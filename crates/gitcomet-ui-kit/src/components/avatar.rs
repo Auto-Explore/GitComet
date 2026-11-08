@@ -71,10 +71,13 @@ pub fn initials_paint_origin_y(
 /// visually centered in the circle; the history table paints the same design
 /// directly on its row canvas.
 pub fn author_avatar(theme: AppTheme, scale: impl Into<UiScale>, name: &str) -> Div {
-    let scale = scale.into();
+    author_avatar_sized(theme, scale.into().px(AVATAR_DIAMETER_PX), name)
+}
+
+/// [`author_avatar`] at `diameter`, its initials scaled with it.
+pub fn author_avatar_sized(theme: AppTheme, diameter: Pixels, name: &str) -> Div {
     let color = author_color(theme, name);
-    let diameter = scale.px(AVATAR_DIAMETER_PX);
-    let font_size = scale.px(AVATAR_FONT_PX);
+    let font_size = diameter * (AVATAR_FONT_PX / AVATAR_DIAMETER_PX);
     let initials: gpui::SharedString = author_initials(name).into();
     div()
         .flex_none()

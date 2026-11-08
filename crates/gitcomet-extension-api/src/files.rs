@@ -85,6 +85,9 @@ pub struct FileListMarks {
     /// Bump when replacing row data. The owner checks this in O(1).
     pub revision: u64,
     pub rows: Arc<BTreeMap<PathBuf, crate::RowMark>>,
+    /// A second mark per row, drawn after the row's line counts: its glyph,
+    /// then its label, such as a comment icon and how many.
+    pub trailing: Arc<BTreeMap<PathBuf, crate::RowMark>>,
 }
 
 impl FileListMarks {
@@ -92,7 +95,16 @@ impl FileListMarks {
         Self {
             revision,
             rows: rows.into(),
+            trailing: Arc::default(),
         }
+    }
+
+    pub fn with_trailing(
+        mut self,
+        trailing: impl Into<Arc<BTreeMap<PathBuf, crate::RowMark>>>,
+    ) -> Self {
+        self.trailing = trailing.into();
+        self
     }
 }
 

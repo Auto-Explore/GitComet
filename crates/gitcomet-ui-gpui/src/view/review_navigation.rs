@@ -1,6 +1,7 @@
 //! Focus transitions for reviewing a commit, its files, and a diff.
 use super::*;
 use crate::view::panes::main::MainPaneContent;
+use crate::view::repository_views::MainSlot;
 
 pub(in crate::view) fn hint(
     theme: AppTheme,
@@ -43,14 +44,20 @@ pub(in crate::view) fn defer(
 
 impl GitCometView {
     fn mounted_main_focus(&self, cx: &App) -> Option<FocusHandle> {
-        if self.documents_active
-            || self
-                .repository_views
-                .as_ref()
-                .zip(self.active_repo())
-                .is_some_and(|(router, repo)| router.active_view(repo).is_some())
-        {
-            return Some(self.repository_view_focus.clone());
+        match self.main_slot() {
+            MainSlot::Document => return Some(self.repository_view_focus.clone()),
+            MainSlot::Overlay(_) => return Some(self.canvas_overlay_focus.clone()),
+            // An unbuilt view falls back to History's panes.
+            MainSlot::View(index)
+                if self
+                    .repository_views
+                    .as_ref()
+                    .zip(self.active_repo())
+                    .is_some_and(|(router, repo)| router.built(repo, index).is_some()) =>
+            {
+                return Some(self.repository_view_focus.clone());
+            }
+            MainSlot::View(_) | MainSlot::History => {}
         }
         let main = self.main_pane.read(cx);
         match main.active_content(cx) {

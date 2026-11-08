@@ -124,6 +124,7 @@ fn run_queued_patch_with_view_change(
             lifetime,
             view,
             target: DiffTarget::working_tree("other.rs".into(), DiffArea::Unstaged),
+            request: None,
         }),
         QueuedPatchViewChange::Close => Some(DiffSessionMsg::Close {
             repo_id,

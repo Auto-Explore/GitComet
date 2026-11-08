@@ -64,7 +64,7 @@ use streamed_text::prepare_streamed_diff_slice_for_paint;
 use streamed_text::should_stream_diff_text;
 use streamed_text::streamed_diff_text_ascii_cell_width;
 use streamed_text::streamed_diff_text_visible_slice_range;
-use streamed_text::streamed_line_display_len;
+use streamed_text::streamed_drawn_len;
 use streamed_text::whitespace_marker_len;
 
 pub(super) mod annotation;
@@ -737,6 +737,7 @@ pub(super) fn inline_diff_line_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
+    line_end_views: bool,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage: Option<StageGutterSpec>,
@@ -770,10 +771,27 @@ pub(super) fn inline_diff_line_row_canvas(
     let offset_map = paint_payload.offset_map;
     let canvas_id = diff_row_canvas_id("diff_row_canvas_inline", visible_ix, revision);
     let test_row_bg = semantic_diff_row_bg(theme, bg);
+    let text_end = line_end_views.then(|| {
+        RowTextEnd::new(
+            &view,
+            DiffTextRegion::Inline,
+            &text,
+            &highlights,
+            text_hash,
+            highlights_hash,
+            streamed_spec.as_ref(),
+            reveal_whitespace_chars,
+            wrap,
+            fg,
+            show_line_numbers,
+            ui_scale_percent,
+            theme,
+        )
+    });
 
     keyed_canvas(
         canvas_id,
-        move |bounds, window, _cx| {
+        move |bounds, window, cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
                 gutter_cell_total_width(
@@ -786,6 +804,9 @@ pub(super) fn inline_diff_line_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
+            if let Some(text_end) = &text_end {
+                text_end.place(visible_ix, text_bounds, window, cx);
+            }
             // Everything but the annotation column, which owns its own clicks.
             let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
@@ -1368,6 +1389,7 @@ pub(super) fn patch_split_column_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
+    line_end_views: bool,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage: Option<StageGutterSpec>,
@@ -1411,10 +1433,27 @@ pub(super) fn patch_split_column_row_canvas(
         revision,
     );
     let test_row_bg = semantic_diff_row_bg(theme, bg);
+    let text_end = line_end_views.then(|| {
+        RowTextEnd::new(
+            &view,
+            region,
+            &text,
+            &highlights,
+            text_hash,
+            highlights_hash,
+            streamed_spec.as_ref(),
+            reveal_whitespace_chars,
+            wrap,
+            fg,
+            show_line_numbers,
+            ui_scale_percent,
+            theme,
+        )
+    });
 
     keyed_canvas(
         canvas_id,
-        move |bounds, window, _cx| {
+        move |bounds, window, cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
                 gutter_cell_total_width(
@@ -1427,6 +1466,9 @@ pub(super) fn patch_split_column_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
+            if let Some(text_end) = &text_end {
+                text_end.place(visible_ix, text_bounds, window, cx);
+            }
             // Everything but the annotation column, which owns its own clicks.
             let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
@@ -2158,32 +2200,11 @@ fn paint_selectable_diff_text(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let mut base_style = diff_text_style(window);
-    base_style.color = base_fg.into_color();
-    base_style.white_space = gpui::WhiteSpace::Nowrap;
-    base_style.text_overflow = None;
-
-    let pad = px_2(window);
-    let gutter_total = gutter_cell_total_width(
-        pad,
-        ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
-    );
-    let row_extra = match region {
-        DiffTextRegion::Inline if show_line_numbers => gutter_total * 2.0 + pad * 2.0,
-        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight if show_line_numbers => {
-            gutter_total + pad * 2.0
-        }
-        _ => pad * 2.0,
-    };
+    let base_style = diff_text_base_style(window, base_fg);
+    let row_extra = diff_row_text_extra(region, show_line_numbers, ui_scale_percent, theme, window);
     let mut total_text_len = streamed_spec
         .filter(|spec| should_stream_diff_text(Some(spec)))
-        .map(|spec| {
-            if reveal_whitespace_chars {
-                spec.raw_text.len()
-            } else {
-                streamed_line_display_len(&spec.raw_text)
-            }
-        })
+        .map(|spec| streamed_drawn_len(&spec.raw_text, reveal_whitespace_chars))
         .unwrap_or_else(|| text.len());
     let source_text_len = offset_map
         .map(DiffTextOffsetMap::source_len)
@@ -2259,7 +2280,8 @@ fn paint_selectable_diff_text(
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
         streamed_slice_range = Some(resolved_slice_range);
-        let total_text_cells = total_text_len.saturating_add(usize::from(reveal_whitespace_chars));
+        let total_text_cells =
+            streamed_text_cells(total_text_len, 0..total_text_len, reveal_whitespace_chars);
         let required_row_w = (row_extra
             + cell_width * total_text_cells as f32
             + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
@@ -2436,13 +2458,11 @@ fn paint_selectable_diff_text(
         if pending_prepared_syntax {
             this.ensure_prepared_syntax_chunk_poll(cx);
         }
-        let column = match region {
-            DiffTextRegion::Inline | DiffTextRegion::SplitLeft => {
-                DiffHorizontalScrollColumn::Primary
-            }
-            DiffTextRegion::SplitRight => DiffHorizontalScrollColumn::SplitRight,
-        };
-        this.record_diff_horizontal_content_width_for_column(column, required_row_w, cx);
+        this.record_diff_horizontal_content_width_for_column(
+            horizontal_column(region),
+            required_row_w,
+            cx,
+        );
     });
 
     if paint_text.is_empty() {
@@ -2487,6 +2507,170 @@ fn diff_layout_base_key(
     base_fg.blue.to_bits().hash(&mut hasher);
     base_fg.alpha.to_bits().hash(&mut hasher);
     hasher.finish()
+}
+
+/// The style a row's text is shaped and painted in.
+fn diff_text_base_style(window: &Window, fg: gpui::Rgba) -> TextStyle {
+    let mut style = diff_text_style(window);
+    style.color = fg.into_color();
+    style.white_space = gpui::WhiteSpace::Nowrap;
+    style.text_overflow = None;
+    style
+}
+
+/// A row's width beside its text: its gutters and padding.
+fn diff_row_text_extra(
+    region: DiffTextRegion,
+    show_line_numbers: bool,
+    ui_scale_percent: u32,
+    theme: AppTheme,
+    window: &Window,
+) -> Pixels {
+    let pad = px_2(window);
+    let gutter_total = gutter_cell_total_width(
+        pad,
+        ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+    );
+    match region {
+        DiffTextRegion::Inline if show_line_numbers => gutter_total * 2.0 + pad * 2.0,
+        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight if show_line_numbers => {
+            gutter_total + pad * 2.0
+        }
+        _ => pad * 2.0,
+    }
+}
+
+/// The monospace cells a streamed slice of a line `len` long takes, with the
+/// end-of-line mark revealed whitespace adds once the slice reaches the
+/// line's end.
+fn streamed_text_cells(len: usize, range: Range<usize>, reveal_whitespace: bool) -> usize {
+    let ends_line = range.end >= len;
+    range.len() + usize::from(reveal_whitespace && ends_line)
+}
+
+pub(in crate::view) fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
+    match region {
+        DiffTextRegion::Inline | DiffTextRegion::SplitLeft => DiffHorizontalScrollColumn::Primary,
+        DiffTextRegion::SplitRight => DiffHorizontalScrollColumn::SplitRight,
+    }
+}
+
+/// What a row's canvas needs to find where its text ends, as
+/// `paint_selectable_diff_text` lays it out, for hosted views after it.
+struct RowTextEnd {
+    view: Entity<DiffRenderer>,
+    region: DiffTextRegion,
+    text: SharedString,
+    highlights: Arc<[(Range<usize>, HighlightStyle)]>,
+    text_hash: u64,
+    highlights_hash: u64,
+    /// The whole line's length as drawn, when it is streamed in monospace
+    /// cells: a trailing CR is drawn only while whitespace is revealed.
+    streamed_len: Option<usize>,
+    reveal_whitespace_chars: bool,
+    wrap: Option<DiffTextWrapSlice>,
+    fg: gpui::Rgba,
+    show_line_numbers: bool,
+    ui_scale_percent: u32,
+    theme: AppTheme,
+}
+
+impl RowTextEnd {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        view: &Entity<DiffRenderer>,
+        region: DiffTextRegion,
+        text: &SharedString,
+        highlights: &Arc<[(Range<usize>, HighlightStyle)]>,
+        text_hash: u64,
+        highlights_hash: u64,
+        streamed_spec: Option<&StreamedDiffTextPaintSpec>,
+        reveal_whitespace_chars: bool,
+        wrap: Option<DiffTextWrapSlice>,
+        fg: gpui::Rgba,
+        show_line_numbers: bool,
+        ui_scale_percent: u32,
+        theme: AppTheme,
+    ) -> Self {
+        Self {
+            view: view.clone(),
+            region,
+            text: text.clone(),
+            highlights: highlights.clone(),
+            text_hash,
+            highlights_hash,
+            streamed_len: streamed_spec
+                .filter(|spec| should_stream_diff_text(Some(spec)))
+                .map(|spec| streamed_drawn_len(&spec.raw_text, reveal_whitespace_chars)),
+            reveal_whitespace_chars,
+            wrap,
+            fg,
+            show_line_numbers,
+            ui_scale_percent,
+            theme,
+        }
+    }
+
+    /// Finds where row `visible_ix`'s text ends if hosted views go after it,
+    /// and notes how wide the row's text is, which its column's scroll range
+    /// holds with them. The text is shaped as it is painted, into the same
+    /// cache.
+    fn place(
+        &self,
+        visible_ix: usize,
+        text_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let view = &self.view;
+        let Some(line_end) = view.read(cx).hosted_line_end(visible_ix, self.region) else {
+            return;
+        };
+        let metrics = line_metrics(window, self.theme);
+        let base_style = diff_text_base_style(window, self.fg);
+        let (width, layout) = match self.streamed_len {
+            Some(len) => {
+                let cell_width =
+                    streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
+                let range = self.wrap.map_or(0..len, |wrap| {
+                    let range = wrap.range_for_region(self.region);
+                    range.start.min(len)..range.end.min(len)
+                });
+                let cells = streamed_text_cells(len, range, self.reveal_whitespace_chars);
+                (cell_width * cells as f32, None)
+            }
+            None => {
+                let (key, layout, shaped) = ensure_layout_cached(
+                    view,
+                    self.text_hash,
+                    &self.text,
+                    &base_style,
+                    self.fg,
+                    &self.highlights,
+                    self.highlights_hash,
+                    metrics,
+                    window,
+                    cx,
+                );
+                (layout.width, Some((key, shaped)))
+            }
+        };
+        line_end.x.set(Some(text_bounds.left() + width));
+        let text_width = diff_row_text_extra(
+            self.region,
+            self.show_line_numbers,
+            self.ui_scale_percent,
+            self.theme,
+            window,
+        ) + width
+            + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, self.ui_scale_percent);
+        view.update(cx, |this, cx| {
+            if let Some((key, shaped)) = layout {
+                this.touch_diff_text_layout_cache(key, shaped);
+            }
+            this.record_hosted_line_end_text(line_end.lines, text_width, window, cx);
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

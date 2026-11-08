@@ -21,6 +21,7 @@ fn commit_emits_effect() {
             repo_id: RepoId(1),
             message: "hello".to_string(),
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
     );
 
@@ -122,6 +123,7 @@ fn commit_amend_emits_effect() {
             repo_id: RepoId(1),
             message: "amended".to_string(),
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
     );
 
@@ -277,6 +279,7 @@ fn commit_bumps_ops_rev() {
             repo_id,
             message: "test commit".to_string(),
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
     );
     assert!(

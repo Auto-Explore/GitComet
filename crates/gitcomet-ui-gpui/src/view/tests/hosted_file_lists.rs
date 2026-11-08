@@ -249,6 +249,30 @@ fn shown(cx: &mut gpui::VisualTestContext, list: &HostedFileList) -> Vec<String>
     })
 }
 
+/// A list's first marks show at whatever revision they carry, zero too: a
+/// revision tells a publication from the one before it, and the first has
+/// none.
+#[gpui::test]
+fn the_first_marks_show_at_revision_zero(cx: &mut gpui::TestAppContext) {
+    let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs"].map(String::from));
+    let id = list_id(cx, &entity);
+    let flagged = RowMark::new(gpui::red())
+        .with_glyph(RowGlyph::Text("F".into()))
+        .with_label("flagged");
+    cx.update(|_, app| {
+        list.set_marks(
+            FileListMarks::new(0, BTreeMap::from([(PathBuf::from("a.rs"), flagged)])),
+            app,
+        )
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_glyph_a.rs")))
+            .is_some(),
+        "a.rs draws its glyph"
+    );
+}
+
 /// A glyph takes a column before the file icon in every row once any mark
 /// has one; a label alone adds no column.
 #[gpui::test]
@@ -266,7 +290,7 @@ fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
     let flagged = RowMark::new(gpui::red())
         .with_glyph(RowGlyph::Text("F".into()))
         .with_label("flagged");
-    cx.update(|_, app| list.set_marks(marks(2, flagged), app));
+    cx.update(|_, app| list.set_marks(marks(1, flagged), app));
     draw(cx);
     let a = cx
         .debug_bounds(glyph("a.rs"))
@@ -282,6 +306,38 @@ fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
         cx.debug_bounds(glyph("b.rs")).is_none(),
         "an empty slot only"
     );
+}
+
+/// A trailing mark draws after the row's line counts, on its own row only.
+#[gpui::test]
+fn trailing_marks_follow_the_line_counts(cx: &mut gpui::TestAppContext) {
+    let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs"].map(String::from));
+    let id = list_id(cx, &entity);
+    let trailing = |path: &str| selector(format!("hosted_file_list_{id}_trailing_{path}"));
+    let comments = RowMark::new(gpui::blue())
+        .with_glyph(RowGlyph::Text("C".into()))
+        .with_label("3");
+    let initial = FileListMarks::new(1, BTreeMap::new());
+    cx.update(|_, app| list.set_marks(initial.clone(), app));
+    draw(cx);
+    cx.update(|_, app| {
+        list.set_marks(
+            initial.with_trailing(BTreeMap::from([(PathBuf::from("a.rs"), comments)])),
+            app,
+        )
+    });
+    draw(cx);
+    let mark = cx
+        .debug_bounds(trailing("a.rs"))
+        .expect("a.rs draws its trailing mark");
+    let row = cx
+        .debug_bounds(selector(format!("hosted_file_list_{id}_file_a.rs")))
+        .unwrap();
+    assert!(
+        mark.origin.x - row.origin.x > row.size.width / 2.0,
+        "it trails the row"
+    );
+    assert!(cx.debug_bounds(trailing("b.rs")).is_none());
 }
 
 /// A Visible chip shows only its paths and clears on a second click; a

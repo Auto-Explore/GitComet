@@ -1341,6 +1341,7 @@ fn repository_windows_keep_their_panes_around_documents_until_the_repository_nav
         gitcomet_core::domain::DiffArea::Unstaged,
     ));
     repo.diff_state.diff_target_rev += 1;
+    repo.navigation.canvas_requests += 1;
     push(&state, cx);
     assert!(
         !cx.update(|_, app| root.read(app).documents_active),

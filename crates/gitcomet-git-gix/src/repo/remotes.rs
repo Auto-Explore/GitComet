@@ -10,8 +10,9 @@ use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
-    CancellationToken, CommandOutput, ForcePushLease, RemoteUrlKind, Result,
+    CancellationToken, CommandOutput, ForcePushLease, GitHooks, RemoteUrlKind, Result,
     SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    UPSTREAM_CONFIG_WRITE_FAILED,
 };
 use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
@@ -20,6 +21,83 @@ use std::process::Command;
 use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
+
+/// Whether the remote has the branch an upstream names yet.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum UpstreamBranch {
+    Published,
+    /// A later push creates it.
+    Pending,
+}
+
+/// Whether `branch.autoSetupRebase` asks an upstream on a remote to rebase.
+/// Git applies it to every upstream it writes.
+fn auto_setup_rebase(config: &gix::config::Snapshot<'_>) -> bool {
+    config
+        .string("branch.autoSetupRebase")
+        .is_some_and(|value| matches!(&value[..], b"remote" | b"always"))
+}
+
+fn write_branch_upstream_config(
+    repo: &gix::Repository,
+    branch: &str,
+    upstream: &Upstream,
+    upstream_branch: UpstreamBranch,
+) -> Result<()> {
+    let merge_ref = format!("refs/heads/{}", upstream.branch);
+    let rebase = auto_setup_rebase(&repo.config_snapshot());
+    edit_local_config_strict(repo, |config| {
+        if let Ok(mut merges) =
+            config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "merge")
+        {
+            merges.delete_all();
+        }
+        if rebase
+            && let Ok(mut rebases) =
+                config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "rebase")
+        {
+            rebases.delete_all();
+        }
+
+        let mut section = config
+            .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "create local config section for branch {branch}: {e}"
+                )))
+            })?;
+        section
+            .set("remote", upstream.remote.as_str())
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "set local config upstream remote for branch {branch}: {e}"
+                )))
+            })?;
+        section.set("merge", merge_ref.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "set local config upstream merge ref for branch {branch}: {e}"
+            )))
+        })?;
+        if rebase {
+            section.set("rebase", "true").map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "set local config rebase for branch {branch}: {e}"
+                )))
+            })?;
+        }
+        while section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some() {}
+        if upstream_branch == UpstreamBranch::Pending {
+            section
+                .set(PENDING_UPSTREAM_CONFIG_KEY, "true")
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "mark new upstream for branch {branch}: {e}"
+                    )))
+                })?;
+        }
+        Ok(true)
+    })
+}
 
 /// Uncoloured output for the diffstat a pull, merge or squash prints:
 /// `color.ui` alone loses to a user's `color.diff=always`.
@@ -86,6 +164,106 @@ fn branches_to_prune(
     }
 
     candidates
+}
+
+/// Whether `--no-verify` skips an LFS upload: Git would run a `pre-push`
+/// hook, and the pushed commits add pointers LFS's hook uploads. Config and
+/// attributes can lie about the latter, so the commits decide.
+fn skips_lfs_upload(repo: &gix::Repository, target: &SafePushAfterCommitTarget) -> Result<bool> {
+    if !runs_pre_push_hook(repo) {
+        return Ok(false);
+    }
+    let head = super::object_id_from_commit_id(&target.local_head, repo.object_hash()).ok_or_else(
+        || {
+            Error::new(ErrorKind::Backend(format!(
+                "invalid pushed commit id {}",
+                target.local_head
+            )))
+        },
+    )?;
+    let pushed = commits_the_remote_has(repo, &target.remote, &target.branch)?;
+    super::large_files::introduces_lfs_pointers(repo, head, pushed)
+}
+
+/// Commits `remote` already has, as far as a push of `branch` needs: the
+/// branch's tracking ref and the remote's default branch, a merge's usual
+/// source; for a new branch, every tracking ref its fetch refspecs write (a
+/// name prefix would also take a remote named `<remote>/x`). Hiding fewer
+/// only scans more, so a ref that does not resolve, such as a pruned
+/// `origin/HEAD`, is left out. Hiding thousands of refs costs ~0.4 s.
+fn commits_the_remote_has(
+    repo: &gix::Repository,
+    remote: &str,
+    branch: &str,
+) -> Result<Vec<gix::ObjectId>> {
+    let refs = crate::refs::view(repo)?;
+    let resolve = |name: &[u8]| {
+        let mut reference = refs.find(name).ok().flatten()?;
+        Some(reference.peel_to_id().ok()?.detach())
+    };
+    let upstream = Upstream {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+    };
+    let mut commits: Vec<_> = tracking_refs_for_remote_branch(repo, &upstream)?
+        .iter()
+        .filter_map(|name| resolve(name.as_bytes()))
+        .collect();
+    if commits.is_empty() {
+        let owned: FxHashSet<_> =
+            tracking_refs_of_remote(repo, &refs, remote, &CancellationToken::new())?
+                .into_iter()
+                .collect();
+        commits.extend(
+            refs.remote_branches()?
+                .peeled()
+                .flatten()
+                .filter(|reference| owned.contains(reference.name()))
+                .map(|reference| reference.id().detach()),
+        );
+    } else {
+        commits.extend(resolve(format!("refs/remotes/{remote}/HEAD").as_bytes()));
+    }
+    commits.retain(|id| repo.has_object(*id));
+    Ok(commits)
+}
+
+/// Whether Git runs a `pre-push` hook here, all that `--no-verify` skips on a
+/// push: one configured for the event, or an executable `pre-push` in the
+/// hooks directory. Disabled configured hooks count too; that only scans more.
+fn runs_pre_push_hook(repo: &gix::Repository) -> bool {
+    let config = repo.config_snapshot();
+    let configured = config
+        .plumbing()
+        .sections_by_name("hook")
+        .into_iter()
+        .flatten()
+        .any(|section| {
+            section
+                .values("event")
+                .iter()
+                .any(|event| event == "pre-push")
+        });
+    // A relative `core.hooksPath` is relative to where hooks run.
+    let hooks = match config.trusted_path("core.hooksPath") {
+        Ok(Some(path)) => repo.workdir().unwrap_or(repo.git_dir()).join(path),
+        Ok(None) => repo.common_dir().join("hooks"),
+        Err(_) => return true,
+    };
+    configured || is_hook_program(&hooks.join("pre-push"))
+}
+
+/// Git's `find_hook`: an executable file, which Windows reads as any file,
+/// with or without `.exe`.
+#[cfg(unix)]
+fn is_hook_program(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_hook_program(path: &std::path::Path) -> bool {
+    path.exists() || path.with_extension("exe").exists()
 }
 
 /// The branch `refs/remotes/<remote>/HEAD` points at, as `git remote set-head`
@@ -1536,41 +1714,78 @@ impl GixRepo {
         target: &SafePushAfterCommitTarget,
         set_upstream: bool,
         capture_output: bool,
+        hooks: GitHooks,
     ) -> Result<CommandOutput> {
         self.validate_push_after_commit_target(target)?;
+        // Git LFS uploads objects from its `pre-push` hook, and `--no-verify`
+        // skips that hook too. Upload them first, as the hook would have, so
+        // the pushed commits never point at objects the server lacks.
+        if !hooks.skipped() || !skips_lfs_upload(&self.reopen_repo()?, target)? {
+            return self.push_after_commit_target_once(target, set_upstream, capture_output, hooks);
+        }
+        // Both commands answer the same credentials prompt.
+        crate::util::with_shared_git_auth(|| {
+            let local_head = target.local_head.to_string();
+            let mut cmd = self.git_workdir_cmd();
+            cmd.args(["lfs", "push"])
+                .arg(&target.remote)
+                .arg(&local_head);
+            let label = format!("git lfs push {} {local_head}", target.remote);
+            let uploaded = run_git_command_with_optional_output(cmd, &label, capture_output)?;
+            let pushed =
+                self.push_after_commit_target_once(target, set_upstream, capture_output, hooks)?;
+            let label = format!("{label} && {}", pushed.command);
+            Ok(super::lfs::combine(&label, vec![uploaded, pushed]))
+        })
+    }
 
-        let source = if set_upstream {
-            format!("refs/heads/{}", target.local_branch)
-        } else {
-            target.local_head.to_string()
-        };
+    fn push_after_commit_target_once(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        capture_output: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
+        let source = target.local_head.to_string();
         let refspec = format!("{source}:refs/heads/{}", target.branch);
-        let command_label = if set_upstream {
-            format!(
-                "git push --set-upstream {} {}:refs/heads/{}",
-                target.remote, source, target.branch
-            )
-        } else {
-            format!(
-                "git push {} {}:refs/heads/{}",
-                target.remote, source, target.branch
-            )
-        };
+        let flags = if hooks.skipped() { " --no-verify" } else { "" };
+        let command_label = format!(
+            "git push{flags} {} {}:refs/heads/{}",
+            target.remote, source, target.branch
+        );
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push");
-        if set_upstream {
-            cmd.arg("--set-upstream");
+        if hooks.skipped() {
+            cmd.arg("--no-verify");
         }
         cmd.arg("--").arg(&target.remote).arg(refspec);
-        let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
-        self.clear_pending_upstream_if_matches(
-            &target.local_branch,
-            &Upstream {
-                remote: target.remote.clone(),
-                branch: target.branch.clone(),
-            },
-        );
+        let mut output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
+        let upstream = Upstream {
+            remote: target.remote.clone(),
+            branch: target.branch.clone(),
+        };
+        if !set_upstream {
+            self.clear_pending_upstream_if_matches(&target.local_branch, &upstream);
+        } else if let Err(error) = self.reopen_repo().and_then(|repo| {
+            // What `--set-upstream` would write, which a commit source skips.
+            write_branch_upstream_config(
+                &repo,
+                &target.local_branch,
+                &upstream,
+                UpstreamBranch::Published,
+            )
+        }) {
+            // Like `git push --set-upstream`: the push stands and says what failed.
+            if !output.stderr.is_empty() && !output.stderr.ends_with('\n') {
+                output.stderr.push('\n');
+            }
+            output.stderr.push_str(&format!(
+                "{UPSTREAM_CONFIG_WRITE_FAILED}: {error}\n\
+                 hint: run `git branch --set-upstream-to={}/{} {}`\n",
+                upstream.remote, upstream.branch, target.local_branch
+            ));
+        }
         Ok(output)
     }
 
@@ -1578,14 +1793,23 @@ impl GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, false, true)
+        self.push_after_commit_target_with_optional_output_impl(target, false, true, GitHooks::Run)
     }
 
     pub(super) fn push_after_commit_set_upstream_with_output_impl(
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, true, true)
+        self.push_after_commit_target_with_optional_output_impl(target, true, true, GitHooks::Run)
+    }
+
+    pub(super) fn push_after_commit_with_hooks_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, set_upstream, true, hooks)
     }
 
     fn fetch_remote_branch_tip_with_output(
@@ -2160,52 +2384,16 @@ impl GixRepo {
         // branch that will be created by a later push. Existing-target picker
         // actions validate liveness against state before reaching this method;
         // the explicit "Create new" flow intentionally has no tracking ref yet.
-        let merge_ref = format!("refs/heads/{}", upstream.branch);
         let label = format!(
             "set upstream {branch} -> {} / {}",
             upstream.remote, upstream.branch
         );
-        edit_local_config_strict(&repo, |config| {
-            // `section.set()` only replaces the last value in one section.
-            // Remove all merge values across repeated sections so Git's first
-            // merge entry becomes the newly selected target.
-            if let Ok(mut merges) =
-                config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "merge")
-            {
-                merges.delete_all();
-            }
-
-            let mut section = config
-                .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "create local config section for branch {branch}: {e}"
-                    )))
-                })?;
-            section
-                .set("remote", upstream.remote.as_str())
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "set local config upstream remote for branch {branch}: {e}"
-                    )))
-                })?;
-            section.set("merge", merge_ref.as_str()).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "set local config upstream merge ref for branch {branch}: {e}"
-                )))
-            })?;
-            while section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some() {}
-            if !tracking_ref_exists {
-                section
-                    .set(PENDING_UPSTREAM_CONFIG_KEY, "true")
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "mark new upstream for branch {branch}: {e}"
-                        )))
-                    })?;
-            }
-            Ok(true)
-        })?;
+        let upstream_branch = if tracking_ref_exists {
+            UpstreamBranch::Published
+        } else {
+            UpstreamBranch::Pending
+        };
+        write_branch_upstream_config(&repo, branch, upstream, upstream_branch)?;
 
         Ok(CommandOutput::empty_success(label))
     }

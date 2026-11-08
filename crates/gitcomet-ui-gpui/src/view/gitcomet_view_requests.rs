@@ -24,6 +24,11 @@ pub(in crate::view) enum RootRequest {
         id: String,
         repo: Option<RepoId>,
     },
+    RunRefMenuItem {
+        id: String,
+        repo_id: RepoId,
+        target: gitcomet_extension_api::RefMenuTarget,
+    },
     PerformCloseAction(TerminalShutdownAction),
     ShowRepositoryCanvas,
     OpenRepoPath(PathBuf),
@@ -39,6 +44,7 @@ pub(in crate::view) enum RootRequest {
     SetChangeTrackingView(ChangeTrackingView),
     SetCommitAmend(bool),
     SetCommitPushAfter(bool),
+    SetCommitSkipHooks(bool),
     OpenPopoverCentered(PopoverKind),
     OpenFileHistory {
         repo_id: RepoId,
@@ -141,6 +147,13 @@ impl GitCometView {
             RootRequest::RunExtensionCommand { id, repo } => {
                 self.run_extension_command_for(&id, repo, cx);
             }
+            RootRequest::RunRefMenuItem {
+                id,
+                repo_id,
+                target,
+            } => {
+                self.run_ref_menu_item(&id, repo_id, target, cx);
+            }
             RootRequest::ShowRepositoryCanvas => self.show_repository_canvas(cx),
             RootRequest::OpenRepoPath(path) => self.open_repo_path(path, cx),
             RootRequest::CloseRepos {
@@ -156,6 +169,9 @@ impl GitCometView {
             RootRequest::SetCommitAmend(enabled) => self.set_commit_amend_enabled(enabled, cx),
             RootRequest::SetCommitPushAfter(enabled) => {
                 self.set_commit_push_after_enabled(enabled, cx)
+            }
+            RootRequest::SetCommitSkipHooks(enabled) => {
+                self.set_commit_skip_hooks_enabled(enabled, cx)
             }
             RootRequest::ReportError(report) => self.report_error(report, cx),
             RootRequest::SetActiveContextMenuInvoker(next) => {

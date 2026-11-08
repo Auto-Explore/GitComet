@@ -410,6 +410,7 @@ impl PopoverHost {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }
             PopoverKind::DiffEditorMenu {
+                context_actions,
                 repo_id,
                 area,
                 path,
@@ -422,6 +423,7 @@ impl PopoverHost {
                 copy_target,
             } => self.context_menu_view(
                 PopoverKind::DiffEditorMenu {
+                    context_actions,
                     repo_id,
                     area,
                     path,

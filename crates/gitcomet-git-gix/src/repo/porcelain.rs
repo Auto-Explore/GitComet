@@ -9,7 +9,7 @@ use crate::util::{
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::path_utils::{canonicalize_or_original, symlink_free_write_target};
-use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, GitHooks, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
@@ -1228,7 +1228,7 @@ impl GixRepo {
     }
 
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
-        self.commit_identity_impl(message, None, false)
+        self.commit_identity_impl(message, None, false, GitHooks::Run)
     }
 
     fn commit_identity_impl(
@@ -1236,6 +1236,7 @@ impl GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
         amend: bool,
+        hooks: GitHooks,
     ) -> Result<()> {
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
@@ -1250,15 +1251,21 @@ impl GixRepo {
         if merge_in_progress {
             cmd.arg("--allow-empty");
         }
+        if hooks.skipped() {
+            cmd.arg("--no-verify");
+        }
         cmd.arg("-m").arg(message);
-        let label = if amend {
+        let mut label = String::from(if amend {
             "git commit --amend"
         } else if merge_in_progress {
             "git commit --allow-empty"
         } else {
             "git commit"
-        };
-        run_git_simple(cmd, label)
+        });
+        if hooks.skipped() {
+            label.push_str(" --no-verify");
+        }
+        run_git_simple(cmd, &label)
     }
 
     pub(super) fn commit_with_outcome_impl(&self, message: &str) -> Result<CommitOperationOutcome> {
@@ -1279,7 +1286,7 @@ impl GixRepo {
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
-        self.commit_identity_impl(message, None, true)
+        self.commit_identity_impl(message, None, true, GitHooks::Run)
     }
 
     pub(super) fn commit_with_identity_impl(
@@ -1287,10 +1294,11 @@ impl GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
         amend: bool,
+        hooks: GitHooks,
     ) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
         let pre_head = self.head_commit_id_for_outcome()?;
-        self.commit_identity_impl(message, identity, amend)?;
+        self.commit_identity_impl(message, identity, amend, hooks)?;
         let post_head = self.head_commit_id_for_outcome()?;
         Ok(CommitOperationOutcome {
             local_branch,

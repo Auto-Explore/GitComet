@@ -65,19 +65,6 @@ impl TextInput {
         self.focus_handle.clone()
     }
 
-    pub fn set_placeholder(
-        &mut self,
-        placeholder: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        let placeholder = placeholder.into();
-        if self.placeholder != placeholder {
-            self.placeholder = placeholder;
-            self.invalidate_layout_caches();
-            cx.notify();
-        }
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub fn theme_for_test(&self) -> AppTheme {
         self.style.menu_theme
@@ -179,6 +166,27 @@ impl TextInput {
     #[cfg(any(test, feature = "test-support"))]
     pub fn line_height_override(&self) -> Option<Pixels> {
         self.line_height_override
+    }
+
+    /// What the input shows while it is empty.
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    /// Shows `placeholder` from now on while the input is empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder == placeholder {
+            return;
+        }
+        self.placeholder = placeholder;
+        // The empty input shapes the placeholder into its cached layout.
+        self.invalidate_layout_caches();
+        cx.notify();
     }
 
     pub fn take_enter_pressed(&mut self) -> bool {

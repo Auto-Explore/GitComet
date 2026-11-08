@@ -15,6 +15,8 @@ mod file_disk;
 pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;
 mod hosted_binding;
+mod hosted_people;
+mod hosted_views;
 pub(in crate::view) mod input;
 mod markdown_state;
 mod media;
@@ -34,7 +36,9 @@ pub(in crate::view) use text_format::TextEncodingMenuState;
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl DiffRenderer`.
 use crate::view::documents::disk::DiskIdentity;
-pub(in crate::view) use core_impl::DiffRendererInit;
+pub(in crate::view) use core_impl::{
+    DiffRendererInit, EngineNotice, LineNumberCells, device_snapped, list_row_pitch,
+};
 #[cfg(test)]
 pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
 pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice, FileDiskSeen};
@@ -42,6 +46,7 @@ pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice,
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::state::DiffRenderer;
 use helpers::*;
+pub(in crate::view) use hosted_views::measure_hosted_views;
 use input::{DiffPaneInput, DiffSourceId};
 pub(in crate::view) use markdown_state::*;
 #[cfg(test)]

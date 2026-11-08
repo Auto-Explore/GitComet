@@ -1,9 +1,5 @@
 use super::*;
 
-const HEADER_PAD_X_PX: f32 = 4.0;
-const HEADER_GAP_PX: f32 = 2.0;
-const FALLBACK_TAB_ICON: &str = "icons/side_panel_left.svg";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SidebarTabTarget {
     Branches,
@@ -12,22 +8,35 @@ enum SidebarTabTarget {
     Extension(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SidebarTool {
+    Search,
+    ExplorerSettings,
+    LocateBranch,
+    LocateFile,
+}
+
 impl SidebarTabTarget {
-    fn tool_count(self) -> usize {
+    /// The tools after the tabs while this tab is selected, in order.
+    fn tools(self) -> &'static [SidebarTool] {
         match self {
-            Self::Branches => 2,
-            Self::Files => 3,
-            Self::History | Self::Extension(_) => 0,
+            Self::Branches => &[SidebarTool::Search, SidebarTool::LocateBranch],
+            Self::Files => &[
+                SidebarTool::Search,
+                SidebarTool::ExplorerSettings,
+                SidebarTool::LocateFile,
+            ],
+            Self::History | Self::Extension(_) => &[],
         }
     }
 }
 
 impl SidebarPaneView {
-    fn header_control(
+    fn header(
         &self,
         cx: &mut App,
     ) -> (
-        components::SegmentedControl,
+        components::PanelHeader,
         Vec<SidebarTabTarget>,
         SidebarTabTarget,
     ) {
@@ -45,51 +54,32 @@ impl SidebarPaneView {
                 SidebarMode::Files => SidebarTabTarget::Files,
             }
         };
-        let font_preferences = crate::font_preferences::current(cx);
-        let font = gpui::Font {
-            family: crate::font_preferences::applied_ui_font_family(
-                &font_preferences.ui_font_family,
-                cx,
-            )
-            .into(),
-            features: crate::font_preferences::applied_font_features(
-                font_preferences.use_font_ligatures,
-            ),
-            ..Default::default()
-        };
-        let mut tabs = Vec::new();
-        let mut add = |target,
-                       id: SharedString,
-                       title: SharedString,
-                       icon: SharedString,
-                       tooltip: SharedString| {
-            tabs.push((
-                target,
-                components::Segment::new(id, title)
-                    .icon(icon)
-                    .selected(active == target)
-                    .tooltip(tooltip, Vec::new()),
-            ));
-        };
+        let mut tabs: Vec<(
+            SidebarTabTarget,
+            SharedString,
+            SharedString,
+            Option<SharedString>,
+            SharedString,
+        )> = Vec::new();
         if self
             .extension_tabs
             .as_ref()
             .is_none_or(|tabs| tabs.host_tabs)
         {
-            add(
+            tabs.push((
                 SidebarTabTarget::Branches,
                 "sidebar_tab_branches".into(),
                 "Branches".into(),
-                "icons/git_branch.svg".into(),
+                Some("icons/git_branch.svg".into()),
                 "Branches".into(),
-            );
-            add(
+            ));
+            tabs.push((
                 SidebarTabTarget::Files,
                 "sidebar_tab_files".into(),
                 "Files".into(),
-                "icons/folder.svg".into(),
+                Some("icons/folder.svg".into()),
                 "Files".into(),
-            );
+            ));
         }
         if self.file_history_visible(cx) {
             let title = self
@@ -99,45 +89,41 @@ impl SidebarPaneView {
                 .as_ref()
                 .map(|(_, path)| path.display().to_string())
                 .unwrap_or_default();
-            add(
+            tabs.push((
                 SidebarTabTarget::History,
                 "sidebar_tab_file_history".into(),
                 "History".into(),
-                "icons/history.svg".into(),
+                Some("icons/history.svg".into()),
                 title.into(),
-            );
+            ));
         }
         for (index, title, icon) in self.extension_tabs.iter().flat_map(|tabs| &tabs.tabs) {
-            add(
+            tabs.push((
                 SidebarTabTarget::Extension(*index),
                 format!("sidebar_tab_extension_{index}").into(),
                 title.clone(),
-                icon.clone().unwrap_or_else(|| FALLBACK_TAB_ICON.into()),
+                icon.clone(),
                 title.clone(),
-            );
+            ));
         }
-        let (targets, segments): (Vec<_>, Vec<_>) = tabs.into_iter().unzip();
-        let control = segments.into_iter().fold(
-            components::SegmentedControl::new("sidebar_view_toggle")
-                .adaptive()
-                .font(font),
-            |control, segment| control.segment(segment),
-        );
-        (control, targets, active)
+        let mut targets = Vec::with_capacity(tabs.len());
+        let mut header = components::PanelHeader::new("sidebar_view_toggle", cx);
+        for (target, id, title, icon, tooltip) in tabs {
+            header = header.tab(id, title, icon, active == target, tooltip);
+            targets.push(target);
+        }
+        (header.tools(active.tools().len()), targets, active)
     }
 
-    pub(in crate::view) fn header_minimum_width(
+    pub(in crate::view) fn header_measure(
         &self,
         theme: AppTheme,
         scale: ui_scale::UiScale,
-        window: &mut Window,
+        window: &Window,
         cx: &mut App,
-    ) -> Pixels {
-        let (control, _, active) = self.header_control(cx);
-        control.minimum_width(theme, scale, window)
-            + scale.px(HEADER_PAD_X_PX) * 2.0
-            + (components::control_height(scale) + scale.px(HEADER_GAP_PX))
-                * active.tool_count() as f32
+    ) -> components::PanelHeaderMeasure {
+        let (header, _, _) = self.header(cx);
+        header.measure(theme, scale, window)
     }
 
     pub(super) fn render_tab_bar(
@@ -148,12 +134,11 @@ impl SidebarPaneView {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = ui_scale::scaler(ui_scale_percent);
-        let (control, targets, active) = self.header_control(cx);
+        let (header, targets, active) = self.header(cx);
         let mode = match active {
             SidebarTabTarget::Files => SidebarMode::Files,
             _ => SidebarMode::Branches,
         };
-        let tools = active.tool_count() > 0;
         let bg = crate::theme::content_header_bg(theme);
         let bg = if active == SidebarTabTarget::Files
             && self
@@ -164,27 +149,6 @@ impl SidebarPaneView {
         } else {
             bg
         };
-        let tabs = control.render(theme, ui_scale, cx, move |this, index, window, cx| {
-            match targets[index] {
-                SidebarTabTarget::Branches | SidebarTabTarget::Files => {
-                    let mode = if targets[index] == SidebarTabTarget::Branches {
-                        SidebarMode::Branches
-                    } else {
-                        SidebarMode::Files
-                    };
-                    this.file_history_selected = false;
-                    this.store.dispatch(Msg::SetSidebarMode { mode });
-                    this.select_routed_tab(None, window, cx);
-                }
-                SidebarTabTarget::History => this.show_file_history(window, cx),
-                SidebarTabTarget::Extension(index) => {
-                    this.file_history_selected = false;
-                    this.select_routed_tab(Some(index), window, cx);
-                }
-            }
-            cx.emit(SidebarHeaderChanged);
-            cx.notify();
-        });
         let active_local_branch_name = self
             .section_locator_target(CollapsedSidebarSection::Local)
             .and_then(|target| match target {
@@ -203,20 +167,14 @@ impl SidebarPaneView {
             .as_ref()
             .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
 
-        let tools_bar = div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(ui_scale.px(HEADER_GAP_PX))
-            .when(tools, |slot| {
-                slot.child(self.render_search_toggle(
-                    mode == SidebarMode::Files,
-                    "sidebar_search_toggle",
-                    cx,
-                ))
-            })
-            .when(mode == SidebarMode::Files && tools, |strip| {
-                strip.child(
+        let mut tools_row: Vec<AnyElement> = Vec::new();
+        for tool in active.tools() {
+            tools_row.push(match tool {
+                SidebarTool::Search => self
+                    .render_search_toggle(mode == SidebarMode::Files, "sidebar_search_toggle", cx)
+                    .into_any_element(),
+                SidebarTool::ExplorerSettings => {
+                    let explorer_settings = explorer_settings.clone();
                     components::Button::new("sidebar_explorer_settings", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
@@ -250,19 +208,18 @@ impl SidebarPaneView {
                         .w(components::control_height(ui_scale))
                         .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(theme, "Files settings".into())
-                        .debug_selector(|| "sidebar_explorer_settings".to_string()),
-                )
-            })
-            .when(mode == SidebarMode::Branches && tools, |strip| {
-                let tooltip = active_local_branch_name.map_or_else(
-                    || SharedString::from("No active local branch to show"),
-                    |name| {
-                        SharedString::from(format!(
-                            "Show and select the active local branch: {name}"
-                        ))
-                    },
-                );
-                strip.child(
+                        .debug_selector(|| "sidebar_explorer_settings".to_string())
+                        .into_any_element()
+                }
+                SidebarTool::LocateBranch => {
+                    let tooltip = active_local_branch_name.clone().map_or_else(
+                        || SharedString::from("No active local branch to show"),
+                        |name| {
+                            SharedString::from(format!(
+                                "Show and select the active local branch: {name}"
+                            ))
+                        },
+                    );
                     components::Button::new("sidebar_locate_active_branch", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
@@ -282,52 +239,73 @@ impl SidebarPaneView {
                         .w(components::control_height(ui_scale))
                         .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(theme, tooltip)
-                        .debug_selector(|| "sidebar_locate_active_branch".to_string()),
-                )
-            })
-            .when(mode == SidebarMode::Files && tools, |strip| {
-                strip.child(
-                    components::Button::new("sidebar_locate_open_file", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .disabled(!can_locate_open_file)
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/locate.svg",
-                            if can_locate_open_file {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            this.locate_open_file(cx);
-                        })
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(
-                            theme,
-                            if can_locate_open_file {
-                                format!(
-                                    "Show the open file in the explorer ({})",
-                                    crate::kit::components::secondary_shortcut("Shift+L")
-                                )
-                                .into()
-                            } else {
-                                SharedString::from("No file is open")
-                            },
-                        )
-                        .debug_selector(|| "sidebar_locate_open_file".to_string()),
-                )
+                        .debug_selector(|| "sidebar_locate_active_branch".to_string())
+                        .into_any_element()
+                }
+                SidebarTool::LocateFile => components::Button::new("sidebar_locate_open_file", "")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .disabled(!can_locate_open_file)
+                    .start_slot(crate::view::icons::svg_icon(
+                        "icons/locate.svg",
+                        if can_locate_open_file {
+                            theme.colors.foreground.secondary
+                        } else {
+                            with_alpha(theme.colors.foreground.secondary, 0.45)
+                        },
+                        scaled_px(13.0),
+                    ))
+                    .on_click(theme, cx, |this, _e, _window, cx| {
+                        this.locate_open_file(cx);
+                    })
+                    .w(components::control_height(ui_scale))
+                    .h(components::control_height(ui_scale))
+                    .gitcomet_tooltip(
+                        theme,
+                        if can_locate_open_file {
+                            format!(
+                                "Show the open file in the explorer ({})",
+                                crate::kit::components::secondary_shortcut("Shift+L")
+                            )
+                            .into()
+                        } else {
+                            SharedString::from("No file is open")
+                        },
+                    )
+                    .debug_selector(|| "sidebar_locate_open_file".to_string())
+                    .into_any_element(),
             });
-        components::navigation_tab_strip(bg, ui_scale)
+        }
+        header
+            .render(
+                theme,
+                ui_scale,
+                bg,
+                tools_row,
+                cx,
+                move |this, index, window, cx| {
+                    match targets[index] {
+                        SidebarTabTarget::Branches | SidebarTabTarget::Files => {
+                            let mode = if targets[index] == SidebarTabTarget::Branches {
+                                SidebarMode::Branches
+                            } else {
+                                SidebarMode::Files
+                            };
+                            this.file_history_selected = false;
+                            this.store.dispatch(Msg::SetSidebarMode { mode });
+                            this.select_routed_tab(None, window, cx);
+                        }
+                        SidebarTabTarget::History => this.show_file_history(window, cx),
+                        SidebarTabTarget::Extension(index) => {
+                            this.file_history_selected = false;
+                            this.select_routed_tab(Some(index), window, cx);
+                        }
+                    }
+                    cx.emit(SidebarHeaderChanged);
+                    cx.notify();
+                },
+            )
             .id("sidebar_header")
             .debug_selector(|| "sidebar_header".to_string())
-            .min_w(px(0.0))
-            .flex_none()
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
-            .child(tabs)
-            .when(tools, |header| header.child(tools_bar))
     }
 }

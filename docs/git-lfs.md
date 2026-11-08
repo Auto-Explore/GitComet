@@ -1,6 +1,6 @@
 # Git LFS
 
-GitComet works with repositories that store large files in [Git LFS](https://git-lfs.com). GitComet does not move LFS content itself. Checkout, staging, commit and push go through Git, and Git runs the `git-lfs` filters and hooks. Downloads, uploads, locks and tracking run `git lfs` directly.
+GitComet works with repositories that store large files in [Git LFS](https://git-lfs.com). GitComet does not move LFS content itself. Checkout, staging, commit and push go through Git, and Git runs the `git-lfs` filters and hooks. Downloads, uploads, locks and tracking run `git lfs` directly. A push after commit that [skips Git hooks](appearance-and-push.md#skip-git-hooks) runs `git lfs push` before pushing when it skips a `pre-push` hook and publishes LFS pointers, because skipping hooks also skips the upload LFS does in that hook.
 
 **Settings → Executables** shows whether Git can run `git lfs`. When it is **Not found**, GitComet still shows which files are LFS files, but every LFS command is listed disabled with "(install git-lfs)".
 
@@ -44,7 +44,7 @@ Git commands time out after five minutes without output (`GITCOMET_GIT_COMMAND_T
 
 When an LFS step fails, GitComet recognises the common causes and adds a hint to the error:
 
-- **Git LFS is not installed where Git can find it.** Install git-lfs and run `git lfs install`. On macOS, a GUI app can have a shorter PATH than your shell; see [Commit Signature Verification](commit-signatures.md) for the same problem with GPG.
+- **Git LFS is not installed where Git can find it.** Install git-lfs and run `git lfs install`. On macOS, GitComet opened from Finder or the Dock finds a git-lfs installed by Homebrew, MacPorts or the git-lfs installer, but not one in a directory that only your shell profile adds to `PATH`. Run `gitcomet` from a terminal to give it your shell's `PATH`, or link git-lfs into `/usr/local/bin`.
 - **An LFS object could not be downloaded.** The remote does not have it, or you cannot authenticate to its LFS server. Run `git lfs fetch --all` in a terminal to see the server's answer.
 - **Another user holds an LFS lock.** Ask them to unlock the file, or use **Force unlock** if the server allows it.
 - **LFS objects could not be uploaded.** Run `git lfs push --all <remote>`, or check the LFS server's credentials.
