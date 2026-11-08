@@ -40,7 +40,8 @@ type OptionsCallback<V> = Rc<dyn Fn(&mut V, SearchToggles, &mut Window, &mut Con
 /// What the bar's match label reports.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuickSearchStatus {
-    /// The query is empty; the label shows nothing.
+    /// The query is empty; the in-row label still reads "No matches" so its
+    /// slot is never blank.
     Empty,
     /// The query is not a valid regular expression.
     InvalidRegex,
@@ -61,10 +62,9 @@ pub enum QuickSearchStatus {
 impl QuickSearchStatus {
     pub fn label(self) -> SharedString {
         match self {
-            Self::Empty => SharedString::default(),
+            Self::Empty | Self::NoMatches => "No matches".into(),
             Self::InvalidRegex => "Invalid regex".into(),
             Self::Searching => "Searching…".into(),
-            Self::NoMatches => "No matches".into(),
             Self::Failed => "Search failed".into(),
             Self::Position {
                 current,
@@ -391,9 +391,11 @@ impl<V: 'static> QuickSearchBar<V> {
         let prefix = self.id_prefix.clone();
         let status = self.status;
         let bar = self.render_bar(tier, theme, ui_scale, cx).w_full();
-        // A tier without the in-row label shows the status under the bar.
+        // A tier without the in-row label shows the status under the bar;
+        // not for an empty query, which would only add a line.
         let label = status.label();
-        let status_line = (!(features.navigation && tier.shows_navigation()) && !label.is_empty())
+        let status_line = (!(features.navigation && tier.shows_navigation())
+            && status != QuickSearchStatus::Empty)
             .then(|| {
                 div()
                     .px(ui_scale.px(PAD_X_PX))
@@ -888,7 +890,7 @@ mod tests {
     #[test]
     fn quick_search_status_labels() {
         let label = |status: QuickSearchStatus| status.label().to_string();
-        assert_eq!(label(QuickSearchStatus::Empty), "");
+        assert_eq!(label(QuickSearchStatus::Empty), "No matches");
         assert_eq!(label(QuickSearchStatus::InvalidRegex), "Invalid regex");
         assert_eq!(label(QuickSearchStatus::Searching), "Searching…");
         assert_eq!(label(QuickSearchStatus::NoMatches), "No matches");
