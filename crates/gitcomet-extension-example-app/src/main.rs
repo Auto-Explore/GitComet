@@ -23,5 +23,5 @@ fn main() {
         return;
     }
 
-    std::process::exit(launch.run());
+    std::process::exit(launch.run_cli());
 }

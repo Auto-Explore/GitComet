@@ -20,6 +20,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(1);
 const CLAIM_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_WIRE_BYTES: usize = 1024 * 1024;
 const INSTANCE_FILE_ENV: &str = "GITCOMET_BROWSER_INSTANCE_FILE";
+const OK_REPLY: &[u8] = b"ok\n";
+const REJECTED_REPLY: &[u8] = b"rejected\n";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstanceDescriptor {
@@ -140,6 +142,18 @@ pub(crate) enum StartResult {
     Primary(PrimaryBrowserInstance),
 }
 
+#[derive(Debug)]
+pub(crate) enum StartError {
+    Broker(io::Error),
+    Forward(io::Error),
+}
+
+impl From<io::Error> for StartError {
+    fn from(error: io::Error) -> Self {
+        Self::Broker(error)
+    }
+}
+
 pub(crate) struct PrimaryBrowserInstance {
     requests: Option<BrowserRequestReceiver>,
     _server: BrowserInstanceServer,
@@ -200,26 +214,73 @@ pub(crate) fn normalize_browser_path(path: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
-pub(crate) fn start_or_forward(request: BrowserOpenRequest) -> io::Result<StartResult> {
-    let descriptor_path = std::env::var_os(INSTANCE_FILE_ENV)
+fn descriptor_path() -> io::Result<PathBuf> {
+    std::env::var_os(INSTANCE_FILE_ENV)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .or_else(gitcomet_state::session::browser_instance_file_path)
-        .ok_or_else(|| io::Error::other("no per-user state directory is available"))?;
-    start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
+        .ok_or_else(|| io::Error::other("no per-user state directory is available"))
+}
+
+pub(crate) fn forward_if_running(request: impl FnOnce() -> BrowserOpenRequest) -> io::Result<bool> {
+    let Ok(path) = descriptor_path() else {
+        return Ok(false);
+    };
+    forward_if_running_at(&path, request)
+}
+
+// Ok(false): nothing was delivered. Err: the request may have been delivered.
+fn forward_if_running_at(
+    descriptor_path: &Path,
+    request: impl FnOnce() -> BrowserOpenRequest,
+) -> io::Result<bool> {
+    let Some(descriptor) = read_descriptor(descriptor_path) else {
+        return Ok(false);
+    };
+    let Ok(stream) = connect_to_descriptor(&descriptor) else {
+        return Ok(false);
+    };
+    match send_request(stream, &descriptor, &request()) {
+        Ok(delivered) => Ok(delivered),
+        // No reply may mean a lost acknowledgement, so never resend unless
+        // the descriptor's process is gone and the descriptor is stale.
+        Err(_) if !crate::process_liveness::process_is_running(descriptor.pid) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// `probed`: this process has just found no browser to forward to with
+/// [`forward_if_running`], so arbitration starts at the claim instead of
+/// connecting to the same, possibly stale, descriptor again. A live browser
+/// holds the claim for its whole life and a claim waiter forwards to it.
+pub(crate) fn start_or_forward(
+    request: BrowserOpenRequest,
+    probed: bool,
+) -> Result<StartResult, StartError> {
+    let descriptor_path = descriptor_path()?;
+    if probed {
+        claim_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
+    } else {
+        start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
+    }
 }
 
 fn start_or_forward_at(
     descriptor_path: &Path,
     request: BrowserOpenRequest,
     claim_wait: Duration,
-) -> io::Result<StartResult> {
-    if let Some(descriptor) = read_descriptor(descriptor_path)
-        && forward_request(&descriptor, &request).is_ok()
-    {
+) -> Result<StartResult, StartError> {
+    if forward_if_running_at(descriptor_path, || request.clone()).map_err(StartError::Forward)? {
         return Ok(StartResult::Forwarded);
     }
+    claim_or_forward_at(descriptor_path, request, claim_wait)
+}
 
+fn claim_or_forward_at(
+    descriptor_path: &Path,
+    request: BrowserOpenRequest,
+    claim_wait: Duration,
+) -> Result<StartResult, StartError> {
     // Binding a candidate and publishing its descriptor are separate
     // operations. Serialize that interval across processes so a contender
     // cannot time out on the bound port, choose another one, and become a
@@ -235,24 +296,30 @@ fn start_or_forward_at(
     for port in candidate_ports(descriptor_path) {
         let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         match TcpListener::bind(address) {
-            Ok(listener) => return start_primary(descriptor_path, listener, port, claim),
+            Ok(listener) => {
+                return start_primary(descriptor_path, listener, port, claim)
+                    .map_err(StartError::Broker);
+            }
             Err(err) => last_error = Some(err),
         }
     }
 
-    Err(last_error.unwrap_or_else(|| io::Error::other("no browser broker port is available")))
+    Err(StartError::Broker(last_error.unwrap_or_else(|| {
+        io::Error::other("no browser broker port is available")
+    })))
 }
 
 fn acquire_browser_instance_claim(
     descriptor_path: &Path,
     request: &BrowserOpenRequest,
     claim_wait: Duration,
-) -> io::Result<BrowserInstanceClaim> {
+) -> Result<BrowserInstanceClaim, StartError> {
     let Some(parent) = descriptor_path.parent() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "browser instance path has no parent",
-        ));
+        )
+        .into());
     };
     fs::create_dir_all(parent)?;
     let mut lock_name = descriptor_path.as_os_str().to_os_string();
@@ -277,8 +344,8 @@ fn acquire_browser_instance_claim(
                 // for its descriptor while publication is in progress instead
                 // of waiting on the lock and missing the moment forwarding
                 // becomes possible.
-                if let Some(descriptor) = read_descriptor(descriptor_path)
-                    && forward_request(&descriptor, request).is_ok()
+                if forward_if_running_at(descriptor_path, || request.clone())
+                    .map_err(StartError::Forward)?
                 {
                     return Ok(BrowserInstanceClaim::Forwarded);
                 }
@@ -288,11 +355,12 @@ fn acquire_browser_instance_claim(
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "the running instance did not accept the request",
-                    ));
+                    )
+                    .into());
                 }
                 thread::sleep(Duration::from_millis(10));
             }
-            Err(TryLockError::Error(error)) => return Err(error),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
         }
     }
 }
@@ -340,8 +408,11 @@ fn server_loop(
 ) {
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
-            Ok((stream, _address)) => {
+            Ok((mut stream, _address)) => {
                 if stop.load(Ordering::Acquire) {
+                    // A launch racing shutdown must not mistake the closed
+                    // connection for a lost acknowledgement.
+                    let _ = stream.write_all(REJECTED_REPLY);
                     break;
                 }
                 let _ = handle_connection(stream, &descriptor, &requests);
@@ -370,9 +441,24 @@ fn handle_connection(
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    if let Err(error) = enqueue_request(&mut stream, descriptor, requests) {
+        // Nothing was queued: say so, so the client may start a primary
+        // instead of guessing whether the request was delivered.
+        let _ = stream.write_all(REJECTED_REPLY);
+        return Err(error);
+    }
+    stream.write_all(OK_REPLY)?;
+    stream.flush()
+}
+
+fn enqueue_request(
+    stream: &mut TcpStream,
+    descriptor: &InstanceDescriptor,
+    requests: &BrowserRequestSender,
+) -> io::Result<()> {
     let mut line = String::new();
     {
-        let mut reader = BufReader::new(&mut stream).take((MAX_WIRE_BYTES + 1) as u64);
+        let mut reader = BufReader::new(&mut *stream).take((MAX_WIRE_BYTES + 1) as u64);
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 || bytes > MAX_WIRE_BYTES || !line.ends_with('\n') {
             return Err(io::Error::new(
@@ -415,15 +501,10 @@ fn handle_connection(
             "browser request receiver is closed",
         ));
     }
-
-    stream.write_all(b"ok\n")?;
-    stream.flush()
+    Ok(())
 }
 
-fn forward_request(
-    descriptor: &InstanceDescriptor,
-    request: &BrowserOpenRequest,
-) -> io::Result<()> {
+fn connect_to_descriptor(descriptor: &InstanceDescriptor) -> io::Result<TcpStream> {
     if descriptor.version != PROTOCOL_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -438,9 +519,26 @@ fn forward_request(
         ));
     }
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, descriptor.port);
-    let mut stream = TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT)?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT)
+}
+
+#[cfg(test)]
+fn forward_request(
+    descriptor: &InstanceDescriptor,
+    request: &BrowserOpenRequest,
+) -> io::Result<()> {
+    if send_request(connect_to_descriptor(descriptor)?, descriptor, request)? {
+        Ok(())
+    } else {
+        Err(io::Error::other("browser broker rejected the request"))
+    }
+}
+
+fn send_request(
+    mut stream: TcpStream,
+    descriptor: &InstanceDescriptor,
+    request: &BrowserOpenRequest,
+) -> io::Result<bool> {
     let wire = WireRequest {
         version: PROTOCOL_VERSION,
         token: descriptor.token.clone(),
@@ -448,19 +546,43 @@ fn forward_request(
         path: request.path.as_deref().map(WirePath::from_path),
         target: request.target.into(),
     };
-    serde_json::to_writer(&mut stream, &wire).map_err(io::Error::other)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
+    let mut line = serde_json::to_vec(&wire)?;
+    line.push(b'\n');
+    // The broker queues a request only once it has read the whole line, so
+    // a failure before the line is out (a broker closing its listener as it
+    // shuts down, say) delivered nothing.
+    let sent = stream
+        .set_read_timeout(Some(IO_TIMEOUT))
+        .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+        .and_then(|()| stream.write_all(&line))
+        .and_then(|()| stream.flush());
+    if sent.is_err() {
+        return Ok(false);
+    }
 
-    let mut response = String::new();
-    BufReader::new(stream).read_line(&mut response)?;
-    if response == "ok\n" {
-        Ok(())
-    } else {
+    let mut response = Vec::new();
+    let reply_limit = OK_REPLY.len().max(REJECTED_REPLY.len()) as u64;
+    match BufReader::new(stream)
+        .take(reply_limit)
+        .read_until(b'\n', &mut response)
+    {
+        Ok(_) => {}
+        // A reset comes from a peer that closed with the request unread, or
+        // whose process ended: nothing will act on the request either way.
+        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    if response == OK_REPLY {
+        Ok(true)
+    } else if OK_REPLY.starts_with(&response) {
+        // Silence or a cut-off "ok": the request may have been queued.
         Err(io::Error::new(
             io::ErrorKind::ConnectionAborted,
-            "browser broker rejected the request",
+            "browser broker did not acknowledge the request",
         ))
+    } else {
+        // A rejection, or a reply our broker never sends (another service).
+        Ok(false)
     }
 }
 
@@ -549,11 +671,19 @@ mod tests {
     fn start_after_reservation(
         descriptor_path: &Path,
         request: BrowserOpenRequest,
-    ) -> io::Result<StartResult> {
+    ) -> Result<StartResult, StartError> {
+        retry_while_reserved(|| {
+            start_or_forward_at(descriptor_path, request.clone(), CLAIM_WAIT_TIMEOUT)
+        })
+    }
+
+    fn retry_while_reserved(
+        mut start: impl FnMut() -> Result<StartResult, StartError>,
+    ) -> Result<StartResult, StartError> {
         let deadline = Instant::now() + CLAIM_WAIT_TIMEOUT;
         loop {
-            match start_or_forward_at(descriptor_path, request.clone(), CLAIM_WAIT_TIMEOUT) {
-                Err(error)
+            match start() {
+                Err(StartError::Broker(error))
                     if error.kind() == io::ErrorKind::AddrInUse && Instant::now() < deadline =>
                 {
                     thread::sleep(Duration::from_millis(10));
@@ -561,6 +691,283 @@ mod tests {
                 result => return result,
             }
         }
+    }
+
+    #[test]
+    fn an_early_probe_does_not_create_state_or_build_a_request_without_a_primary() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("absent/instance.json");
+        assert!(
+            !forward_if_running_at(&path, || panic!("request built without a primary")).unwrap()
+        );
+        assert!(!path.parent().unwrap().exists());
+
+        let path = directory.path().join("stale.json");
+        fs::write(&path, b"incomplete descriptor").unwrap();
+        assert!(!forward_if_running_at(&path, || panic!("request built from stale data")).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"incomplete descriptor");
+        assert!(!directory.path().join("stale.json.lock").exists());
+    }
+
+    #[test]
+    fn an_early_probe_ignores_incompatible_and_disconnected_descriptors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("instance.json");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut descriptor = InstanceDescriptor {
+            version: PROTOCOL_VERSION + 1,
+            port: listener.local_addr().unwrap().port(),
+            token: "probe-fixture".into(),
+            pid: std::process::id(),
+            product: this_product(),
+        };
+        for foreign_product in [false, true] {
+            if foreign_product {
+                descriptor.version = PROTOCOL_VERSION;
+                descriptor.product = "dev.other.product".into();
+            }
+            write_descriptor(&path, &descriptor).unwrap();
+            assert!(!forward_if_running_at(&path, || panic!("incompatible primary")).unwrap());
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
+        descriptor.product = this_product();
+        write_descriptor(&path, &descriptor).unwrap();
+        drop(listener);
+        assert!(!forward_if_running_at(&path, || panic!("disconnected primary")).unwrap());
+        assert!(!directory.path().join("instance.json.lock").exists());
+    }
+
+    #[test]
+    fn an_early_probe_leaves_ownership_to_final_arbitration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(directory.path()).0;
+        assert!(!forward_if_running_at(&path, || panic!("no primary yet")).unwrap());
+        let StartResult::Primary(mut primary) = start_after_reservation(
+            &path,
+            request("initial".into(), BrowserOpenTarget::ExistingWindow),
+        )
+        .unwrap() else {
+            panic!("first launch must own the broker");
+        };
+        let published = fs::read(&path).unwrap();
+        let receiver = primary.take_requests().unwrap();
+        let fast = request("early".into(), BrowserOpenTarget::NewWindow);
+        assert!(forward_if_running_at(&path, || fast.clone()).unwrap());
+        assert_eq!(receiver.try_recv().unwrap(), fast);
+        let raced = request("raced".into(), BrowserOpenTarget::ExistingWindow);
+        assert!(matches!(
+            start_or_forward_at(&path, raced.clone(), CLAIM_WAIT_TIMEOUT).unwrap(),
+            StartResult::Forwarded
+        ));
+        assert_eq!(receiver.try_recv().unwrap(), raced);
+        assert_eq!(fs::read(&path).unwrap(), published);
+    }
+
+    #[test]
+    fn a_lost_acknowledgement_never_retries_or_claims_a_new_primary() {
+        for arbitrate in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("instance.json");
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let descriptor = InstanceDescriptor {
+                version: PROTOCOL_VERSION,
+                port: listener.local_addr().unwrap().port(),
+                token: "lost-ack-fixture".into(),
+                pid: std::process::id(),
+                product: this_product(),
+            };
+            write_descriptor(&path, &descriptor).unwrap();
+            let published = fs::read(&path).unwrap();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+                let mut line = String::new();
+                BufReader::new(stream).read_line(&mut line).unwrap();
+                let wire: WireRequest = serde_json::from_str(&line).unwrap();
+                assert_eq!(wire.token, "lost-ack-fixture");
+            });
+            let request = request("accepted-once".into(), BrowserOpenTarget::NewWindow);
+            let result = if arbitrate {
+                start_or_forward_at(&path, request, CLAIM_WAIT_TIMEOUT)
+                    .map(|result| matches!(result, StartResult::Forwarded))
+            } else {
+                forward_if_running_at(&path, || request).map_err(StartError::Forward)
+            };
+            assert!(matches!(result, Err(StartError::Forward(_))), "{result:?}");
+            server.join().unwrap();
+            assert_eq!(fs::read(&path).unwrap(), published);
+            assert!(!directory.path().join("instance.json.lock").exists());
+        }
+    }
+
+    // Answers one connection per reply (None closes silently); returns the tokens.
+    fn fake_broker(replies: Vec<Option<&'static [u8]>>) -> (u16, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            replies
+                .into_iter()
+                .map(|reply| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&mut stream).read_line(&mut line).unwrap();
+                    if let Some(reply) = reply {
+                        stream.write_all(reply).unwrap();
+                    }
+                    serde_json::from_str::<WireRequest>(&line).unwrap().token
+                })
+                .collect()
+        });
+        (port, server)
+    }
+
+    fn fake_descriptor(port: u16, token: &str, pid: u32) -> InstanceDescriptor {
+        InstanceDescriptor {
+            version: PROTOCOL_VERSION,
+            port,
+            token: token.into(),
+            pid,
+            product: this_product(),
+        }
+    }
+
+    #[test]
+    fn a_shutting_down_primary_rejects_without_blocking_the_next_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let StartResult::Primary(mut primary) = start_after_reservation(
+            &path,
+            request("initial".into(), BrowserOpenTarget::ExistingWindow),
+        )
+        .unwrap() else {
+            panic!("expected primary")
+        };
+        drop(primary.take_requests().unwrap());
+        let next = request("next".into(), BrowserOpenTarget::ExistingWindow);
+        assert!(!forward_if_running_at(&path, || next.clone()).unwrap());
+        match start_or_forward_at(&path, next.clone(), Duration::from_millis(50)) {
+            Err(StartError::Broker(error)) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
+            Err(error) => panic!("a rejection must leave the claim to arbitration: {error:?}"),
+            Ok(_) => panic!("the shutting-down primary still holds the claim"),
+        }
+        drop(primary);
+        assert!(matches!(
+            start_after_reservation(&path, next).unwrap(),
+            StartResult::Primary(_)
+        ));
+    }
+
+    #[test]
+    fn a_request_queued_behind_broker_shutdown_is_not_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let StartResult::Primary(mut primary) = start_after_reservation(
+            &path,
+            request("initial".into(), BrowserOpenTarget::ExistingWindow),
+        )
+        .unwrap() else {
+            panic!("expected primary")
+        };
+        let receiver = primary.take_requests().unwrap();
+        let descriptor = read_descriptor(&path).unwrap();
+        // The broker serves one connection at a time and waits IO_TIMEOUT
+        // on this silent one, so the next is still queued when it stops.
+        let _stall = connect_to_descriptor(&descriptor).unwrap();
+        let queued = connect_to_descriptor(&descriptor).unwrap();
+        drop(primary);
+        let late = request("late".into(), BrowserOpenTarget::NewWindow);
+        assert!(
+            !send_request(queued, &descriptor, &late).unwrap(),
+            "a closed broker queued nothing, so the launch may claim"
+        );
+        assert!(receiver.try_recv().is_none());
+    }
+
+    #[test]
+    fn a_probed_launch_skips_the_repeat_probe_and_still_forwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let stale = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        stale.set_nonblocking(true).unwrap();
+        let stale_port = stale.local_addr().unwrap().port();
+        write_descriptor(&path, &fake_descriptor(stale_port, "stale", u32::MAX)).unwrap();
+        let initial = request("initial".into(), BrowserOpenTarget::ExistingWindow);
+        let StartResult::Primary(mut primary) = retry_while_reserved(|| {
+            claim_or_forward_at(&path, initial.clone(), CLAIM_WAIT_TIMEOUT)
+        })
+        .unwrap() else {
+            panic!("nothing holds the claim, so the launch must own the broker");
+        };
+        assert_eq!(
+            stale.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "the descriptor the caller already probed was contacted again"
+        );
+        // The live browser holds the claim, so the claim wait forwards to it.
+        let receiver = primary.take_requests().unwrap();
+        let next = request("next".into(), BrowserOpenTarget::NewWindow);
+        assert!(matches!(
+            claim_or_forward_at(&path, next.clone(), CLAIM_WAIT_TIMEOUT).unwrap(),
+            StartResult::Forwarded
+        ));
+        assert_eq!(receiver.try_recv().unwrap(), next);
+    }
+
+    #[test]
+    fn a_stale_descriptor_on_a_foreign_listener_does_not_block_launch() {
+        // A foreign reply proves the port is not ours; a silent close is
+        // only trusted as undelivered once the descriptor's process is gone.
+        for (reply, pid) in [
+            (
+                Some(&b"HTTP/1.1 400 Bad Request\r\n"[..]),
+                std::process::id(),
+            ),
+            (None, u32::MAX),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = reserve_candidate_ports(dir.path()).0;
+            let (port, server) = fake_broker(vec![reply]);
+            write_descriptor(&path, &fake_descriptor(port, "stale", pid)).unwrap();
+            let launch = request("repo".into(), BrowserOpenTarget::ExistingWindow);
+            let result = start_after_reservation(&path, launch);
+            assert!(
+                matches!(result, Ok(StartResult::Primary(_))),
+                "{reply:?}: {:?}",
+                result.err()
+            );
+            assert_eq!(server.join().unwrap(), ["stale"]);
+        }
+    }
+
+    #[test]
+    fn a_claim_waiter_keeps_polling_after_a_rejection_until_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let launch = request("repo".into(), BrowserOpenTarget::NewWindow);
+        let BrowserInstanceClaim::Acquired(claim) =
+            acquire_browser_instance_claim(&path, &launch, CLAIM_WAIT_TIMEOUT).unwrap()
+        else {
+            panic!("claim unexpectedly forwarded");
+        };
+        // The new primary rejects the stale token until it publishes its own.
+        let (stale_port, stale) = fake_broker(vec![Some(b"rejected\n")]);
+        write_descriptor(&path, &fake_descriptor(stale_port, "stale", u32::MAX)).unwrap();
+        let waiter_path = path.clone();
+        let waiter = thread::spawn(move || {
+            start_or_forward_at(&waiter_path, launch, CLAIM_WAIT_TIMEOUT)
+                .map(|result| matches!(result, StartResult::Forwarded))
+        });
+        assert_eq!(stale.join().unwrap(), ["stale"]);
+        let (port, published) = fake_broker(vec![Some(b"ok\n")]);
+        write_descriptor(&path, &fake_descriptor(port, "fresh", std::process::id())).unwrap();
+        assert!(matches!(waiter.join().unwrap(), Ok(true)));
+        assert_eq!(published.join().unwrap(), ["fresh"]);
+        drop(claim);
     }
 
     #[test]
@@ -906,7 +1313,8 @@ mod tests {
         let started = Instant::now();
         let result = start_or_forward_at(&descriptor_path, request.clone(), wait);
         match result {
-            Err(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
+            Err(StartError::Broker(error)) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
+            Err(error) => panic!("unexpected forwarding error: {error:?}"),
             Ok(_) => panic!("a held claim must not allow another primary"),
         }
         assert!(
@@ -972,7 +1380,10 @@ mod tests {
             .unwrap_or_else(|_| panic!("{case}: second launch is still waiting"));
 
         match result {
-            Err(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{case}"),
+            Err(StartError::Broker(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{case}")
+            }
+            Err(error) => panic!("{case}: unexpected forwarding error: {error:?}"),
             Ok(_) => panic!("{case}: second launch should fall back to running alone"),
         }
         assert_eq!(

@@ -191,6 +191,8 @@ fn relaunch_under_x11_fallback() -> i32 {
         gitcomet_core::identity::current().display_name()
     );
 
+    // The process's own arguments, not the ones a library caller passed:
+    // the relaunched executable runs its `main` again.
     let mut relaunch = std::process::Command::new(current_exe);
     relaunch.args(std::env::args_os().skip(1));
     relaunch.env(LINUX_X11_RELAUNCH_ENV, "1");
