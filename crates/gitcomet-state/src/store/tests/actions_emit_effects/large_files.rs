@@ -586,6 +586,7 @@ fn review_commit_and_amend_push_wait_for_running_push() {
             message: "ship".into(),
             amend,
             push_after_commit: true,
+            hooks: gitcomet_core::services::GitHooks::Run,
         });
         let result = Ok(gitcomet_core::services::CommitOperationOutcome {
             local_branch: Some("adjusted/main(unlocked)".into()),
@@ -922,6 +923,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         local_branch: Some("adjusted/main(unlocked)".to_string()),
         pre_head: None,
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        hooks: gitcomet_core::services::GitHooks::Run,
     };
 
     // An adjusted branch has no upstream, so the toolbar offers set-upstream.
@@ -935,6 +937,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
             repo_id,
             target: target.clone(),
             set_upstream: true,
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
         Msg::SafePushAfterCommit {
             repo_id,
@@ -952,6 +955,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
+        hooks: gitcomet_core::services::GitHooks::Run,
     });
     let effects = reduce(
         &mut repos,

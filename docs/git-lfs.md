@@ -1,6 +1,6 @@
 # Git LFS
 
-GitComet works with repositories that store large files in [Git LFS](https://git-lfs.com). GitComet does not move LFS content itself. Checkout, staging, commit and push go through Git, and Git runs the `git-lfs` filters and hooks. Downloads, uploads, locks and tracking run `git lfs` directly.
+GitComet works with repositories that store large files in [Git LFS](https://git-lfs.com). GitComet does not move LFS content itself. Checkout, staging, commit and push go through Git, and Git runs the `git-lfs` filters and hooks. Downloads, uploads, locks and tracking run `git lfs` directly. A push after commit that [skips Git hooks](appearance-and-push.md#skip-git-hooks) runs `git lfs push` before pushing when it skips a `pre-push` hook and publishes LFS pointers, because skipping hooks also skips the upload LFS does in that hook.
 
 **Settings → Executables** shows whether Git can run `git lfs`. When it is **Not found**, GitComet still shows which files are LFS files, but every LFS command is listed disabled with "(install git-lfs)".
 

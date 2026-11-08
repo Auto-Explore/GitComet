@@ -782,6 +782,46 @@ fn maintenance_summary_reports_what_the_run_did() {
     );
 }
 
+/// `git push -u` exits 0 when it pushed but could not write the upstream
+/// config, and says so only on stderr; the summary must not call it done.
+#[test]
+fn summarize_command_success_says_when_the_upstream_was_not_saved() {
+    let stderr = "To ../remote.git\n * [new branch]      topic -> topic\n\
+                  error: unable to write upstream branch configuration\n";
+    let target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".into(),
+        branch: "topic".into(),
+        local_branch: "topic".into(),
+        local_head: CommitId("0123456789abcdef0123456789abcdef01234567".into()),
+    };
+    let cases = [
+        (
+            RepoCommandKind::PushSetUpstream {
+                remote: "origin".into(),
+                branch: "topic".into(),
+            },
+            "Push -u origin/topic: Pushed, but the upstream was not saved",
+        ),
+        (
+            RepoCommandKind::PushAfterCommit {
+                target,
+                set_upstream: true,
+                hooks: gitcomet_core::services::GitHooks::Skip,
+            },
+            "Push after commit -u: Pushed, but the upstream was not saved",
+        ),
+    ];
+    for (command, expected) in cases {
+        let (_, summary) = summarize_command(
+            &command,
+            &command_output("git push", "", stderr),
+            true,
+            None,
+        );
+        assert_eq!(summary, expected);
+    }
+}
+
 #[test]
 fn summarize_command_success_covers_status_variants() {
     let (_, fetch_summary) = summarize_command(

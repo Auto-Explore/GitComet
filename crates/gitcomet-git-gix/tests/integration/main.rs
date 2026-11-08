@@ -19,6 +19,7 @@ mod commit_signature;
 mod comparison;
 mod conflict_base_checkout;
 mod git_cli_scoreboard;
+mod git_hooks;
 mod git_ops_trace;
 mod gitignore;
 mod large_files;

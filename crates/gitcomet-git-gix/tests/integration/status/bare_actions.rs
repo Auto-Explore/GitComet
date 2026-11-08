@@ -5,7 +5,8 @@ use gitcomet_core::large_files::{AnnexAdjustMode, LargeFileCommand};
 use gitcomet_core::patch_action::{PatchOperation, SourceLineSelection};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    ComparisonOptions, GitRepository, PullMode, RebaseRange, ResetMode, Result, WorktreeCheckout,
+    ComparisonOptions, GitHooks, GitRepository, PullMode, RebaseRange, ResetMode, Result,
+    WorktreeCheckout,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -95,6 +96,10 @@ fn direct_worktree_mutations_and_reads_refuse_bare_without_changing_git_data() {
     reject!(repo.commit_amend_with_output("blocked"));
     reject!(repo.commit_amend_with_outcome("blocked"));
     reject!(repo.commit_amend_with_identity("blocked", None));
+    for hooks in [GitHooks::Run, GitHooks::Skip] {
+        reject!(repo.commit_with_hooks("blocked", None, hooks));
+        reject!(repo.commit_amend_with_hooks("blocked", None, hooks));
+    }
     reject!(repo.discard_worktree_changes(&[Path::new("config")]));
     reject!(repo.pull(PullMode::Default));
     reject!(repo.pull_branch_with_output("origin", "main"));

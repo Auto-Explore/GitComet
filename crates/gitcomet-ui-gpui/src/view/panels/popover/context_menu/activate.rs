@@ -886,6 +886,14 @@ impl PopoverHost {
                     let _ = root_view.request(RootRequest::SetCommitPushAfter(enabled), None, cx);
                 });
             }
+            ContextMenuAction::SetCommitSkipHooksEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_skip_hooks_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.request(RootRequest::SetCommitSkipHooks(enabled), None, cx);
+                });
+            }
             ContextMenuAction::UseCommitMessage { message } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_commit_message_from_history(message, window, cx);
