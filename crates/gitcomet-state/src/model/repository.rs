@@ -246,6 +246,8 @@ pub struct RepoState {
     /// command *starts*, which would spend the signal before the disk changed.
     pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
+    /// A document, hosted pane or reload used the tab without activating it.
+    pub(crate) last_background_use_at: Option<SystemTime>,
     /// The tab was left with loads or a diff reload in flight. Leaving
     /// cancelled them, so the values they were replacing stay stale until the
     /// tab is refreshed on its next activation.
@@ -346,6 +348,10 @@ impl RepoState {
     /// Reloadable backend resources were released while this tab stayed open.
     pub fn is_backend_parked(&self) -> bool {
         self.backend_parked
+    }
+
+    pub(crate) fn last_used_at(&self) -> Option<SystemTime> {
+        self.last_active_at.max(self.last_background_use_at)
     }
 
     /// The feedback logs for writing, copied first if a snapshot shares them.
@@ -475,6 +481,7 @@ impl RepoState {
             change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
+            last_background_use_at: None,
             left_mid_refresh: false,
             feedback: Arc::default(),
             pending: RepoPendingState::default(),

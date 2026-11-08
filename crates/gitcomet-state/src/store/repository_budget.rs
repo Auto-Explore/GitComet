@@ -84,7 +84,11 @@ pub(super) fn cold_repositories(
     repos: &RepositoryRuntimes,
     now: SystemTime,
 ) -> Vec<RepoId> {
-    let warm = super::warm_inactive_repos(state, repos.warm_repository_count(now));
+    let warm = super::warm_inactive_repos(
+        state,
+        repos.warm_repository_count(now),
+        RepoState::last_used_at,
+    );
     state
         .repos
         .iter()

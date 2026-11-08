@@ -83,7 +83,7 @@ pub(super) fn reload_repo(
     let repo_state = &mut state.repos[repo_ix];
     // Explicit background use must survive the budget pass until its read can
     // start. A parked tab first needs a handle; its open completion refreshes it.
-    repo_state.last_active_at = Some(inputs.now());
+    repo_state.last_background_use_at = Some(inputs.now());
     if repo_state.backend_parked {
         if matches!(repo_state.open, Loadable::Error(_)) {
             repo_state.set_open(Loadable::NotLoaded);

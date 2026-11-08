@@ -563,7 +563,7 @@ fn open_repo_with_mode(
             if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 // A document request is use too. Keep the handle warm until
                 // its presenter can acquire the document's watch lease.
-                repo.last_active_at = Some(now);
+                repo.last_background_use_at = Some(now);
                 append_open_repo_effect_if_not_loaded(repo, &mut effects);
             }
             return effects;

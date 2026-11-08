@@ -365,7 +365,7 @@ fn hosted_requests_wait_for_cold_or_initial_background_open_and_keep_the_latest_
         assert_eq!(opens, 1);
         assert!(state.repos[0].diff_sessions[&view].is_loading());
         assert!(state.repos[0].change_lists[&list].is_loading());
-        let recent = state.repos[0].last_active_at;
+        let recent = state.repos[0].last_background_use_at;
         let effects = reduce(
             &mut repos,
             &ids,
@@ -377,7 +377,7 @@ fn hosted_requests_wait_for_cold_or_initial_background_open_and_keep_the_latest_
             }),
         );
         assert!(effects.is_empty());
-        assert_eq!(state.repos[0].last_active_at, recent);
+        assert_eq!(state.repos[0].last_background_use_at, recent);
         let effects = reduce(
             &mut repos,
             &ids,
@@ -1062,5 +1062,57 @@ fn a_maintenance_recommendation_for_a_parked_tab_reopens_it() {
         effects
             .iter()
             .any(|effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == id))
+    );
+}
+
+#[test]
+fn background_hosted_use_keeps_the_budget_warm_without_skipping_the_switch_refresh() {
+    use crate::diff_session::{DiffSessionMsg, DiffViewId};
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let background = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/hot-switch-background");
+    open_repo_ready(&mut repos, &ids, &mut state, "/tmp/hot-switch-active");
+    let repo = &mut state.repos[0];
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.set_branches(Loadable::Ready(Vec::new()));
+    repo.set_tags(Loadable::Ready(Vec::new()));
+    repo.set_remotes(Loadable::Ready(Vec::new()));
+    repo.set_remote_branches(Loadable::Ready(Vec::new()));
+    repo.set_stashes(Loadable::Ready(Vec::new()));
+    repo.set_rebase_in_progress(Loadable::Ready(false));
+    repo.set_merge_commit_message(Loadable::Ready(None));
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    repo.last_active_at = Some(an_hour_ago);
+    let lifetime = repo.lifetime();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id: background,
+            lifetime,
+            view: DiffViewId::next(),
+            request: None,
+            target: DiffTarget::working_tree("file.rs".into(), DiffArea::Unstaged),
+        }),
+    );
+    assert_eq!(state.repos[0].last_active_at, Some(an_hour_ago));
+    assert!(state.repos[0].last_used_at() > Some(an_hour_ago));
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: background,
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::References(ReferenceEffect::LoadRemotes { .. })
+        )),
+        "a tab last viewed an hour ago refreshes its remotes, tags and stashes"
     );
 }

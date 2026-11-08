@@ -106,9 +106,13 @@ fn warm_inactive_repo_monitors(_warm_backends: usize) -> usize {
     0
 }
 
-/// The `count` most recently active open tabs that are neither active nor
-/// leased, most recent first.
-fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
+/// The `count` most recent open tabs by `recency` that are neither active
+/// nor leased, most recent first.
+fn warm_inactive_repos(
+    state: &AppState,
+    count: usize,
+    recency: fn(&crate::model::RepoState) -> Option<std::time::SystemTime>,
+) -> Vec<RepoId> {
     if count == 0 {
         return Vec::new();
     }
@@ -120,10 +124,10 @@ fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
                 && !state.watch_leases.contains_key(&repo.id)
                 && matches!(repo.open, crate::model::Loadable::Ready(()))
                 && !repo.backend_parked
-                && repo.last_active_at.is_some()
+                && recency(repo).is_some()
         })
         .collect();
-    recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
+    recent.sort_by_key(|repo| std::cmp::Reverse(recency(repo)));
     recent.truncate(count);
     recent.into_iter().map(|repo| repo.id).collect()
 }
@@ -506,6 +510,7 @@ impl WorkerLoopContext<'_> {
                 warm_inactive_repo_monitors(
                     repos.warm_repository_count(std::time::SystemTime::now()),
                 ),
+                |repo| repo.last_active_at,
             );
             let watched = state
                 .repos

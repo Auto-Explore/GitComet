@@ -88,7 +88,7 @@ pub(super) fn reduce(
                 }
         })
     {
-        repo.last_active_at = Some(inputs.now());
+        repo.last_background_use_at = Some(inputs.now());
         if !repos.has_repository(&repo_id) {
             super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
         }
