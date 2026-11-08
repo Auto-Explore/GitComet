@@ -361,8 +361,8 @@ fn hosted_requests_wait_for_cold_or_initial_background_open_and_keep_the_latest_
             "the pending backend is opened only once"
         );
         assert_eq!(opens, 1);
-        assert!(!state.repos[0].diff_sessions[&view].is_loading());
-        assert!(!state.repos[0].change_lists[&list].is_loading());
+        assert!(state.repos[0].diff_sessions[&view].is_loading());
+        assert!(state.repos[0].change_lists[&list].is_loading());
         let recent = state.repos[0].last_active_at;
         let effects = reduce(
             &mut repos,
@@ -862,4 +862,168 @@ fn an_exhausted_read_on_the_active_tab_parks_idle_tabs_and_reopens_once() {
     let effects = reduce(&mut repos, &ids, &mut state, failure);
     assert_eq!(reopens(&effects), 0, "the retry's failure is not retried");
     assert!(matches!(state.repos[1].status, Loadable::Error(_)));
+}
+
+fn open_hosted_reads(
+    repos: &mut RepositoryRuntimes,
+    ids: &AtomicU64,
+    state: &mut AppState,
+    id: RepoId,
+) -> (
+    Vec<Effect>,
+    crate::diff_session::DiffViewId,
+    crate::diff_session::DiffViewId,
+) {
+    use crate::diff_session::{ChangeSource, DiffSessionMsg, DiffViewId};
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    let lifetime = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == id)
+        .unwrap()
+        .lifetime();
+    let (view, list) = (DiffViewId::next(), DiffViewId::next());
+    let mut effects = reduce(
+        repos,
+        ids,
+        state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id: id,
+            lifetime,
+            view,
+            request: None,
+            target: DiffTarget::working_tree("file.rs".into(), DiffArea::Unstaged),
+        }),
+    );
+    effects.extend(reduce(
+        repos,
+        ids,
+        state,
+        Msg::DiffSession(DiffSessionMsg::OpenChanges {
+            repo_id: id,
+            lifetime,
+            view: list,
+            source: ChangeSource::worktree(DiffArea::Unstaged, true),
+        }),
+    ));
+    (effects, view, list)
+}
+
+#[test]
+fn a_failed_open_answers_the_hosted_reads_waiting_for_it() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/hosted-open-fails");
+    open_repo_ready(
+        &mut repos,
+        &ids,
+        &mut state,
+        "/tmp/hosted-open-fails-active",
+    );
+    park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    state.repos[0].backend_parked = false;
+    state.repos[0].open = Loadable::NotLoaded;
+    let (effects, view, list) = open_hosted_reads(&mut repos, &ids, &mut state, id);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoOpenedErr {
+            repo_id: id,
+            spec: RepoSpec {
+                workdir: "/tmp/hosted-open-fails".into(),
+            },
+            error: std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+        }),
+    );
+    let repo = &state.repos[0];
+    assert!(!repo.diff_sessions[&view].is_loading());
+    assert!(matches!(repo.diff_sessions[&view].diff, Loadable::Error(_)));
+    assert!(!repo.change_lists[&list].is_loading());
+    assert!(matches!(repo.change_lists[&list].files, Loadable::Error(_)));
+}
+
+#[test]
+fn hosted_reads_on_a_tab_whose_open_failed_are_answered_at_once() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/hosted-failed-tab");
+    open_repo_ready(
+        &mut repos,
+        &ids,
+        &mut state,
+        "/tmp/hosted-failed-tab-active",
+    );
+    park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    state.repos[0].backend_parked = false;
+    state.repos[0].open = Loadable::Error("permission denied".into());
+    let (effects, view, list) = open_hosted_reads(&mut repos, &ids, &mut state, id);
+    assert!(effects.is_empty());
+    let repo = &state.repos[0];
+    assert!(
+        matches!(&repo.diff_sessions[&view].diff, Loadable::Error(message) if message == "permission denied")
+    );
+    assert!(matches!(repo.change_lists[&list].files, Loadable::Error(_)));
+}
+
+#[test]
+fn a_cancelled_open_settles_waiting_hosted_reads_until_the_next_open() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::OpenRepo("/tmp/hosted-cancelled".into()),
+    );
+    let id = state.active_repo.unwrap();
+    let (_, view, list) = open_hosted_reads(&mut repos, &ids, &mut state, id);
+    open_repo_ready(&mut repos, &ids, &mut state, "/tmp/hosted-cancelled-other");
+    let repo = &state.repos[0];
+    assert!(matches!(repo.open, Loadable::NotLoaded));
+    assert!(!repo.diff_sessions[&view].is_loading());
+    assert!(matches!(
+        repo.diff_sessions[&view].diff,
+        Loadable::NotLoaded
+    ));
+    assert!(!repo.change_lists[&list].is_loading());
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: id },
+    );
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoOpenedOk {
+            repo_id: id,
+            spec: RepoSpec {
+                workdir: "/tmp/hosted-cancelled".into(),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/hosted-cancelled")),
+            preferences: None,
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+        }),
+    );
+    for expected in [view, list] {
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DiffSession(work) if work.view == expected)),
+            "{expected:?} reloads on the next open"
+        );
+    }
 }

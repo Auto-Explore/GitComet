@@ -274,6 +274,7 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
         repo_state.load_epoch,
         repo_state.spec.workdir.display()
     );
+    let opening = repo_state.open.is_loading();
     clear_cancelled_repo_loading(repo_state);
     effects.extend(std::iter::once(Effect::Control(
         ControlEffect::CancelRepoLoads {
@@ -281,6 +282,13 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
             load_epoch,
         },
     )));
+    if opening {
+        effects.extend(super::diff_session::settle_awaiting_backend(
+            state,
+            repo_id,
+            &Error::new(ErrorKind::Cancelled),
+        ));
+    }
 }
 
 /// Cancels the loads of the tab being switched away from, except a dropped
@@ -1846,7 +1854,7 @@ pub(super) fn repo_opened_err(
             push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.to_string());
         }
     }
-    Vec::new()
+    super::diff_session::settle_awaiting_backend(state, repo_id, &error)
 }
 
 #[cfg(test)]

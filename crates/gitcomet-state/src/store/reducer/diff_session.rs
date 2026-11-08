@@ -9,6 +9,7 @@ use crate::diff_session::{
 };
 use crate::model::RepoState;
 use gitcomet_core::domain::DiffTarget;
+use gitcomet_core::error::{Error, ErrorKind};
 use std::sync::Arc;
 
 pub(super) fn reduce(
@@ -76,41 +77,6 @@ pub(super) fn reduce(
         | Event::ChangesLoaded { .. } => None,
     };
     let mut effects = reduce_event(state, event);
-    // An initial/cold open has no backend yet. Keep the latest requested
-    // target, but do not turn the missing backend into a permanent read error.
-    effects.retain(|effect| {
-        let Effect::DiffSession(work) = effect else {
-            return true;
-        };
-        let Some(repo) = state
-            .repos
-            .iter_mut()
-            .find(|repo| repo.id == work.repo_id && repo.lifetime() == work.lifetime)
-        else {
-            return false;
-        };
-        if repos.has_repository(&repo.id)
-            || (!repo.backend_parked && matches!(repo.open, Loadable::Ready(())))
-        {
-            return true;
-        }
-        if matches!(work.work, DiffSessionWork::Changes { .. }) {
-            if let Some(list) = Arc::make_mut(&mut repo.change_lists).get_mut(&work.view)
-                && list.generation == work.generation
-            {
-                list.next_generation();
-                list.loading = false;
-                list.refresh_queued = true;
-            }
-        } else if let Some(session) = Arc::make_mut(&mut repo.diff_sessions).get_mut(&work.view)
-            && session.generation == work.generation
-        {
-            session.next_generation();
-            session.pending = Default::default();
-            session.refresh_queued = true;
-        }
-        false
-    });
     if let Some((repo_id, lifetime, view, list)) = explicit
         && let Some(repo) = state.repos.iter_mut().find(|repo| {
             repo.id == repo_id
@@ -127,7 +93,135 @@ pub(super) fn reduce(
             super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
         }
     }
+    // Reads for a repository without a backend wait for its open. With no
+    // open in flight, they are answered with why the repository is closed.
+    let mut unavailable = Vec::new();
+    effects.retain(|effect| {
+        let Effect::DiffSession(work) = effect else {
+            return true;
+        };
+        let Some(repo) = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == work.repo_id && repo.lifetime() == work.lifetime)
+        else {
+            return false;
+        };
+        if repos.has_repository(&repo.id)
+            || (!repo.backend_parked && matches!(repo.open, Loadable::Ready(())))
+        {
+            return true;
+        }
+        await_backend(repo, work);
+        if !repo.open.is_loading() && !unavailable.iter().any(|(id, _)| *id == repo.id) {
+            unavailable.push((repo.id, unavailable_error(repo)));
+        }
+        false
+    });
+    for (repo_id, error) in unavailable {
+        effects.extend(settle_awaiting_backend(state, repo_id, &error));
+    }
     effects
+}
+
+fn await_backend(repo: &mut RepoState, work: &DiffSessionEffect) {
+    if matches!(work.work, DiffSessionWork::Changes { .. }) {
+        if let Some(list) = Arc::make_mut(&mut repo.change_lists).get_mut(&work.view)
+            && list.generation == work.generation
+        {
+            list.awaiting_backend = true;
+        }
+    } else if let Some(session) = Arc::make_mut(&mut repo.diff_sessions).get_mut(&work.view)
+        && session.generation == work.generation
+    {
+        session.awaiting_backend = true;
+    }
+}
+
+fn unavailable_error(repo: &RepoState) -> Error {
+    Error::new(ErrorKind::Backend(match &repo.open {
+        Loadable::Error(message) => message.clone(),
+        _ => "The repository is not open.".to_string(),
+    }))
+}
+
+/// Answers the reads waiting for a backend whose open ended without one,
+/// through the same completions the scheduler sends.
+pub(super) fn settle_awaiting_backend(
+    state: &mut AppState,
+    repo_id: RepoId,
+    error: &Error,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let lifetime = repo.lifetime();
+    let mut replies = Vec::new();
+    if repo
+        .diff_sessions
+        .values()
+        .any(|session| session.awaiting_backend)
+    {
+        for (view, session) in Arc::make_mut(&mut repo.diff_sessions).iter_mut() {
+            if !std::mem::take(&mut session.awaiting_backend) {
+                continue;
+            }
+            session.refresh_queued = false;
+            replies.extend(
+                pending_failures(&session.pending, error)
+                    .into_iter()
+                    .map(|content| Event::Loaded {
+                        repo_id,
+                        view: *view,
+                        lifetime,
+                        generation: session.generation,
+                        content,
+                    }),
+            );
+        }
+    }
+    if repo.change_lists.values().any(|list| list.awaiting_backend) {
+        for (view, list) in Arc::make_mut(&mut repo.change_lists).iter_mut() {
+            if !std::mem::take(&mut list.awaiting_backend) {
+                continue;
+            }
+            list.refresh_queued = false;
+            replies.push(Event::ChangesLoaded {
+                repo_id,
+                view: *view,
+                lifetime,
+                generation: list.generation,
+                result: Err(error.clone()),
+            });
+        }
+    }
+    replies
+        .into_iter()
+        .flat_map(|reply| reduce_event(state, reply))
+        .collect()
+}
+
+fn pending_failures(pending: &DiffSessionLoads, error: &Error) -> Vec<DiffSessionContent> {
+    let mut contents = Vec::new();
+    if pending.attributes {
+        contents.push(DiffSessionContent::Attributes(Err(error.clone())));
+    }
+    if pending.patch {
+        contents.push(DiffSessionContent::Patch(Err(error.clone())));
+    }
+    if pending.file_text {
+        contents.push(DiffSessionContent::FileText(Err(error.clone())));
+    }
+    if pending.image {
+        contents.push(DiffSessionContent::Image(Err(error.clone())));
+    }
+    if pending.preview_text {
+        contents.push(DiffSessionContent::PreviewText(Err(error.clone())));
+    }
+    if pending.blame {
+        contents.push(DiffSessionContent::Blame(Err(error.clone())));
+    }
+    contents
 }
 
 fn reduce_event(state: &mut AppState, event: Event) -> Vec<Effect> {
@@ -544,6 +638,7 @@ fn refresh_affected<S: Refreshable + Clone>(
 /// retried into the same cancellation; its next activation runs them.
 pub(super) fn resume_queued_loads(repo: &mut RepoState, effects: &mut impl Extend<Effect>) {
     let (repo_id, lifetime) = (repo.id, repo.lifetime());
+    requeue_awaiting_backend(repo);
     effects.extend(refresh_affected(
         &mut repo.diff_sessions,
         |session| session.refresh_queued && !session.is_loading(),
@@ -554,6 +649,29 @@ pub(super) fn resume_queued_loads(repo: &mut RepoState, effects: &mut impl Exten
         |list| list.refresh_queued && !list.is_loading(),
         |view, list| refresh_changes(repo_id, lifetime, view, list),
     ));
+}
+
+fn requeue_awaiting_backend(repo: &mut RepoState) {
+    if repo
+        .diff_sessions
+        .values()
+        .any(|session| session.awaiting_backend)
+    {
+        for session in Arc::make_mut(&mut repo.diff_sessions).values_mut() {
+            if std::mem::take(&mut session.awaiting_backend) {
+                session.pending = DiffSessionLoads::default();
+                session.refresh_queued = true;
+            }
+        }
+    }
+    if repo.change_lists.values().any(|list| list.awaiting_backend) {
+        for list in Arc::make_mut(&mut repo.change_lists).values_mut() {
+            if std::mem::take(&mut list.awaiting_backend) {
+                list.loading = false;
+                list.refresh_queued = true;
+            }
+        }
+    }
 }
 
 /// Queue at most one refresh while a load is in flight. Known worktree
