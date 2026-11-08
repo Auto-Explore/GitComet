@@ -50,6 +50,15 @@ pub(crate) fn open_worktree_repo_with_options(
 /// retain their existing classifications. Callers that treat a missing
 /// repository as absence check [`gix::Error::is_not_found`] themselves instead.
 pub(crate) fn map_open_error(error: gix::Error, context: &str, path: &Path) -> Error {
+    // gix's std::error::Error source skips its root diagnostic. Inspect its
+    // typed tree before erasing it, and preserve the OS cause for recovery.
+    if let Some(exhausted) = error.iter_errors().find_map(|cause| {
+        let code = cause.downcast_ref::<std::io::Error>()?.raw_os_error()?;
+        let mapped = Error::from(std::io::Error::from_raw_os_error(code));
+        mapped.is_file_descriptor_exhaustion().then_some(mapped)
+    }) {
+        return exhausted.with_context(format!("{context}: {error}"), Some(path));
+    }
     // gix classifies "not a git repository" (and a missing path) as not-found.
     if error.is_not_found() {
         return Error::new(ErrorKind::NotARepository)
@@ -83,6 +92,25 @@ pub(crate) fn map_open_error(error: gix::Error, context: &str, path: &Path) -> E
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_exhaustion_at_the_gix_root_remains_classifiable() {
+        for code in [rustix::io::Errno::MFILE, rustix::io::Errno::NFILE] {
+            let error =
+                gix::Error::from_error(std::io::Error::from_raw_os_error(code.raw_os_error()));
+            let mapped = super::map_open_error(error, "gix open", std::path::Path::new("repo"));
+            assert!(mapped.is_file_descriptor_exhaustion());
+            assert!(!matches!(
+                mapped.kind(),
+                gitcomet_core::error::ErrorKind::NotARepository
+            ));
+            assert_eq!(
+                mapped.context().unwrap().path(),
+                Some(std::path::Path::new("repo"))
+            );
+        }
+    }
+
     #[test]
     fn open_error_preserves_io_kinds_without_semantic_classifications() {
         for kind in [std::io::ErrorKind::Other, std::io::ErrorKind::InvalidData] {

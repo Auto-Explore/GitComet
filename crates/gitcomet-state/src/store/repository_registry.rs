@@ -7,15 +7,16 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
-struct RepositoryTarget {
-    root: PathBuf,
-    repository: Option<Weak<dyn GitRepository>>,
+pub(super) struct RepositoryTarget<T> {
+    pub(super) root: PathBuf,
+    pub(super) repository: Option<T>,
+    pub(super) parked: bool,
 }
 
 struct Subscriber {
     alive: Weak<AtomicBool>,
     sender: mpsc::Sender<StoreWorkerCommand>,
-    repositories: Vec<RepositoryTarget>,
+    repositories: Vec<RepositoryTarget<Weak<dyn GitRepository>>>,
 }
 
 static STORES: LazyLock<Mutex<HashMap<u64, Subscriber>>> = LazyLock::new(Mutex::default);
@@ -74,21 +75,21 @@ pub(super) fn update_repositories(id: u64, state: &AppState, repos: &RepositoryR
         .map(|repo| RepositoryTarget {
             root: repo.spec.workdir.clone(),
             repository: repos.repository(&repo.id).map(Arc::downgrade),
+            parked: repo.is_backend_parked(),
         })
         .collect();
 }
 
-pub(super) fn repository_targets() -> Vec<(PathBuf, Option<Arc<dyn GitRepository>>)> {
+pub(super) fn repository_targets() -> Vec<RepositoryTarget<Arc<dyn GitRepository>>> {
     let mut stores = STORES.lock().unwrap_or_else(|error| error.into_inner());
     retain_live(&mut stores);
     stores
         .values()
         .flat_map(|subscriber| &subscriber.repositories)
-        .map(|target| {
-            (
-                target.root.clone(),
-                target.repository.as_ref().and_then(Weak::upgrade),
-            )
+        .map(|target| RepositoryTarget {
+            root: target.root.clone(),
+            repository: target.repository.as_ref().and_then(Weak::upgrade),
+            parked: target.parked,
         })
         .collect()
 }

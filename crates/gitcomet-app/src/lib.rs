@@ -193,6 +193,12 @@ impl AppLaunch {
             return exit_code::ERROR;
         }
 
+        if let Err(error) =
+            gitcomet_core::platform::resource_limits::ensure_file_descriptor_headroom()
+        {
+            eprintln!("Could not raise the process file descriptor limit: {error}");
+        }
+
         let parsed = {
             let _stage = gitcomet_core::startup_trace::span("parse_cli");
             cli::parse_launch(args.clone(), &about)

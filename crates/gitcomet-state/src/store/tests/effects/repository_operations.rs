@@ -535,6 +535,55 @@ fn session_update_effects_persist_on_session_executor() {
 }
 
 #[test]
+fn safe_push_after_commit_without_backend_reports_completion() {
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let mut repos = RepositoryRuntimes::default();
+    let repo_id = RepoId(3);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("main".into()),
+        pre_head: None,
+        post_head: None,
+        hooks: gitcomet_core::services::GitHooks::Run,
+    };
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &mut repos,
+        msg_tx,
+        Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
+            repo_id,
+            context: context.clone(),
+            auth: None,
+        }),
+    );
+    match msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("missing backend still completes")
+    {
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id: actual_id,
+            context: actual_context,
+            result,
+            ..
+        }) => {
+            assert_eq!(actual_id, repo_id);
+            assert_eq!(actual_context, context);
+            assert!(
+                result
+                    .expect_err("missing backend")
+                    .to_string()
+                    .contains("Repository handle not found")
+            );
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
+#[test]
 fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);

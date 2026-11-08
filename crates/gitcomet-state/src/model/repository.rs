@@ -98,6 +98,7 @@ pub struct RepoState {
     /// wait for these alone, so a merge tool cannot lock them out.
     pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
+    pub(crate) push_preflights_in_flight: u32,
     /// The shared git directory (the main `.git` of a linked worktree), set
     /// once the repository opens; tabs of one repository share maintenance.
     pub common_dir: Option<Arc<std::path::Path>>,
@@ -110,6 +111,12 @@ pub struct RepoState {
     pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
+    /// The tab remains open, but its reloadable data and worker-owned backend
+    /// were released. Selecting it reattaches without creating a new lifetime.
+    pub(crate) backend_parked: bool,
+    /// The load generation already retried after descriptor exhaustion. A
+    /// slow failing reopen must not start another recovery after the cooldown.
+    pub(crate) descriptor_retry_epoch: Option<super::RepoLoadEpoch>,
     pub repository_mode: Option<RepositoryMode>,
     pub bare_mode_conversion: BareModeConversionState,
     pub head_commit: Option<CommitId>,
@@ -239,6 +246,8 @@ pub struct RepoState {
     /// command *starts*, which would spend the signal before the disk changed.
     pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
+    /// A document, hosted pane or reload used the tab without activating it.
+    pub(crate) last_background_use_at: Option<SystemTime>,
     /// The tab was left with loads or a diff reload in flight. Leaving
     /// cancelled them, so the values they were replacing stay stale until the
     /// tab is refreshed on its next activation.
@@ -336,6 +345,26 @@ pub enum DiagnosticKind {
 }
 
 impl RepoState {
+    /// Reloadable backend resources were released while this tab stayed open.
+    pub fn is_backend_parked(&self) -> bool {
+        self.backend_parked
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_backend_parked_for_test(&mut self, parked: bool) {
+        self.backend_parked = parked;
+    }
+
+    /// An open that reattaches a parked tab, as opposed to its first open.
+    pub(crate) fn resumes_parked_backend(&self) -> bool {
+        self.backend_parked && self.repository_mode.is_some()
+    }
+
+    pub(crate) fn last_used_at(&self) -> Option<SystemTime> {
+        self.last_active_at.max(self.last_background_use_at)
+    }
+
     /// The feedback logs for writing, copied first if a snapshot shares them.
     pub fn feedback_mut(&mut self) -> &mut RepoFeedbackState {
         Arc::make_mut(&mut self.feedback)
@@ -367,6 +396,7 @@ impl RepoState {
             local_actions_in_flight: 0,
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
+            push_preflights_in_flight: 0,
             common_dir: None,
             shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
@@ -375,6 +405,8 @@ impl RepoState {
             refresh_read_failed: false,
             incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
+            backend_parked: false,
+            descriptor_retry_epoch: None,
             repository_mode: None,
             bare_mode_conversion: BareModeConversionState::Idle,
             head_commit: None,
@@ -460,6 +492,7 @@ impl RepoState {
             change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
+            last_background_use_at: None,
             left_mid_refresh: false,
             feedback: Arc::default(),
             pending: RepoPendingState::default(),

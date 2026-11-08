@@ -451,7 +451,7 @@ fn edit_hosted(
 fn hosted_parent_saves_keep_their_binding_when_a_nested_repository_is_open(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (dir, store, view, cx) = open_repository(cx);
+    let (dir, store, view, cx) = open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
     let nested = dir.path().join("nested");
     std::fs::create_dir(&nested).unwrap();
     let nested = canonicalize_or_original(nested);

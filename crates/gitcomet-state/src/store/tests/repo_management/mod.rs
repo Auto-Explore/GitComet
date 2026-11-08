@@ -237,6 +237,7 @@ mod close_reorder;
 mod file_browser_and_misc;
 mod open_drop;
 mod repo_opened;
+mod resource_budget;
 mod restore_session;
 mod runtime_lifecycle;
 mod worker_commands;

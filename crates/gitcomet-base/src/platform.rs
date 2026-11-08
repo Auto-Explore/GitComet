@@ -2,6 +2,7 @@
 //! detection, and the product's per-user directories.
 
 pub mod dirs;
+pub mod resource_limits;
 
 /// Detects WSL from explicit environment signals or the Linux kernel release.
 ///

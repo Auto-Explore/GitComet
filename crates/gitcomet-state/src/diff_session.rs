@@ -53,6 +53,7 @@ pub struct DiffSession {
     /// An external change during a load requests one more load on completion.
     pub(crate) refresh_queued: bool,
     pub(crate) pending: DiffSessionLoads,
+    pub(crate) awaiting_backend: bool,
     pub(crate) cancellation: CancellationToken,
 }
 
@@ -84,6 +85,7 @@ impl DiffSession {
             blame_requested: false,
             refresh_queued: false,
             pending: DiffSessionLoads::default(),
+            awaiting_backend: false,
             cancellation: CancellationToken::new(),
         }
     }
@@ -251,6 +253,7 @@ pub struct ChangeListSession {
     pub base: Option<CommitId>,
     pub(crate) refresh_queued: bool,
     pub(crate) loading: bool,
+    pub(crate) awaiting_backend: bool,
     pub(crate) cancellation: CancellationToken,
 }
 
@@ -264,6 +267,7 @@ impl ChangeListSession {
             base: None,
             refresh_queued: false,
             loading: false,
+            awaiting_backend: false,
             cancellation: CancellationToken::new(),
         }
     }

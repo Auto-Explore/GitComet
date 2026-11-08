@@ -1482,6 +1482,8 @@ fn schedule_safe_push_after_commit(
 ) {
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
+    let missing_context = context.clone();
+    let missing_auth = auth.clone();
     // The preflight fetches the push target and then reads FETCH_HEAD, which
     // an automatic fetch beside it would rewrite.
     let foreground = repos.repository(&repo_id).map(|repo| {
@@ -1490,24 +1492,41 @@ fn schedule_safe_push_after_commit(
             .admission()
             .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
     });
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = foreground
-            .as_ref()
-            .map_or(Ok(()), |reservation| {
-                reservation.wait(&gitcomet_core::services::CancellationToken::new())
-            })
-            .and_then(|()| run_with_git_auth(auth, || repo.safe_push_after_commit(&context)));
-        drop(foreground);
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
-                repo_id,
-                context: finish_context,
-                auth: follow_up_auth,
-                result,
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = foreground
+                .as_ref()
+                .map_or(Ok(()), |reservation| {
+                    reservation.wait(&gitcomet_core::services::CancellationToken::new())
+                })
+                .and_then(|()| run_with_git_auth(auth, || repo.safe_push_after_commit(&context)));
+            drop(foreground);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+                    repo_id,
+                    context: finish_context,
+                    auth: follow_up_auth,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+                    repo_id,
+                    context: missing_context,
+                    auth: missing_auth,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 fn schedule_force_push(

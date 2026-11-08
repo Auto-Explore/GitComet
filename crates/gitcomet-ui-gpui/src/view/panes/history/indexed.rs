@@ -161,6 +161,23 @@ pub(super) struct RetainedTab {
     viewport: Option<super::scroll::LogicalViewport>,
 }
 
+impl RetainedTab {
+    fn can_retain(state: &IndexedViewState, repo: &RepoState) -> bool {
+        !repo.is_backend_parked()
+            && repo
+                .history_state
+                .indexed
+                .index
+                .as_ref()
+                .is_some_and(|index| {
+                    state
+                        .presentation
+                        .as_ref()
+                        .is_some_and(|shown| Arc::ptr_eq(index, &shown.graph.projection.index))
+                })
+    }
+}
+
 impl IndexedViewState {
     fn repo_id(&self) -> Option<RepoId> {
         self.presentation
@@ -274,9 +291,28 @@ impl HistoryView {
         }
     }
 
+    /// Release cold owners even while this pane is hidden and never renders.
+    pub(super) fn prune_retained_indexed_history(&mut self) {
+        self.retained_indexed_tabs.retain(|id, retained| {
+            self.state
+                .repos
+                .iter()
+                .any(|repo| repo.id == *id && RetainedTab::can_retain(&retained.state, repo))
+        });
+        if self.indexed.repo_id().is_some_and(|id| {
+            self.state
+                .repos
+                .iter()
+                .find(|repo| repo.id == id)
+                .is_none_or(|repo| repo.is_backend_parked())
+        }) {
+            self.indexed = Default::default();
+            self.scroll_interaction.borrow_mut().logical = None;
+        }
+    }
+
     pub(super) fn ensure_indexed_history(&mut self, cx: &mut gpui::Context<Self>) {
-        self.retained_indexed_tabs
-            .retain(|id, _| self.state.repos.iter().any(|repo| repo.id == *id));
+        self.prune_retained_indexed_history();
         let Some(repo) = self.active_repo() else {
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
@@ -288,8 +324,11 @@ impl HistoryView {
             let mut state = std::mem::take(&mut self.indexed);
             state.cancel_pending_work();
             let viewport = self.scroll_interaction.borrow_mut().logical.take();
-            if state.presentation.is_some()
-                && self.state.repos.iter().any(|repo| repo.id == previous_id)
+            if self
+                .state
+                .repos
+                .iter()
+                .any(|repo| repo.id == previous_id && RetainedTab::can_retain(&state, repo))
             {
                 self.retained_indexed_tabs
                     .insert(previous_id, RetainedTab { state, viewport });

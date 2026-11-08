@@ -1254,6 +1254,8 @@ fn check_provisional_drop_window_locality(cx: &mut gpui::TestAppContext, succeed
         },
     );
     repo.open = gitcomet_state::model::Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.last_active_at = Some(std::time::SystemTime::now());
     store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),

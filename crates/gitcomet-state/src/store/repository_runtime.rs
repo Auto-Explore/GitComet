@@ -3,6 +3,7 @@ use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 use super::effects::worktree_list::WorktreeListPublisher;
 use super::executor::{LatestTaskSlot, SelectedDiffSlots};
@@ -76,12 +77,40 @@ impl Drop for RepositoryRuntime {
 #[derive(Default)]
 pub(super) struct RepositoryRuntimes {
     entries: FxHashMap<RepoId, RepositoryRuntime>,
+    descriptor_recovery_at: Option<SystemTime>,
     // Reducers retire entries under the state lock; the worker disposes them
     // after releasing that lock, before it schedules the returned effects.
     retired: Vec<RepositoryRuntime>,
+    retired_data: Vec<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl RepositoryRuntimes {
+    /// One recovery attempt per pressure episode, shared by all read replies
+    /// in this store. A refresh fan-out must not become a retry loop.
+    pub(super) fn begin_descriptor_recovery(&mut self, now: SystemTime) -> bool {
+        if self.under_descriptor_pressure(now) {
+            return false;
+        }
+        self.descriptor_recovery_at = Some(now);
+        true
+    }
+
+    pub(super) fn warm_repository_count(&self, now: SystemTime) -> usize {
+        if self.under_descriptor_pressure(now) {
+            0
+        } else {
+            super::repository_budget::WARM_INACTIVE_REPOSITORIES
+        }
+    }
+
+    fn under_descriptor_pressure(&self, now: SystemTime) -> bool {
+        self.descriptor_recovery_at.is_some_and(|at| {
+            !now.duration_since(at).is_ok_and(|elapsed| {
+                elapsed >= super::repository_budget::DESCRIPTOR_RECOVERY_COOLDOWN
+            })
+        })
+    }
+
     fn begin_opening(&mut self, repo_id: RepoId, lifetime: RepoLifetime) -> &mut RepositoryRuntime {
         if self
             .entries
@@ -218,6 +247,11 @@ impl RepositoryRuntimes {
 
     pub(super) fn release_retired(&mut self) {
         self.retired.clear();
+        self.retired_data.clear();
+    }
+
+    pub(super) fn defer_data_release(&mut self, data: impl std::any::Any + Send + Sync) {
+        self.retired_data.push(Box::new(data));
     }
 
     pub(super) fn clear(&mut self) {

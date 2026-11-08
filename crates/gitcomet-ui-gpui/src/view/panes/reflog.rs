@@ -152,8 +152,8 @@ impl ReflogPaneView {
     /// cannot repaint the panel — while a repo *closing* still lands here, so
     /// its panel state is dropped with it.
     ///
-    /// `reflog_rev` alone captures every reflog transition (loading, ready,
-    /// error, cleared) because every write goes through `RepoState::set_reflog`.
+    /// Reflog revisions capture data changes; backend availability also wakes
+    /// an open panel after a parked tab finishes reopening.
     fn notify_fingerprint(&self, state: &AppState) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
@@ -162,6 +162,8 @@ impl ReflogPaneView {
             repo.id.hash(&mut hasher);
             if self.panels.contains_key(&repo.id) {
                 repo.reflog_rev.hash(&mut hasher);
+                repo.is_backend_parked().hash(&mut hasher);
+                matches!(repo.open, Loadable::Ready(())).hash(&mut hasher);
             }
         }
         hasher.finish()
@@ -176,6 +178,14 @@ impl ReflogPaneView {
             // unrelated repository).
             let open: FxHashSet<RepoId> = self.state.repos.iter().map(|repo| repo.id).collect();
             self.panels.retain(|repo_id, _| open.contains(repo_id));
+            for repo in &self.state.repos {
+                if repo.is_backend_parked()
+                    && let Some(panel) = self.panels.get_mut(&repo.id)
+                {
+                    panel.rows = Vec::new();
+                    panel.rows_key = None;
+                }
+            }
         }
         let _ = self.request_missing_reflogs();
     }
@@ -195,7 +205,11 @@ impl ReflogPaneView {
     fn request_missing_reflogs(&self) -> Vec<RepoId> {
         let mut requested = Vec::new();
         for repo in &self.state.repos {
-            if self.panels.contains_key(&repo.id) && matches!(repo.reflog, Loadable::NotLoaded) {
+            if self.panels.contains_key(&repo.id)
+                && !repo.is_backend_parked()
+                && matches!(repo.open, Loadable::Ready(()))
+                && matches!(repo.reflog, Loadable::NotLoaded)
+            {
                 self.store.dispatch(Msg::LoadReflog { repo_id: repo.id });
                 requested.push(repo.id);
             }
@@ -211,7 +225,13 @@ impl ReflogPaneView {
     /// Opens (or re-focuses) the panel for `repo_id` and kicks off a load.
     pub(in super::super) fn open(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.ensure_panel_state(repo_id, cx);
-        self.store.dispatch(Msg::LoadReflog { repo_id });
+        if self.state.repos.iter().any(|repo| {
+            repo.id == repo_id
+                && !repo.is_backend_parked()
+                && matches!(repo.open, Loadable::Ready(()))
+        }) {
+            self.store.dispatch(Msg::LoadReflog { repo_id });
+        }
         cx.notify();
     }
 
@@ -1040,6 +1060,7 @@ mod view_tests {
                 workdir: std::path::PathBuf::from("/tmp/reflog-pane-test"),
             },
         );
+        repo.open = Loadable::Ready(());
         repo.reflog = Loadable::Ready(Arc::new(entries));
         repo.reflog_rev = 1;
         Arc::new(AppState {
@@ -1417,6 +1438,43 @@ mod view_tests {
         });
 
         drop(subscription);
+    }
+
+    #[gpui::test]
+    fn an_open_reflog_waits_for_the_repository_to_finish_reopening(cx: &mut gpui::TestAppContext) {
+        let (pane, repo_id, cx) = open_pane(cx, reflog_entries(4));
+        pane.update(cx, |pane, cx| {
+            let mut state = (*pane.state).clone();
+            state.repos[0].reflog = Loadable::NotLoaded;
+            state.repos[0].open = Loadable::Loading;
+            let opening = pane.notify_fingerprint(&state);
+            pane.apply_state_snapshot(Arc::new(state.clone()), cx);
+            pane.close(repo_id, cx);
+            pane.open(repo_id, cx);
+            assert!(pane.is_open(repo_id));
+            assert!(pane.request_missing_reflogs().is_empty());
+            state.repos[0].open = Loadable::Ready(());
+            assert_ne!(pane.notify_fingerprint(&state), opening);
+            pane.apply_state_snapshot(Arc::new(state), cx);
+            assert_eq!(pane.request_missing_reflogs(), vec![repo_id]);
+        });
+    }
+
+    #[gpui::test]
+    fn a_parked_repository_drops_its_reflog_rows_until_it_reopens(cx: &mut gpui::TestAppContext) {
+        let (pane, repo_id, cx) = open_pane(cx, reflog_entries(4));
+        pane.update(cx, |pane, cx| {
+            assert!(pane.sync_rows(repo_id) > 0);
+            let mut state = (*pane.state).clone();
+            state.repos[0].set_backend_parked_for_test(true);
+            state.repos[0].reflog = Loadable::NotLoaded;
+            pane.apply_state_snapshot(Arc::new(state.clone()), cx);
+            assert!(pane.panels[&repo_id].rows.is_empty());
+            assert!(pane.request_missing_reflogs().is_empty());
+            state.repos[0].set_backend_parked_for_test(false);
+            pane.apply_state_snapshot(Arc::new(state), cx);
+            assert_eq!(pane.request_missing_reflogs(), vec![repo_id]);
+        });
     }
 
     /// `reload_repo` drops the reflog back to `NotLoaded` on every repo reload;
