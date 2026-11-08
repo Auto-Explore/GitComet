@@ -554,6 +554,9 @@ fn populated_repo() -> RepoState {
         recorded_head: commit_id("cccccccc"),
         checked_out_head: Some(commit_id("cccccccc")),
         status: SubmoduleStatus::UpToDate,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo.submodules_rev = 1;
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {

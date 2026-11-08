@@ -10,6 +10,80 @@ mod items;
 
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
+/// What a Submodules row knows about its submodule.
+struct SubmoduleRowFacts {
+    status: SubmoduleStatus,
+    recorded_head: CommitId,
+    checked_out_head: Option<CommitId>,
+    drift: Option<gitcomet_core::domain::SubmoduleDrift>,
+    has_inner_changes: bool,
+}
+
+/// The pill on a Submodules row, also the status line of its menus: how far
+/// the checkout moved from the recorded commit, or that it has uncommitted
+/// files. An in-sync row has none.
+pub(in crate::view) fn submodule_pill_label(
+    status: SubmoduleStatus,
+    drift: Option<gitcomet_core::domain::SubmoduleDrift>,
+    has_inner_changes: bool,
+) -> Option<SharedString> {
+    match status {
+        SubmoduleStatus::NotInitialized => return Some(SharedString::new_static("Not loaded")),
+        SubmoduleStatus::MergeConflict => return Some(SharedString::new_static("Conflict")),
+        SubmoduleStatus::MissingMapping => {
+            return Some(SharedString::new_static("Missing mapping"));
+        }
+        SubmoduleStatus::Unknown(_) => return Some(SharedString::new_static("Unknown")),
+        SubmoduleStatus::UpToDate | SubmoduleStatus::HeadMismatch => {}
+    }
+    match drift {
+        Some(drift) if drift.ahead > 0 && drift.behind > 0 => {
+            return Some(format!("{} ahead, {} behind", drift.ahead, drift.behind).into());
+        }
+        Some(drift) if drift.ahead > 0 => return Some(format!("{} ahead", drift.ahead).into()),
+        Some(drift) if drift.behind > 0 => {
+            return Some(format!("{} behind", drift.behind).into());
+        }
+        _ => {}
+    }
+    if has_inner_changes {
+        return Some(SharedString::new_static("changes"));
+    }
+    // A moved pointer whose commits are not here to count.
+    (status == SubmoduleStatus::HeadMismatch).then(|| SharedString::new_static("Head mismatch"))
+}
+
+/// Appends the tooltip lines that spell out the pill, each on its own line.
+fn push_submodule_sync_lines(
+    tooltip: &mut String,
+    drift: Option<gitcomet_core::domain::SubmoduleDrift>,
+    has_inner_changes: bool,
+) {
+    use std::fmt::Write as _;
+    let commits = |count: u32| if count == 1 { "commit" } else { "commits" };
+    if let Some(drift) = drift {
+        if drift.ahead > 0 {
+            let _ = write!(
+                tooltip,
+                "\n{} {} ahead of the recorded commit",
+                drift.ahead,
+                commits(drift.ahead)
+            );
+        }
+        if drift.behind > 0 {
+            let _ = write!(
+                tooltip,
+                "\n{} {} behind the recorded commit",
+                drift.behind,
+                commits(drift.behind)
+            );
+        }
+    }
+    if has_inner_changes {
+        tooltip.push_str("\nUncommitted changes");
+    }
+}
+
 const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
 const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
 const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
@@ -541,14 +615,20 @@ impl SidebarPaneView {
                     status,
                     recorded_head,
                     checked_out_head,
+                    drift,
+                    has_inner_changes,
                 } => Self::sidebar_submodule_item_row(
                     this,
                     &ctx,
                     slot,
                     path,
-                    status,
-                    recorded_head,
-                    checked_out_head,
+                    SubmoduleRowFacts {
+                        status,
+                        recorded_head,
+                        checked_out_head,
+                        drift,
+                        has_inner_changes,
+                    },
                     cx,
                 ),
                 BranchSidebarRow::RemoteHeader {
@@ -614,5 +694,55 @@ impl SidebarPaneView {
                 ),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod submodule_pill_tests {
+    use super::{SubmoduleStatus, push_submodule_sync_lines, submodule_pill_label};
+    use gitcomet_core::domain::SubmoduleDrift;
+
+    fn drift(ahead: u32, behind: u32) -> Option<SubmoduleDrift> {
+        Some(SubmoduleDrift { ahead, behind })
+    }
+
+    #[test]
+    fn the_pill_counts_how_far_the_checkout_moved() {
+        let pill = |status, drift, changes| submodule_pill_label(status, drift, changes);
+        let moved = SubmoduleStatus::HeadMismatch;
+        assert_eq!(pill(moved, drift(2, 0), false).as_deref(), Some("2 ahead"));
+        assert_eq!(pill(moved, drift(0, 1), false).as_deref(), Some("1 behind"));
+        assert_eq!(
+            pill(moved, drift(2, 1), true).as_deref(),
+            Some("2 ahead, 1 behind")
+        );
+        assert_eq!(
+            pill(SubmoduleStatus::UpToDate, None, true).as_deref(),
+            Some("changes")
+        );
+        assert_eq!(pill(SubmoduleStatus::UpToDate, None, false), None);
+        assert_eq!(pill(moved, None, false).as_deref(), Some("Head mismatch"));
+        assert_eq!(
+            pill(SubmoduleStatus::NotInitialized, None, false).as_deref(),
+            Some("Not loaded")
+        );
+        assert_eq!(
+            pill(SubmoduleStatus::MergeConflict, drift(1, 0), true).as_deref(),
+            Some("Conflict")
+        );
+    }
+
+    #[test]
+    fn the_tooltip_spells_out_the_counts_and_changes() {
+        let lines = |drift, changes| {
+            let mut tooltip = String::from("path");
+            push_submodule_sync_lines(&mut tooltip, drift, changes);
+            tooltip
+        };
+        assert_eq!(
+            lines(drift(1, 3), true),
+            "path\n1 commit ahead of the recorded commit\n3 commits behind the recorded commit\nUncommitted changes"
+        );
+        assert_eq!(lines(None, false), "path");
     }
 }

@@ -2629,6 +2629,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 identity: None,
                 hooks: gitcomet_core::services::GitHooks::Run,
                 auth: None,
+                shelve: None,
             },
             1,
         ),

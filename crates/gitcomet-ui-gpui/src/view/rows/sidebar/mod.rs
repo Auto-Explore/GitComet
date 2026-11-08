@@ -18,6 +18,7 @@ mod search_labels;
 
 pub(in crate::view) use badges::*;
 pub(in crate::view) use branch_lookup::*;
+pub(in crate::view) use branch_rows::submodule_pill_label;
 use search_labels::*;
 
 pub(in crate::view) fn sidebar_row_background(

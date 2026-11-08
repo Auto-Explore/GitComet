@@ -122,6 +122,20 @@ fn selected_inline_submodule_diff(
         })
 }
 
+/// Whether operations that may move submodule pointers should check the
+/// in-sync first-level submodules out at the new pointers.
+pub(super) fn follow_submodule_pointers(thread_state: &Arc<RwLock<Arc<AppState>>>) -> bool {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state.submodule_settings.follow_pointers
+}
+
+fn remote_url_policy(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+) -> gitcomet_core::remote_url::RemoteUrlPolicy {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state.remote_url_policy
+}
+
 pub(super) fn schedule_effect(
     executors: EffectExecutors<'_>,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
@@ -888,6 +902,7 @@ pub(super) fn schedule_effect(
                 msg_tx,
                 repo_id,
                 name,
+                follow_submodule_pointers(thread_state),
             );
         }
         Effect::CheckoutRemoteBranch {
@@ -906,9 +921,17 @@ pub(super) fn schedule_effect(
             branch,
             local_branch,
             mode,
+            follow_submodule_pointers(thread_state),
         ),
         Effect::CheckoutCommit { repo_id, commit_id } => {
-            repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);
+            repo_actions::schedule_checkout_commit(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                commit_id,
+                follow_submodule_pointers(thread_state),
+            );
         }
         Effect::CreateBranch {
             repo_id,
@@ -984,23 +1007,70 @@ pub(super) fn schedule_effect(
         }
         Effect::DiscardWorktreeChangesPath { repo_id, path } => {
             repo_actions::schedule_discard_worktree_changes_path(
-                executor, repos, msg_tx, repo_id, path,
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                remote_url_policy(thread_state),
             );
         }
         Effect::DiscardWorktreeChangesPaths { repo_id, paths } => {
             repo_actions::schedule_discard_worktree_changes_paths(
-                executor, repos, msg_tx, repo_id, paths,
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                paths,
+                remote_url_policy(thread_state),
             )
         }
+        Effect::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+            amend_expected,
+            identity,
+        } => repo_actions::schedule_record_submodule_commit(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            path,
+            message,
+            amend_expected,
+            identity,
+        ),
+        Effect::PushSubmodulesThenRepo {
+            repo_id,
+            pointers,
+            push,
+        } => repo_commands::schedule_push_submodules_then_repo(
+            executor, repos, msg_tx, repo_id, pointers, push,
+        ),
+        Effect::SubmoduleCheckout {
+            repo_id,
+            operation,
+            policy,
+        } => repo_actions::schedule_submodule_checkout(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            operation,
+            policy,
+            remote_url_policy(thread_state),
+        ),
         Effect::Commit {
             repo_id,
             message,
             identity,
             hooks,
             auth,
+            shelve,
         } => {
             repo_actions::schedule_commit(
-                executor, repos, msg_tx, repo_id, message, identity, hooks, auth,
+                executor, repos, msg_tx, repo_id, message, identity, hooks, auth, shelve,
             );
         }
         Effect::CommitAmend {
@@ -1061,10 +1131,24 @@ pub(super) fn schedule_effect(
             include_untracked,
         ),
         Effect::ApplyStash { repo_id, index } => {
-            repo_actions::schedule_apply_stash(executor, repos, msg_tx, repo_id, index);
+            repo_actions::schedule_apply_stash(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                index,
+                follow_submodule_pointers(thread_state),
+            );
         }
         Effect::PopStash { repo_id, index } => {
-            repo_actions::schedule_pop_stash(executor, repos, msg_tx, repo_id, index);
+            repo_actions::schedule_pop_stash(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                index,
+                follow_submodule_pointers(thread_state),
+            );
         }
         Effect::DropStash { repo_id, index } => {
             repo_actions::schedule_drop_stash(executor, repos, msg_tx, repo_id, index);

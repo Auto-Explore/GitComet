@@ -331,13 +331,19 @@ pub(super) fn append_gitignore_patterns(repo_id: RepoId, patterns: Vec<String>) 
     )]
 }
 
-pub(super) fn commit(repo_id: RepoId, message: String, hooks: GitHooks) -> Vec<Effect> {
+pub(super) fn commit(
+    repo_id: RepoId,
+    message: String,
+    hooks: GitHooks,
+    shelve: Option<crate::model::SubmoduleShelve>,
+) -> Vec<Effect> {
     vec![Effect::Commit {
         repo_id,
         message,
         identity: None,
         hooks,
         auth: None,
+        shelve,
     }]
 }
 

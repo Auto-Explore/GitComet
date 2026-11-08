@@ -76,7 +76,15 @@ impl Msg {
             | Self::UnstagePath { repo_id, .. }
             | Self::UnstagePaths { repo_id, .. }
             | Self::UpdateSubmodules { repo_id, .. }
+            | Self::UpdateSubmoduleToRecorded { repo_id, .. }
+            | Self::CommitShelvingSubmodules { repo_id, .. }
             | Self::UpdateSubmodulesTrusted { repo_id, .. } => Some((*repo_id, WorkingTree)),
+            Self::ResolveSubmoduleCheckoutPrompt { prompt, .. } => {
+                Some((prompt.repo_id, WorkingTree))
+            }
+            Self::CommitLinked { child, .. } => Some((*child, WorkingTree)),
+            Self::ResolveLinkedPushPrompt { prompt, .. } => Some((prompt.child, WorkingTree)),
+            Self::ResolveUnpushedPointerPrompt { prompt, .. } => Some((prompt.repo_id, Repository)),
             Self::RememberDocumentInRepository { repo_id, .. }
             | Self::SelectExplorerPath { repo_id, .. }
             | Self::FocusExplorerPath { repo_id, .. }
@@ -292,6 +300,9 @@ impl Msg {
             | Self::SetGitLogSettings { .. }
             | Self::SetRemoteSettings(..)
             | Self::SetMaintenanceSettings(..)
+            | Self::SetSubmoduleSettings(..)
+            | Self::DismissSubmoduleCheckoutPrompt { .. }
+            | Self::DismissUnpushedPointerPrompt { .. }
             | Self::SetFileBrowserSettings(..)
             | Self::SetLargeFileSettings(..)
             | Self::SetHistoryHiddenRefs(..)

@@ -100,6 +100,23 @@ fn model_for_state_with_editor(
         action: Box::new(ContextMenuAction::ActivateRepo { repo_id }),
     }];
 
+    // A submodule tab leads back to the worktree it belongs to: its tab when
+    // open, otherwise a new one.
+    if let Some(link) = state.repos[repo_ix].submodule_parent.as_ref() {
+        items.push(ContextMenuItem::Entry {
+            label: "Open parent repository".into(),
+            icon: Some("icons/corner_down_right.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(match link.repo_id {
+                Some(parent) => ContextMenuAction::ActivateRepo { repo_id: parent },
+                None => ContextMenuAction::OpenRepo {
+                    path: link.workdir.clone(),
+                },
+            }),
+        });
+    }
+
     if let Some(ref workdir) = workdir {
         items.push(ContextMenuItem::Separator);
         items.push(ContextMenuItem::Entry {
@@ -216,6 +233,37 @@ mod tests {
             ));
         }
         state
+    }
+
+    #[test]
+    fn a_submodule_tab_offers_its_parent_repository() {
+        let mut state = state_with_repo_tabs(RepoId(2), 2);
+        state.repos[1].submodule_parent = Some(gitcomet_state::model::SubmoduleParentLink {
+            workdir: PathBuf::from("/tmp/repo-tab-menu-1"),
+            path: PathBuf::from("sub"),
+            repo_id: Some(RepoId(1)),
+        });
+        let model = model_for_state(&state, RepoId(2), None, &[], None);
+        let (disabled, action) = entry_action(&model, "Open parent repository");
+        assert!(!disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::ActivateRepo { repo_id: RepoId(1) }
+        ));
+
+        state.repos[1].submodule_parent.as_mut().unwrap().repo_id = None;
+        let model = model_for_state(&state, RepoId(2), None, &[], None);
+        let (_, action) = entry_action(&model, "Open parent repository");
+        assert!(matches!(
+            action,
+            ContextMenuAction::OpenRepo { path } if path == std::path::Path::new("/tmp/repo-tab-menu-1")
+        ));
+
+        let model = model_for_state(&state, RepoId(1), None, &[], None);
+        assert!(!model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { label, .. } if label.as_ref() == "Open parent repository"
+        )));
     }
 
     fn entry_with_label<'a>(model: &'a ContextMenuModel, expected: &str) -> &'a ContextMenuItem {

@@ -249,6 +249,19 @@ impl PopoverHost {
             PopoverKind::ForceDeleteBranchConfirm(prompt) => {
                 force_delete_branch_confirm::panel(self, prompt, cx)
             }
+            PopoverKind::SubmoduleCheckoutConfirm(prompt) => {
+                submodule_checkout_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::LinkedPushConfirm(prompt) => linked_push_confirm::panel(self, prompt, cx),
+            PopoverKind::UnpushedPointerConfirm(prompt) => {
+                unpushed_pointer_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::SubmoduleCloseConfirm(prompt) => {
+                submodule_close_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::SubmoduleLeaveBehindConfirm(prompt) => {
+                submodule_leave_behind_confirm::panel(self, prompt, cx)
+            }
             PopoverKind::ForceRemoveWorktreeConfirm(prompt) => {
                 force_remove_worktree_confirm::panel(self, prompt, cx)
             }

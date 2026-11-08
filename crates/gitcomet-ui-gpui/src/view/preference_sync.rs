@@ -1150,6 +1150,12 @@ impl GitCometView {
             PreferenceChange::MaintenanceRecommendations(enabled) => {
                 self.set_maintenance_recommendation_preference(enabled, cx)
             }
+            PreferenceChange::SubmoduleSettings(settings) => {
+                self.update_ui_preferences(cx, move |preferences| {
+                    preferences.submodules = settings;
+                });
+                self.store.dispatch(Msg::SetSubmoduleSettings(settings));
+            }
             PreferenceChange::ResetHistoryColumnWidths => self.reset_history_column_widths(cx),
             PreferenceChange::GitRuntime(runtime) => {
                 self.cancel_large_file_tools_probe();

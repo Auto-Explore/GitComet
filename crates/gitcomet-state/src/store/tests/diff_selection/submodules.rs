@@ -405,6 +405,9 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         recorded_head: CommitId("old-recorded".into()),
         checked_out_head: Some(CommitId("old-head".into())),
         status: SubmoduleStatus::HeadMismatch,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo_state.set_diff_target(Some(parent_target.clone()));
     repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(SubmoduleDiffSummary {
@@ -715,6 +718,9 @@ fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
         recorded_head: CommitId("recorded".into()),
         checked_out_head: Some(CommitId("head".into())),
         status: SubmoduleStatus::HeadMismatch,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo_state.set_diff_target(Some(target.clone()));
     state.repos.push(repo_state);
@@ -825,6 +831,9 @@ fn reloading_an_identical_submodule_summary_rereads_the_patch_without_rebuilding
         recorded_head: CommitId("recorded".into()),
         checked_out_head: Some(CommitId("head".into())),
         status: SubmoduleStatus::HeadMismatch,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo_state.set_diff_target(Some(target.clone()));
     repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));
@@ -980,6 +989,9 @@ fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
         recorded_head: CommitId("recorded".into()),
         checked_out_head: Some(CommitId("head".into())),
         status: SubmoduleStatus::HeadMismatch,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo_state.set_diff_target(Some(target.clone()));
     repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));

@@ -1,4 +1,4 @@
-use crate::model::{AppState, Loadable};
+use crate::model::{AppState, BlockedPush, Loadable};
 use crate::msg::RepoCommandEffect;
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use crate::store::repository_runtime::RepositoryRuntimes;
@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
+use super::repo_actions::following_submodule_pointers;
 use super::util::{
     GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, send_or_log,
     short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
@@ -1312,8 +1313,10 @@ fn schedule_pull(
     mode: PullMode,
     context: Option<String>,
     auth: Option<StagedGitAuth>,
+    follow_submodules: bool,
 ) {
     let command = RepoCommandKind::Pull { mode };
+    let follow_tx = msg_tx.clone();
     let context = context.map(|context| match pull_mode_suffix(mode) {
         Some(mode) => format!("{context} · {mode}"),
         None => context,
@@ -1325,7 +1328,15 @@ fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull(mode)),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || run_with_git_auth(auth, || repo.pull(mode)),
+            )
+        },
     );
 }
 
@@ -1338,8 +1349,10 @@ fn schedule_pull_branch(
     branch: String,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
+    follow_submodules: bool,
 ) {
     let command_remote = remote.clone();
+    let follow_tx = msg_tx.clone();
     let command_branch = branch.clone();
     let context = local_branch.map(|local| format!("{remote}/{branch} → {local}"));
     schedule_repo_command_with_context(
@@ -1352,7 +1365,15 @@ fn schedule_pull_branch(
             branch: command_branch,
         },
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
+            )
+        },
     );
 }
 
@@ -1403,7 +1424,9 @@ fn schedule_push_with_tags(
     repo_id: RepoId,
     request: gitcomet_core::tag_push::TagPushRequest,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1419,7 +1442,19 @@ fn schedule_push_with_tags(
             request.branch,
             request.mode.flag()
         )),
-        move |repo| run_with_git_auth(auth, || repo.push_with_tags(&request)),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::WithTags {
+                        request: request.clone(),
+                    },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_with_tags(&request))
+        },
     );
 }
 
@@ -1430,8 +1465,10 @@ fn schedule_push(
     repo_id: RepoId,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1439,7 +1476,114 @@ fn schedule_push(
         repo_id,
         RepoCommandKind::Push,
         context,
-        move |repo| run_with_git_auth(auth, || repo.push_with_output()),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Push,
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_with_output())
+        },
+    );
+}
+
+/// Stops a push whose outgoing commits record submodule commits that the
+/// submodules' remotes do not have: nobody could check those out. The prompt
+/// that offers to push the submodules first opens from the message sent here.
+fn refuse_unpushed_submodule_pointers(
+    repo: &dyn GitRepository,
+    msg_tx: &StoreWorkerSender,
+    repo_id: RepoId,
+    push: BlockedPush,
+) -> Result<(), Error> {
+    // The check never blocks a push it cannot complete.
+    let pointers = repo.unpushed_submodule_pointers().unwrap_or_default();
+    if pointers.is_empty() {
+        return Ok(());
+    }
+    let names = pointers
+        .iter()
+        .map(|pointer| pointer.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    send_or_log(
+        msg_tx,
+        Msg::Internal(InternalMsg::PushBlockedByUnpushedSubmodules {
+            repo_id,
+            pointers,
+            push,
+        }),
+    );
+    Err(Error::new(ErrorKind::Backend(format!(
+        "Push stopped: the commits to push record submodule commits that are not on the submodule's remote ({names}). Push the submodule first."
+    ))))
+}
+
+/// Push each submodule of `repo_id` so its listed commit is on its remote,
+/// then run the repository's stopped push again.
+pub(super) fn schedule_push_submodules_then_repo(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    pointers: Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>,
+    push: BlockedPush,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            for pointer in &pointers {
+                if let Err(error) = repo.push_submodule_with_output(&pointer.path, &pointer.commit)
+                {
+                    // The submodule push runs without the sign-in prompt;
+                    // its own tab has it.
+                    send_or_log(
+                        &msg_tx,
+                        Msg::ReportError {
+                            repo_id: Some(repo_id),
+                            message: format!(
+                                "Pushing {} failed, so nothing was pushed: {error}. Open it and push it from its own tab.",
+                                pointer.path.display()
+                            ),
+                        },
+                    );
+                    return;
+                }
+            }
+            send_or_log(
+                &msg_tx,
+                match push {
+                    BlockedPush::Push => Msg::Push { repo_id },
+                    BlockedPush::AfterCommit {
+                        target,
+                        set_upstream,
+                        hooks,
+                    } => Msg::PushAfterCommit {
+                        repo_id,
+                        target,
+                        set_upstream,
+                        hooks,
+                    },
+                    BlockedPush::SetUpstream { remote, branch } => Msg::PushSetUpstream {
+                        repo_id,
+                        remote,
+                        branch,
+                    },
+                    BlockedPush::Force { lease: None } => Msg::ForcePush { repo_id },
+                    BlockedPush::Force { lease: Some(lease) } => {
+                        Msg::ForcePushWithLease { repo_id, lease }
+                    }
+                    BlockedPush::WithTags { request } => Msg::PushWithTags { repo_id, request },
+                },
+            );
+        },
+        |_msg_tx| {},
     );
 }
 
@@ -1452,8 +1596,10 @@ fn schedule_push_after_commit(
     set_upstream: bool,
     hooks: GitHooks,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_target = target.clone();
+    let guard_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1465,6 +1611,18 @@ fn schedule_push_after_commit(
             hooks,
         },
         move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::AfterCommit {
+                        target: target.clone(),
+                        set_upstream,
+                        hooks,
+                    },
+                )?;
+            }
             run_with_git_auth(auth, || {
                 repo.push_after_commit_with_hooks(&target, set_upstream, hooks)
             })
@@ -1517,8 +1675,10 @@ fn schedule_force_push(
     repo_id: RepoId,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1526,7 +1686,17 @@ fn schedule_force_push(
         repo_id,
         RepoCommandKind::ForcePush,
         context,
-        move |repo| run_with_git_auth(auth, || repo.push_force_with_output()),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Force { lease: None },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_force_with_output())
+        },
     );
 }
 
@@ -1537,8 +1707,10 @@ fn schedule_force_push_with_lease(
     repo_id: RepoId,
     lease: ForcePushLease,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_lease = lease.clone();
+    let guard_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1547,7 +1719,19 @@ fn schedule_force_push_with_lease(
         RepoCommandKind::ForcePushWithLease {
             lease: command_lease,
         },
-        move |repo| run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease)),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Force {
+                        lease: Some(lease.clone()),
+                    },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease))
+        },
     );
 }
 
@@ -1560,10 +1744,12 @@ fn schedule_push_set_upstream(
     branch: String,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
     let context = local_branch.map(|local| format!("{local} → {remote}/{branch}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1575,6 +1761,19 @@ fn schedule_push_set_upstream(
         },
         context,
         move |repo| {
+            // The first push of a branch is the usual way a submodule bump
+            // leaves, so it is checked like any other push.
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::SetUpstream {
+                        remote: remote.clone(),
+                        branch: branch.clone(),
+                    },
+                )?;
+            }
             run_with_git_auth(auth, || {
                 repo.push_set_upstream_with_output(&remote, &branch)
             })
@@ -1688,8 +1887,10 @@ fn schedule_reset(
     repo_id: RepoId,
     target: String,
     mode: ResetMode,
+    follow_submodules: bool,
 ) {
     let command_target = target.clone();
+    let follow_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1699,7 +1900,18 @@ fn schedule_reset(
             mode,
             target: command_target,
         },
-        move |repo| repo.reset_with_output(&target, mode),
+        move |repo| {
+            // Only a hard reset updates the working tree, as with Git's own
+            // `--recurse-submodules`; soft and mixed resets leave the
+            // submodule checkouts alone too.
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules && mode == ResetMode::Hard,
+                &follow_tx,
+                repo_id,
+                || repo.reset_with_output(&target, mode),
+            )
+        },
     );
 }
 
@@ -2553,6 +2765,13 @@ fn tracking_branch_context(
     ))
 }
 
+/// Whether a push of `repo_id` checks for unpushed submodule commits first:
+/// always, unless the user chose to push anyway.
+fn guard_unpushed_submodules(thread_state: &Arc<RwLock<Arc<AppState>>>, repo_id: RepoId) -> bool {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state.unpushed_pointer_override != Some(repo_id)
+}
+
 pub(super) fn schedule(
     executor: &TaskExecutor,
     filesystem_executor: &TaskExecutor,
@@ -2927,6 +3146,7 @@ pub(super) fn schedule(
                 .map(|(local, upstream)| format!("{upstream} → {local}"))
                 .or_else(|| current_branch_context(thread_state, repo_id)),
             auth,
+            super::follow_submodule_pointers(thread_state),
         ),
         RepoCommandEffect::PullBranch {
             repo_id,
@@ -2942,6 +3162,7 @@ pub(super) fn schedule(
             branch,
             current_branch_context(thread_state, repo_id),
             auth,
+            super::follow_submodule_pointers(thread_state),
         ),
         RepoCommandEffect::MergeRef { repo_id, reference } => {
             schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
@@ -2953,7 +3174,15 @@ pub(super) fn schedule(
             repo_id,
             request,
             auth,
-        } => schedule_push_with_tags(executor, repos, msg_tx, repo_id, request, auth),
+        } => schedule_push_with_tags(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            request,
+            auth,
+            guard_unpushed_submodules(thread_state, repo_id),
+        ),
         RepoCommandEffect::Push { repo_id, auth } => schedule_push(
             executor,
             repos,
@@ -2961,6 +3190,7 @@ pub(super) fn schedule(
             repo_id,
             tracking_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::PushAfterCommit {
             repo_id,
@@ -2977,6 +3207,7 @@ pub(super) fn schedule(
             set_upstream,
             hooks,
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::ForcePush { repo_id, auth } => schedule_force_push(
             executor,
@@ -2985,12 +3216,21 @@ pub(super) fn schedule(
             repo_id,
             tracking_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::ForcePushWithLease {
             repo_id,
             lease,
             auth,
-        } => schedule_force_push_with_lease(executor, repos, msg_tx, repo_id, lease, auth),
+        } => schedule_force_push_with_lease(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            lease,
+            auth,
+            guard_unpushed_submodules(thread_state, repo_id),
+        ),
         RepoCommandEffect::PushSetUpstream {
             repo_id,
             remote,
@@ -3005,6 +3245,7 @@ pub(super) fn schedule(
             branch,
             current_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::SetUpstreamBranch {
             repo_id,
@@ -3032,7 +3273,15 @@ pub(super) fn schedule(
             repo_id,
             target,
             mode,
-        } => schedule_reset(executor, repos, msg_tx, repo_id, target, mode),
+        } => schedule_reset(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            target,
+            mode,
+            super::follow_submodule_pointers(thread_state),
+        ),
         RepoCommandEffect::SquashCommits {
             repo_id,
             oldest,

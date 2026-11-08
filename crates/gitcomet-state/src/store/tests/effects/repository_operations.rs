@@ -1,7 +1,7 @@
 //! Repository operations: stash, branches, checkout, clone, saves, attributes.
 
 use super::*;
-use crate::model::ConflictFile;
+use crate::model::{BlockedPush, ConflictFile};
 use crate::msg::{PersistenceEffect, RepoCommandEffect, WorktreeSaveBaseline};
 use crate::store::repository_runtime::RepositoryRuntimes;
 
@@ -3951,4 +3951,310 @@ fn pull_releases_the_object_store_before_its_refresh() {
     // Released before the finish message, so the refresh it triggers reads
     // through a fresh store.
     assert_eq!(*calls.lock().unwrap(), vec!["pull", "release"]);
+}
+
+fn unpushed_pointer() -> gitcomet_core::domain::SubmoduleCheckoutUpdate {
+    gitcomet_core::domain::SubmoduleCheckoutUpdate {
+        path: PathBuf::from("mods/child"),
+        commit: CommitId("c".repeat(40).into()),
+    }
+}
+
+/// Outgoing commits record a submodule commit its remote lacks; records
+/// every push that reaches Git.
+struct UnpushedPointerRepo {
+    inner: DummyRepo,
+    pushes: Arc<Mutex<Vec<String>>>,
+}
+
+impl UnpushedPointerRepo {
+    fn record(&self, push: String) -> Result<CommandOutput> {
+        self.pushes.lock().unwrap().push(push);
+        Ok(CommandOutput::empty_success("git push"))
+    }
+}
+
+impl GitRepository for UnpushedPointerRepo {
+    fn spec(&self) -> &RepoSpec {
+        self.inner.spec()
+    }
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.inner.log_head_page(limit, cursor, cancellation)
+    }
+    fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
+        self.inner.commit_details(id)
+    }
+    fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        self.inner.reflog_head(limit)
+    }
+    fn current_branch(&self, cancellation: &CancellationToken) -> Result<String> {
+        self.inner.current_branch(cancellation)
+    }
+    fn list_branches(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+        self.inner.list_branches(cancellation)
+    }
+    fn list_remotes(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+        self.inner.list_remotes(cancellation)
+    }
+    fn list_remote_branches(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteBranch>> {
+        self.inner.list_remote_branches(cancellation)
+    }
+    fn status(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
+        self.inner.status(cancellation)
+    }
+    fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
+        self.inner.diff_unified(target)
+    }
+    fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.inner.create_branch(name, target)
+    }
+    fn delete_branch(&self, name: &str) -> Result<()> {
+        self.inner.delete_branch(name)
+    }
+    fn checkout_branch(&self, name: &str) -> Result<()> {
+        self.inner.checkout_branch(name)
+    }
+    fn checkout_commit(&self, id: &CommitId) -> Result<()> {
+        self.inner.checkout_commit(id)
+    }
+    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
+        self.inner.cherry_pick(id)
+    }
+    fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
+        self.inner.stash_create(message, include_untracked)
+    }
+    fn stash_list(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
+        self.inner.stash_list(cancellation)
+    }
+    fn stash_apply(&self, index: usize) -> Result<()> {
+        self.inner.stash_apply(index)
+    }
+    fn stash_drop(&self, index: usize) -> Result<()> {
+        self.inner.stash_drop(index)
+    }
+    fn stage(&self, paths: &[&Path]) -> Result<()> {
+        self.inner.stage(paths)
+    }
+    fn unstage(&self, paths: &[&Path]) -> Result<()> {
+        self.inner.unstage(paths)
+    }
+    fn commit(&self, message: &str) -> Result<()> {
+        self.inner.commit(message)
+    }
+    fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
+        self.inner.fetch_all(prune)
+    }
+    fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
+        self.inner.pull(mode)
+    }
+    fn push(&self) -> Result<()> {
+        self.inner.push()
+    }
+    fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
+        self.inner.discard_worktree_changes(paths)
+    }
+    fn unpushed_submodule_pointers(
+        &self,
+    ) -> Result<Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>> {
+        Ok(vec![unpushed_pointer()])
+    }
+    fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        self.record(format!("push --set-upstream {remote} {branch}"))
+    }
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        self.record("push --force".to_string())
+    }
+    fn push_force_with_lease_with_output(
+        &self,
+        lease: &gitcomet_core::services::ForcePushLease,
+    ) -> Result<CommandOutput> {
+        self.record(format!("push --force-with-lease {}", lease.branch))
+    }
+    fn push_with_tags(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+    ) -> Result<CommandOutput> {
+        self.record(format!("push {} with tags", request.branch))
+    }
+    fn push_submodule_with_output(&self, path: &Path, _commit: &CommitId) -> Result<CommandOutput> {
+        self.record(format!("push submodule {}", path.display()))
+    }
+}
+
+fn unpushed_pointer_fixture(
+    repo_id: RepoId,
+) -> (RepositoryRuntimes, AppState, Arc<Mutex<Vec<String>>>) {
+    let pushes = Arc::new(Mutex::new(Vec::new()));
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(
+        repo_id,
+        Arc::new(UnpushedPointerRepo {
+            inner: DummyRepo::new("/tmp/app"),
+            pushes: Arc::clone(&pushes),
+        }),
+    );
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/app"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    state.repos.push(repo);
+    state.active_repo = Some(repo_id);
+    (repos, state, pushes)
+}
+
+/// Reduce `msg`, run the one push it asks for and feed the replies back.
+fn run_push(repos: &mut RepositoryRuntimes, state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let mut effects = reduce(repos, &AtomicU64::new(9700), state, msg);
+    assert_eq!(effects.len(), 1, "one push: {effects:?}");
+    let effect = effects.remove(0);
+    apply_effect_with_state_for_test(&executor, &backend, repos, state, effect)
+}
+
+#[test]
+fn push_set_upstream_stops_for_unpushed_submodule_pointers() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state, pushes) = unpushed_pointer_fixture(repo_id);
+
+    run_push(
+        &mut repos,
+        &mut state,
+        Msg::PushSetUpstream {
+            repo_id,
+            remote: "origin".into(),
+            branch: "topic".into(),
+        },
+    );
+
+    let prompt = state
+        .unpushed_pointer_prompt
+        .clone()
+        .expect("the first push of a branch is checked too");
+    assert_eq!(prompt.pointers, vec![unpushed_pointer()]);
+    assert_eq!(
+        prompt.push,
+        BlockedPush::SetUpstream {
+            remote: "origin".into(),
+            branch: "topic".into(),
+        }
+    );
+    assert!(pushes.lock().unwrap().is_empty(), "nothing reached Git");
+}
+
+#[test]
+fn force_and_tag_pushes_stop_for_unpushed_submodule_pointers() {
+    let repo_id = RepoId(1);
+    let lease = gitcomet_core::services::ForcePushLease {
+        remote: "origin".into(),
+        branch: "topic".into(),
+        expected: CommitId("e".repeat(40).into()),
+        local_branch: "topic".into(),
+        local_head: CommitId("h".repeat(40).into()),
+    };
+    let request = gitcomet_core::tag_push::TagPushRequest {
+        mode: gitcomet_core::tag_push::TagPushMode::FollowAnnotated,
+        remote: "origin".into(),
+        branch: "topic".into(),
+        local_branch: "topic".into(),
+        head: CommitId("h".repeat(40).into()),
+        set_upstream: false,
+    };
+    for (msg, blocked) in [
+        (
+            Msg::ForcePush { repo_id },
+            BlockedPush::Force { lease: None },
+        ),
+        (
+            Msg::ForcePushWithLease {
+                repo_id,
+                lease: lease.clone(),
+            },
+            BlockedPush::Force { lease: Some(lease) },
+        ),
+        (
+            Msg::PushWithTags {
+                repo_id,
+                request: request.clone(),
+            },
+            BlockedPush::WithTags { request },
+        ),
+    ] {
+        let (mut repos, mut state, pushes) = unpushed_pointer_fixture(repo_id);
+        run_push(&mut repos, &mut state, msg);
+        let prompt = state.unpushed_pointer_prompt.clone().expect("stopped");
+        assert_eq!(prompt.push, blocked);
+        assert!(pushes.lock().unwrap().is_empty(), "nothing reached Git");
+    }
+}
+
+#[test]
+fn a_stopped_set_upstream_push_runs_again_as_it_was_asked() {
+    let repo_id = RepoId(1);
+    let blocked = BlockedPush::SetUpstream {
+        remote: "origin".into(),
+        branch: "topic".into(),
+    };
+
+    // "Push anyway" runs the same push, past the check.
+    let (mut repos, mut state, pushes) = unpushed_pointer_fixture(repo_id);
+    reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::PushBlockedByUnpushedSubmodules {
+            repo_id,
+            pointers: vec![unpushed_pointer()],
+            push: blocked.clone(),
+        }),
+    );
+    let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");
+    run_push(
+        &mut repos,
+        &mut state,
+        Msg::ResolveUnpushedPointerPrompt {
+            prompt: prompt.clone(),
+            push_submodules_first: false,
+        },
+    );
+    assert_eq!(
+        *pushes.lock().unwrap(),
+        vec!["push --set-upstream origin topic".to_string()]
+    );
+    assert_eq!(
+        state.unpushed_pointer_override, None,
+        "it answered one push"
+    );
+
+    // "Push submodules first" pushes them, then asks for the same push.
+    let (mut repos, mut state, pushes) = unpushed_pointer_fixture(repo_id);
+    let followups = run_push(
+        &mut repos,
+        &mut state,
+        Msg::ResolveUnpushedPointerPrompt {
+            prompt,
+            push_submodules_first: true,
+        },
+    );
+    assert_eq!(
+        *pushes.lock().unwrap(),
+        vec!["push submodule mods/child".to_string()]
+    );
+    assert!(
+        matches!(
+            followups.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::PushSetUpstream { remote, branch, .. })]
+                if remote == "origin" && branch == "topic"
+        ),
+        "{followups:?}"
+    );
 }

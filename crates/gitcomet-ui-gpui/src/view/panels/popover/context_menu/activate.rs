@@ -1049,6 +1049,10 @@ impl PopoverHost {
             ContextMenuAction::LoadSubmodule { repo_id, path } => {
                 self.store.dispatch(Msg::LoadSubmodule { repo_id, path });
             }
+            ContextMenuAction::UpdateSubmoduleToRecorded { repo_id, path } => {
+                self.store
+                    .dispatch(Msg::UpdateSubmoduleToRecorded { repo_id, path });
+            }
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });
             }

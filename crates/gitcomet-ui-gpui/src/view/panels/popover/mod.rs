@@ -39,6 +39,7 @@ mod force_push_confirm;
 mod force_remove_worktree_confirm;
 mod hook_activity;
 mod interactive_cherry_pick_confirm;
+mod linked_push_confirm;
 mod menu_layer;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
@@ -64,11 +65,15 @@ mod stash_picker_prompt;
 mod stash_prompt;
 mod submodule_add_prompt;
 mod submodule_change_pointer_prompt;
+mod submodule_checkout_confirm;
+mod submodule_close_confirm;
+mod submodule_leave_behind_confirm;
 mod submodule_picker;
 mod submodule_remove_confirm;
 mod submodule_trust_confirm;
 mod tag_push;
 mod terminal_shutdown_confirm;
+mod unpushed_pointer_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
 mod worktree_add_prompt;
@@ -707,6 +712,11 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::RebaseReword { .. }
             | PopoverKind::BranchExistsPrompt { .. }
             | PopoverKind::ForceDeleteBranchConfirm(_)
+            | PopoverKind::SubmoduleCheckoutConfirm(_)
+            | PopoverKind::LinkedPushConfirm(_)
+            | PopoverKind::UnpushedPointerConfirm(_)
+            | PopoverKind::SubmoduleCloseConfirm(_)
+            | PopoverKind::SubmoduleLeaveBehindConfirm(_)
             | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm(_)
             | PopoverKind::DiscardChangesConfirm { .. }
@@ -789,6 +799,11 @@ pub(super) fn cancel_button(
 }
 
 /// Cancel button whose click simply closes the popover.
+/// A commit id as the submodule prompts show it.
+pub(super) fn short_commit(commit: &gitcomet_core::domain::CommitId) -> &str {
+    gitcomet_core::domain::short_commit_id(commit.as_ref())
+}
+
 pub(super) fn dialog_cancel_button(
     id: &'static str,
     hint_debug_selector: &'static str,
@@ -1057,6 +1072,11 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::DeletePermanentlyConfirm(_)
         | PopoverKind::FilesystemUnsavedEditsConfirm(_)
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
+        | PopoverKind::LinkedPushConfirm(_)
+        | PopoverKind::UnpushedPointerConfirm(_)
+        | PopoverKind::SubmoduleCloseConfirm(_)
+        | PopoverKind::SubmoduleLeaveBehindConfirm(_)
         | PopoverKind::ForceRemoveWorktreeConfirm(_)
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
@@ -1130,6 +1150,11 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
+        | PopoverKind::LinkedPushConfirm(_)
+        | PopoverKind::UnpushedPointerConfirm(_)
+        | PopoverKind::SubmoduleCloseConfirm(_)
+        | PopoverKind::SubmoduleLeaveBehindConfirm(_)
         | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. }
         | PopoverKind::DiscardFolderChangesConfirm { .. }

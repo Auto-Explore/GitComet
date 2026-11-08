@@ -210,6 +210,9 @@ pub(crate) fn build_synthetic_repo_state_with_tags(
             } else {
                 SubmoduleStatus::UpToDate
             },
+            nested: false,
+            drift: None,
+            has_inner_changes: false,
         });
     }
     repo.submodules = Loadable::Ready(Arc::new(submodules_vec));

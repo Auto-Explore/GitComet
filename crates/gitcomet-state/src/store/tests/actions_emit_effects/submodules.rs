@@ -133,6 +133,9 @@ fn selected_submodule_command_reloads_selected_summary() {
             recorded_head: CommitId("old-recorded".into()),
             checked_out_head: None,
             status: SubmoduleStatus::NotInitialized,
+            nested: false,
+            drift: None,
+            has_inner_changes: false,
         }]));
         let target = DiffTarget::working_tree(command_path.to_path_buf(), DiffArea::Unstaged);
         repo.diff_state.diff_target = Some(target.clone());

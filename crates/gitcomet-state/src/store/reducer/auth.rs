@@ -753,7 +753,9 @@ fn replay_auth_prompt(
 pub(super) fn cancel_auth_prompt(state: &mut AppState) -> Vec<Effect> {
     cancel_auth_validation(state);
     if let Some(prompt) = state.auth_prompt.as_ref() {
-        super::reword::cancel_auth(state, &prompt.operation.clone());
+        let operation = prompt.operation.clone();
+        super::reword::cancel_auth(state, &operation);
+        super::linked_commit::cancel_auth(state, &operation);
     }
     if let Some(AuthPromptState {
         operation: AuthRetryOperation::Clone { dest, .. },
@@ -810,12 +812,15 @@ pub(super) fn clone_repo_finished(
     effects
 }
 
+/// `shelve` stashes submodule changes first. A sign-in retry commits
+/// without it: the stash already ran when the commit asked for a sign-in.
 pub(super) fn commit(
     state: &mut AppState,
     repo_id: RepoId,
     message: String,
     push_after_commit: bool,
     hooks: GitHooks,
+    shelve: Option<crate::model::SubmoduleShelve>,
 ) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -826,7 +831,7 @@ pub(super) fn commit(
             hooks,
         });
     }
-    actions_emit_effects::commit(repo_id, message, hooks)
+    actions_emit_effects::commit(repo_id, message, hooks, shelve)
 }
 
 pub(super) fn commit_amend(

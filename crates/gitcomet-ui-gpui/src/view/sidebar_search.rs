@@ -187,6 +187,8 @@ mod tests {
                 status: gitcomet_core::domain::SubmoduleStatus::UpToDate,
                 recorded_head: gitcomet_core::domain::CommitId("a".into()),
                 checked_out_head: None,
+                drift: None,
+                has_inner_changes: false,
             },
             BranchSidebarRow::StashItem {
                 id: gitcomet_core::domain::CommitId("s".into()),

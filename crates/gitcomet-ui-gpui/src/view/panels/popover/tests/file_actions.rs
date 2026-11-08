@@ -733,6 +733,9 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
                     recorded_head: CommitId("1111111111111111".into()),
                     checked_out_head: None,
                     status: gitcomet_core::domain::SubmoduleStatus::NotInitialized,
+                    nested: false,
+                    drift: None,
+                    has_inner_changes: false,
                 }]
                 .into(),
             );

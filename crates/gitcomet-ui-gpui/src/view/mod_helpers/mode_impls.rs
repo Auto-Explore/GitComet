@@ -250,6 +250,11 @@ pub(crate) enum PopoverKind {
         operation: BranchExistsPromptOperation,
     },
     ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt),
+    SubmoduleCheckoutConfirm(gitcomet_state::model::SubmoduleCheckoutPrompt),
+    LinkedPushConfirm(gitcomet_state::model::LinkedPushPrompt),
+    UnpushedPointerConfirm(gitcomet_state::model::UnpushedPointerPrompt),
+    SubmoduleCloseConfirm(SubmoduleClosePrompt),
+    SubmoduleLeaveBehindConfirm(SubmoduleLeaveBehindPrompt),
     ForceRemoveWorktreeConfirm(gitcomet_state::model::ForceRemoveWorktreePrompt),
     DiscardChangesConfirm {
         repo_id: RepoId,
@@ -1037,6 +1042,28 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// Closing a worktree tab whose submodules have tabs open asks whether
+/// they close too.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct SubmoduleClosePrompt {
+    /// The tabs the user asked to close.
+    pub(in crate::view) repo_ids: Vec<RepoId>,
+    pub(in crate::view) activate_after: Option<RepoId>,
+    /// Open submodule tabs of those worktrees that were not asked about.
+    pub(in crate::view) submodules: Vec<RepoId>,
+}
+
+/// A commit in a worktree whose first-level submodules hold uncommitted
+/// changes the commit would leave behind.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct SubmoduleLeaveBehindPrompt {
+    pub(in crate::view) repo_id: RepoId,
+    /// The submodules' paths in the worktree.
+    pub(in crate::view) submodules: Vec<std::path::PathBuf>,
+    /// The first line of the commit message, for the stash's name.
+    pub(in crate::view) subject: String,
 }
 
 /// A close the Git-operation or extension guards asked about. Confirming it

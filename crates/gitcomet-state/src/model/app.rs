@@ -129,6 +129,154 @@ impl Default for FileBrowserSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmoduleSettings {
+    /// After a checkout, pull, reset or stash pop moves a first-level
+    /// submodule's recorded commit, check the submodule out there too when it
+    /// was in sync before. Git's own `submodule.recurse` takes precedence.
+    pub follow_pointers: bool,
+}
+
+impl Default for SubmoduleSettings {
+    fn default() -> Self {
+        Self {
+            follow_pointers: true,
+        }
+    }
+}
+
+/// What a submodule checkout prompt will run once the user picks how to keep
+/// the work the guard found.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum SubmoduleCheckoutOperation {
+    /// Discard these paths in the parent; at least one restores a pointer.
+    Discard { paths: Vec<PathBuf> },
+    /// Check a submodule out at the commit its parent records.
+    UpdateToRecorded { path: PathBuf },
+}
+
+/// A checkout the guard stopped because it could lose work in a submodule.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleCheckoutPrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub operation: SubmoduleCheckoutOperation,
+    pub risks: Vec<gitcomet_core::domain::SubmoduleCheckoutRisk>,
+}
+
+/// Where a commit made in a submodule tab, recorded in its parent, stands.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum LinkedCommitStage {
+    /// Committing in the submodule.
+    CommitChild,
+    /// Recording the new submodule commit in the parent.
+    RecordInParent,
+    /// Pushing the submodule; the parent waits for it.
+    PushChild,
+    /// Pushing the parent after the submodule.
+    PushParent,
+    /// The submodule push was refused; waiting for the user's choice.
+    PushStopped,
+    /// Pulling the submodule before pushing again.
+    ReconcileChild { rebase: bool },
+    /// Recording the rebased submodule commit in the parent's commit.
+    RerecordInParent,
+}
+
+/// A commit in a first-level submodule tab that the parent records too, and
+/// pushes after the submodule, so the parent never records a commit nobody
+/// else can fetch.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LinkedCommit {
+    pub child: RepoId,
+    pub parent: RepoId,
+    /// The submodule's path in the parent.
+    pub path: PathBuf,
+    pub parent_message: String,
+    pub push: bool,
+    pub stage: LinkedCommitStage,
+    /// The parent commit that records the submodule, once made.
+    pub parent_commit: Option<gitcomet_core::domain::CommitId>,
+}
+
+/// The message a parent's commit recording a submodule starts with: the
+/// submodule's path and the first line of the submodule's message.
+pub fn default_parent_message(path: &std::path::Path, child_message: &str) -> String {
+    let subject = child_message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if subject.is_empty() {
+        format!("Update {}", path.display())
+    } else {
+        format!("Update {}: {subject}", path.display())
+    }
+}
+
+/// The submodule push of a linked commit was refused, so the parent's push
+/// is held back.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LinkedPushPrompt {
+    pub generation: u64,
+    pub child: RepoId,
+    pub parent: RepoId,
+    pub error: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum LinkedPushChoice {
+    /// Leave both commits local and push later.
+    KeepLocal,
+    /// Pull the submodule with a rebase, record the rebased commit in the
+    /// parent's unpushed commit, and push both again.
+    Rebase,
+    /// Pull the submodule with a merge and push both again.
+    Merge,
+}
+
+/// The push the unpushed-pointer guard stopped, so that "Push anyway" and
+/// "Push submodules first" run it again as it was asked for.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BlockedPush {
+    Push,
+    AfterCommit {
+        target: gitcomet_core::services::SafePushAfterCommitTarget,
+        set_upstream: bool,
+        hooks: gitcomet_core::services::GitHooks,
+    },
+    /// The first push of a branch, which also sets its upstream.
+    SetUpstream {
+        remote: String,
+        branch: String,
+    },
+    /// A force push, with the lease it was asked with if any.
+    Force {
+        lease: Option<gitcomet_core::services::ForcePushLease>,
+    },
+    WithTags {
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
+}
+
+/// A push refused because outgoing commits record submodule commits that
+/// the submodules' remotes do not have.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UnpushedPointerPrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub pointers: Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>,
+    pub push: BlockedPush,
+}
+
+/// Changes to tracked files in first-level submodules that a commit in the
+/// parent stashes first, under `message`, instead of leaving them behind.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleShelve {
+    pub paths: Vec<PathBuf>,
+    pub message: String,
+}
+
 // ── App state ───────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
@@ -166,6 +314,19 @@ pub struct AppState {
     /// repeats the last one is still a new prompt.
     pub force_remove_worktree_prompt_generation: u64,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    /// A discard or update the submodule guard stopped, waiting for a choice.
+    pub submodule_checkout_prompt: Option<SubmoduleCheckoutPrompt>,
+    pub submodule_checkout_prompt_generation: u64,
+    pub submodule_settings: SubmoduleSettings,
+    /// The linked commit in progress; one at a time.
+    pub linked_commit: Option<LinkedCommit>,
+    pub linked_push_prompt: Option<LinkedPushPrompt>,
+    pub linked_push_prompt_generation: u64,
+    pub unpushed_pointer_prompt: Option<UnpushedPointerPrompt>,
+    pub unpushed_pointer_prompt_generation: u64,
+    /// The next push of this repository skips the unpushed-submodule check:
+    /// the user chose to push anyway, or the submodules were pushed first.
+    pub unpushed_pointer_override: Option<RepoId>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
     /// UI can show a pending/spinner state instead of a dead gap before the
@@ -208,6 +369,44 @@ impl AppState {
             },
             ..Self::default()
         }
+    }
+
+    /// Open first-level submodule tabs of the worktree tab `repo_id`, in tab
+    /// order.
+    pub fn submodule_children(&self, repo_id: RepoId) -> Vec<RepoId> {
+        self.repos
+            .iter()
+            .filter(|repo| repo.submodule_parent_tab() == Some(repo_id))
+            .map(|repo| repo.id)
+            .collect()
+    }
+
+    /// The folder name the tab of `repo_id` shows, for prompts and notices.
+    pub fn repo_name(&self, repo_id: RepoId) -> String {
+        self.repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.spec.workdir.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the repository".to_string())
+    }
+
+    /// The row the parent tab lists for the first-level submodule tab
+    /// `repo_id`: what the parent records for it and how far it has moved.
+    pub fn submodule_row_in_parent(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<&gitcomet_core::domain::Submodule> {
+        let child = self.repos.iter().find(|repo| repo.id == repo_id)?;
+        let link = child.submodule_parent.as_ref()?;
+        let parent = self
+            .repos
+            .iter()
+            .find(|repo| Some(repo.id) == link.repo_id)?;
+        let crate::model::Loadable::Ready(rows) = &parent.submodules else {
+            return None;
+        };
+        rows.iter().find(|row| !row.nested && row.path == link.path)
     }
 
     /// Queues a notification for the window.

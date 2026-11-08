@@ -378,6 +378,9 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
         recorded_head: CommitId("beadfeed".into()),
         checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
         index: 0,
@@ -577,6 +580,9 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
         recorded_head: CommitId("beadfeed".into()),
         checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
+        nested: false,
+        drift: None,
+        has_inner_changes: false,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
         index: 0,
