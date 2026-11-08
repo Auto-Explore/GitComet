@@ -155,6 +155,12 @@ impl DiffRenderer {
                             });
                     let over =
                         self.render_hosted_over_layer(None, scrollbar_gutter, bottom_gutter, cx);
+                    let list = crate::kit::elastic_scroll::ElasticScroll::new(
+                        ("diff_elastic", self.diff_elastic_generation),
+                        self.diff_scroll.clone(),
+                        list,
+                    )
+                    .shared_motion(self.diff_elastic_scroll.clone());
                     div()
                         .id("diff_scroll_container")
                         .relative()
@@ -261,6 +267,26 @@ impl DiffRenderer {
                         bottom_gutter,
                         cx,
                     );
+                    let left = crate::kit::elastic_scroll::ElasticScroll::new(
+                        ("diff_split_left_elastic", self.diff_elastic_generation),
+                        self.diff_scroll.clone(),
+                        left,
+                    );
+                    let right = crate::kit::elastic_scroll::ElasticScroll::new(
+                        ("diff_split_right_elastic", self.diff_elastic_generation),
+                        self.diff_split_right_scroll.clone(),
+                        right,
+                    );
+                    let left = if vertical_sync_enabled {
+                        left.shared_motion(self.diff_elastic_scroll.clone())
+                    } else {
+                        left
+                    };
+                    let right = if vertical_sync_enabled {
+                        right.shared_motion(self.diff_elastic_scroll.clone())
+                    } else {
+                        right
+                    };
                     // Built before `resize_handle` captures `cx`.
                     let split_annotate_handle = self
                         .annotation_active()

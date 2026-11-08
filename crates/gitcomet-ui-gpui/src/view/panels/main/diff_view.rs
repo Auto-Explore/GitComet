@@ -2481,6 +2481,12 @@ impl DiffRenderer {
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
+                            let list = crate::kit::elastic_scroll::ElasticScroll::new(
+                                ("worktree_preview_elastic", self.diff_elastic_generation),
+                                self.worktree_preview_scroll.clone(),
+                                list,
+                            )
+                            .shared_motion(self.diff_elastic_scroll.clone());
 
                             let scroll_handle =
                                 self.worktree_preview_scroll.0.borrow().base_handle.clone();

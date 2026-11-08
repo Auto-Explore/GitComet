@@ -1363,15 +1363,28 @@ impl HistoryView {
             .min_h(px(0.0))
             .overflow_hidden()
             .child(
-                div()
-                    .id("history_main")
-                    .relative()
-                    .h_full()
-                    .mr(super::history_scrollbar_gutter())
-                    .overflow_hidden()
-                    .on_scroll_wheel(cx.listener(Self::history_wheel))
-                    .child(measure)
-                    .children(rows),
+                crate::kit::elastic_scroll::ElasticScroll::new(
+                    (
+                        "history_elastic",
+                        self.active_repo_id().map_or(0, |id| id.0),
+                    ),
+                    super::scroll::HistoryScrollDriver {
+                        view: cx.entity().downgrade(),
+                        handle: self.history_scroll.clone(),
+                        interaction: self.scroll_interaction.clone(),
+                    },
+                    div()
+                        .id("history_main")
+                        .relative()
+                        .h_full()
+                        .mr(super::history_scrollbar_gutter())
+                        .overflow_hidden()
+                        .on_scroll_wheel(cx.listener(Self::history_wheel))
+                        .child(measure)
+                        .children(rows),
+                )
+                .vertical_only()
+                .on_scroll(cx.listener(|this, _, _, cx| this.history_wheel_interaction(cx))),
             )
             .child(
                 components::Scrollbar::new(

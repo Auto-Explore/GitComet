@@ -62,6 +62,15 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .track_scroll(&self.file_browser_scroll);
             let list = restrict_scroll_to_vertical_axis(list);
+            let list = crate::kit::elastic_scroll::ElasticScroll::new(
+                (
+                    "file_browser_elastic",
+                    self.active_repo_id().map_or(0, |id| id.0),
+                ),
+                self.file_browser_scroll.clone(),
+                list,
+            )
+            .vertical_only();
             // Same overlay-scrollbar treatment as the branches list above.
             let list = div()
                 .flex_1()

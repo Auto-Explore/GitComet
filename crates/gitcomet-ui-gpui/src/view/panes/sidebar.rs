@@ -2016,6 +2016,20 @@ impl SidebarPaneView {
             list.with_decoration(sticky::StickyRows { view: cx.entity() })
         });
         let list = restrict_scroll_to_vertical_axis(list);
+        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            (
+                "branch_sidebar_elastic",
+                self.active_repo_id().map_or(0, |id| id.0),
+            ),
+            self.branches_scroll.clone(),
+            list,
+        )
+        .vertical_only()
+        .on_scroll(cx.listener(|this, _, _, cx| {
+            if this.sidebar_scroll_animation.take().is_some() {
+                cx.notify();
+            }
+        }));
         let view = cx.entity();
         let row_height = sidebar_list_row_height(theme, ui_scale_percent);
         let list = div()

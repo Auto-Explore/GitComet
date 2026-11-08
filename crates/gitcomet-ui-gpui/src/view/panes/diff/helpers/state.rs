@@ -1091,6 +1091,8 @@ pub(crate) struct DiffRenderer {
 
     // History view, scroll handles, and gutter geometry.
     pub(in crate::view) diff_scroll: UniformListScrollHandle,
+    pub(in crate::view) diff_elastic_scroll: crate::kit::elastic_scroll::ElasticScrollState,
+    pub(in crate::view) diff_elastic_generation: u64,
     pub(in crate::view) diff_split_right_scroll: UniformListScrollHandle,
     /// How the list on `diff_scroll` was last built, which its handle's
     /// measured contents are of.

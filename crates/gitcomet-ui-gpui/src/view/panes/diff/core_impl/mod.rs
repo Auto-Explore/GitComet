@@ -456,6 +456,7 @@ impl DiffRenderer {
     }
 
     pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
+        self.reset_diff_elastic_scroll();
         self.diff_horizontal_scroll.reset();
         self.forget_hosted_line_end_text();
         // A reveal names a row in the view it was armed over. That view is gone,
@@ -465,6 +466,11 @@ impl DiffRenderer {
         self.markdown_interaction.reveal.clear();
         self.markdown_interaction.hovered_link = None;
         self.markdown_interaction.plain_link = None;
+    }
+
+    fn reset_diff_elastic_scroll(&mut self) {
+        self.diff_elastic_scroll.reset();
+        self.diff_elastic_generation = self.diff_elastic_generation.wrapping_add(1);
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -879,6 +885,7 @@ impl DiffRenderer {
         }
 
         self.diff_scroll_sync = next;
+        self.reset_diff_elastic_scroll();
         self.sync_diff_split_scroll();
         self.sync_conflict_preview_scroll();
         cx.notify();
@@ -894,6 +901,7 @@ impl DiffRenderer {
         }
 
         self.diff_view = next;
+        self.reset_diff_elastic_scroll();
         // Inline keys styled segments by `row_ix` while split keys them by
         // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
         // the same `split_left`/`split_right` epochs, so the two key spaces
@@ -1998,6 +2006,7 @@ impl DiffRenderer {
         });
 
         if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
+            self.reset_diff_elastic_scroll();
             self.remote_markdown_images.approved_urls = Arc::default();
             self.remote_markdown_images.approval_revision = self
                 .remote_markdown_images

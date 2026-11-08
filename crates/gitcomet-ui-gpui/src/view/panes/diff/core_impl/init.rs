@@ -610,6 +610,8 @@ impl DiffRenderer {
             #[cfg(test)]
             conflict_resolved_outline_background_delay_override: None,
             diff_scroll: UniformListScrollHandle::default(),
+            diff_elastic_scroll: crate::kit::elastic_scroll::ElasticScrollState::default(),
+            diff_elastic_generation: 0,
             diff_split_right_scroll: UniformListScrollHandle::default(),
             diff_list_built: Default::default(),
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),

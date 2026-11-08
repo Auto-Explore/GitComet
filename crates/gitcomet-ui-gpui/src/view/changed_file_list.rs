@@ -65,10 +65,16 @@ impl Render for ChangedFileListView {
         .flex_1()
         .min_h(px(0.0))
         .track_scroll(&self.scroll);
-        restrict_scroll_to_vertical_axis(match &self.decorate {
+        let list = restrict_scroll_to_vertical_axis(match &self.decorate {
             Some(decorate) => decorate(list),
             None => list,
-        })
+        });
+        crate::kit::elastic_scroll::ElasticScroll::new(
+            "changed_files_elastic",
+            self.scroll.clone(),
+            list,
+        )
+        .vertical_only()
     }
 }
 
