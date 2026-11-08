@@ -1542,6 +1542,13 @@ fn readability_checks(theme: AppTheme) -> Vec<ReadabilityCheck> {
             colors.editor.line_number,
             editor,
         ),
+        // Collapsed hunk separators draw placeholder text on the bare editor.
+        (
+            "placeholder/editor",
+            "colors.foreground.placeholder",
+            colors.foreground.placeholder,
+            editor,
+        ),
         (
             "line_number/gutter",
             "colors.editor.line_number",
