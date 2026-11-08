@@ -1269,3 +1269,40 @@ fn a_parked_tab_whose_repository_is_gone_stays_open_with_its_error() {
         "activation retries the open"
     );
 }
+
+#[test]
+fn reading_a_parked_tab_opens_a_handle_without_waking_it() {
+    use super::super::worktree_redirect::{open_repo_and_wait, wait_until};
+    let dir = tempfile::tempdir().unwrap();
+    let root = gitcomet_core::path_utils::canonicalize_or_original(dir.path().to_path_buf());
+    let paths: Vec<PathBuf> = ["parked", "b", "c", "d"]
+        .into_iter()
+        .map(|name| {
+            let repo = root.join(name);
+            std::fs::create_dir(&repo).unwrap();
+            super::super::run_git(&repo, &["init", "-q", "-b", "main"]);
+            repo
+        })
+        .collect();
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    let id = open_repo_and_wait(&store, &paths[0]);
+    for path in &paths[1..] {
+        open_repo_and_wait(&store, path);
+    }
+    let tab = |store: &AppStore| {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == id)
+            .cloned()
+            .expect("parked tab")
+    };
+    wait_until("the oldest tab to park", || tab(&store).is_backend_parked());
+    let handle = store
+        .repository(id, tab(&store).lifetime())
+        .expect("a parked tab is still open");
+    assert_eq!(handle.spec().workdir, paths[0]);
+    assert!(tab(&store).is_backend_parked(), "reading does not wake it");
+    store.shutdown_for_test().recv().unwrap();
+}

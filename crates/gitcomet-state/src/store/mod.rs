@@ -1401,8 +1401,25 @@ impl AppStore {
     /// Reads a backend handle for this repository lifetime on a worker thread.
     /// This waits for the store worker; do not call from the UI thread or a reducer.
     /// An old handle never resolves to a reopened repository with the same id.
+    /// A parked tab is read through a handle opened for the caller, which
+    /// leaves the tab parked.
     pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
-        self.msg_tx.repository(repo_id, lifetime)
+        self.msg_tx.repository(repo_id, lifetime).or_else(|| {
+            let workdir = self
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| {
+                    repo.id == repo_id
+                        && repo.lifetime() == lifetime
+                        && repo.is_backend_parked()
+                        && matches!(repo.open, crate::model::Loadable::Ready(()))
+                })?
+                .spec
+                .workdir
+                .clone();
+            self.backend.open(&workdir).ok()
+        })
     }
 
     /// [`Self::snapshot`] without blocking: `None` while the reducer holds
