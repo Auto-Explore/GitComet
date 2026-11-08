@@ -772,12 +772,18 @@ impl RepoState {
             return false;
         }
         self.set_range_selection(None);
+        self.release_range_files();
+        true
+    }
+
+    /// Drop the comparison's file list and retire any load still in flight,
+    /// keeping its endpoints so the list can be loaded again.
+    pub(crate) fn release_range_files(&mut self) {
         self.set_range_files(Loadable::NotLoaded);
         self.history_state.range_files_request =
             self.history_state.range_files_request.wrapping_add(1);
         self.history_state.range_files_in_flight = false;
         self.history_state.range_files_refresh_queued = false;
-        true
     }
 
     /// Claim the next range-file load. Returns the request id to carry through

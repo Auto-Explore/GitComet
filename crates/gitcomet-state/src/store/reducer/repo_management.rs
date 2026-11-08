@@ -337,6 +337,7 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
         repo.history_state.retained_log_while_loading.clone(),
         repo.history_state.file_history.clone(),
         repo.history_state.commit_details.clone(),
+        repo.history_state.range_files.clone(),
         repo.diff_state.clone(),
         repo.file_browser.entries.clone(),
         repo.status.clone(),
@@ -361,6 +362,9 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
     repo.history_state.retained_log_while_loading = None;
     repo.history_state.file_history = Loadable::NotLoaded;
     repo.set_commit_details(Loadable::NotLoaded);
+    if repo.history_state.range_selection.is_some() || repo.history_state.range_files_in_flight {
+        repo.release_range_files();
+    }
     repo.diff_state.blame = Loadable::NotLoaded;
     repo.clear_retained_blame();
     repo.diff_state.clear_loads();
@@ -1645,6 +1649,16 @@ pub(super) fn repo_opened_ok(
         if resuming {
             let reloads = selected_history_reloads_for_activation(repo_state);
             append_selected_history_reload_effects(repo_id, repo_state, reloads, &mut effects);
+            if let Some(range) = repo_state.history_state.range_selection.clone() {
+                repo_state.set_range_files(Loadable::Loading);
+                effects.push(Effect::LoadRangeFiles {
+                    repo_id,
+                    from: range.from,
+                    to: range.to,
+                    options: range.options,
+                    request: repo_state.begin_range_files_load(),
+                });
+            }
             if let Some(target) = repo_state.diff_state.diff_target.clone() {
                 match selected_conflict_target(repo_state, &target) {
                     Some(SelectedConflictTarget::Current) => {

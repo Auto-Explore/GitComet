@@ -1170,3 +1170,55 @@ fn a_resumed_history_walk_streams_into_a_loading_log() {
     );
     assert_eq!(state.repos[0].history_state.log_scan_progress, Some(42));
 }
+
+#[cfg(unix)]
+#[test]
+fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/recovery-comparison");
+    let repo = &mut state.repos[0];
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.set_range_selection(Some(crate::model::RangeSelection::new(
+        gitcomet_core::domain::CommitId("a".repeat(40).into()),
+        None,
+        "base".into(),
+        "Working tree".into(),
+    )));
+    repo.set_range_files(Loadable::Loading);
+    let stranded = repo.begin_range_files_load();
+    let failure = Msg::Internal(InternalMsg::RepoLoadFinished {
+        repo_id: id,
+        load_epoch: repo.load_epoch,
+        message: Box::new(InternalMsg::StatusLoaded {
+            repo_id: id,
+            result: Err(exhausted()),
+        }),
+    });
+    reduce(&mut repos, &ids, &mut state, failure);
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoOpenedOk {
+            repo_id: id,
+            spec: RepoSpec {
+                workdir: "/tmp/recovery-comparison".into(),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/recovery-comparison")),
+            preferences: None,
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+        }),
+    );
+    let history = &state.repos[0].history_state;
+    let reissued = effects.iter().find_map(|effect| match effect {
+        Effect::LoadRangeFiles { request, .. } => Some(*request),
+        _ => None,
+    });
+    assert_eq!(reissued, Some(history.range_files_request));
+    assert_ne!(reissued, Some(stranded));
+    assert!(history.range_files_in_flight);
+    assert!(history.range_files.is_loading());
+}
