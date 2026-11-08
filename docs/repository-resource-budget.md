@@ -50,6 +50,14 @@ Visibility-based leases for those cached extension views are outside this draft.
 Explicit automatic fetching retains its existing scheduling and can temporarily
 open a cold repository for a fetch.
 
+Pending authentication, branch/worktree confirmations, submodule trust checks
+and prompts, and bare-conversion confirmations also pin their repository. These
+continuations resume directly without selecting their tab first. Dismissal
+releases the pin; approval transfers ownership to the new in-flight operation.
+The push safety check after a commit is counted as an in-flight local action,
+including authentication retries, until it hands off to a push or finishes.
+A missing backend still produces its completion error and releases that count.
+
 Filesystem operations resolve only affected parked roots on their filesystem
 worker. A nested repository still supplies the mode and operation-lease checks;
 a cold nested root is not bypassed in favor of its open parent. The temporary
@@ -107,9 +115,9 @@ a separate macOS zoom-wheel policy change:
   app and CLI targets. All passed across environment-specific reruns: app
   configuration tests ran outside the checkout, while automatic-fetch tests
   retained the Mac's existing Git/proxy configuration.
-- A later full state run passed all 1,668 enabled cases (9 skipped). After the
-  final hosted-session changes, all 26 focused state cases pass, including
-  initial/cold background opens, latest-target queuing and document pinning.
+- The final full state run passed all 1,678 enabled cases (9 skipped), including
+  initial/cold background opens, latest-target queuing, document pinning,
+  pending confirmation/authentication ownership, and commit-to-push handoffs.
 - The broad GUI run passed 4,049 cases and identified four failures. Two were
   old Control-wheel fixtures, one an unrealistic activity timestamp fixture,
   and one exposed nested-save/attribute-resume integration bugs. After fixes,
@@ -117,13 +125,15 @@ a separate macOS zoom-wheel policy change:
   focused run, and all 56 hosted-pane cases passed after the final changes.
 - The shared UI kit passed 536 enabled cases across its run and a corrected
   working-directory rerun; all 76 media cases passed. Ignored cases stay ignored.
-- Workspace formatting, whitespace and all 18 dependency-boundary contexts pass.
+- Workspace formatting, whitespace, all three documented Clippy lanes,
+  all 18 dependency-boundary contexts, grammar symbols, identity literals and
+  the open-source licence inventory pass.
 - Subagent static reviews found lifecycle, UI retention and hosted-document
   integration issues. The fixes were reviewed again with no outstanding
   actionable production finding.
 
-Tests cover the 264-tab backend bound and deferred release, lease/document and
-mutation exemptions, parked resumption, background wakeup, stale replies,
+Tests cover the 264-tab backend bound and deferred release, lease/document,
+pending-continuation and mutation exemptions, parked resumption, background wakeup, stale replies,
 bounded descriptor recovery, typed OS errors, nested filesystem/bare checks,
 decoding-attribute resume and startup fallback. A subprocess exercises the real
 startup limit helper with a restricted hard limit without changing its parent.
@@ -134,6 +144,8 @@ complete passes plus 24 cold revisits passed (1,344 readiness witnesses). Sample
 FD peak was 90; settled counts were 55–64 after visiting repositories, with no
 descriptor-exhaustion errors. The app could not raise that test process's hard
 ceiling. A separate two-pass run also passed, with a sampled FD peak of 107.
+These smoke runs preceded the final continuation-pin fixes; focused and full
+state regressions validate those follow-up changes separately.
 
 The five-pass status/history-ready witness measured 42.8 ms median, 111.2 ms p95
 and 3,594 ms maximum. These are test-build diagnostics: the UI crate uses the
@@ -152,7 +164,7 @@ limitation to investigate before making a low-memory claim.
 Artifacts, including the five-pass summary and allocator statistics, are under
 `target/resource-budget-smoke/real-repos-five-passes/`; they are ignored by Git.
 
-The entire native cross-platform/release CI matrix, physical scroll gestures,
-long-duration idle behavior and all interactive conflict/editor workflows have
+The entire native cross-platform/release CI matrix, long-duration idle behavior
+and all interactive conflict/editor workflows have
 not been exhaustively tested. Held/cached extension panes remain an explicit
 exception to the three-backend budget, as described above.

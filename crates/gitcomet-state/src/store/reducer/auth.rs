@@ -881,6 +881,7 @@ pub(super) fn commit_finished(
         && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
     {
         effects.extend(actions_emit_effects::safe_push_after_commit(
+            state,
             repo_id,
             SafePushAfterCommitContext {
                 amend: pending_commit.amend,

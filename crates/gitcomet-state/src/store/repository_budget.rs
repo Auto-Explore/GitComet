@@ -2,7 +2,10 @@
 //! and let document leases and unfinished operations explicitly pin a runtime.
 
 use super::repository_runtime::RepositoryRuntimes;
-use crate::model::{AppState, AutoFetchStatus, Loadable, RepoId, RepoState};
+use crate::model::{
+    AppState, AuthRetryOperation, AutoFetchStatus, BareModeConversionState, Loadable, RepoId,
+    RepoState,
+};
 use crate::msg::InternalMsg;
 
 pub(super) const WARM_INACTIVE_REPOSITORIES: usize = 2;
@@ -15,7 +18,42 @@ pub(super) fn is_pinned(state: &AppState, repo: &RepoState) -> bool {
             .worktree_watch_leases
             .keys()
             .any(|(id, lifetime, _)| *id == repo.id && *lifetime == repo.lifetime())
+        || has_pending_continuation(state, repo.id)
         || has_unfinished_operation(repo)
+}
+
+fn has_pending_continuation(state: &AppState, repo_id: RepoId) -> bool {
+    // Prompt acceptance resumes the existing operation directly, without a
+    // tab activation that would reopen a parked backend first.
+    state
+        .auth_prompt
+        .as_ref()
+        .is_some_and(|prompt| match &prompt.operation {
+            AuthRetryOperation::RepoCommand { repo_id: id, .. }
+            | AuthRetryOperation::SafePushAfterCommit { repo_id: id, .. }
+            | AuthRetryOperation::Commit { repo_id: id, .. } => *id == repo_id,
+            AuthRetryOperation::Clone { .. } => false,
+        })
+        || state
+            .branch_exists_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.repo_id == repo_id)
+        || state
+            .force_delete_branch_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.repo_id == repo_id)
+        || state
+            .force_remove_worktree_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.repo_id == repo_id)
+        || state
+            .submodule_trust_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.repo_id == repo_id)
+        || state
+            .submodule_trust_check_pending
+            .as_ref()
+            .is_some_and(|pending| pending.repo_id == repo_id)
 }
 
 pub(super) fn has_unfinished_operation(repo: &RepoState) -> bool {
@@ -28,6 +66,10 @@ pub(super) fn has_unfinished_operation(repo: &RepoState) -> bool {
         || repo.submodule_add_in_flight.is_some()
         || repo.maintenance.running
         || repo.bare_mode_conversion.is_busy()
+        || matches!(
+            repo.bare_mode_conversion,
+            BareModeConversionState::AwaitingConfirmation(_)
+        )
         || matches!(repo.auto_fetch.status, AutoFetchStatus::Running)
         || repo.diff_state.edit_mode
         || repo.conflict_state.conflict_session.is_some()
@@ -310,6 +352,164 @@ mod tests {
         park_inactive(&mut state, &mut runtimes);
         assert!(!runtimes.has_repository(&RepoId(1)));
         assert!(!runtimes.has_repository(&RepoId(2)));
+    }
+
+    #[test]
+    fn pending_operation_prompts_pin_only_their_repository_until_dismissed() {
+        use crate::model::{
+            AuthPromptKind, AuthPromptState, AuthPromptStatus, AuthRetryOperation,
+            BranchExistsPromptOperation, BranchExistsPromptState, ForceDeleteBranchPrompt,
+            ForceRemoveWorktreePrompt, SubmoduleTrustCheckOperation, SubmoduleTrustCheckState,
+            SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
+        };
+        let id = RepoId(1);
+        let mut cases = vec![
+            AppState {
+                branch_exists_prompt: Some(BranchExistsPromptState {
+                    repo_id: id,
+                    name: "topic".into(),
+                    target: "HEAD".into(),
+                    operation: BranchExistsPromptOperation::CreateBranch,
+                }),
+                ..AppState::test_default()
+            },
+            AppState {
+                force_delete_branch_prompt: Some(ForceDeleteBranchPrompt {
+                    generation: 1,
+                    repo_id: id,
+                    name: "topic".into(),
+                }),
+                ..AppState::test_default()
+            },
+            AppState {
+                force_remove_worktree_prompt: Some(ForceRemoveWorktreePrompt {
+                    generation: 1,
+                    repo_id: id,
+                    path: "/linked".into(),
+                    delete_branch: None,
+                    blocker: gitcomet_core::error::WorktreeRemovalBlocker::Changes,
+                }),
+                ..AppState::test_default()
+            },
+            AppState {
+                submodule_trust_prompt: Some(SubmoduleTrustPromptState {
+                    repo_id: id,
+                    operation: SubmoduleTrustPromptOperation::Update,
+                    sources: Vec::new(),
+                }),
+                ..AppState::test_default()
+            },
+            AppState {
+                submodule_trust_check_pending: Some(SubmoduleTrustCheckState {
+                    repo_id: id,
+                    operation: SubmoduleTrustCheckOperation::Update,
+                }),
+                ..AppState::test_default()
+            },
+        ];
+        for operation in [
+            AuthRetryOperation::RepoCommand {
+                repo_id: id,
+                command: crate::msg::RepoCommandKind::Push,
+            },
+            AuthRetryOperation::SafePushAfterCommit {
+                repo_id: id,
+                context: gitcomet_core::services::SafePushAfterCommitContext {
+                    amend: false,
+                    local_branch: Some("main".into()),
+                    pre_head: None,
+                    post_head: None,
+                },
+            },
+            AuthRetryOperation::Commit {
+                repo_id: id,
+                message: "message".into(),
+                amend: false,
+                push_after_commit: false,
+            },
+        ] {
+            for status in [
+                AuthPromptStatus::AwaitingInput,
+                AuthPromptStatus::Validating,
+                AuthPromptStatus::Rejected,
+            ] {
+                cases.push(AppState {
+                    auth_prompt: Some(AuthPromptState {
+                        generation: 1,
+                        challenge: None,
+                        status,
+                        kind: AuthPromptKind::UsernamePassword,
+                        reason: "authentication required".into(),
+                        operation: operation.clone(),
+                    }),
+                    ..AppState::test_default()
+                });
+            }
+        }
+        for (case, mut state) in cases.into_iter().enumerate() {
+            let (visited, mut runtimes, _) = visited_repos(5);
+            state.repos = visited.repos;
+            state.active_repo = visited.active_repo;
+            assert!(runtimes.begin_descriptor_recovery(std::time::Instant::now()));
+            park_inactive(&mut state, &mut runtimes);
+            assert!(runtimes.has_repository(&id), "pending continuation {case}");
+            assert!(!runtimes.has_repository(&RepoId(2)), "unrelated repository");
+
+            state.auth_prompt = None;
+            state.branch_exists_prompt = None;
+            state.force_delete_branch_prompt = None;
+            state.force_remove_worktree_prompt = None;
+            state.submodule_trust_prompt = None;
+            state.submodule_trust_check_pending = None;
+            park_inactive(&mut state, &mut runtimes);
+            assert!(
+                !runtimes.has_repository(&id),
+                "dismissed continuation {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_conversion_confirmation_pins_until_dismissed() {
+        use gitcomet_core::domain::{
+            BareConversionHead, BareConversionLayout, BareConversionPreview,
+        };
+        let (mut state, mut runtimes, _) = visited_repos(5);
+        state.repos[0].bare_mode_conversion =
+            BareModeConversionState::AwaitingConfirmation(Arc::new(BareConversionPreview::new(
+                state.repos[0].spec.workdir.clone(),
+                BareConversionLayout::BareDirectory,
+                BareConversionHead::Branch {
+                    name: "main".into(),
+                    commit: None,
+                },
+                Vec::new(),
+            )));
+        assert!(runtimes.begin_descriptor_recovery(std::time::Instant::now()));
+        park_inactive(&mut state, &mut runtimes);
+        assert!(runtimes.has_repository(&RepoId(1)));
+        assert!(!runtimes.has_repository(&RepoId(2)));
+        state.repos[0].bare_mode_conversion = BareModeConversionState::Idle;
+        park_inactive(&mut state, &mut runtimes);
+        assert!(!runtimes.has_repository(&RepoId(1)));
+    }
+
+    #[test]
+    fn clone_authentication_does_not_pin_existing_repository_tabs() {
+        let (mut state, mut runtimes, _) = visited_repos(4);
+        state.auth_prompt = Some(crate::model::AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: crate::model::AuthPromptStatus::AwaitingInput,
+            kind: crate::model::AuthPromptKind::UsernamePassword,
+            reason: "authentication required".into(),
+            operation: AuthRetryOperation::Clone {
+                url: "https://example.com/repo.git".into(),
+                dest: "/clone".into(),
+            },
+        });
+        park_inactive(&mut state, &mut runtimes);
+        assert!(!runtimes.has_repository(&RepoId(1)));
     }
 
     #[test]

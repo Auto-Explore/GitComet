@@ -3,6 +3,300 @@ use crate::msg::InternalMsg;
 use crate::store::reducer::park_repository;
 
 #[test]
+fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
+    use crate::msg::{RepoCommandEffect, RepoCommandKind};
+    use gitcomet_core::services::{
+        CommitOperationOutcome, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    };
+    for set_upstream in [false, true] {
+        let mut repos = RepositoryRuntimes::default();
+        let mut state = AppState::test_default();
+        let ids = AtomicU64::new(1);
+        let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/commit-background");
+        state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::Commit {
+                repo_id: id,
+                message: "message".into(),
+                push_after_commit: true,
+            },
+        );
+        assert_eq!(state.repos[0].commit_in_flight, 1);
+        for path in [
+            "/tmp/commit-other-1",
+            "/tmp/commit-other-2",
+            "/tmp/commit-other-3",
+        ] {
+            open_repo_ready(&mut repos, &ids, &mut state, path);
+            crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        }
+        let effects = reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::Internal(InternalMsg::CommitFinished {
+                repo_id: id,
+                result: Ok(CommitOperationOutcome::default()),
+            }),
+        );
+        let context = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { context, .. }) => {
+                    Some(context.clone())
+                }
+                _ => None,
+            })
+            .expect("commit schedules its safety check");
+        assert_eq!(state.repos[0].commit_in_flight, 0);
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        assert!(repos.begin_descriptor_recovery(std::time::Instant::now()));
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(
+            repos.has_repository(&id),
+            "preflight takes over the commit pin"
+        );
+        let target = SafePushAfterCommitTarget {
+            remote: "origin".into(),
+            branch: "main".into(),
+            local_branch: "main".into(),
+            local_head: gitcomet_core::domain::CommitId("a".repeat(40).into()),
+        };
+        let decision = if set_upstream {
+            SafePushAfterCommitDecision::PushSetUpstream {
+                target: target.clone(),
+            }
+        } else {
+            SafePushAfterCommitDecision::Push {
+                target: target.clone(),
+            }
+        };
+        let effects = reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::Internal(InternalMsg::SafePushAfterCommitFinished {
+                repo_id: id,
+                context,
+                auth: None,
+                result: Ok(decision),
+            }),
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit { repo_id, set_upstream: actual, .. })
+                if *repo_id == id && *actual == set_upstream
+        )));
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(
+            repos.has_repository(&id),
+            "checked push takes over the preflight pin"
+        );
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::Internal(InternalMsg::RepoCommandFinished {
+                repo_id: id,
+                command: RepoCommandKind::PushAfterCommit {
+                    target,
+                    set_upstream,
+                },
+                result: Ok(gitcomet_core::services::CommandOutput::default()),
+            }),
+        );
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(!repos.has_repository(&id), "finished push releases its pin");
+    }
+}
+
+#[test]
+fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
+    use gitcomet_core::services::{SafePushAfterCommitContext, SafePushAfterCommitDecision};
+    let _lock = super::super::staged_auth_test_lock();
+    for blocked in [false, true] {
+        let mut repos = RepositoryRuntimes::default();
+        let mut state = AppState::test_default();
+        let ids = AtomicU64::new(1);
+        let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/preflight-background");
+        state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+        let context = SafePushAfterCommitContext {
+            amend: false,
+            local_branch: Some("main".into()),
+            pre_head: None,
+            post_head: None,
+        };
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::SafePushAfterCommit {
+                repo_id: id,
+                context: context.clone(),
+            },
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        for path in [
+            "/tmp/preflight-other-1",
+            "/tmp/preflight-other-2",
+            "/tmp/preflight-other-3",
+        ] {
+            open_repo_ready(&mut repos, &ids, &mut state, path);
+            crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        }
+        reduce(&mut repos, &ids, &mut state,
+            Msg::Internal(InternalMsg::SafePushAfterCommitFinished {
+                repo_id: id, context: context.clone(), auth: None,
+                result: Err(Error::new(ErrorKind::Backend(
+                    "fatal: could not read Password for 'https://alice@example.com': terminal prompts disabled".into(),
+                ))),
+            }));
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        let generation = state
+            .auth_prompt
+            .as_ref()
+            .expect("preflight auth prompt")
+            .generation;
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(
+            repos.has_repository(&id),
+            "prompt takes over the preflight pin"
+        );
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                generation,
+                username: Some("alice".into()),
+                secret: "test-password".into(),
+            },
+        );
+        assert!(state.auth_prompt.is_none());
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(
+            repos.has_repository(&id),
+            "auth retry takes over the prompt pin"
+        );
+        let result = if blocked {
+            Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "remote moved".into(),
+                lease: None,
+            })
+        } else {
+            Err(Error::new(ErrorKind::Backend("preflight failed".into())))
+        };
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::Internal(InternalMsg::SafePushAfterCommitFinished {
+                repo_id: id,
+                context,
+                auth: None,
+                result,
+            }),
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert!(state.auth_prompt.is_none());
+        assert_eq!(state.repos[0].push_in_flight, 0);
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(
+            !repos.has_repository(&id),
+            "terminal preflight releases its pin"
+        );
+    }
+}
+
+#[test]
+fn background_authentication_continuation_survives_leaving_the_warm_set() {
+    use crate::msg::{RepoCommandEffect, RepoCommandKind};
+    let _lock = super::super::staged_auth_test_lock();
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/auth-background");
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    reduce(&mut repos, &ids, &mut state, Msg::Push { repo_id: id });
+    assert_eq!(state.repos[0].push_in_flight, 1);
+    for path in [
+        "/tmp/auth-other-1",
+        "/tmp/auth-other-2",
+        "/tmp/auth-other-3",
+    ] {
+        open_repo_ready(&mut repos, &ids, &mut state, path);
+        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    }
+    assert!(
+        repos.has_repository(&id),
+        "in-flight command pins its backend"
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id: id,
+            command: RepoCommandKind::Push,
+            result: Err(Error::new(ErrorKind::Backend(
+                "fatal: could not read Password for 'https://alice@example.com': terminal prompts disabled".into(),
+            ))),
+        }),
+    );
+    assert_eq!(state.repos[0].push_in_flight, 0);
+    let generation = state
+        .auth_prompt
+        .as_ref()
+        .expect("authentication prompt")
+        .generation;
+    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    assert!(
+        repos.has_repository(&id),
+        "prompt takes over the command's pin"
+    );
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation,
+            username: Some("alice".into()),
+            secret: "test-password".into(),
+        },
+    );
+    assert!(state.auth_prompt.is_none());
+    assert_eq!(state.repos[0].push_in_flight, 1);
+    assert!(effects.iter().any(|effect| matches!(effect,
+        Effect::RepoCommand(RepoCommandEffect::Push { repo_id, .. }) if *repo_id == id
+    )));
+    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    assert!(
+        repos.has_repository(&id),
+        "retry takes over the prompt's pin"
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id: id,
+            command: RepoCommandKind::Push,
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    assert!(
+        !repos.has_repository(&id),
+        "finished continuation releases its pin"
+    );
+}
+
+#[test]
 fn hosted_requests_wait_for_cold_or_initial_background_open_and_keep_the_latest_target() {
     use crate::diff_session::{ChangeSource, DiffSessionMsg, DiffSessionWork, DiffViewId};
     use gitcomet_core::domain::{DiffArea, DiffTarget};

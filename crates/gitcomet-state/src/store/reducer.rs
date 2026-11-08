@@ -1910,7 +1910,7 @@ fn reduce_inner(
         Msg::SafePushAfterCommit { repo_id, context } => {
             match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,
-                None => actions_emit_effects::safe_push_after_commit(repo_id, context),
+                None => actions_emit_effects::safe_push_after_commit(state, repo_id, context),
             }
         }
         Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
