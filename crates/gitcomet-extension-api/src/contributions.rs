@@ -24,6 +24,10 @@ pub type ViewFocus = Rc<dyn Fn(&AnyView, &App) -> Option<FocusHandle>>;
 /// Runs a command.
 pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
 
+/// Opens an extension's crash-report review flow. The host supplies no raw log
+/// or repository context; invoking this action must not submit a report.
+pub type CrashReportAction = Rc<dyn Fn(WindowHost, &mut Window, &mut App)>;
+
 /// What a repository view is built for: its window and repository.
 #[derive(Clone, Debug)]
 pub struct RepositoryViewContext {
@@ -180,6 +184,84 @@ impl BottomPanelDescriptor {
             icon: icon.into(),
             build: Rc::new(build),
         }
+    }
+}
+
+/// What happened to a canvas overlay. Delivered after the host's update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CanvasOverlayVisibility {
+    /// Now covers its repository's main canvas.
+    Shown,
+    /// No longer covers it; its view is kept. Sent whoever hid it: the
+    /// extension, a view tab, navigation, a document taking the slot, or
+    /// another overlay shown over the same repository.
+    Hidden,
+    /// Forgotten: no longer shown, and its view, if one was built, is gone.
+    /// Not preceded by `Hidden`; sent by `drop_canvas_overlay` or when the
+    /// repository closes (the context's handle is then no longer current).
+    Dropped,
+}
+
+/// Told of a canvas overlay's visibility changes.
+pub type CanvasOverlayObserver =
+    Rc<dyn Fn(RepositoryViewContext, CanvasOverlayVisibility, &mut App)>;
+
+/// A view an extension shows over a repository's main canvas (History or
+/// the selected repository view), shown with
+/// [`WindowHost::show_canvas_overlay`](crate::WindowHost::show_canvas_overlay).
+/// The action bar, sidebar, details, bottom panel and status bar stay; hiding
+/// it returns to the view behind, which the host never rebuilt. Anything
+/// that asks for the main canvas hides it: a view tab (the one behind
+/// included), navigation, Back, choosing a commit or file in History, or a
+/// document taking the slot. Built on first show per repository and kept
+/// while hidden, until dropped with
+/// [`WindowHost::drop_canvas_overlay`](crate::WindowHost::drop_canvas_overlay)
+/// or the repository closes. One overlay is shown per repository.
+///
+/// An overlay is not one of the repository's views: showing or hiding it
+/// emits no `ViewChanged`, so History and the selected view stay what they
+/// were, and it stays shown while another repository's tab is selected,
+/// covering its own repository again when that tab comes back.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct CanvasOverlayDescriptor {
+    pub build: ViewBuilder<RepositoryViewContext>,
+    /// Focused by the host each time the overlay is shown.
+    pub focus: Option<ViewFocus>,
+    /// Told of every visibility change, whoever caused it.
+    pub on_visibility: Option<CanvasOverlayObserver>,
+}
+
+impl CanvasOverlayDescriptor {
+    pub fn new(
+        build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        Self {
+            build: Rc::new(build),
+            focus: None,
+            on_visibility: None,
+        }
+    }
+
+    /// Give the keyboard to the built view of type `V` each time the overlay
+    /// is shown over the active repository.
+    pub fn with_focus<V: Focusable + 'static>(mut self) -> Self {
+        self.focus = Some(Rc::new(|view, cx| {
+            view.clone()
+                .downcast::<V>()
+                .ok()
+                .map(|view| view.read(cx).focus_handle(cx))
+        }));
+        self
+    }
+
+    pub fn on_visibility(
+        mut self,
+        observer: impl Fn(RepositoryViewContext, CanvasOverlayVisibility, &mut App) + 'static,
+    ) -> Self {
+        self.on_visibility = Some(Rc::new(observer));
+        self
     }
 }
 
@@ -426,6 +508,75 @@ pub enum MenuLocation {
     RepositoryTab,
 }
 
+/// What a branch or commit menu was opened on.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefMenuTarget {
+    LocalBranch {
+        name: String,
+    },
+    /// A remote-tracking branch, by its remote and its name there.
+    RemoteBranch {
+        remote: String,
+        branch: String,
+    },
+    Commit {
+        id: gitcomet_core::domain::CommitId,
+    },
+}
+
+impl RefMenuTarget {
+    /// A revision Git resolves to the target: the branch name, `remote/branch`,
+    /// or the full commit id.
+    pub fn revision(&self) -> String {
+        match self {
+            Self::LocalBranch { name } => name.clone(),
+            Self::RemoteBranch { remote, branch } => format!("{remote}/{branch}"),
+            Self::Commit { id } => id.as_ref().to_string(),
+        }
+    }
+}
+
+/// Where a branch or commit menu entry runs: the window, the repository whose
+/// menu it was, and what the menu was opened on.
+#[derive(Clone)]
+pub struct RefMenuContext {
+    pub window: WindowHost,
+    pub repository: RepositoryHandle,
+    pub target: RefMenuTarget,
+}
+
+/// Runs a branch or commit menu entry.
+pub type RefMenuHandler = Rc<dyn Fn(RefMenuContext, &mut Window, &mut App)>;
+
+/// An entry in every branch menu (local and remote, in the sidebar and in
+/// History) and every commit menu, after the host's comparison entries.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct RefMenuItemDescriptor {
+    pub label: SharedString,
+    pub icon: Option<SharedString>,
+    pub run: RefMenuHandler,
+}
+
+impl RefMenuItemDescriptor {
+    pub fn new(
+        label: impl Into<SharedString>,
+        run: impl Fn(RefMenuContext, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            icon: None,
+            run: Rc::new(run),
+        }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+}
+
 /// How a repository is being opened. Gates should deny origins they do not
 /// recognise rather than allow them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -525,6 +676,23 @@ pub struct ChromeDescriptor {
 }
 
 impl ChromeDescriptor {
+    pub fn new(build: impl Fn(WindowHost, &mut Window, &mut App) -> AnyView + 'static) -> Self {
+        Self {
+            build: Rc::new(build),
+        }
+    }
+}
+
+/// A control in History's commit box, drawn before "Previous commit
+/// messages" in registration order. Built once per repository window; it
+/// follows the active repository through its host.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct CommitBoxItemDescriptor {
+    pub build: ViewBuilder<WindowHost>,
+}
+
+impl CommitBoxItemDescriptor {
     pub fn new(build: impl Fn(WindowHost, &mut Window, &mut App) -> AnyView + 'static) -> Self {
         Self {
             build: Rc::new(build),

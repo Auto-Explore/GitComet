@@ -145,14 +145,16 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
+    /// `--no-verify` for the commit and the push after it.
+    pub(in super::super) commit_skip_hooks_enabled: bool,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
     /// prepared message is applied once and never re-applied.
     applied_commit_suggestions: rustc_hash::FxHashMap<RepoId, (u64, Option<String>)>,
-    pub(in super::super) commit_message_user_edited: bool,
-    pub(in super::super) commit_message_last_text: SharedString,
-    pub(in super::super) commit_message_programmatic_change: bool,
+    pub(in super::super) extension_commit_items: Vec<AnyView>,
+    /// The commit message the parent message last followed.
+    commit_message_last_text: SharedString,
 
     pub(in super::super) status_multi_selection: FxHashMap<RepoId, StatusMultiSelection>,
     pub(in super::super) status_multi_selection_last_status: FxHashMap<RepoId, (u64, u64)>,
@@ -447,7 +449,11 @@ impl DetailsPaneView {
                 window,
                 cx,
             );
-            input.set_vertical_scroll_handle(Some(commit_message_scroll.clone()));
+            input.set_scrollable(
+                commit_message_scroll.clone(),
+                crate::view::panels::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX,
+                cx,
+            );
             input
         });
 
@@ -561,18 +567,11 @@ impl DetailsPaneView {
                 this.parent_message_user_edited = true;
             }
         });
+        // The parent message follows the commit message until it is edited.
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
-            if this.commit_message_programmatic_change {
-                this.commit_message_programmatic_change = false;
-                this.commit_message_last_text = next.clone();
-                this.sync_parent_message(next.as_ref(), cx);
-                return;
-            }
-
             if this.commit_message_last_text != next {
                 this.commit_message_last_text = next.clone();
-                this.commit_message_user_edited = true;
                 this.sync_parent_message(next.as_ref(), cx);
             }
         });
@@ -649,12 +648,12 @@ impl DetailsPaneView {
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
+            commit_skip_hooks_enabled: false,
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
-            commit_message_user_edited: false,
+            extension_commit_items: Vec::new(),
             commit_message_last_text: SharedString::default(),
-            commit_message_programmatic_change: false,
             status_multi_selection: FxHashMap::default(),
             status_multi_selection_last_status: FxHashMap::default(),
             file_list_selection: FxHashMap::default(),
@@ -936,13 +935,50 @@ impl DetailsPaneView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = false;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
         self.commit_message_input
             .update(cx, |input, cx| input.set_text(message, cx));
         self.commit_message_scroll
             .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    /// An extension's message for the repository `repo_id` held at `lifetime`:
+    /// in the box while that repository is on screen, otherwise as the draft
+    /// it shows when selected. Focus stays where it is. A repository that has
+    /// closed since the request gets nothing.
+    pub(in super::super) fn set_extension_commit_message(
+        &mut self,
+        repo_id: RepoId,
+        lifetime: u64,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self
+            .state
+            .repos
+            .iter()
+            .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+        {
+            return;
+        }
+        if self.active_repo_id() == Some(repo_id) {
+            self.set_commit_message_programmatically(message, cx);
+            cx.notify();
+            return;
+        }
+        if message.is_empty() {
+            self.commit_message_drafts.remove(&repo_id);
+        } else {
+            self.commit_message_drafts.insert(repo_id, message.into());
+        }
+    }
+
+    pub(in super::super) fn set_extension_commit_items(
+        &mut self,
+        items: Vec<AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_commit_items = items;
+        cx.notify();
     }
 
     fn prefill_commit_message_for_amend(&mut self, cx: &mut gpui::Context<Self>) {
@@ -986,19 +1022,26 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_skip_hooks_enabled == enabled {
+            return;
+        }
+
+        self.commit_skip_hooks_enabled = enabled;
+        cx.notify();
+    }
+
     pub(in super::super) fn set_commit_message_from_history(
         &mut self,
         message: String,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = true;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
-        self.commit_message_input
-            .update(cx, |input, cx| input.set_text(message, cx));
-        self.commit_message_scroll
-            .set_offset(point(px(0.0), px(0.0)));
+        self.set_commit_message_programmatically(message, cx);
         let focus = self
             .commit_message_input
             .read_with(cx, |input, _| input.focus_handle());
@@ -2721,8 +2764,6 @@ impl DetailsPaneView {
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.staged_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2730,11 +2771,7 @@ impl DetailsPaneView {
                 .and_then(|repo_id| self.commit_message_drafts.get(&repo_id).cloned())
                 .unwrap_or_default();
             restored_commit_message = Some(restore.clone());
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
-            self.commit_message_last_text = restore.clone();
+            self.set_commit_message_programmatically(restore.to_string(), cx);
             self.switch_parent_message(prev_active_repo_id, next_repo_id, &restore, cx);
         } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
@@ -2766,13 +2803,7 @@ impl DetailsPaneView {
             && apply_merge_message
             && let Some(message) = next_merge_message
         {
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
-            self.commit_message_last_text = message.clone().into();
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(message, cx));
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
+            self.set_commit_message_programmatically(message, cx);
         }
 
         self.apply_pending_amend_prefill(cx);

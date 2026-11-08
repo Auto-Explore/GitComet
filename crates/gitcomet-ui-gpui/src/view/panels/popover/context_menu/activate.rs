@@ -82,6 +82,23 @@ impl PopoverHost {
                 );
                 return;
             }
+            ContextMenuAction::RunRefMenuItem {
+                id,
+                repo_id,
+                target,
+            } => {
+                self.close_popover_and_restore_focus(window, cx);
+                let _ = self.root_view.request(
+                    RootRequest::RunRefMenuItem {
+                        id: id.to_string(),
+                        repo_id,
+                        target,
+                    },
+                    None,
+                    cx,
+                );
+                return;
+            }
             ContextMenuAction::AddRepoMenu(action) => {
                 add_repo_menu::activate(self, action, window, cx);
                 return;
@@ -867,6 +884,14 @@ impl PopoverHost {
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
                     let _ = root_view.request(RootRequest::SetCommitPushAfter(enabled), None, cx);
+                });
+            }
+            ContextMenuAction::SetCommitSkipHooksEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_skip_hooks_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.request(RootRequest::SetCommitSkipHooks(enabled), None, cx);
                 });
             }
             ContextMenuAction::UseCommitMessage { message } => {

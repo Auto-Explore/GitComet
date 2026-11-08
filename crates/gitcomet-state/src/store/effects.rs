@@ -1065,21 +1065,23 @@ pub(super) fn schedule_effect(
             repo_id,
             message,
             identity,
+            hooks,
             auth,
             shelve,
         } => {
             repo_actions::schedule_commit(
-                executor, repos, msg_tx, repo_id, message, identity, auth, shelve,
+                executor, repos, msg_tx, repo_id, message, identity, hooks, auth, shelve,
             );
         }
         Effect::CommitAmend {
             repo_id,
             message,
             identity,
+            hooks,
             auth,
         } => {
             repo_actions::schedule_commit_amend(
-                executor, repos, msg_tx, repo_id, message, identity, auth,
+                executor, repos, msg_tx, repo_id, message, identity, hooks, auth,
             );
         }
         Effect::PreviewTagPush {

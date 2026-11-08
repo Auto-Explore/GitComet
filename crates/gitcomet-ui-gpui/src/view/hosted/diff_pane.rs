@@ -6,8 +6,8 @@ use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide,
-    DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
+    DiffAnnotations, DiffHostedView, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange,
+    DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
     RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
@@ -17,7 +17,6 @@ enum PaneSource {
     Session {
         store: std::sync::Weak<AppStore>,
         repository: RepositoryHandle,
-        target: DiffTarget,
     },
     Snapshot(DiffSnapshot),
 }
@@ -50,11 +49,16 @@ pub(crate) struct DiffPaneView {
     snapshot_rev: u64,
     loading: bool,
     pending_target: Option<DiffTarget>,
+    /// Numbers each open; the session echoes the last once it is reduced, so
+    /// no snapshot from before answers `pending_target`.
+    open_request: u64,
     error: Option<SharedString>,
     /// A patch that failed while its file loaded. The renderer shows it only
     /// when its body is the patch.
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
+    views: Arc<[DiffHostedView]>,
+    view_observers: rustc_hash::FxHashMap<gpui::EntityId, gpui::Subscription>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
     selection: Option<DiffLineRange>,
@@ -105,9 +109,12 @@ impl DiffPaneView {
             snapshot_rev: 0,
             loading: true,
             pending_target: None,
+            open_request: 0,
             error: None,
             patch_error: None,
             insets: Arc::from([]),
+            views: Arc::from([]),
+            view_observers: Default::default(),
             annotations: Arc::default(),
             legend: Vec::new(),
             selection: None,
@@ -136,16 +143,12 @@ impl DiffPaneView {
         let mut pane = Self::with_source(
             host,
             environment,
-            PaneSource::Session {
-                store,
-                repository,
-                target: target.clone(),
-            },
+            PaneSource::Session { store, repository },
             options,
             cx,
         );
         pane._state = subscription;
-        pane.open(target);
+        pane.open(target, cx);
         pane
     }
 
@@ -272,6 +275,7 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
+                    self.views.clone(),
                 );
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
@@ -387,7 +391,12 @@ impl DiffPaneView {
         }
     }
 
-    fn reset(&mut self) {
+    /// Forgets the shown file, its views with it: the renderer too, so it
+    /// neither draws them nor keeps their rows in the next file.
+    fn reset(&mut self, cx: &mut gpui::Context<Self>) {
+        self.views = Arc::from([]);
+        self.view_observers.clear();
+        self.sync_decor(cx);
         self.engaged = next_engaged();
         self.revision = self.revision.wrapping_add(1);
         if let Some(cache) = self.file_cache.take() {
@@ -457,7 +466,7 @@ impl DiffPaneView {
         };
         *shown = snapshot.clone();
         self.snapshot_rev = self.snapshot_rev.wrapping_add(1);
-        self.reset();
+        self.reset(cx);
         let cache = snapshot.patch.is_none().then(|| {
             Arc::new(SharedFileDiffCache::with_engine(
                 Arc::new(gitcomet_core::domain::FileDiffText::new_shared(
@@ -486,9 +495,6 @@ impl DiffPaneView {
             return;
         };
         self.pending_target = None;
-        if let PaneSource::Session { target, .. } = &mut self.source {
-            *target = session.target.clone();
-        }
         if self.session_revision == Some(session.rev) {
             self.sync_renderer(cx);
             return;
@@ -567,10 +573,15 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_target(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
-        if matches!(self.source, PaneSource::Snapshot(_)) {
+        // `==` ignores the rename source, which the old side loads from.
+        if !matches!(self.source, PaneSource::Session { .. })
+            || self.target(cx).is_some_and(|shown| {
+                shown == target && shown.old_file_path() == target.old_file_path()
+            })
+        {
             return;
         }
-        self.open(target.clone());
+        self.open(target.clone(), cx);
         if let Some(renderer) = &self.renderer {
             renderer.update(cx, |pane, cx| pane.set_pending_target(target.clone(), cx));
         }
@@ -654,6 +665,7 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
+                    self.views.clone(),
                 );
                 cx.notify();
             });
@@ -665,34 +677,29 @@ impl DiffPaneView {
         cx.notify();
     }
 
-    fn open(&mut self, target: DiffTarget) {
-        if !matches!(self.source, PaneSource::Session { .. }) {
-            return;
-        }
-        self.reset();
-        self.pending_target = Some(target.clone());
-        let PaneSource::Session {
-            store,
-            repository,
-            target: shown,
-        } = &mut self.source
-        else {
+    fn open(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
+        let PaneSource::Session { store, repository } = &self.source else {
             return;
         };
-        *shown = target.clone();
+        let (store, repo_id, lifetime) =
+            (store.clone(), repository.repo_id(), repository.lifetime());
+        self.reset(cx);
+        self.pending_target = Some(target.clone());
+        self.open_request = self.open_request.wrapping_add(1);
         let Some(store) = store.upgrade() else {
             return;
         };
         store.dispatch(Msg::DiffSession(DiffSessionMsg::Open {
-            repo_id: repository.repo_id(),
-            lifetime: repository.lifetime(),
+            repo_id,
+            lifetime,
             view: self.view_id,
             target,
+            request: Some(self.open_request),
         }));
         if self.options.policy.blame {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
-                repo_id: repository.repo_id(),
-                lifetime: repository.lifetime(),
+                repo_id,
+                lifetime,
                 view: self.view_id,
             }));
         }
@@ -711,17 +718,21 @@ impl DiffPaneView {
             .diff_sessions
             .get(&self.view_id)
             .filter(|session| {
-                self.pending_target.as_ref().is_none_or(|target| {
-                    session.target == *target
-                        && session.target.old_file_path() == target.old_file_path()
-                })
+                self.pending_target.is_none() || session.open_request == Some(self.open_request)
             })
     }
 
+    /// The target on its way, else the one shown; `None` once closed.
+    fn target(&self, cx: &App) -> Option<DiffTarget> {
+        if let Some(target) = &self.pending_target {
+            return Some(target.clone());
+        }
+        let state = self.host.state(cx).ok()?;
+        self.session(&state)?.diff_target.clone()
+    }
+
     pub(crate) fn set_encoding(&mut self, encoding: Option<TextEncoding>) {
-        if let PaneSource::Session {
-            store, repository, ..
-        } = &self.source
+        if let PaneSource::Session { store, repository } = &self.source
             && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::SetEncoding {
@@ -831,6 +842,12 @@ impl DiffPaneView {
 impl Render for DiffPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.prepare_renderer(window, cx);
+        if let Some(renderer) = self.renderer.clone() {
+            renderer.update(cx, |pane, cx| pane.sync_hosted_row_height(window, cx));
+            // Before the renderer counts its rows, which follow the views'
+            // heights in this frame.
+            crate::view::panes::diff::measure_hosted_views(&renderer, window, cx);
+        }
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
@@ -983,9 +1000,7 @@ impl Drop for DiffPaneView {
         if let Some(cache) = &self.file_cache {
             cache.cancel();
         }
-        if let PaneSource::Session {
-            store, repository, ..
-        } = &self.source
+        if let PaneSource::Session { store, repository } = &self.source
             && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::Close {
@@ -1016,12 +1031,7 @@ impl DiffPaneImpl for HostedDiffPane {
     }
 
     fn target(&self, cx: &App) -> Option<DiffTarget> {
-        let pane = self.entity.read(cx);
-        if let Some(target) = &pane.pending_target {
-            return Some(target.clone());
-        }
-        let state = pane.host.state(cx).ok()?;
-        pane.session(&state)?.diff_target.clone()
+        self.entity.read(cx).target(cx)
     }
 
     fn set_target(&self, target: DiffTarget, cx: &mut App) {
@@ -1088,11 +1098,76 @@ impl DiffPaneImpl for HostedDiffPane {
         self.entity
             .update(cx, |pane, cx| pane.set_insets(insets, cx));
     }
+    fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
+        /// The same view at the same place; the observer is the entity's.
+        fn same(a: &DiffHostedView, b: &DiffHostedView) -> bool {
+            a.anchor() == b.anchor()
+                && a.placement() == b.placement()
+                && a.view().entity_id() == b.view().entity_id()
+        }
+        self.entity.update(cx, |pane, cx| {
+            // An entity shows once: its first place wins.
+            let mut seen = rustc_hash::FxHashSet::default();
+            let views: Vec<_> = views
+                .into_iter()
+                .filter(|view| seen.insert(view.view().entity_id()))
+                .collect();
+            if pane.views.len() == views.len()
+                && pane.views.iter().zip(&views).all(|(a, b)| same(a, b))
+            {
+                return;
+            }
+            pane.view_observers.retain(|id, _| seen.contains(id));
+            for view in &views {
+                let id = view.view().entity_id();
+                pane.view_observers.entry(id).or_insert_with(|| {
+                    let pane_entity = cx.weak_entity();
+                    view.observe(
+                        move |cx| {
+                            let _ = pane_entity.update(cx, |pane, cx| {
+                                if let Some(renderer) = &pane.renderer {
+                                    renderer.update(cx, |renderer, _| {
+                                        renderer.mark_hosted_view_notified(id)
+                                    });
+                                }
+                                cx.notify();
+                            });
+                        },
+                        cx,
+                    )
+                });
+            }
+            pane.views = views.into();
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
 
     fn selected_text(&self, cx: &App) -> Option<String> {
         let pane = self.entity.read(cx);
         let range = self.selection(cx)?;
         Some(pane.renderer.as_ref()?.read(cx).hosted_selected_text(range))
+    }
+    fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
+        if range.start == 0 || range.end < range.start {
+            return None;
+        }
+        let pane = self.entity.read(cx);
+        pane.renderer
+            .as_ref()?
+            .read(cx)
+            .hosted_text_for_range(range)
+    }
+    fn set_context_actions(
+        &self,
+        actions: Vec<gitcomet_extension_api::DiffSelectionAction>,
+        cx: &mut App,
+    ) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.context_actions = actions;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
     }
     fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>> {
         let range = self.selection(cx)?;
@@ -1122,9 +1197,7 @@ impl DiffPaneImpl for HostedDiffPane {
                 });
             }
             if policy.blame
-                && let PaneSource::Session {
-                    store, repository, ..
-                } = &pane.source
+                && let PaneSource::Session { store, repository } = &pane.source
                 && let Some(store) = store.upgrade()
             {
                 store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {

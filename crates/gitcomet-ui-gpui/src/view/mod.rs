@@ -301,6 +301,7 @@ use gitcomet_ui_media::rendered_preview::{
 use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
+mod canvas_overlays;
 mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;
@@ -527,6 +528,9 @@ const fn history_message_text_left_px(show_graph_color_marker: bool) -> f32 {
     }
 }
 
+/// An extension's row-mark icon, the size of the hosted file list's glyph.
+const ROW_MARK_ICON_PX: f32 = 14.0;
+
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
 const PANE_COLLAPSE_ANIM_MS: u64 = 120;
@@ -727,7 +731,8 @@ impl Element for UiScaleScrollCapture {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if !renders_full_chrome(self.view.read(cx).view_mode) {
+        // macOS uses Command +/- for window scaling; scrolling belongs to content.
+        if cfg!(target_os = "macos") || !renders_full_chrome(self.view.read(cx).view_mode) {
             return;
         }
 

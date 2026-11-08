@@ -243,6 +243,7 @@ pub enum BlockedPush {
     AfterCommit {
         target: gitcomet_core::services::SafePushAfterCommitTarget,
         set_upstream: bool,
+        hooks: gitcomet_core::services::GitHooks,
     },
     /// The first push of a branch, which also sets its upstream.
     SetUpstream {
@@ -507,6 +508,7 @@ pub enum AuthRetryOperation {
         message: String,
         amend: bool,
         push_after_commit: bool,
+        hooks: gitcomet_core::services::GitHooks,
     },
     Clone {
         url: String,

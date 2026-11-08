@@ -466,12 +466,14 @@ pub(super) fn resolve_unpushed_pointer_prompt(
         BlockedPush::AfterCommit {
             target,
             set_upstream,
+            hooks,
         } => super::actions_emit_effects::push_after_commit(
             repos,
             state,
             prompt.repo_id,
             target,
             set_upstream,
+            hooks,
         ),
         BlockedPush::SetUpstream { remote, branch } => {
             super::actions_emit_effects::push_set_upstream(
@@ -709,6 +711,7 @@ mod tests {
                 message: "x".into(),
                 amend: false,
                 push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         }
     }
@@ -797,6 +800,7 @@ mod tests {
         let blocked = BlockedPush::AfterCommit {
             target: target.clone(),
             set_upstream: true,
+            hooks: gitcomet_core::services::GitHooks::Skip,
         };
         push_blocked(&mut state, RepoId(1), vec![pointer()], blocked.clone());
         let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");
@@ -808,6 +812,7 @@ mod tests {
                 repo_id: RepoId(1),
                 target: pushed,
                 set_upstream: true,
+                hooks: gitcomet_core::services::GitHooks::Skip,
                 ..
             })] if *pushed == target
         ));

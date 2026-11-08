@@ -265,6 +265,21 @@ impl PopoverHost {
         }
     }
 
+    pub(in crate::view) fn sync_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_skip_hooks_enabled == enabled {
+            return;
+        }
+
+        self.commit_skip_hooks_enabled = enabled;
+        if matches!(self.popover, Some(PopoverKind::CommitOptionsMenu { .. })) {
+            cx.notify();
+        }
+    }
+
     pub(in crate::view) fn sync_commit_amend_enabled(
         &mut self,
         enabled: bool,

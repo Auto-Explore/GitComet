@@ -282,6 +282,7 @@ fn safe_push_after_published_amend_blocks_and_offers_lease() {
             local_branch: Some(branch.to_string()),
             pre_head: Some(pre_head.clone()),
             post_head: Some(post_head.clone()),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
 
@@ -386,6 +387,7 @@ fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
             local_branch: Some("new-topic".to_string()),
             pre_head: None,
             post_head: Some(post_head.clone()),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
 
@@ -458,6 +460,7 @@ fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
             local_branch: Some("safe-main".to_string()),
             pre_head: None,
             post_head: Some(post_head.clone()),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
     let SafePushAfterCommitDecision::Push { target } = decision else {
@@ -543,6 +546,7 @@ fn safe_push_after_commit_rejects_branch_change_before_decision() {
             local_branch: Some("safe-main".to_string()),
             pre_head: None,
             post_head: Some(post_head),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
 
@@ -649,6 +653,7 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
             local_branch: Some(branch),
             pre_head: Some(pre_head),
             post_head: Some(post_head),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
 
@@ -742,6 +747,7 @@ fn safe_push_after_commit_remote_advance_does_not_refresh_force_lease_tracking_r
             local_branch: Some(branch.clone()),
             pre_head: None,
             post_head: Some(post_head),
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
         .unwrap();
 

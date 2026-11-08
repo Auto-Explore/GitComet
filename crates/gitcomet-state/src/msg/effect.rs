@@ -372,6 +372,7 @@ pub enum Effect {
         repo_id: RepoId,
         message: String,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
         /// Stash these submodules' changes first; a failed stash fails the
         /// commit before it starts.
@@ -381,6 +382,7 @@ pub enum Effect {
         repo_id: RepoId,
         message: String,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
     },
 

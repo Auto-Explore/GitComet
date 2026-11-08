@@ -7,14 +7,15 @@ use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiscardOutcome, SubmoduleCheckoutPolicy};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitHooks, GitRepository};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, message_subject, missing_repo_error, path_context, paths_context,
-    send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
+    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, path_context,
+    paths_context, send_or_log, short_commit_id, single_line_context, spawn_with_repo,
+    spawn_with_repo_or_else,
 };
 
 /// Runs a repo action against the repo's handle, or finishes it at once when
@@ -1177,6 +1178,15 @@ pub(super) fn following_submodule_pointers<T>(
     result
 }
 
+fn commit_context(message: &str, hooks: GitHooks) -> Option<String> {
+    let subject = message_subject(message).unwrap_or_else(|| "No commit message".to_string());
+    Some(if hooks.skipped() {
+        format!("{subject} · {SKIPPING_HOOKS_CONTEXT}")
+    } else {
+        subject
+    })
+}
+
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1184,10 +1194,11 @@ pub(super) fn schedule_commit(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
     shelve: Option<crate::model::SubmoduleShelve>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -1200,7 +1211,7 @@ pub(super) fn schedule_commit(
                 shelve_submodule_changes(repo.as_ref(), shelve)?;
             }
             run_with_git_auth(auth, || {
-                repo.commit_with_identity(&message, identity.as_ref())
+                repo.commit_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
@@ -1232,9 +1243,10 @@ pub(super) fn schedule_commit_amend(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -1244,7 +1256,7 @@ pub(super) fn schedule_commit_amend(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.commit_amend_with_identity(&message, identity.as_ref())
+                repo.commit_amend_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },

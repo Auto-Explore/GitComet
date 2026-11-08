@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::domain::Upstream;
+use gitcomet_extension_api::RefMenuTarget;
 
 pub(super) fn model(
     this: &PopoverHost,
@@ -206,6 +207,17 @@ pub(super) fn model(
             });
         }
     }
+    items.extend(super::ref_menu::entries(
+        this,
+        repo_id,
+        match target {
+            BranchMenuTarget::Local { name } => RefMenuTarget::LocalBranch { name: name.clone() },
+            BranchMenuTarget::Remote { remote, branch } => RefMenuTarget::RemoteBranch {
+                remote: remote.clone(),
+                branch: branch.clone(),
+            },
+        },
+    ));
     // Focus sits with the other view-shaping entries, above the actions that
     // change the repository.
     items.push(super::focus::entry(

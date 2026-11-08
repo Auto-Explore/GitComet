@@ -7,9 +7,9 @@ use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitRepository, InteractiveRebaseEntry,
-    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
-    SubmoduleTrustTarget, WorktreeCheckout,
+    CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitHooks, GitRepository,
+    InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -18,8 +18,8 @@ use std::sync::RwLock;
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::repo_actions::following_submodule_pointers;
 use super::util::{
-    GitOperationTask, message_subject, missing_repo_error, send_or_log, short_commit_id,
-    single_line_context, spawn_with_repo, spawn_with_repo_or_else,
+    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, send_or_log,
+    short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
 const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
@@ -133,11 +133,16 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::Push | RepoCommandKind::ForcePush => {
             "Current branch → configured upstream".to_string()
         }
-        RepoCommandKind::PushAfterCommit { target, .. } => {
-            format!(
+        RepoCommandKind::PushAfterCommit { target, hooks, .. } => {
+            let context = format!(
                 "{} → {}/{}",
                 target.local_branch, target.remote, target.branch
-            )
+            );
+            if hooks.skipped() {
+                format!("{context} · {SKIPPING_HOOKS_CONTEXT}")
+            } else {
+                context
+            }
         }
         RepoCommandKind::ForcePushWithLease { lease } => {
             format!("{} → {}/{}", lease.local_branch, lease.remote, lease.branch)
@@ -1558,10 +1563,12 @@ pub(super) fn schedule_push_submodules_then_repo(
                     BlockedPush::AfterCommit {
                         target,
                         set_upstream,
+                        hooks,
                     } => Msg::PushAfterCommit {
                         repo_id,
                         target,
                         set_upstream,
+                        hooks,
                     },
                     BlockedPush::SetUpstream { remote, branch } => Msg::PushSetUpstream {
                         repo_id,
@@ -1587,6 +1594,7 @@ fn schedule_push_after_commit(
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
     set_upstream: bool,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
     guard_submodules: bool,
 ) {
@@ -1600,6 +1608,7 @@ fn schedule_push_after_commit(
         RepoCommandKind::PushAfterCommit {
             target: command_target,
             set_upstream,
+            hooks,
         },
         move |repo| {
             if guard_submodules {
@@ -1610,15 +1619,12 @@ fn schedule_push_after_commit(
                     BlockedPush::AfterCommit {
                         target: target.clone(),
                         set_upstream,
+                        hooks,
                     },
                 )?;
             }
             run_with_git_auth(auth, || {
-                if set_upstream {
-                    repo.push_after_commit_set_upstream_with_output(&target)
-                } else {
-                    repo.push_after_commit_with_output(&target)
-                }
+                repo.push_after_commit_with_hooks(&target, set_upstream, hooks)
             })
         },
     );
@@ -2675,9 +2681,24 @@ mod hook_activity_context_tests {
                     local_head: CommitId("0123456789abcdef".into()),
                 },
                 set_upstream: false,
+                hooks: GitHooks::Run,
             })
             .as_deref(),
             Some("feature/hooks → origin/main")
+        );
+        assert_eq!(
+            repo_command_context(&RepoCommandKind::PushAfterCommit {
+                target: SafePushAfterCommitTarget {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    local_branch: "feature/hooks".to_string(),
+                    local_head: CommitId("0123456789abcdef".into()),
+                },
+                set_upstream: true,
+                hooks: GitHooks::Skip,
+            })
+            .as_deref(),
+            Some("feature/hooks → origin/main · skipping Git hooks")
         );
         assert_eq!(
             repo_command_context(&RepoCommandKind::SquashCommits {
@@ -3175,6 +3196,7 @@ pub(super) fn schedule(
             repo_id,
             target,
             set_upstream,
+            hooks,
             auth,
         } => schedule_push_after_commit(
             executor,
@@ -3183,6 +3205,7 @@ pub(super) fn schedule(
             repo_id,
             target,
             set_upstream,
+            hooks,
             auth,
             guard_unpushed_submodules(thread_state, repo_id),
         ),

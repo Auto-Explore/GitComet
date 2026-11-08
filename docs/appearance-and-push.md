@@ -74,3 +74,30 @@ authentication, hooks and signing, and keeps the chosen tag option when setting
 an upstream or retrying authentication. The option applies to that push only.
 
 The remote can change after a preview. Conflicting tags are not force-updated.
+
+## Skip Git hooks
+
+Open the commit button's options menu and turn on **Skip Git hooks** (`H`) to
+commit with `--no-verify`. Git then skips the repository's `pre-commit` and
+`commit-msg` hooks; other hooks, such as `prepare-commit-msg` and
+`post-commit`, still run. With **Push after commit** on, that push also skips
+the `pre-push` hook. While the option is on, the commit button says so, for
+example **Commit without Hooks** or **Amend without Hooks and Push Safely**.
+
+The option stays on for later commits until you turn it off. It belongs to the
+window and is never saved, so a new window always runs hooks. Pushes from the
+toolbar's Push menu always run hooks.
+
+Git LFS uploads objects from its own `pre-push` hook. When a push after commit
+skips a `pre-push` hook Git would run, and the commits it publishes contain LFS
+pointers, GitComet first runs `git lfs push <remote> <commit>` itself, as that
+hook would. It checks the commits rather than the LFS settings or
+`.gitattributes`, so a global `git lfs install` alone never triggers it, and it
+reads pointers as git-lfs does, CRLF line endings included. Commits the
+remote's default branch already has, such as a merged `main`, are not checked
+again. Missing content stops the push. The Git push publishes that captured
+commit, even if the branch moved during the upload. Upstream tracking is
+configured after a successful push and follows `branch.autoSetupRebase`, as
+`git push --set-upstream` does. If it cannot be saved, the push still succeeds,
+and its summary and output say so. On an adjusted git-annex branch, git-annex
+performs the push and the hooks run as usual.

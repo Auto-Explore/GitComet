@@ -40,6 +40,7 @@ impl TextInput {
             editor_font: false,
             editor_line_height: px(20.0),
             vertical_padding_override: None,
+            scroll_max_height: None,
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
             wrap: WrapState::new(),
@@ -167,6 +168,25 @@ impl TextInput {
         self.line_height_override
     }
 
+    /// What the input shows while it is empty.
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    /// Shows `placeholder` from now on while the input is empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder == placeholder {
+            return;
+        }
+        self.placeholder = placeholder;
+        cx.notify();
+    }
+
     pub fn take_enter_pressed(&mut self) -> bool {
         std::mem::take(&mut self.interaction.enter_pressed)
     }
@@ -278,6 +298,21 @@ impl TextInput {
         self.interaction.vertical_scroll_handle = handle;
         // Offsets of another handle say nothing about this one.
         self.layout.painted_scroll_offset = None;
+    }
+
+    /// Scroll a multiline field inside its own border, up to `max_height` design px.
+    /// The text always reserves scrollbar space so wrapping stays stable.
+    pub fn set_scrollable(
+        &mut self,
+        scroll: ScrollHandle,
+        max_height: f32,
+        cx: &mut Context<Self>,
+    ) {
+        assert!(self.multiline && max_height.is_finite() && max_height > 0.0);
+        self.set_vertical_scroll_handle(Some(scroll));
+        self.scroll_max_height = Some(max_height);
+        self.invalidate_layout_caches();
+        cx.notify();
     }
 
     /// Enable content-width layout: a multiline input lays out at its widest-line
