@@ -3,8 +3,9 @@
 use crate::contributions::{
     BottomPanelDescriptor, CanvasOverlayDescriptor, ChromeDescriptor, CloseGuard,
     CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, DetailsTabDescriptor,
-    MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
-    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
+    MenuLocation, RefMenuItemDescriptor, RepositoryEntryGate, RepositoryViewDescriptor,
+    SettingsPageDescriptor, SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor,
+    WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -79,6 +80,7 @@ pub struct Registrar {
     commands: Vec<(ContributionId, CommandDescriptor)>,
     key_bindings: Vec<KeyBindingDeclaration>,
     menu_items: Vec<MenuItemDeclaration>,
+    ref_menu_items: Vec<(ContributionId, RefMenuItemDescriptor)>,
     assets: Vec<(String, &'static [u8])>,
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
@@ -109,6 +111,7 @@ impl Registrar {
             commands: Vec::new(),
             key_bindings: Vec::new(),
             menu_items: Vec::new(),
+            ref_menu_items: Vec::new(),
             assets: Vec::new(),
             entry_gates: Vec::new(),
             window_gates: Vec::new(),
@@ -357,6 +360,19 @@ impl Registrar {
         self
     }
 
+    /// Adds an entry to every branch and commit menu; it receives the
+    /// branch or commit the menu was opened on.
+    pub fn ref_menu_item(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: RefMenuItemDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.ref_menu_items.push((id, descriptor));
+        }
+        self
+    }
+
     /// Serves `bytes` at `extensions/<extension id>/<path>` through the
     /// window's asset source (for `svg()`/`img()` paths).
     pub fn asset(&mut self, path: &str, bytes: &'static [u8]) -> &mut Self {
@@ -446,6 +462,7 @@ pub struct Registry {
     commands: Vec<(ContributionId, CommandDescriptor)>,
     key_bindings: Vec<KeyBindingDeclaration>,
     menu_items: Vec<MenuItemDeclaration>,
+    ref_menu_items: Vec<(ContributionId, RefMenuItemDescriptor)>,
     assets: Vec<(String, &'static [u8])>,
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
@@ -513,6 +530,7 @@ impl Registry {
             registry.commands.extend(registrar.commands);
             registry.key_bindings.extend(registrar.key_bindings);
             registry.menu_items.extend(registrar.menu_items);
+            registry.ref_menu_items.extend(registrar.ref_menu_items);
             registry.assets.extend(registrar.assets);
             registry.entry_gates.extend(registrar.entry_gates);
             registry.window_gates.extend(registrar.window_gates);
@@ -580,6 +598,10 @@ impl Registry {
             (
                 "command",
                 duplicates(registry.commands.iter().map(|(id, _)| id)),
+            ),
+            (
+                "ref menu item",
+                duplicates(registry.ref_menu_items.iter().map(|(id, _)| id)),
             ),
             (
                 "entry gate",
@@ -784,6 +806,11 @@ impl Registry {
         self.menu_items
             .iter()
             .filter(move |item| item.location == location)
+    }
+
+    /// Branch and commit menu entries, in registration order.
+    pub fn ref_menu_items(&self) -> &[(ContributionId, RefMenuItemDescriptor)] {
+        &self.ref_menu_items
     }
 
     pub fn asset(&self, path: &str) -> Option<&'static [u8]> {

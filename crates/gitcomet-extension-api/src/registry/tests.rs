@@ -383,3 +383,74 @@ fn crash_report_action_has_one_owner() {
             .contains("crash_report_action has more than one provider")
     }));
 }
+
+fn ref_menu_item(label: &'static str) -> crate::RefMenuItemDescriptor {
+    crate::RefMenuItemDescriptor::new(label, |_, _, _| {})
+}
+
+#[test]
+fn ref_menu_items_keep_registration_order_and_refuse_duplicates() {
+    let registry = build(vec![
+        Fixture {
+            id: "com.example.a",
+            register: |r| {
+                r.ref_menu_item("review", ref_menu_item("Review"));
+            },
+        },
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.ref_menu_item("review", ref_menu_item("Review").with_icon("icons/b.svg"));
+            },
+        },
+    ])
+    .expect("valid registrations");
+    let items: Vec<(String, &str, Option<&str>)> = registry
+        .ref_menu_items()
+        .iter()
+        .map(|(id, item)| (id.to_string(), item.label.as_ref(), item.icon.as_deref()))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("com.example.a/review".to_string(), "Review", None),
+            (
+                "com.example.b/review".to_string(),
+                "Review",
+                Some("icons/b.svg")
+            ),
+        ]
+    );
+
+    let errors = build(vec![Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.ref_menu_item("review", ref_menu_item("Review"))
+                .ref_menu_item("review", ref_menu_item("Review again"));
+        },
+    }])
+    .err()
+    .expect("a duplicate entry");
+    assert_eq!(
+        errors[0].to_string(),
+        "com.example.a: ref menu item com.example.a/review is declared twice"
+    );
+}
+
+#[test]
+fn ref_menu_targets_name_a_revision_git_resolves() {
+    use crate::RefMenuTarget;
+    let local = RefMenuTarget::LocalBranch {
+        name: "feature/x".into(),
+    };
+    let remote = RefMenuTarget::RemoteBranch {
+        remote: "origin".into(),
+        branch: "main".into(),
+    };
+    let commit = RefMenuTarget::Commit {
+        id: gitcomet_core::domain::CommitId("0123456789abcdef".into()),
+    };
+    assert_eq!(local.revision(), "feature/x");
+    assert_eq!(remote.revision(), "origin/main");
+    assert_eq!(commit.revision(), "0123456789abcdef");
+}

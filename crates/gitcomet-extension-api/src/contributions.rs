@@ -508,6 +508,75 @@ pub enum MenuLocation {
     RepositoryTab,
 }
 
+/// What a branch or commit menu was opened on.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefMenuTarget {
+    LocalBranch {
+        name: String,
+    },
+    /// A remote-tracking branch, by its remote and its name there.
+    RemoteBranch {
+        remote: String,
+        branch: String,
+    },
+    Commit {
+        id: gitcomet_core::domain::CommitId,
+    },
+}
+
+impl RefMenuTarget {
+    /// A revision Git resolves to the target: the branch name, `remote/branch`,
+    /// or the full commit id.
+    pub fn revision(&self) -> String {
+        match self {
+            Self::LocalBranch { name } => name.clone(),
+            Self::RemoteBranch { remote, branch } => format!("{remote}/{branch}"),
+            Self::Commit { id } => id.as_ref().to_string(),
+        }
+    }
+}
+
+/// Where a branch or commit menu entry runs: the window, the repository whose
+/// menu it was, and what the menu was opened on.
+#[derive(Clone)]
+pub struct RefMenuContext {
+    pub window: WindowHost,
+    pub repository: RepositoryHandle,
+    pub target: RefMenuTarget,
+}
+
+/// Runs a branch or commit menu entry.
+pub type RefMenuHandler = Rc<dyn Fn(RefMenuContext, &mut Window, &mut App)>;
+
+/// An entry in every branch menu (local and remote, in the sidebar and in
+/// History) and every commit menu, after the host's comparison entries.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct RefMenuItemDescriptor {
+    pub label: SharedString,
+    pub icon: Option<SharedString>,
+    pub run: RefMenuHandler,
+}
+
+impl RefMenuItemDescriptor {
+    pub fn new(
+        label: impl Into<SharedString>,
+        run: impl Fn(RefMenuContext, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            icon: None,
+            run: Rc::new(run),
+        }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+}
+
 /// How a repository is being opened. Gates should deny origins they do not
 /// recognise rather than allow them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
