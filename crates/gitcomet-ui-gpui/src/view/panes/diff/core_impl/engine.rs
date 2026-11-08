@@ -117,27 +117,45 @@ impl DiffRenderer {
         cx.notify();
     }
 
-    pub(in crate::view) fn diff_engine_label(&self) -> SharedString {
+    /// What the notice above the diff says.
+    pub(in crate::view) fn diff_engine_notice(&self) -> EngineNotice {
         if self.effective_diff_engine() == DiffEngine::LineByLine {
-            return "Line by line".into();
+            return EngineNotice::Name("Line by line".into());
         }
         match self.diff_engine_status {
             DiffEngineStatus::Difftastic {
                 syntactic_changes: false,
                 text_differs: true,
-            } => "Difftastic · No syntactic changes; text differs".into(),
-            DiffEngineStatus::Difftastic { .. } => "Difftastic".into(),
+            } => EngineNotice::Explained("Difftastic · No syntactic changes; text differs".into()),
+            DiffEngineStatus::Difftastic { .. } => EngineNotice::Name("Difftastic".into()),
             DiffEngineStatus::Fallback(reason) => {
-                format!("Line by line · {}", reason.label()).into()
+                EngineNotice::Explained(format!("Line by line · {}", reason.label()).into())
             }
             DiffEngineStatus::LineByLine if self.file_diff_cache_inflight.is_some() => {
-                "Difftastic · Comparing…".into()
+                EngineNotice::Name("Difftastic · Comparing…".into())
             }
-            DiffEngineStatus::LineByLine => format!(
-                "Line by line · {}",
-                DiffEngineFallback::MissingSources.label()
-            )
-            .into(),
+            DiffEngineStatus::LineByLine => EngineNotice::Explained(
+                format!(
+                    "Line by line · {}",
+                    DiffEngineFallback::MissingSources.label()
+                )
+                .into(),
+            ),
+        }
+    }
+}
+
+/// The notice above a diff: the engine's name alone, or why the diff looks as
+/// it does.
+pub(in crate::view) enum EngineNotice {
+    Name(SharedString),
+    Explained(SharedString),
+}
+
+impl EngineNotice {
+    pub(in crate::view) fn text(&self) -> SharedString {
+        match self {
+            Self::Name(text) | Self::Explained(text) => text.clone(),
         }
     }
 }

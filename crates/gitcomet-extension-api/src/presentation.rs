@@ -50,6 +50,12 @@ impl PartialEq for HostedAction {
 }
 impl Eq for HostedAction {}
 
+impl std::hash::Hash for HostedAction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HostedMenuItem {

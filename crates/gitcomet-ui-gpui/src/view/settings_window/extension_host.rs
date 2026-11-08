@@ -350,7 +350,7 @@ impl WindowHostImpl for SettingsHost {
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
-        self.present(title, None, content, cx)
+        self.present(title, None, false, content, cx)
     }
     fn open_popover(
         &self,
@@ -359,7 +359,7 @@ impl WindowHostImpl for SettingsHost {
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
-        self.present(title, Some(anchor), content, cx)
+        self.present(title, Some(anchor), false, content, cx)
     }
     fn open_menu(
         &self,
@@ -372,6 +372,7 @@ impl WindowHostImpl for SettingsHost {
         self.present(
             "".into(),
             Some(anchor),
+            true,
             Box::new(move |_, cx| {
                 cx.new(|_| SettingsMenu {
                     items,
@@ -519,6 +520,8 @@ pub(super) struct SettingsDialog {
     pub title: SharedString,
     pub content: gpui::AnyView,
     pub anchor: Option<gpui::Point<gpui::Pixels>>,
+    /// A context menu: drawn bare at its anchor, closed by a click outside.
+    pub menu: bool,
     pub focus: gpui::FocusHandle,
     previous_focus: Option<gpui::FocusHandle>,
     application_close_prompt: bool,
@@ -528,6 +531,7 @@ impl SettingsHost {
         &self,
         title: SharedString,
         anchor: Option<gpui::Point<gpui::Pixels>>,
+        menu: bool,
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
@@ -556,6 +560,7 @@ impl SettingsHost {
                         title,
                         content,
                         anchor,
+                        menu,
                         focus,
                         previous_focus,
                         application_close_prompt,

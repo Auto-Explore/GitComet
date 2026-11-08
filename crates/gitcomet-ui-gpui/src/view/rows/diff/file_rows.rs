@@ -242,6 +242,7 @@ pub(super) fn render_collapsed_diff_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = pass;
 
     let theme = this.theme;
@@ -446,6 +447,7 @@ pub(super) fn render_collapsed_diff_rows(
                             reveal_whitespace_chars,
                             show_line_numbers,
                             annotation_width,
+                            line_end_views,
                         },
                         visible_ix,
                         DiffClickKind::Line,
@@ -505,6 +507,7 @@ pub(super) fn render_file_diff_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = pass;
 
     let theme = this.theme;
@@ -793,6 +796,7 @@ pub(super) fn render_file_diff_rows(
                     reveal_whitespace_chars,
                     show_line_numbers,
                     annotation_width,
+                    line_end_views,
                 },
                 visible_ix,
                 DiffClickKind::Line,
@@ -862,6 +866,7 @@ pub(super) fn render_collapsed_diff_split_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = common;
 
     let theme = this.theme;
@@ -1048,6 +1053,7 @@ pub(super) fn render_collapsed_diff_split_rows(
                         show_line_numbers,
                         wrap,
                         annotation_width,
+                        line_end_views,
                         if is_left {
                             blame_ctx.as_ref().and_then(|ctx| {
                                 build_row_blame_paint_tracked(
@@ -1104,6 +1110,7 @@ pub(super) fn render_file_diff_split_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = common;
 
     let theme = this.theme;
@@ -1239,6 +1246,7 @@ pub(super) fn render_file_diff_split_rows(
                 show_line_numbers,
                 wrap,
                 annotation_width,
+                line_end_views,
                 if is_left {
                     blame_ctx.as_ref().and_then(|ctx| {
                         build_row_blame_paint_tracked(

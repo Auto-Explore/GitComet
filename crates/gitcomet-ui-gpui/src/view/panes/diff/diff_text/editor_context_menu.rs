@@ -354,6 +354,7 @@ impl DiffRenderer {
 
         self.open_popover_at(
             (PopoverKind::DiffEditorMenu {
+                context_actions: self.hosted_context_actions(visible_ix, region, cx),
                 repo_id,
                 area,
                 path,

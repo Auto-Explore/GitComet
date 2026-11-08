@@ -90,6 +90,12 @@ pub(in crate::view) enum ContextMenuAction {
         id: SharedString,
         repo_id: RepoId,
     },
+    /// An extension's branch or commit menu entry, for the menu's target.
+    RunRefMenuItem {
+        id: SharedString,
+        repo_id: RepoId,
+        target: gitcomet_extension_api::RefMenuTarget,
+    },
     SetImageSampling {
         mode: crate::view::image_preview::ImageSamplingMode,
     },
