@@ -7,8 +7,10 @@ use crate::model::{
     RepoState,
 };
 use crate::msg::InternalMsg;
+use std::time::{Duration, SystemTime};
 
 pub(super) const WARM_INACTIVE_REPOSITORIES: usize = 2;
+pub(super) const DESCRIPTOR_RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub(super) fn is_pinned(state: &AppState, repo: &RepoState) -> bool {
     !repo.diff_sessions.is_empty()
@@ -77,8 +79,8 @@ pub(super) fn has_unfinished_operation(repo: &RepoState) -> bool {
 
 /// Called under the state lock. Actual handle destruction is deferred until
 /// the worker releases that lock, as it is when closing a tab.
-pub(super) fn park_inactive(state: &mut AppState, repos: &mut RepositoryRuntimes) {
-    let warm = super::warm_inactive_repos(state, repos.warm_repository_count());
+pub(super) fn park_inactive(state: &mut AppState, repos: &mut RepositoryRuntimes, now: SystemTime) {
+    let warm = super::warm_inactive_repos(state, repos.warm_repository_count(now));
     let cold: Vec<_> = state
         .repos
         .iter()
@@ -279,7 +281,7 @@ mod tests {
         let lifetime = state.repos[0].lifetime_id();
         let lease = runtimes.worktree_cache(RepoId(1), lifetime);
         let scope = runtimes.start_load_scope(RepoId(1), lifetime, state.repos[0].load_epoch);
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         // Destruction is deliberately deferred beyond the state write lock.
         assert!(weak[0].upgrade().is_some());
         runtimes.release_retired();
@@ -307,7 +309,7 @@ mod tests {
             .insert((RepoId(2), lifetime, "/linked".into()), 1);
         state.repos[2].push_in_flight = 1;
         state.repos[3].diff_state.edit_mode = true;
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         for id in 1..=7 {
             assert!(runtimes.has_repository(&RepoId(id)));
         }
@@ -315,7 +317,7 @@ mod tests {
         Arc::make_mut(&mut state.worktree_watch_leases).clear();
         state.repos[2].push_in_flight = 0;
         state.repos[3].diff_state.edit_mode = false;
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         for id in 1..=4 {
             assert!(!runtimes.has_repository(&RepoId(id)));
         }
@@ -340,16 +342,16 @@ mod tests {
             DiffViewId::next(),
             ChangeListSession::new(ChangeSource::worktree(DiffArea::Unstaged, true)),
         );
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(runtimes.has_repository(&RepoId(1)));
         assert!(runtimes.has_repository(&RepoId(2)));
-        assert!(runtimes.begin_descriptor_recovery(std::time::Instant::now()));
-        park_inactive(&mut state, &mut runtimes);
+        assert!(runtimes.begin_descriptor_recovery(SystemTime::now()));
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(runtimes.has_repository(&RepoId(1)));
         assert!(runtimes.has_repository(&RepoId(2)));
         Arc::make_mut(&mut state.repos[0].diff_sessions).clear();
         Arc::make_mut(&mut state.repos[1].change_lists).clear();
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(!runtimes.has_repository(&RepoId(1)));
         assert!(!runtimes.has_repository(&RepoId(2)));
     }
@@ -450,8 +452,8 @@ mod tests {
             let (visited, mut runtimes, _) = visited_repos(5);
             state.repos = visited.repos;
             state.active_repo = visited.active_repo;
-            assert!(runtimes.begin_descriptor_recovery(std::time::Instant::now()));
-            park_inactive(&mut state, &mut runtimes);
+            assert!(runtimes.begin_descriptor_recovery(SystemTime::now()));
+            park_inactive(&mut state, &mut runtimes, SystemTime::now());
             assert!(runtimes.has_repository(&id), "pending continuation {case}");
             assert!(!runtimes.has_repository(&RepoId(2)), "unrelated repository");
 
@@ -461,7 +463,7 @@ mod tests {
             state.force_remove_worktree_prompt = None;
             state.submodule_trust_prompt = None;
             state.submodule_trust_check_pending = None;
-            park_inactive(&mut state, &mut runtimes);
+            park_inactive(&mut state, &mut runtimes, SystemTime::now());
             assert!(
                 !runtimes.has_repository(&id),
                 "dismissed continuation {case}"
@@ -485,12 +487,12 @@ mod tests {
                 },
                 Vec::new(),
             )));
-        assert!(runtimes.begin_descriptor_recovery(std::time::Instant::now()));
-        park_inactive(&mut state, &mut runtimes);
+        assert!(runtimes.begin_descriptor_recovery(SystemTime::now()));
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(runtimes.has_repository(&RepoId(1)));
         assert!(!runtimes.has_repository(&RepoId(2)));
         state.repos[0].bare_mode_conversion = BareModeConversionState::Idle;
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(!runtimes.has_repository(&RepoId(1)));
     }
 
@@ -508,23 +510,40 @@ mod tests {
                 dest: "/clone".into(),
             },
         });
-        park_inactive(&mut state, &mut runtimes);
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(!runtimes.has_repository(&RepoId(1)));
     }
 
     #[test]
     fn pressure_releases_all_warm_slots_and_retries_are_bounded() {
         let (mut state, mut runtimes, _) = visited_repos(4);
-        let now = std::time::Instant::now();
+        let now = SystemTime::now();
         assert!(runtimes.begin_descriptor_recovery(now));
         assert!(!runtimes.begin_descriptor_recovery(now + Duration::from_secs(1)));
-        assert_eq!(runtimes.warm_repository_count(), 0);
-        park_inactive(&mut state, &mut runtimes);
+        assert_eq!(runtimes.warm_repository_count(now), 0);
+        park_inactive(&mut state, &mut runtimes, now);
         for id in 1..=3 {
             assert!(!runtimes.has_repository(&RepoId(id)));
         }
         assert!(runtimes.has_repository(&RepoId(4)));
-        assert!(runtimes.begin_descriptor_recovery(now + Duration::from_secs(30)));
+        assert!(runtimes.begin_descriptor_recovery(now + DESCRIPTOR_RECOVERY_COOLDOWN));
+    }
+
+    #[test]
+    fn the_warm_allowance_returns_after_the_cooldown_and_survives_clock_steps() {
+        let mut runtimes = RepositoryRuntimes::default();
+        let now = SystemTime::now();
+        assert!(runtimes.begin_descriptor_recovery(now));
+        let just_before = now + DESCRIPTOR_RECOVERY_COOLDOWN - Duration::from_millis(1);
+        assert_eq!(runtimes.warm_repository_count(just_before), 0);
+        assert_eq!(
+            runtimes.warm_repository_count(now - Duration::from_secs(5)),
+            0
+        );
+        assert_eq!(
+            runtimes.warm_repository_count(now + DESCRIPTOR_RECOVERY_COOLDOWN),
+            WARM_INACTIVE_REPOSITORIES
+        );
     }
 
     #[cfg(unix)]

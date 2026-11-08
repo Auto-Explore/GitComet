@@ -2,6 +2,10 @@ use super::*;
 use crate::msg::InternalMsg;
 use crate::store::reducer::park_repository;
 
+fn park(state: &mut AppState, repos: &mut RepositoryRuntimes) {
+    crate::store::repository_budget::park_inactive(state, repos, std::time::SystemTime::now());
+}
+
 #[test]
 fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
     use crate::msg::{RepoCommandEffect, RepoCommandKind};
@@ -31,7 +35,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             "/tmp/commit-other-3",
         ] {
             open_repo_ready(&mut repos, &ids, &mut state, path);
-            crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+            park(&mut state, &mut repos);
         }
         let effects = reduce(
             &mut repos,
@@ -53,8 +57,8 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             .expect("commit schedules its safety check");
         assert_eq!(state.repos[0].commit_in_flight, 0);
         assert_eq!(state.repos[0].local_actions_in_flight, 1);
-        assert!(repos.begin_descriptor_recovery(std::time::Instant::now()));
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        assert!(repos.begin_descriptor_recovery(std::time::SystemTime::now()));
+        park(&mut state, &mut repos);
         assert!(
             repos.has_repository(&id),
             "preflight takes over the commit pin"
@@ -91,7 +95,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             Effect::RepoCommand(RepoCommandEffect::PushAfterCommit { repo_id, set_upstream: actual, .. })
                 if *repo_id == id && *actual == set_upstream
         )));
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
         assert!(
             repos.has_repository(&id),
             "checked push takes over the preflight pin"
@@ -109,7 +113,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
                 result: Ok(gitcomet_core::services::CommandOutput::default()),
             }),
         );
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
         assert!(!repos.has_repository(&id), "finished push releases its pin");
     }
 }
@@ -146,7 +150,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
             "/tmp/preflight-other-3",
         ] {
             open_repo_ready(&mut repos, &ids, &mut state, path);
-            crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+            park(&mut state, &mut repos);
         }
         reduce(&mut repos, &ids, &mut state,
             Msg::Internal(InternalMsg::SafePushAfterCommitFinished {
@@ -161,7 +165,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
             .as_ref()
             .expect("preflight auth prompt")
             .generation;
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
         assert!(
             repos.has_repository(&id),
             "prompt takes over the preflight pin"
@@ -178,7 +182,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
         );
         assert!(state.auth_prompt.is_none());
         assert_eq!(state.repos[0].local_actions_in_flight, 1);
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
         assert!(
             repos.has_repository(&id),
             "auth retry takes over the prompt pin"
@@ -205,7 +209,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
         assert_eq!(state.repos[0].local_actions_in_flight, 0);
         assert!(state.auth_prompt.is_none());
         assert_eq!(state.repos[0].push_in_flight, 0);
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
         assert!(
             !repos.has_repository(&id),
             "terminal preflight releases its pin"
@@ -230,7 +234,7 @@ fn background_authentication_continuation_survives_leaving_the_warm_set() {
         "/tmp/auth-other-3",
     ] {
         open_repo_ready(&mut repos, &ids, &mut state, path);
-        crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+        park(&mut state, &mut repos);
     }
     assert!(
         repos.has_repository(&id),
@@ -254,7 +258,7 @@ fn background_authentication_continuation_survives_leaving_the_warm_set() {
         .as_ref()
         .expect("authentication prompt")
         .generation;
-    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    park(&mut state, &mut repos);
     assert!(
         repos.has_repository(&id),
         "prompt takes over the command's pin"
@@ -274,7 +278,7 @@ fn background_authentication_continuation_survives_leaving_the_warm_set() {
     assert!(effects.iter().any(|effect| matches!(effect,
         Effect::RepoCommand(RepoCommandEffect::Push { repo_id, .. }) if *repo_id == id
     )));
-    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    park(&mut state, &mut repos);
     assert!(
         repos.has_repository(&id),
         "retry takes over the prompt's pin"
@@ -289,7 +293,7 @@ fn background_authentication_continuation_survives_leaving_the_warm_set() {
             result: Ok(gitcomet_core::services::CommandOutput::default()),
         }),
     );
-    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    park(&mut state, &mut repos);
     assert!(
         !repos.has_repository(&id),
         "finished continuation releases its pin"
@@ -641,7 +645,7 @@ fn explicit_background_reload_reopens_and_refreshes_a_cold_tab() {
             .iter()
             .any(|effect| matches!(effect, Effect::LoadWorktrees { repo_id } if *repo_id == cold))
     );
-    crate::store::repository_budget::park_inactive(&mut state, &mut repos);
+    park(&mut state, &mut repos);
     assert!(
         repos.has_repository(&cold),
         "explicit use keeps the resumed handle warm"
@@ -713,5 +717,5 @@ fn stale_exhaustion_does_not_reopen_or_evict_a_newer_runtime() {
     );
     assert!(effects.is_empty());
     assert!(repos.has_repository(&id));
-    assert_eq!(repos.warm_repository_count(), 2);
+    assert_eq!(repos.warm_repository_count(std::time::SystemTime::now()), 2);
 }

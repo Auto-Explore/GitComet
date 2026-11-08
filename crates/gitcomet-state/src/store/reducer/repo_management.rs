@@ -379,19 +379,21 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
 /// cooldown also covers the retry's replies, so persistent EMFILE reaches the
 /// existing error UI rather than recursively starting more refreshes.
 pub(super) fn recover_descriptor_exhaustion(
+    inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Option<Vec<Effect>> {
+    let now = inputs.now();
     if !state
         .repos
         .iter()
         .any(|repo| repo.id == repo_id && repo.descriptor_retry_epoch != Some(repo.load_epoch))
-        || !repos.begin_descriptor_recovery(std::time::Instant::now())
+        || !repos.begin_descriptor_recovery(now)
     {
         return None;
     }
-    super::super::repository_budget::park_inactive(state, repos);
+    super::super::repository_budget::park_inactive(state, repos, now);
     let active = state.active_repo == Some(repo_id);
     if state
         .repos
@@ -1768,7 +1770,7 @@ pub(super) fn repo_opened_err(
     error: Error,
 ) -> Vec<Effect> {
     if error.is_file_descriptor_exhaustion()
-        && let Some(effects) = recover_descriptor_exhaustion(repos, state, repo_id)
+        && let Some(effects) = recover_descriptor_exhaustion(inputs, repos, state, repo_id)
     {
         return effects;
     }

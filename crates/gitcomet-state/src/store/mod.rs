@@ -369,6 +369,7 @@ impl WorkerLoopContext<'_> {
     ) where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
+        let now = std::time::SystemTime::now();
         let (effects, state, reduce_duration, publication) = {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
             let mutable = make_mut_state_with_diagnostics(&mut app_state);
@@ -377,7 +378,7 @@ impl WorkerLoopContext<'_> {
                 reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
             }
             let effects = reduce_with(mutable, repos, id_alloc);
-            repository_budget::park_inactive(mutable, repos);
+            repository_budget::park_inactive(mutable, repos, now);
             repository_registry::update_repositories(
                 self.thread_msg_tx.store_id().get(),
                 mutable,

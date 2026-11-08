@@ -3,6 +3,7 @@ use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 use super::effects::worktree_list::WorktreeListPublisher;
 use super::executor::{LatestTaskSlot, SelectedDiffSlots};
@@ -76,7 +77,7 @@ impl Drop for RepositoryRuntime {
 #[derive(Default)]
 pub(super) struct RepositoryRuntimes {
     entries: FxHashMap<RepoId, RepositoryRuntime>,
-    descriptor_recovery_at: Option<std::time::Instant>,
+    descriptor_recovery_at: Option<SystemTime>,
     // Reducers retire entries under the state lock; the worker disposes them
     // after releasing that lock, before it schedules the returned effects.
     retired: Vec<RepositoryRuntime>,
@@ -86,25 +87,28 @@ pub(super) struct RepositoryRuntimes {
 impl RepositoryRuntimes {
     /// One recovery attempt per pressure episode, shared by all read replies
     /// in this store. A refresh fan-out must not become a retry loop.
-    pub(super) fn begin_descriptor_recovery(&mut self, now: std::time::Instant) -> bool {
-        if self.descriptor_recovery_at.is_some_and(|previous| {
-            now.saturating_duration_since(previous) < std::time::Duration::from_secs(30)
-        }) {
+    pub(super) fn begin_descriptor_recovery(&mut self, now: SystemTime) -> bool {
+        if self.under_descriptor_pressure(now) {
             return false;
         }
         self.descriptor_recovery_at = Some(now);
         true
     }
 
-    pub(super) fn warm_repository_count(&self) -> usize {
-        if self
-            .descriptor_recovery_at
-            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30))
-        {
+    pub(super) fn warm_repository_count(&self, now: SystemTime) -> usize {
+        if self.under_descriptor_pressure(now) {
             0
         } else {
             super::repository_budget::WARM_INACTIVE_REPOSITORIES
         }
+    }
+
+    fn under_descriptor_pressure(&self, now: SystemTime) -> bool {
+        self.descriptor_recovery_at.is_some_and(|at| {
+            !now.duration_since(at).is_ok_and(|elapsed| {
+                elapsed >= super::repository_budget::DESCRIPTOR_RECOVERY_COOLDOWN
+            })
+        })
     }
 
     fn begin_opening(&mut self, repo_id: RepoId, lifetime: RepoLifetime) -> &mut RepositoryRuntime {

@@ -80,7 +80,7 @@ pub(super) fn repo_load_finished(
     if current_load_epoch == Some(load_epoch) {
         if super::super::repository_budget::descriptor_read_failure(&message) == Some(repo_id)
             && let Some(effects) =
-                super::repo_management::recover_descriptor_exhaustion(repos, state, repo_id)
+                super::repo_management::recover_descriptor_exhaustion(inputs, repos, state, repo_id)
         {
             return effects;
         }
