@@ -24,6 +24,11 @@ pub(in crate::view) enum RootRequest {
         id: String,
         repo: Option<RepoId>,
     },
+    RunRefMenuItem {
+        id: String,
+        repo_id: RepoId,
+        target: gitcomet_extension_api::RefMenuTarget,
+    },
     PerformCloseAction(TerminalShutdownAction),
     ShowRepositoryCanvas,
     OpenRepoPath(PathBuf),
@@ -140,6 +145,13 @@ impl GitCometView {
             }
             RootRequest::RunExtensionCommand { id, repo } => {
                 self.run_extension_command_for(&id, repo, cx);
+            }
+            RootRequest::RunRefMenuItem {
+                id,
+                repo_id,
+                target,
+            } => {
+                self.run_ref_menu_item(&id, repo_id, target, cx);
             }
             RootRequest::ShowRepositoryCanvas => self.show_repository_canvas(cx),
             RootRequest::OpenRepoPath(path) => self.open_repo_path(path, cx),

@@ -1,8 +1,8 @@
 use super::{
     AppTheme, DiffContentMode, DiffRenderer, DiffSplitResizeHandle, DiffSplitResizeState,
     DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable, PANE_RESIZE_HANDLE_PX,
-    ResizeDividerDrag, components, diff_split_column_widths, diff_split_drag_params,
-    empty_diff_text_document, next_diff_split_drag_ratio,
+    ResizeDividerDrag, components, diff_split_drag_params, empty_diff_text_document,
+    next_diff_split_drag_ratio,
 };
 use crate::view::panes::diff::DiffBody;
 use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
@@ -129,28 +129,31 @@ impl DiffRenderer {
                         DiffHorizontalScrollColumn::Primary,
                         self.diff_scroll.clone(),
                     );
-                    let list = uniform_list(
-                        "diff",
-                        self.diff_list_len(),
-                        cx.processor(Self::render_projected_inline),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
+                    // Wrapped rows end at the pane: no sideways scrollbar.
+                    let bottom_gutter = if self.diff_word_wrap {
                         px(0.0)
                     } else {
                         horizontal_scrollbar_gutter
-                    })
-                    .track_scroll(&self.diff_scroll)
-                    .with_decoration(DiffTextEmptySpaceDecoration {
-                        view: cx.entity(),
-                        region: DiffTextRegion::Inline,
-                    })
-                    .when(!self.diff_word_wrap, |list| {
-                        list.with_horizontal_sizing_behavior(
-                            gpui::ListHorizontalSizingBehavior::Unconstrained,
-                        )
-                    });
+                    };
+                    let rows = self.diff_list_len();
+                    self.note_diff_list_built(rows, window, cx);
+                    let list =
+                        uniform_list("diff", rows, cx.processor(Self::render_projected_inline))
+                            .h_full()
+                            .min_h(px(0.0))
+                            .pb(bottom_gutter)
+                            .track_scroll(&self.diff_scroll)
+                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                view: cx.entity(),
+                                region: DiffTextRegion::Inline,
+                            })
+                            .when(!self.diff_word_wrap, |list| {
+                                list.with_horizontal_sizing_behavior(
+                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                )
+                            });
+                    let over =
+                        self.render_hosted_over_layer(None, scrollbar_gutter, bottom_gutter, cx);
                     div()
                         .id("diff_scroll_container")
                         .relative()
@@ -165,6 +168,7 @@ impl DiffRenderer {
                                 .pr(scrollbar_gutter)
                                 .child(list),
                         )
+                        .children(over)
                         // Anchored to the rows container so the
                         // handle's hover highlight matches the
                         // annotation column height exactly.
@@ -192,26 +196,21 @@ impl DiffRenderer {
                     self.sync_diff_split_scroll();
                     let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
                     let count = self.diff_list_len();
+                    self.note_diff_list_built(count, window, cx);
                     let horizontal_scrollbar_gutter =
                         components::Scrollbar::gutter(components::ScrollbarAxis::Horizontal);
-                    let left_scrollbar_gutter = self.diff_vertical_scrollbar_gutter_for_column(
-                        DiffHorizontalScrollColumn::Primary,
-                        self.diff_scroll.clone(),
-                    );
-                    let right_scrollbar_gutter = self.diff_vertical_scrollbar_gutter_for_column(
-                        DiffHorizontalScrollColumn::SplitRight,
-                        self.diff_split_right_scroll.clone(),
-                    );
-                    let shared_scrollbar_gutter = if vertical_sync_enabled {
-                        left_scrollbar_gutter
-                    } else {
+                    let columns = self.diff_columns();
+                    let shared_scrollbar_gutter = columns.shared_gutter;
+                    let [left_gutter, right_gutter] = columns.gutters;
+                    let [left_w, right_w] = columns.widths;
+                    // Wrapped rows end at the pane: no sideways scrollbar.
+                    let bottom_gutter = if self.diff_word_wrap {
                         px(0.0)
+                    } else {
+                        horizontal_scrollbar_gutter
                     };
                     let handle_w = px(PANE_RESIZE_HANDLE_PX);
-                    let main_w =
-                        (self.main_pane_content_width(cx) - shared_scrollbar_gutter).max(px(0.0));
-                    let (_, min_col_w) = diff_split_drag_params(main_w);
-                    let (left_w, right_w) = diff_split_column_widths(main_w, self.diff_split_ratio);
+                    let (_, min_col_w) = diff_split_drag_params(columns.split);
                     let left = uniform_list(
                         "diff_split_left",
                         count,
@@ -219,11 +218,7 @@ impl DiffRenderer {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    })
+                    .pb(bottom_gutter)
                     .track_scroll(&self.diff_scroll)
                     .with_decoration(DiffTextEmptySpaceDecoration {
                         view: cx.entity(),
@@ -241,11 +236,7 @@ impl DiffRenderer {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    })
+                    .pb(bottom_gutter)
                     .track_scroll(&self.diff_split_right_scroll)
                     .with_decoration(DiffTextEmptySpaceDecoration {
                         view: cx.entity(),
@@ -256,6 +247,19 @@ impl DiffRenderer {
                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                         )
                     });
+                    // Over the columns' rows, short of their scrollbars.
+                    let left_over = self.render_hosted_over_layer(
+                        Some(gitcomet_extension_api::DiffLineSide::Old),
+                        left_gutter,
+                        bottom_gutter,
+                        cx,
+                    );
+                    let right_over = self.render_hosted_over_layer(
+                        Some(gitcomet_extension_api::DiffLineSide::New),
+                        right_gutter,
+                        bottom_gutter,
+                        cx,
+                    );
                     // Built before `resize_handle` captures `cx`.
                     let split_annotate_handle = self
                         .annotation_active()
@@ -304,19 +308,9 @@ impl DiffRenderer {
                                         return;
                                     }
 
-                                    let scrollbar_gutter =
-                                        if this.diff_scroll_sync.includes_vertical() {
-                                            components::Scrollbar::visible_gutter(
-                                                this.diff_scroll.clone(),
-                                                components::ScrollbarAxis::Vertical,
-                                            )
-                                        } else {
-                                            px(0.0)
-                                        };
-                                    let main_w = (this.main_pane_content_width(cx)
-                                        - scrollbar_gutter)
-                                        .max(px(0.0));
-                                    let available = (main_w - handle_w).max(px(0.0));
+                                    // The width the layout divides.
+                                    let available =
+                                        (this.diff_columns().split - handle_w).max(px(0.0));
                                     let dx = e.event.position.x - state.start_x;
                                     match next_diff_split_drag_ratio(
                                         available,
@@ -391,13 +385,10 @@ impl DiffRenderer {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            left_scrollbar_gutter
-                                                        })
+                                                        .pr(left_gutter)
                                                         .child(left),
                                                 )
+                                                .children(left_over)
                                                 .when(!vertical_sync_enabled, |d| {
                                                     d.child(
                                                         components::Scrollbar::new(
@@ -414,11 +405,7 @@ impl DiffRenderer {
                                                         theme,
                                                         "diff_split_left_hscrollbar",
                                                         self.diff_scroll.clone(),
-                                                        if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            left_scrollbar_gutter
-                                                        },
+                                                        left_gutter,
                                                         "diff_split_left_hscrollbar",
                                                     ))
                                                 })
@@ -437,13 +424,10 @@ impl DiffRenderer {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            right_scrollbar_gutter
-                                                        })
+                                                        .pr(right_gutter)
                                                         .child(right),
                                                 )
+                                                .children(right_over)
                                                 .when(!vertical_sync_enabled, |d| {
                                                     d.child(
                                                         components::Scrollbar::new(
@@ -460,11 +444,7 @@ impl DiffRenderer {
                                                         theme,
                                                         "diff_split_right_hscrollbar",
                                                         self.diff_split_right_scroll.clone(),
-                                                        if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            right_scrollbar_gutter
-                                                        },
+                                                        right_gutter,
                                                         "diff_split_right_hscrollbar",
                                                     ))
                                                 }),

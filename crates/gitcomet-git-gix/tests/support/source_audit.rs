@@ -28,18 +28,150 @@ fn collect_rust_source_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether `attrs` hold a `#[cfg(..)]` that compiles the item only for
+/// tests: `test`, or an `all` with it, or an `any` of nothing else.
+/// `#[cfg(not(test))]` is production code.
 pub fn has_test_cfg(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        if !attr.path().is_ident("cfg") {
-            return false;
-        }
-        match &attr.meta {
-            syn::Meta::List(list) => list
-                .tokens
-                .to_string()
-                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .any(|token| token == "test"),
-            _ => false,
-        }
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| requires_test(&predicate))
     })
+}
+
+fn requires_test(predicate: &syn::Meta) -> bool {
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) => {
+            let Ok(nested) = list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return false;
+            };
+            if list.path.is_ident("all") {
+                nested.iter().any(requires_test)
+            } else if list.path.is_ident("any") {
+                !nested.is_empty() && nested.iter().all(requires_test)
+            } else {
+                false
+            }
+        }
+        syn::Meta::NameValue(_) => false,
+    }
+}
+
+/// A place in the source a guard may name: a call or a string literal.
+pub enum Site<'a> {
+    Method(&'a syn::ExprMethodCall),
+    Function(&'a syn::ExprCall),
+    Literal(&'a syn::LitStr),
+}
+
+/// The sites `pick` names in production code under `root`, as
+/// `(file relative to root, name)` in source order. Files named `tests` and
+/// items marked `#[cfg(test)]` are skipped.
+pub fn production_sites(
+    root: &Path,
+    pick: impl Fn(Site<'_>) -> Option<String>,
+) -> Vec<(String, String)> {
+    let mut sites = Vec::new();
+    for path in rust_source_files(root) {
+        let relative = path.strip_prefix(root).unwrap();
+        if relative.file_stem().is_some_and(|stem| stem == "tests") {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let file = syn::parse_file(&source)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        sites.extend(
+            sites_in(&file, &pick)
+                .into_iter()
+                .map(|site| (relative.clone(), site)),
+        );
+    }
+    sites
+}
+
+/// The sites `pick` names in `file`, outside items marked `#[cfg(test)]`.
+pub fn sites_in(file: &syn::File, pick: impl Fn(Site<'_>) -> Option<String>) -> Vec<String> {
+    let mut finder = SiteFinder {
+        pick,
+        sites: Vec::new(),
+    };
+    syn::visit::Visit::visit_file(&mut finder, file);
+    finder.sites
+}
+
+struct SiteFinder<F> {
+    pick: F,
+    sites: Vec<String>,
+}
+
+impl<'a, F: Fn(Site<'_>) -> Option<String>> syn::visit::Visit<'a> for SiteFinder<F> {
+    fn visit_item_mod(&mut self, node: &'a syn::ItemMod) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
+    fn visit_item_fn(&mut self, node: &'a syn::ItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+    fn visit_item_impl(&mut self, node: &'a syn::ItemImpl) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_impl(self, node);
+        }
+    }
+    fn visit_impl_item_fn(&mut self, node: &'a syn::ImplItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_impl_item_fn(self, node);
+        }
+    }
+    fn visit_expr_method_call(&mut self, node: &'a syn::ExprMethodCall) {
+        self.sites.extend((self.pick)(Site::Method(node)));
+        syn::visit::visit_expr_method_call(self, node);
+    }
+    fn visit_expr_call(&mut self, node: &'a syn::ExprCall) {
+        self.sites.extend((self.pick)(Site::Function(node)));
+        syn::visit::visit_expr_call(self, node);
+    }
+    fn visit_lit_str(&mut self, node: &'a syn::LitStr) {
+        self.sites.extend((self.pick)(Site::Literal(node)));
+    }
+}
+
+#[test]
+fn only_a_test_only_cfg_marks_test_code() {
+    let item = |source: &str| syn::parse_str::<syn::ItemFn>(source).unwrap();
+    for (source, test_only) in [
+        ("#[cfg(test)] fn f() {}", true),
+        ("#[cfg(all(test, unix))] fn f() {}", true),
+        ("#[cfg(any(test, all(test, unix)))] fn f() {}", true),
+        ("#[cfg(not(test))] fn f() {}", false),
+        ("#[cfg(any(test, feature = \"bench\"))] fn f() {}", false),
+        ("#[cfg(unix)] fn f() {}", false),
+        ("#[inline] fn f() {}", false),
+    ] {
+        assert_eq!(has_test_cfg(&item(source).attrs), test_only, "{source}");
+    }
+}
+
+#[test]
+fn sites_in_test_only_items_are_skipped() {
+    let file = syn::parse_file(
+        "fn production() { let _ = \"wanted\"; } \
+         #[cfg(not(test))] fn also_production() { let _ = \"wanted\"; } \
+         struct S; #[cfg(test)] impl S { fn t() { let _ = \"wanted\"; } } \
+         impl S { #[cfg(test)] fn t() { let _ = \"wanted\"; } }",
+    )
+    .unwrap();
+    let found = sites_in(&file, |site| match site {
+        Site::Literal(literal) if literal.value() == "wanted" => Some("wanted".to_owned()),
+        _ => None,
+    });
+    assert_eq!(found, ["wanted", "wanted"]);
 }

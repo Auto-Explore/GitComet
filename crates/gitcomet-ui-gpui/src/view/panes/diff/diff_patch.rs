@@ -92,7 +92,8 @@ impl DiffRenderer {
         {
             scopes.push(("block", block));
         }
-        self.open_structural_menu(scopes, copy, anchor, window, cx);
+        let actions = self.hosted_context_actions(visible, region, cx);
+        self.open_structural_menu(scopes, copy, actions, anchor, window, cx);
     }
 
     pub(super) fn structural_line_selection(
@@ -155,6 +156,7 @@ impl DiffRenderer {
                 self.open_structural_menu(
                     vec![(&format!("block at line {line}"), selection)],
                     None,
+                    Vec::new(),
                     anchor,
                     window,
                     cx,
@@ -185,6 +187,7 @@ impl DiffRenderer {
         &mut self,
         scopes: Vec<(&str, SourceLineSelection)>,
         copy: Option<String>,
+        actions: Vec<HostedAction>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -204,6 +207,7 @@ impl DiffRenderer {
                 },
             )));
         }
+        items.extend(actions.into_iter().map(HostedMenuItem::action));
         if let Some(DiffTarget::WorkingTree { area, .. }) = self.rendered_diff_target() {
             let operations: &[PatchOperation] = match area {
                 DiffArea::Unstaged => &[PatchOperation::Stage, PatchOperation::Discard],

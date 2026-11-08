@@ -613,3 +613,65 @@ fn cancelling_the_focused_mergetool_runs_the_close_guards(cx: &mut gpui::TestApp
         .update(|app| assert!(!host.is_open(app), "confirming closes it"));
     assert_eq!(exit_code.load(Ordering::SeqCst), 1);
 }
+
+#[gpui::test]
+fn a_pane_without_the_engine_label_still_explains_a_fallback(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = focused_over(
+        cx,
+        crate::FocusedDiffInput::FilePair {
+            path: "lib.rs".into(),
+            old: "fn first() {}\nfn old() {}\n".into(),
+            new: "fn first() {}\nfn new() {}\n".into(),
+        },
+    );
+    let pane = cx.update(|_, app| view.read(app).focused_diff_pane.clone().unwrap().pane);
+    cx.update(|_, app| pane.set_engine_override(Some(DiffEngine::Difftastic), app));
+    pump_until(cx, "the structural diff", |cx| {
+        cx.update(|_, app| {
+            let renderer = hosted_pane(&view, app).read(app).renderer().unwrap();
+            matches!(
+                renderer.read(app).diff_engine_status,
+                gitcomet_core::diff_engine::DiffEngineStatus::Difftastic { .. }
+            )
+        })
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("diff_engine_notice").is_some());
+
+    let set_label = |cx: &mut gpui::VisualTestContext, shown: bool| {
+        cx.update(|_, app| {
+            let renderer = hosted_pane(&view, app)
+                .read(app)
+                .renderer()
+                .unwrap()
+                .clone();
+            renderer.update(app, |renderer, cx| {
+                renderer.store.policy.engine_label = shown;
+                cx.notify();
+            });
+        });
+        test_support::redraw(cx);
+    };
+    set_label(cx, false);
+    assert!(
+        cx.debug_bounds("diff_engine_notice").is_none(),
+        "the engine's name alone is left out"
+    );
+
+    // A fallback says why the diff is line by line, so it stays.
+    cx.update(|_, app| {
+        let renderer = hosted_pane(&view, app)
+            .read(app)
+            .renderer()
+            .unwrap()
+            .clone();
+        renderer.update(app, |renderer, cx| {
+            renderer.diff_engine_status = gitcomet_core::diff_engine::DiffEngineStatus::Fallback(
+                gitcomet_core::diff_engine::DiffEngineFallback::MissingSources,
+            );
+            cx.notify();
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("diff_engine_notice").is_some());
+}

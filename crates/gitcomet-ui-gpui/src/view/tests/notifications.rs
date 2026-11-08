@@ -1764,3 +1764,57 @@ fn outdated_git_shows_one_sticky_update_notice(cx: &mut gpui::TestAppContext) {
     assert_eq!(notices[0].0, components::ToastKind::Warning);
     assert!(notices[0].1.starts_with("Git 2.45 is older"), "{notices:?}");
 }
+
+#[gpui::test]
+fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::{Extension, ExtensionId, Registrar, Registry};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Reporting(Rc<Cell<usize>>);
+    impl Extension for Reporting {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.reporting").unwrap()
+        }
+        fn register(&self, registrar: &mut Registrar) {
+            let opened = self.0.clone();
+            registrar.crash_report_action(
+                "report",
+                Rc::new(move |host, _, cx| {
+                    assert!(host.active_repository(cx).unwrap().is_none());
+                    opened.set(opened.get() + 1);
+                }),
+            );
+        }
+    }
+    let opened = Rc::new(Cell::new(0));
+    cx.update(|app| {
+        let registry = Registry::build(vec![Box::new(Reporting(opened.clone()))]).unwrap();
+        extension_host::install(registry, app);
+    });
+    let report_dir = tempfile::tempdir().unwrap();
+    let crash_log_path = report_dir.path().join("pending-startup-report.log");
+    std::fs::write(&crash_log_path, "private raw crash text").unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let mut config = GitCometViewConfig::normal(Some(StartupCrashReport {
+        issue_url: String::new(),
+        summary: "Previous process stopped".into(),
+        crash_log_path: crash_log_path.clone(),
+    }));
+    config.workspace = WorkspaceBootstrap::Empty;
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    test_support::redraw(cx);
+    let button = cx
+        .debug_bounds("startup_crash_report_open")
+        .expect("Report Issue is visible");
+    assert_eq!(opened.get(), 0, "rendering sends nothing");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(opened.get(), 1);
+    assert!(crash_log_path.exists(), "review must preserve the report");
+    view.read_with(cx, |view, _| assert!(view.startup_crash_report.is_some()));
+}

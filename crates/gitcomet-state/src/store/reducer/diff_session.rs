@@ -194,6 +194,7 @@ fn reduce_event(state: &mut AppState, event: Event) -> Vec<Effect> {
             lifetime,
             view,
             target,
+            request,
         } => with_repo(state, repo_id, lifetime, |repo| {
             let (repo_id, lifetime) = (repo.id, repo.lifetime());
             // Opening clears content preview, so the side is known up front
@@ -218,6 +219,9 @@ fn reduce_event(state: &mut AppState, event: Event) -> Vec<Effect> {
                     session.blame = Loadable::NotLoaded;
                 })
                 .or_insert_with(|| DiffSession::new(target));
+            if request.is_some() {
+                session.open_request = request;
+            }
             session.diff_state.one_sided_side = side;
             load(repo_id, lifetime, view, session)
         }),

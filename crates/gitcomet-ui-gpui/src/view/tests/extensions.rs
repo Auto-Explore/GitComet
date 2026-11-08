@@ -98,6 +98,39 @@ fn config_for(mode: GitCometViewMode) -> GitCometViewConfig {
 }
 
 #[gpui::test]
+fn commit_messages_are_unsupported_without_a_commit_box(cx: &mut gpui::TestAppContext) {
+    cx.update(install_example);
+    for mode in [
+        GitCometViewMode::FocusedDiff,
+        GitCometViewMode::FocusedMergetool,
+    ] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_config(store, events, config_for(mode), window, cx)
+        });
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                test_support::push_test_state(
+                    this,
+                    state_with_repo(RepoId(1), Path::new("/tmp/no-commit-box")),
+                    cx,
+                )
+            });
+            extension_host::window_opened(&view, app);
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            let host = view.read(app).extension_window.as_ref().unwrap().host();
+            let repository = host.active_repository(app).unwrap().unwrap();
+            assert_eq!(
+                host.set_commit_message(&repository, "message".into(), app),
+                Err(HostError::Unsupported)
+            );
+        });
+    }
+}
+
+#[gpui::test]
 fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
     for mode in [
         GitCometViewMode::Normal,
@@ -514,7 +547,8 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
             vec![
                 "extension:com.example.review/mark-reviewed",
                 "extension:com.example.review/show-summary",
-                "extension:com.example.review/toggle-review-log"
+                "extension:com.example.review/toggle-review-log",
+                "extension:com.example.review/toggle-review-overlay"
             ]
         );
         let app_menu =
@@ -553,7 +587,7 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
-fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
+fn retained_panes_bottom_panels_and_overlays_do_not_keep_a_closed_windows_store_alive(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{ChangeSource, DiffPaneOptions};
@@ -563,13 +597,14 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
         install_example(app);
     });
     let window = open_window_with_repo(cx, workspace, Path::new("/tmp/host-store-lifetime"));
-    let (host, weak_store, panels, key) = window
+    let (host, weak_store, panels, overlays, key) = window
         .update(cx, |view, _, _| {
             let extensions = view.extension_window.as_ref().unwrap();
             (
                 extensions.host(),
                 Arc::downgrade(&view.store),
                 extensions.bottom_panels(),
+                extensions.canvas_overlays(),
                 crate::view::extension_panels::repo_key(view.active_repo().unwrap()),
             )
         })
@@ -600,10 +635,19 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
             app,
         )
         .unwrap();
+        host.show_canvas_overlay(
+            &repository,
+            &review::extension_id()
+                .contribution(review::REVIEW_OVERLAY)
+                .unwrap(),
+            app,
+        )
+        .unwrap();
         (pane, list)
     });
     cx.run_until_parked();
     assert!(!panels.borrow().shown(key).is_empty());
+    assert!(overlays.borrow().view(key, 0).is_some());
     window
         .update(cx, |_, window, _| window.remove_window())
         .unwrap();
@@ -615,6 +659,10 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
     assert!(
         panels.borrow().shown(key).is_empty(),
         "closing breaks the panel/host cycle"
+    );
+    assert!(
+        overlays.borrow().view(key, 0).is_none(),
+        "closing breaks the overlay/host cycle"
     );
     cx.update(|app| {
         assert!(!host.is_open(app));

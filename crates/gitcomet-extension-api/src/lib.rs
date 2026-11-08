@@ -44,13 +44,16 @@ pub mod storage;
 pub use services::{RepositoryReader, StoreView, SyntaxService};
 
 pub use contributions::{
-    BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope,
-    CommandContext, CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin,
-    GateDecision, MenuLocation, Navigate, NavigationAvailability, PanelArea, PanelContentPolicy,
-    PanelTabDescriptor, RepositoryEntryGate, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, SettingsPageContext, SettingsPageDescriptor, SettingsTarget,
-    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, ViewBuilder, ViewFocus,
-    ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
+    BottomPanelDescriptor, CanvasOverlayDescriptor, CanvasOverlayObserver, CanvasOverlayVisibility,
+    ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext,
+    CommandDescriptor, CommandHandler, CommitBoxItemDescriptor, CrashReportAction,
+    DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
+    NavigationAvailability, PanelArea, PanelContentPolicy, PanelTabDescriptor, RefMenuContext,
+    RefMenuHandler, RefMenuItemDescriptor, RefMenuTarget, RepositoryEntryGate,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
+    SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, SidebarTabDescriptor,
+    StatusItemDescriptor, ViewBuilder, ViewFocus, ViewNavigation, ViewTarget, WindowGateDescriptor,
+    WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
@@ -62,11 +65,12 @@ pub use host::{
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
 pub use panes::{
-    DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffBarItemStyle, DiffBarRun,
-    DiffFileNavigation, DiffFilePosition, DiffGutterAction, DiffInset, DiffLayout, DiffLegendItem,
-    DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler, DiffPaneOptions,
-    DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor,
-    DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode, FileSelected,
+    DiffAlign, DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffBarItemStyle, DiffBarRun,
+    DiffFileNavigation, DiffFilePosition, DiffGlyph, DiffGutterAction, DiffHostedView, DiffInset,
+    DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent,
+    DiffPaneEventHandler, DiffPaneOptions, DiffPanePolicy, DiffPlacement, DiffRowDecor,
+    DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun,
+    DiffSnapshot, FileList, FileListHeaderItem, FileListMode, FileSelected,
 };
 pub use registry::{
     KeyBindingDeclaration, MenuItemDeclaration, Registrar, RegistrationError, Registry,
