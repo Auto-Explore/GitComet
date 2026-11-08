@@ -941,6 +941,8 @@ pub struct TextInput {
     pub(super) line_height_override: Option<Pixels>,
     /// Design px; scaled with the window's UI zoom at render.
     pub(super) vertical_padding_override: Option<f32>,
+    /// Design px; an internal viewport keeps scrolling within the field's border.
+    pub(super) scroll_max_height: Option<f32>,
     pub(super) highlight: HighlightState,
     pub(super) layout: LayoutState,
     pub(super) wrap: WrapState,

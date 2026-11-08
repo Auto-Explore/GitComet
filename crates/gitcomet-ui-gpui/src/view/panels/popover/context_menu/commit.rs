@@ -457,6 +457,13 @@ fn model_with_header(
             action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
         });
     }
+    items.extend(super::ref_menu::entries(
+        this,
+        repo_id,
+        gitcomet_extension_api::RefMenuTarget::Commit {
+            id: commit_id.clone(),
+        },
+    ));
     items.push(ContextMenuItem::Entry {
         label: "Export patch…".into(),
         icon: Some("icons/arrow_down.svg".into()),

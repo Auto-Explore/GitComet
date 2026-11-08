@@ -242,6 +242,7 @@ pub(super) fn render_collapsed_diff_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = pass;
 
     let theme = this.theme;
@@ -300,7 +301,6 @@ pub(super) fn render_collapsed_diff_rows(
                                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                             this.active_context_menu_invoker.as_ref() == Some(&invoker)
                         });
-                    let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
 
                     collapsed_inline_header_row(
                         theme,
@@ -311,7 +311,6 @@ pub(super) fn render_collapsed_diff_rows(
                         min_width,
                         pinned_hunk_shell_width,
                         pinned_hunk_shell_scroll.clone(),
-                        collapsed_hunk,
                         None,
                         display,
                         None,
@@ -448,6 +447,7 @@ pub(super) fn render_collapsed_diff_rows(
                             reveal_whitespace_chars,
                             show_line_numbers,
                             annotation_width,
+                            line_end_views,
                         },
                         visible_ix,
                         DiffClickKind::Line,
@@ -507,6 +507,7 @@ pub(super) fn render_file_diff_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = pass;
 
     let theme = this.theme;
@@ -795,6 +796,7 @@ pub(super) fn render_file_diff_rows(
                     reveal_whitespace_chars,
                     show_line_numbers,
                     annotation_width,
+                    line_end_views,
                 },
                 visible_ix,
                 DiffClickKind::Line,
@@ -864,6 +866,7 @@ pub(super) fn render_collapsed_diff_split_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = common;
 
     let theme = this.theme;
@@ -929,7 +932,6 @@ pub(super) fn render_collapsed_diff_split_rows(
                                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                             this.active_context_menu_invoker.as_ref() == Some(&invoker)
                         });
-                    let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
 
                     collapsed_split_header_row(
                         theme,
@@ -941,7 +943,6 @@ pub(super) fn render_collapsed_diff_split_rows(
                         min_width,
                         pinned_hunk_shell_width,
                         pinned_hunk_shell_scroll.clone(),
-                        collapsed_hunk,
                         None,
                         display,
                         None,
@@ -1052,6 +1053,7 @@ pub(super) fn render_collapsed_diff_split_rows(
                         show_line_numbers,
                         wrap,
                         annotation_width,
+                        line_end_views,
                         if is_left {
                             blame_ctx.as_ref().and_then(|ctx| {
                                 build_row_blame_paint_tracked(
@@ -1108,6 +1110,7 @@ pub(super) fn render_file_diff_split_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = common;
 
     let theme = this.theme;
@@ -1243,6 +1246,7 @@ pub(super) fn render_file_diff_split_rows(
                 show_line_numbers,
                 wrap,
                 annotation_width,
+                line_end_views,
                 if is_left {
                     blame_ctx.as_ref().and_then(|ctx| {
                         build_row_blame_paint_tracked(

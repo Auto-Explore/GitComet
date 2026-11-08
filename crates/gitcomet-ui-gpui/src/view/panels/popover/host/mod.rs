@@ -491,7 +491,11 @@ impl PopoverHost {
                 window,
                 cx,
             );
-            input.set_vertical_scroll_handle(Some(commit_prompt_message_scroll.clone()));
+            input.set_scrollable(
+                commit_prompt_message_scroll.clone(),
+                crate::view::panels::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX,
+                cx,
+            );
             input
         });
 
@@ -922,6 +926,7 @@ impl PopoverHost {
                 gitcomet_extension_api::MenuLocation::RepositoryTab,
                 cx,
             ),
+            extension_ref_menu: crate::view::extension_host::ref_menu_entries(cx),
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,

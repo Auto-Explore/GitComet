@@ -296,6 +296,16 @@ pub fn read_text<T: 'static>(cx: &gpui::Context<T>) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
+/// The first image on the clipboard, such as a screenshot copied there.
+pub fn read_image<T: 'static>(cx: &gpui::Context<T>) -> Option<gpui::Image> {
+    cx.read_from_clipboard()?
+        .into_entries()
+        .find_map(|entry| match entry {
+            gpui::ClipboardEntry::Image(image) => Some(image),
+            _ => None,
+        })
+}
+
 /// Pure decision function, so it is exercised by this module's tests on every
 /// platform; only the Linux `clipboard_backend` actually calls it at runtime.
 #[allow(dead_code)]
@@ -454,6 +464,25 @@ mod tests {
         with_override(UiRuntime::live(), || {
             assert_eq!(copy_diagnostics_enabled(), cfg!(target_os = "linux"));
         });
+    }
+
+    #[gpui::test]
+    fn an_image_is_read_from_the_clipboard_and_text_is_not_one(cx: &mut gpui::TestAppContext) {
+        let reader = gpui::AppContext::new(cx, |_| ());
+        let read = |cx: &mut gpui::TestAppContext| {
+            reader.update(cx, |_, cx| super::read_image(cx).map(|image| image.bytes))
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("notes".into()));
+        assert_eq!(read(cx), None);
+
+        let png = gpui::Image::from_bytes(gpui::ImageFormat::Png, b"\x89PNG\r\n\x1a\n".to_vec());
+        cx.write_to_clipboard(gpui::ClipboardItem {
+            entries: vec![
+                gpui::ClipboardEntry::String(gpui::ClipboardString::new("caption".into())),
+                gpui::ClipboardEntry::Image(png),
+            ],
+        });
+        assert_eq!(read(cx), Some(b"\x89PNG\r\n\x1a\n".to_vec()));
     }
 
     #[test]

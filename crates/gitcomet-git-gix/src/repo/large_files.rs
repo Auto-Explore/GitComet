@@ -104,6 +104,126 @@ fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
 }
 
+/// Whether a commit `head` reaches and `hidden` does not adds or changes a
+/// blob git-lfs's `pre-push` hook would upload.
+pub(super) fn introduces_lfs_pointers(
+    repo: &gix::Repository,
+    head: gix::ObjectId,
+    hidden: Vec<gix::ObjectId>,
+) -> Result<bool> {
+    let walk = repo
+        .rev_walk([head])
+        .with_hidden(hidden)
+        .all()
+        .map_err(|e| backend_error("walk pushed commits", e))?;
+    let mut state = gix::diff::tree::State::default();
+    for info in walk {
+        let info = info.map_err(|e| backend_error("walk pushed commits", e))?;
+        if commit_adds_lfs_pointer(repo, info.id, &info.parent_ids, &mut state)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether one pushed commit adds or changes a blob git-lfs would upload. A
+/// blob a merge takes from another parent came with that parent, which is
+/// scanned too or already pushed.
+fn commit_adds_lfs_pointer(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    parent_ids: &[gix::ObjectId],
+    state: &mut gix::diff::tree::State,
+) -> Result<bool> {
+    use gix::diff::tree::recorder::Change;
+
+    let Some(tree) = commit_tree(repo, id)? else {
+        return Ok(false);
+    };
+    let parents = parent_ids
+        .iter()
+        .map(|&parent| commit_tree(repo, parent))
+        .collect::<Result<Vec<_>>>()?;
+    let empty = repo.empty_tree();
+    let first = parents.first().and_then(Option::as_ref).unwrap_or(&empty);
+    let mut changes = gix::diff::tree::Recorder::default();
+    gix::diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&first.data, first.id.kind()),
+        gix::objs::TreeRefIter::from_bytes(&tree.data, tree.id.kind()),
+        state,
+        &repo.objects,
+        &mut changes,
+    )
+    .map_err(|e| backend_error("diff pushed commit", e))?;
+    for change in changes.records {
+        let (entry_mode, oid, path) = match change {
+            Change::Addition {
+                entry_mode,
+                oid,
+                path,
+                ..
+            }
+            | Change::Modification {
+                entry_mode,
+                oid,
+                path,
+                ..
+            } => (entry_mode, oid, path),
+            Change::Deletion { .. } => continue,
+        };
+        let from_other_parent = || {
+            parents.iter().skip(1).flatten().any(|parent| {
+                parent
+                    .lookup_entry(path.split(|&byte| byte == b'/'))
+                    .is_ok_and(|entry| entry.is_some_and(|entry| entry.oid() == oid))
+            })
+        };
+        if entry_mode.is_blob() && git_lfs_uploads(repo, oid)? && !from_other_parent() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A commit's tree; `None` past a shallow boundary, where the commit is absent.
+fn commit_tree(repo: &gix::Repository, id: gix::ObjectId) -> Result<Option<gix::Tree<'_>>> {
+    let Some(object) = repo
+        .try_find_object(id)
+        .map_err(|e| backend_error("read pushed commit", e))?
+    else {
+        return Ok(None);
+    };
+    let commit = object
+        .try_into_commit()
+        .map_err(|e| backend_error("read pushed commit", e))?;
+    commit
+        .tree()
+        .map(Some)
+        .map_err(|e| backend_error("read pushed tree", e))
+}
+
+/// Whether git-lfs's `pre-push` hook would upload content for this blob. It
+/// skips size 0, which the empty blob reads as. A blob missing here, as in a
+/// partial clone, is left to git-lfs.
+fn git_lfs_uploads(repo: &gix::Repository, id: gix::ObjectId) -> Result<bool> {
+    let Some(header) = repo
+        .try_find_header(id)
+        .map_err(|e| backend_error("read pushed blob", e))?
+    else {
+        return Ok(true);
+    };
+    if header.size() >= lfs::POINTER_MAX_BYTES as u64 {
+        return Ok(false);
+    }
+    let Some(blob) = repo
+        .try_find_object(id)
+        .map_err(|e| backend_error("read pushed blob", e))?
+    else {
+        return Ok(true);
+    };
+    Ok(lfs::parse_pointer_like_git_lfs(&blob.data).is_some_and(|pointer| pointer.size > 0))
+}
+
 fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::Backend(format!("{context}: {error}")))
 }
@@ -715,14 +835,6 @@ impl super::GixRepo {
             },
             bytes,
         ))
-    }
-
-    /// Git LFS's `pre-push` hook would upload objects for this push: the
-    /// LFS filter is configured and this repository stores LFS objects.
-    pub(super) fn lfs_objects_upload_on_pre_push(&self) -> Result<bool> {
-        let repo = self.repo_with_current_config()?;
-        let config = repo.config_snapshot();
-        Ok(lfs_filter_configured(&config) && lfs_storage_dir(&repo).join("objects").is_dir())
     }
 
     pub(super) fn large_file_support_impl(

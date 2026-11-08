@@ -5,7 +5,6 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;
 use crate::kit::interaction::ControlInteractionExt as _;
 use crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind;
-use crate::view::panes::diff::helpers::state::CollapsedDiffHunk;
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
 
@@ -133,13 +132,6 @@ fn collapsed_hunk_bg_fill_bounds(bounds: gpui::Bounds<Pixels>) -> gpui::Bounds<P
     )
 }
 
-fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.foreground.secondary,
-        if theme.is_dark { 0.14 } else { 0.10 },
-    )
-}
-
 fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
         theme.colors.foreground.secondary,
@@ -165,35 +157,32 @@ fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
     crate::theme::composite_over(theme.colors.editor.background, background)
 }
 
-fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    with_alpha(
+/// Collapsed hunk separators stay quiet: no fill and placeholder text, so they
+/// never read as a changed row. Keyboard focus paints the accent wash, and
+/// placeholder text is too faint on it, so focus also restores secondary text.
+fn collapsed_hunk_header_colors(
+    theme: AppTheme,
+    selected: bool,
+) -> (Option<gpui::Rgba>, gpui::Rgba) {
+    if !selected {
+        return (None, theme.colors.foreground.placeholder);
+    }
+    let focus_wash = with_alpha(
         theme.colors.accent.foreground,
         if theme.is_dark { 0.22 } else { 0.16 },
-    )
+    );
+    (Some(focus_wash), theme.colors.foreground.secondary)
 }
 
-fn collapsed_inline_hunk_bg(
-    theme: AppTheme,
-    _hunk: Option<CollapsedDiffHunk>,
-    _expansion_kind: CollapsedDiffExpansionKind,
-) -> gpui::Rgba {
-    collapsed_hunk_header_bg(theme)
-}
-
-fn collapsed_inline_hunk_fg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    theme.colors.foreground.secondary
-}
-
-fn collapsed_split_hunk_bg(
-    theme: AppTheme,
-    _hunk: Option<CollapsedDiffHunk>,
-    _column: PatchSplitColumn,
-) -> gpui::Rgba {
-    collapsed_hunk_header_bg(theme)
-}
-
-fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
-    theme.colors.foreground.secondary
+/// Reveal chevrons and the plus marker take the theme's accent so they stand
+/// out from the quiet separator; dimmed when nothing is left to reveal.
+fn collapsed_hunk_reveal_button_color(theme: AppTheme, hidden_rows: usize) -> gpui::Rgba {
+    let accent = theme.colors.accent.foreground;
+    if hidden_rows > 0 {
+        accent
+    } else {
+        with_alpha(accent, 0.45)
+    }
 }
 
 /// Hit box for a collapsed-hunk reveal chevron. An editor row, not a chrome
@@ -370,6 +359,7 @@ pub(super) struct DiffRowStyle {
     pub(super) reveal_whitespace_chars: bool,
     pub(super) show_line_numbers: bool,
     pub(super) annotation_width: Pixels,
+    pub(super) line_end_views: bool,
 }
 
 pub(super) struct DiffRowDecor<'a> {
@@ -408,6 +398,7 @@ pub(super) fn diff_row(
         reveal_whitespace_chars,
         show_line_numbers,
         annotation_width,
+        line_end_views,
     } = style;
     let DiffRowDecor {
         tint,
@@ -589,6 +580,7 @@ pub(super) fn diff_row(
                 show_line_numbers,
                 wrap,
                 annotation_width,
+                line_end_views,
                 row_blame,
                 annot_hover,
                 stage,
@@ -707,7 +699,6 @@ pub(super) fn collapsed_inline_header_row(
     min_width: Pixels,
     pinned_hunk_shell_width: Pixels,
     pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
-    collapsed_hunk: Option<CollapsedDiffHunk>,
     file_stat: Option<(usize, usize)>,
     display: SharedString,
     styled: Option<&CachedDiffStyledText>,
@@ -773,7 +764,7 @@ pub(super) fn collapsed_inline_header_row(
                 ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
             );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
-            let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
+            let (row_bg, text_color) = collapsed_hunk_header_colors(theme, selected);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if this.is_inline_submodule_diff_active() || this.has_large_file_text_diff() {
@@ -793,11 +784,7 @@ pub(super) fn collapsed_inline_header_row(
                     cx,
                 );
             });
-            let button_color = if hidden_rows > 0 {
-                text_color
-            } else {
-                with_alpha(text_color, 0.45)
-            };
+            let button_color = collapsed_hunk_reveal_button_color(theme, hidden_rows);
             let controls = match expansion_kind {
                 CollapsedDiffExpansionKind::Up => div()
                     .flex()
@@ -892,12 +879,6 @@ pub(super) fn collapsed_inline_header_row(
                 CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
-            let row_bg = collapsed_inline_hunk_bg(theme, collapsed_hunk, expansion_kind);
-            let painted_row_bg = if selected {
-                focused_collapsed_hunk_bg(theme, collapsed_hunk)
-            } else {
-                row_bg
-            };
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
                 .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
@@ -908,7 +889,7 @@ pub(super) fn collapsed_inline_header_row(
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(painted_row_bg)
+                .when_some(row_bg, |this, bg| this.bg(bg))
                 .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color);
             row = row
@@ -942,9 +923,6 @@ pub(super) fn collapsed_inline_header_row(
                 )
                 .on_pointer_click(MouseButton::Right, on_right_click);
 
-            if selected {
-                row = row.bg(painted_row_bg);
-            }
             if context_menu_active {
                 row = row.bg(theme.colors.interaction.pressed_background);
             }
@@ -952,10 +930,10 @@ pub(super) fn collapsed_inline_header_row(
             div()
                 .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
-                .bg(painted_row_bg)
+                .when_some(row_bg, |this, bg| this.bg(bg))
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
-                    Some(painted_row_bg),
+                    row_bg,
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -986,6 +964,7 @@ pub(super) fn patch_split_column_row(
     show_line_numbers: bool,
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
     annotation_width: Pixels,
+    line_end_views: bool,
     row_blame: Option<diff_canvas::RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage_area: Option<DiffArea>,
@@ -1056,6 +1035,7 @@ pub(super) fn patch_split_column_row(
         show_line_numbers,
         wrap,
         annotation_width,
+        line_end_views,
         row_blame,
         annot_hover,
         stage,
@@ -1237,7 +1217,6 @@ pub(super) fn collapsed_split_header_row(
     min_width: Pixels,
     pinned_hunk_shell_width: Pixels,
     pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
-    collapsed_hunk: Option<CollapsedDiffHunk>,
     file_stat: Option<(usize, usize)>,
     display: SharedString,
     styled: Option<&CachedDiffStyledText>,
@@ -1314,7 +1293,7 @@ pub(super) fn collapsed_split_header_row(
                 ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
             );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
-            let text_color = collapsed_split_hunk_fg(theme, column);
+            let (row_bg, text_color) = collapsed_hunk_header_colors(theme, selected);
             let (
                 row_id,
                 shell_debug_selector,
@@ -1368,11 +1347,7 @@ pub(super) fn collapsed_split_header_row(
                     cx,
                 );
             });
-            let button_color = if hidden_rows > 0 {
-                text_color
-            } else {
-                with_alpha(text_color, 0.45)
-            };
+            let button_color = collapsed_hunk_reveal_button_color(theme, hidden_rows);
             let controls = match expansion_kind {
                 CollapsedDiffExpansionKind::Up => div()
                     .flex()
@@ -1467,12 +1442,6 @@ pub(super) fn collapsed_split_header_row(
                 CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
-            let row_bg = collapsed_split_hunk_bg(theme, collapsed_hunk, column);
-            let painted_row_bg = if selected {
-                focused_collapsed_hunk_bg(theme, collapsed_hunk)
-            } else {
-                row_bg
-            };
             let mut row = div()
                 .id((row_id, visible_ix))
                 .debug_selector(move || shell_debug_selector.to_string())
@@ -1483,7 +1452,7 @@ pub(super) fn collapsed_split_header_row(
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(painted_row_bg)
+                .when_some(row_bg, |this, bg| this.bg(bg))
                 .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color)
                 .child(
@@ -1514,9 +1483,6 @@ pub(super) fn collapsed_split_header_row(
                 )
                 .on_pointer_click(MouseButton::Right, on_right_click);
 
-            if selected {
-                row = row.bg(painted_row_bg);
-            }
             if context_menu_active {
                 row = row.bg(theme.colors.interaction.pressed_background);
             }
@@ -1524,10 +1490,10 @@ pub(super) fn collapsed_split_header_row(
             div()
                 .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
-                .bg(painted_row_bg)
+                .when_some(row_bg, |this, bg| this.bg(bg))
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
-                    Some(painted_row_bg),
+                    row_bg,
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -1625,6 +1591,7 @@ pub(super) fn render_patch_diff_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = pass;
 
     let theme = this.theme;
@@ -1751,6 +1718,7 @@ pub(super) fn render_patch_diff_rows(
                     reveal_whitespace_chars,
                     show_line_numbers,
                     annotation_width,
+                    line_end_views,
                 },
                 visible_ix,
                 click_kind,
@@ -1823,6 +1791,7 @@ pub(super) fn render_patch_diff_split_rows(
         ui_scale_percent,
         annotation_width,
         blame_ctx,
+        line_end_views,
     } = common;
 
     let theme = this.theme;
@@ -1957,6 +1926,7 @@ pub(super) fn render_patch_diff_split_rows(
                         show_line_numbers,
                         wrap,
                         annotation_width,
+                        line_end_views,
                         if is_left {
                             blame_ctx.as_ref().and_then(|ctx| {
                                 build_row_blame_paint_tracked(

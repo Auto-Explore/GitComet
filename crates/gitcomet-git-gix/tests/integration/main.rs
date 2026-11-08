@@ -28,6 +28,7 @@ mod maintenance;
 mod operation_identity;
 mod operation_lease_guard;
 mod patch;
+mod pathspec_api_guard;
 mod refs;
 mod refs_api_guard;
 mod refs_review_regressions;

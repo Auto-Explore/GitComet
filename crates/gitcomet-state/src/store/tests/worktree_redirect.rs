@@ -354,6 +354,7 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
         lifetime,
         view: pane,
         target: source.target_for(&files[0], None),
+        request: None,
     }));
     wait_until("the linked file's diff", || {
         state(&store)

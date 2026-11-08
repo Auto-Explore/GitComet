@@ -304,6 +304,8 @@ pub(in super::super) struct PopoverHost {
     extension_app_menu: Rc<[crate::view::extension_host::ExtensionMenuEntry]>,
     /// Extension commands in a repository tab's menu, fixed at construction.
     extension_repo_tab_menu: Rc<[crate::view::extension_host::ExtensionMenuEntry]>,
+    /// Extension entries in branch and commit menus, fixed at construction.
+    extension_ref_menu: Rc<[crate::view::extension_host::ExtensionRefMenuEntry]>,
     /// Storage keys of the repository picker sections the user folded away.
     cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,

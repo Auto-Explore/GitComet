@@ -5,15 +5,15 @@
 //! A pane lives while its handle or its mounted view does; dropping both
 //! closes its session and cancels its work.
 //!
-//! File-line features (selection, reveal, annotations, insets, blame, and
-//! gutter actions) require a single-file target or a snapshot. Whole-commit
-//! and whole-comparison patches display and search all files; their repeated
-//! line numbers cannot be addressed by the side/line API.
+//! File-line features (selection, reveal, annotations, insets, hosted views,
+//! blame, and gutter actions) require a single-file target or a snapshot.
+//! Whole-commit and whole-comparison patches display and search all files;
+//! their repeated line numbers cannot be addressed by the side/line API.
 
 use gitcomet_core::domain::{CommitFileChange, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_state::diff_session::ChangeSource;
-use gitcomet_ui_kit::gpui::{AnyView, App, Hsla, SharedString};
+use gitcomet_ui_kit::gpui::{AnyView, App, Entity, Hsla, Render, SharedString, Subscription};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -60,6 +60,11 @@ pub struct DiffPanePolicy {
     pub line_numbers: bool,
     /// Loads blame for the target's newer side and shows it in the gutter.
     pub blame: bool,
+    /// Names the diff engine above the diff. Off, the name alone is not
+    /// shown; a notice that explains a fallback or offers an action still is.
+    pub engine_label: bool,
+    /// Lines under the pane's header and under its engine notice.
+    pub header_divider: bool,
 }
 
 impl Default for DiffPanePolicy {
@@ -76,6 +81,8 @@ impl Default for DiffPanePolicy {
             search: true,
             line_numbers: true,
             blame: false,
+            engine_label: true,
+            header_divider: true,
         }
     }
 }
@@ -149,21 +156,59 @@ impl DiffRowDecor {
 /// Decorations by file line. Asked only for the rows being drawn.
 pub type DiffRowDecorProvider = Rc<dyn Fn(DiffLineSide, u32) -> Option<DiffRowDecor>>;
 
-/// A mark on one file line, drawn beside the row and on the scrollbar.
+/// A mark on one file line, drawn beside the row and on the scrollbar: its
+/// glyph in its colour, or the colour alone filling the lane. The label is
+/// its tooltip.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DiffAnnotation {
     pub color: Hsla,
     pub label: Option<SharedString>,
+    pub glyph: Option<DiffGlyph>,
+}
+
+/// What a diff annotation draws in the lane beside its row.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DiffGlyph {
+    /// A row glyph, as file lists and History draw it.
+    Row(crate::RowGlyph),
+    /// The people behind the mark, by name or login, most relevant first,
+    /// as initials in the diff's comment column: the first two in their own
+    /// colours, the rest as "+k". An empty list draws nothing and reserves
+    /// no column; `with_people` never makes one.
+    People(Arc<[SharedString]>),
 }
 
 impl DiffAnnotation {
     pub fn new(color: Hsla) -> Self {
-        Self { color, label: None }
+        Self {
+            color,
+            label: None,
+            glyph: None,
+        }
     }
 
     pub fn with_label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_glyph(mut self, glyph: crate::RowGlyph) -> Self {
+        self.glyph = Some(DiffGlyph::Row(glyph));
+        self
+    }
+
+    /// Shows the people behind the mark as its glyph; with nobody, the glyph
+    /// stays as it was.
+    pub fn with_people(
+        mut self,
+        people: impl IntoIterator<Item = impl Into<SharedString>>,
+    ) -> Self {
+        let people: Arc<[SharedString]> = people.into_iter().map(Into::into).collect();
+        if !people.is_empty() {
+            self.glyph = Some(DiffGlyph::People(people));
+        }
         self
     }
 }
@@ -290,6 +335,125 @@ impl DiffInset {
     }
 }
 
+/// A view of the extension's own in a diff pane, at a line on one side; in a
+/// split it draws in that side's column only. Its entity is what identifies
+/// it: a pane shows an entity once, and keeps its state and measured size
+/// across replacements.
+///
+/// The pane measures the view before it first draws it, and again when the
+/// view notifies or when the text style or the row height changes; a block
+/// or over view also when its column's width does, and a start-aligned over
+/// view when the text start moves. `render` may so run twice in a frame, once
+/// to measure and once to draw, and must have no side effects. A view whose
+/// height follows a child view's should notify along with it. The view keeps
+/// its own state while it is scrolled away. Its mouse presses are its own,
+/// and the diff's shortcuts stand aside while it holds focus.
+#[derive(Clone)]
+pub struct DiffHostedView {
+    anchor: DiffScrollAnchor,
+    placement: DiffPlacement,
+    view: AnyView,
+    observe: ObserveView,
+}
+
+/// Where a [`DiffHostedView`] shows beside its anchor's line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffPlacement {
+    /// Between lines, after its anchor's line. The pane reserves whole rows
+    /// for it, as many as its height needs, after the line's insets, and holds
+    /// it against sideways scrolling.
+    Block,
+    /// After the line's text, on the line's own row: the pane reserves no
+    /// rows for it. It is measured at its natural width, centred on the row
+    /// and clipped to its height, and scrolls sideways with the text. A
+    /// wrapped line shows it on its last row, clipped there when the row is
+    /// nearly full rather than given a row of its own. Views after the same
+    /// line sit side by side in order.
+    EndOfLine,
+    /// Over the text beside the line: the pane reserves no rows for it. Its
+    /// top is at the line's bottom, the bottom of its last row for a wrapped
+    /// line, and it lines up with `align`'s edge of its column; it moves
+    /// above the line when it would run past the pane's bottom, and stays
+    /// below when it fits neither way. It is measured at its natural width,
+    /// lined up with the start up to the room from the text start to the
+    /// column's end, with the end up to the column's width. It holds still
+    /// against sideways scrolling and is clipped to its column, over the rows
+    /// and block views but under menus. Views over the same line overlap.
+    Over { align: DiffAlign },
+}
+
+/// The edge of its column a [`DiffPlacement::Over`] view lines up with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffAlign {
+    /// Where the column's text starts.
+    Start,
+    /// The column's end, short of its scrollbar.
+    End,
+}
+
+/// Subscribes a callback to a view's notifies, without its type.
+type ObserveView = Rc<dyn Fn(Box<dyn FnMut(&mut App)>, &mut App) -> Subscription>;
+
+impl DiffHostedView {
+    /// A view between lines, after `anchor`'s line.
+    pub fn block<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
+        Self::new(anchor, DiffPlacement::Block, view)
+    }
+
+    /// A view after the text of `anchor`'s line.
+    pub fn end_of_line<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
+        Self::new(anchor, DiffPlacement::EndOfLine, view)
+    }
+
+    /// A view over the text beside `anchor`'s line, lined up with `align`.
+    pub fn over<V: Render>(anchor: DiffScrollAnchor, align: DiffAlign, view: Entity<V>) -> Self {
+        Self::new(anchor, DiffPlacement::Over { align }, view)
+    }
+
+    fn new<V: Render>(anchor: DiffScrollAnchor, placement: DiffPlacement, view: Entity<V>) -> Self {
+        let observed = view.downgrade();
+        Self {
+            anchor,
+            placement,
+            view: view.into(),
+            observe: Rc::new(move |mut on_notify, cx| match observed.upgrade() {
+                Some(view) => cx.observe(&view, move |_, cx| on_notify(cx)),
+                None => Subscription::new(|| {}),
+            }),
+        }
+    }
+
+    pub fn placement(&self) -> DiffPlacement {
+        self.placement
+    }
+
+    /// The line the view shows at.
+    pub fn anchor(&self) -> DiffScrollAnchor {
+        self.anchor
+    }
+
+    pub fn view(&self) -> &AnyView {
+        &self.view
+    }
+
+    /// Runs `on_notify` whenever the view notifies, for as long as the
+    /// subscription is kept.
+    #[doc(hidden)]
+    pub fn observe(&self, on_notify: impl FnMut(&mut App) + 'static, cx: &mut App) -> Subscription {
+        (self.observe)(Box::new(on_notify), cx)
+    }
+}
+
+impl std::fmt::Debug for DiffHostedView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffHostedView")
+            .field("anchor", &self.anchor)
+            .field("placement", &self.placement)
+            .field("view", &self.view.entity_id())
+            .finish()
+    }
+}
+
 /// The presentation of the two sides; changing it preserves file-line anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -336,6 +500,7 @@ pub struct DiffPaneOptions {
     /// annotation. Both need [`DiffPanePolicy::line_action`].
     pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
+    pub context_actions: Vec<DiffSelectionAction>,
     /// The bottom bar's place in the owner's list and its buttons.
     pub bar: DiffBar,
 }
@@ -476,6 +641,8 @@ pub trait DiffPaneImpl {
     fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App);
     /// The selected file lines' text, one line each; insets never included.
     fn selected_text(&self, cx: &App) -> Option<String>;
+    fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String>;
+    fn set_context_actions(&self, actions: Vec<DiffSelectionAction>, cx: &mut App);
     /// Original file bytes for the selected whole lines, including line endings.
     fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>>;
     fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App);
@@ -493,6 +660,10 @@ pub trait DiffPaneImpl {
     fn set_bar(&self, bar: DiffBar, cx: &mut App) {
         let _ = (bar, cx);
     }
+    /// Replaces the extension's own views in the pane.
+    fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
+        let _ = (views, cx);
+    }
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -501,6 +672,17 @@ pub trait DiffPaneImpl {
 pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 
 impl DiffPane {
+    /// Replaces the extension's own views in the pane.
+    pub fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
+        self.0.set_views(views, cx)
+    }
+    pub fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
+        self.0.text_for_range(range, cx)
+    }
+
+    pub fn set_context_actions(&self, actions: Vec<DiffSelectionAction>, cx: &mut App) {
+        self.0.set_context_actions(actions, cx)
+    }
     #[doc(hidden)]
     pub fn new(pane: Rc<dyn DiffPaneImpl>) -> Self {
         Self(pane)
@@ -616,6 +798,8 @@ pub enum FileListMode {
 /// Called when the user picks a file, with its diff target.
 pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 
+pub type FileListHeaderItem = gitcomet_ui_kit::components::ActionButton<()>;
+
 /// What the host implements behind a [`FileList`].
 #[doc(hidden)]
 pub trait FileListImpl {
@@ -633,6 +817,7 @@ pub trait FileListImpl {
     fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App);
     fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App);
     fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App);
+    fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App);
     fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
     fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
@@ -658,6 +843,9 @@ pub trait FileListImpl {
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    pub fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App) {
+        self.0.set_header_items(items, cx)
+    }
     /// Observe list changes, including the user's sort, layout and filters.
     pub fn observe(
         &self,
@@ -731,5 +919,26 @@ impl FileList {
 
     pub fn is_loading(&self, cx: &App) -> bool {
         self.0.is_loading(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nobody_leaves_the_glyph_as_it_was() {
+        let pin = crate::RowGlyph::Icon("icons/pin.svg".into());
+        let annotation = DiffAnnotation::new(Hsla::default())
+            .with_glyph(pin.clone())
+            .with_people(Vec::<String>::new());
+        assert_eq!(annotation.glyph, Some(DiffGlyph::Row(pin)));
+        let annotation = annotation.with_people(["Ada Lovelace"]);
+        assert_eq!(
+            annotation.glyph,
+            Some(DiffGlyph::People(Arc::from([SharedString::from(
+                "Ada Lovelace"
+            )])))
+        );
     }
 }

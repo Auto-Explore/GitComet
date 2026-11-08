@@ -43,6 +43,9 @@ pub struct DiffSession {
     pub generation: u64,
     /// Bumped on every change to the session, for fingerprints.
     pub rev: u64,
+    /// The last [`DiffSessionMsg::Open`] request its pane numbered, so the
+    /// pane can tell a snapshot that answers it from one taken before.
+    pub open_request: Option<u64>,
     /// The complete diff state, shared with the built-in pane.
     pub diff_state: crate::model::DiffState,
     /// Once requested, blame follows subsequent reloads and retargets.
@@ -73,6 +76,7 @@ impl DiffSession {
             encoding: None,
             generation: 0,
             rev: 0,
+            open_request: None,
             diff_state: crate::model::DiffState {
                 diff_target: Some(target.clone()),
                 ..Default::default()
@@ -316,6 +320,9 @@ pub enum DiffSessionMsg {
         lifetime: u64,
         view: DiffViewId,
         target: DiffTarget,
+        /// The pane's number for this open, kept as the session's
+        /// `open_request`; `None` for an open its renderer asked for.
+        request: Option<u64>,
     },
     SetEncoding {
         repo_id: RepoId,

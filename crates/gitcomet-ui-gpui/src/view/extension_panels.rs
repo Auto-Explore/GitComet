@@ -14,6 +14,13 @@ pub(in crate::view) fn repo_key(repo: &RepoState) -> RepoKey {
     (repo.id, repo.lifetime())
 }
 
+/// The repository an extension's handle names, keyed the same way.
+pub(in crate::view) fn handle_key(
+    repository: &gitcomet_extension_api::RepositoryHandle,
+) -> RepoKey {
+    (repository.repo_id(), repository.lifetime())
+}
+
 #[derive(Default)]
 pub(in crate::view) struct BottomPanels {
     descriptors: Rc<[(ContributionId, BottomPanelDescriptor)]>,

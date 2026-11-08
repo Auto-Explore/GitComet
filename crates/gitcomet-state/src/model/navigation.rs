@@ -287,7 +287,7 @@ impl<T: Clone + PartialEq> NavStack<T> {
     }
 }
 
-/// The three related navigation mechanisms owned by one repository.
+/// The navigation state owned by one repository.
 #[derive(Clone, Debug, Default)]
 pub struct RepoNavigationState {
     /// Commits browsed through the file browser during this session.
@@ -298,6 +298,9 @@ pub struct RepoNavigationState {
     pub main_history: NavStack<MainViewSnapshot>,
     /// A commit, branch, or tag waiting to be compared with another target.
     pub comparison_mark: Option<ComparisonMark>,
+    /// Bumped each time the user asks for the repository's canvas, for the
+    /// view already shown too; background changes leave it.
+    pub canvas_requests: u64,
 }
 
 /// A point marked for comparison via the "Mark for comparison" context-menu

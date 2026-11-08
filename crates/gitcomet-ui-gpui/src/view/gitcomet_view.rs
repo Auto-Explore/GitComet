@@ -1,3 +1,4 @@
+use super::repository_views::MainSlot;
 use super::*;
 
 impl GitCometView {
@@ -1189,6 +1190,7 @@ impl GitCometView {
             window_gated: false,
             extension_window,
             repository_view_focus: cx.focus_handle(),
+            canvas_overlay_focus: cx.focus_handle(),
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
             sidebar_tabs: Self::sidebar_tab_router(cx),
@@ -1289,8 +1291,9 @@ impl GitCometView {
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
-            sidebar_header_minimum: px(0.0),
-            sidebar_window_size_request: None,
+            sidebar_header_minimum: Default::default(),
+            details_header_minimum: Default::default(),
+            pane_window_size_request: None,
             _sidebar_header_subscription: sidebar_header_subscription,
             details_width: initial_details_width,
             sidebar_render_width: initial_sidebar_render_width,
@@ -2304,10 +2307,36 @@ impl GitCometView {
             .filter(|url| !url.is_empty())
     }
 
+    pub(super) fn can_report_startup_crash(&self, cx: &App) -> bool {
+        self.startup_crash_report_issue_url().is_some()
+            || (self.extension_window.is_some()
+                && super::extension_host::registry(cx)
+                    .is_some_and(|registry| registry.crash_report_action().is_some()))
+    }
+
     /// The "Report Issue" button's whole body, so the button stays a one-liner
     /// and tests can drive the real sequence through
     /// [`Self::report_startup_crash_report_with`].
     pub(super) fn report_startup_crash_report(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.startup_crash_report.is_none() {
+            return;
+        }
+        if let Some(action) = super::extension_host::registry(cx)
+            .and_then(|registry| registry.crash_report_action().cloned())
+        {
+            if let Some(host) = self
+                .extension_window
+                .as_ref()
+                .map(|extension| extension.host())
+            {
+                let window = self.window_handle;
+                // Release this view's borrow before the extension opens a dialog.
+                cx.defer(move |cx| {
+                    let _ = window.update(cx, |_, window, cx| action(host, window, cx));
+                });
+            }
+            return;
+        }
         self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
     }
 
@@ -2351,26 +2380,23 @@ impl GitCometView {
     }
 
     /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,
-    /// unless an extension's repository view is selected. Then it is the
-    /// hosted diff pane inside that view the user is engaged with, and with
-    /// none there the keys do nothing, rather than move History's hidden
-    /// selection.
+    /// unless an extension's canvas overlay covers it or an extension's
+    /// repository view is selected. Then it is the hosted diff pane inside
+    /// that overlay or view the user is engaged with, and with none there the
+    /// keys do nothing, rather than move History's hidden selection.
     pub(super) fn diff_shortcut_target(
         &self,
         window: &Window,
         cx: &App,
     ) -> Option<Entity<DiffRenderer>> {
-        let extension_view_selected = self
-            .repository_views
-            .as_ref()
-            .zip(self.active_repo())
-            .is_some_and(|(router, repo)| router.selected(repo).is_some());
-        if !extension_view_selected || self.documents_active {
-            return Some(self.diff_renderer.clone());
-        }
+        let scope = match self.main_slot() {
+            MainSlot::Document | MainSlot::History => return Some(self.diff_renderer.clone()),
+            MainSlot::Overlay(_) => &self.canvas_overlay_focus,
+            MainSlot::View(_) => &self.repository_view_focus,
+        };
         self.extension_window
             .as_ref()?
-            .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+            .diff_pane_for_keys(scope, window, cx)
     }
 
     pub(super) fn defer_search_match_navigation(
@@ -2488,6 +2514,17 @@ impl GitCometView {
     pub(super) fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
         if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
             return;
+        }
+        // Over a canvas overlay, Back uncovers the view behind and Forward
+        // waits: neither moves a view the user cannot see.
+        match self.main_slot() {
+            MainSlot::Overlay(_) => {
+                if !forward {
+                    self.hide_active_canvas_overlay(cx);
+                }
+                return;
+            }
+            MainSlot::Document | MainSlot::View(_) | MainSlot::History => {}
         }
         if self.route_extension_navigation(forward, cx) {
             return;

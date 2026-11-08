@@ -3,7 +3,7 @@ use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
-const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
+pub(in crate::view) const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
 #[derive(Clone)]
 pub(in crate::view) enum AppMenuAction {
@@ -89,6 +89,12 @@ pub(in crate::view) enum ContextMenuAction {
     RunExtensionCommand {
         id: SharedString,
         repo_id: RepoId,
+    },
+    /// An extension's branch or commit menu entry, for the menu's target.
+    RunRefMenuItem {
+        id: SharedString,
+        repo_id: RepoId,
+        target: gitcomet_extension_api::RefMenuTarget,
     },
     SetImageSampling {
         mode: crate::view::image_preview::ImageSamplingMode,
