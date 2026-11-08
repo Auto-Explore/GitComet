@@ -36,6 +36,7 @@ mod mergetool_settings;
 mod previous_commit_messages;
 pub(super) mod pull;
 mod push;
+mod ref_menu;
 mod reflog_entry;
 mod remote;
 mod remote_web_picker;

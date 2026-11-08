@@ -5,7 +5,7 @@
 //! [`crate::changes`]), a bottom panel, a canvas overlay, a details tab, a
 //! sidebar section and sidebar rows, a history annotator, a status item, the
 //! edition strip and title-bar brand, a settings page, commands with a key
-//! binding and menu entries, an asset, a window gate, a repository-entry
+//! binding and menu entries, a branch and commit menu entry, an asset, a window gate, a repository-entry
 //! gate, a close guard, and a hosted dialog. Review counts are per window and saved in that
 //! window's workspace, so they survive a restart.
 
@@ -17,10 +17,11 @@ use gitcomet_extension_api::{
     CloseDecision, CloseRequest, CloseScope, CommandContext, CommandDescriptor,
     DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension, ExtensionId, GateDecision,
     HistoryAnnotator, HistoryRowAnnotation, HostedAction, HostedMenuItem, MenuLocation,
-    NotificationKind, Registrar, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext, SettingsPageDescriptor,
-    ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor, SidebarSectionRows,
-    SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor, WindowHost,
+    NotificationKind, RefMenuContext, RefMenuItemDescriptor, RefMenuTarget, Registrar,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, RowGlyph, RowMark,
+    SettingsPageContext, SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow,
+    SidebarSectionDescriptor, SidebarSectionRows, SlotSignal, StatusItemDescriptor,
+    WindowExtension, WindowGateDescriptor, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -96,6 +97,8 @@ pub struct Reviews {
     pub confirm_close_unreviewed: bool,
     /// Every change to the review overlay, oldest first.
     overlay_changes: Vec<(PathBuf, CanvasOverlayVisibility)>,
+    /// Every branch or commit marked from its menu, oldest first.
+    reviewed_refs: Vec<(PathBuf, RefMenuTarget)>,
 }
 
 impl Reviews {
@@ -120,6 +123,10 @@ impl Reviews {
 
     pub fn overlay_changes(&self) -> &[(PathBuf, CanvasOverlayVisibility)] {
         &self.overlay_changes
+    }
+
+    pub fn reviewed_refs(&self) -> &[(PathBuf, RefMenuTarget)] {
+        &self.reviewed_refs
     }
 }
 
@@ -164,6 +171,20 @@ pub fn mark_reviewed(window: &WindowHost, workdir: &Path, cx: &mut App) {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let _ = window.notify(format!("Marked {name} reviewed"), cx);
+}
+
+/// The branch and commit menus' entry: remembers what it was opened on.
+fn mark_ref_reviewed(context: RefMenuContext, _window: &mut Window, cx: &mut App) {
+    let workdir = context.repository.workdir().to_path_buf();
+    reviews(cx).update(cx, |reviews, cx| {
+        reviews
+            .reviewed_refs
+            .push((workdir, context.target.clone()));
+        cx.notify();
+    });
+    let _ = context
+        .window
+        .notify(format!("Marked {} reviewed", context.target.revision()), cx);
 }
 
 /// The repository view: the count, and a button to add one.
@@ -817,6 +838,11 @@ impl Extension for ReviewExtension {
             .key_binding("secondary-alt-r", "mark-reviewed", None)
             .menu_item(MenuLocation::Application, "show-summary")
             .menu_item(MenuLocation::RepositoryTab, "mark-reviewed")
+            .ref_menu_item(
+                "mark-ref-reviewed",
+                RefMenuItemDescriptor::new("Mark reviewed here", mark_ref_reviewed)
+                    .with_icon(ICON_PATH),
+            )
             .asset("icons/review.svg", ICON_SVG)
             .asset("icons/flag.svg", FLAG_SVG)
             .repository_entry_gate("deny-marker", Rc::new(gate))
@@ -896,6 +922,7 @@ mod tests {
         assert_eq!(registry.key_bindings().len(), 1);
         assert_eq!(registry.menu_items(MenuLocation::Application).count(), 1);
         assert_eq!(registry.menu_items(MenuLocation::RepositoryTab).count(), 1);
+        assert_eq!(registry.ref_menu_items().len(), 1);
         assert_eq!(registry.asset(ICON_PATH), Some(ICON_SVG));
         assert_eq!(registry.entry_gates().len(), 1);
         assert_eq!(registry.close_guards().len(), 1);

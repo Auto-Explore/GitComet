@@ -14,8 +14,8 @@ use gitcomet_extension_api::{
 };
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
-    MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
-    host::WindowHostImpl, storage::StorageError,
+    MenuLocation, RefMenuContext, RefMenuTarget, Registry, RepositoryEntryRequest,
+    RepositoryHandle, StateObserver, WindowHost, host::WindowHostImpl, storage::StorageError,
 };
 use gitcomet_state::msg::Msg;
 use gitcomet_state::session::WorkspaceId;
@@ -227,6 +227,36 @@ pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[Ext
                 requires_repository: command.requires_repository,
                 repository_requirement: command.repository_requirement,
             })
+        })
+        .collect()
+}
+
+/// An extension entry in branch and commit menus.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct ExtensionRefMenuEntry {
+    /// The entry's contribution id.
+    pub(in crate::view) id: SharedString,
+    pub(in crate::view) label: SharedString,
+    pub(in crate::view) icon: Option<SharedString>,
+}
+
+/// The extension entries of branch and commit menus, in registration order;
+/// none while commands are not offered.
+pub(in crate::view) fn ref_menu_entries(cx: &App) -> Rc<[ExtensionRefMenuEntry]> {
+    let Some(registry) = cx
+        .try_global::<ExtensionHost>()
+        .filter(|host| host.commands)
+        .map(|host| Rc::clone(&host.registry))
+    else {
+        return Rc::from([]);
+    };
+    registry
+        .ref_menu_items()
+        .iter()
+        .map(|(id, item)| ExtensionRefMenuEntry {
+            id: id.to_string().into(),
+            label: item.label.clone(),
+            icon: item.icon.clone(),
         })
         .collect()
 }
@@ -1910,6 +1940,56 @@ impl GitCometView {
                     CommandContext {
                         window: host,
                         repository,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        true
+    }
+
+    /// Runs branch or commit menu entry `id` for `target` in repository
+    /// `repo_id`. False when no such entry is registered.
+    pub(in crate::view) fn run_ref_menu_item(
+        &mut self,
+        id: &str,
+        repo_id: RepoId,
+        target: RefMenuTarget,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(registry) = registry(cx) else {
+            return false;
+        };
+        let Some((_, item)) = registry
+            .ref_menu_items()
+            .iter()
+            .find(|(item_id, _)| item_id.to_string() == id)
+        else {
+            return false;
+        };
+        let Some(host) = self.extension_window.as_ref().map(ExtensionWindow::host) else {
+            return false;
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return true;
+        };
+        let window_handle = self.window_handle;
+        let repository = repository_handle(window_handle.window_id(), repo);
+        let run = Rc::clone(&item.run);
+        // Deferred like commands: the entry reads this window through its
+        // host, and the view is borrowed while it updates.
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                if host.check(&repository, cx).is_err() {
+                    return;
+                }
+                crate::view::perf::extension_dispatch();
+                run(
+                    RefMenuContext {
+                        window: host,
+                        repository,
+                        target,
                     },
                     window,
                     cx,

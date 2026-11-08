@@ -925,6 +925,7 @@ impl PopoverHost {
                 gitcomet_extension_api::MenuLocation::RepositoryTab,
                 cx,
             ),
+            extension_ref_menu: crate::view::extension_host::ref_menu_entries(cx),
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
