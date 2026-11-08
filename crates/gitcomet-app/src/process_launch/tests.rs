@@ -44,6 +44,38 @@ fn run_child(scenario: &str) -> ! {
             eprintln!("written after the handoff");
             std::process::exit(0);
         }
+        #[cfg(target_os = "linux")]
+        "stderr-exhausted" => {
+            use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+
+            let limit = getrlimit(Resource::Nofile);
+            setrlimit(
+                Resource::Nofile,
+                Rlimit {
+                    current: Some(limit.current.unwrap_or(64).min(64)),
+                    maximum: limit.maximum,
+                },
+            )
+            .unwrap();
+            let mut descriptors = Vec::new();
+            loop {
+                match std::fs::File::open("/dev/null") {
+                    Ok(file) => descriptors.push(file),
+                    Err(error) => {
+                        assert_eq!(
+                            error.raw_os_error(),
+                            Some(rustix::io::Errno::MFILE.raw_os_error())
+                        );
+                        break;
+                    }
+                }
+            }
+            // Opening /dev/null succeeds, but duplicating stderr exhausts
+            // the limit. Closing /dev/null then permits the startup socket.
+            drop(descriptors.pop().expect("filled descriptor slots"));
+            assert!(notify_ready(&endpoint).is_err());
+            std::process::exit(2);
+        }
         "cancel" => {
             crate::crashlog::install();
             crate::crashlog::begin_session().unwrap();
@@ -163,6 +195,22 @@ fn startup_failure_is_visible_even_when_the_child_exits_zero() {
         let pid: i32 = std::fs::read_to_string(report).unwrap().parse().unwrap();
         assert!(rustix::process::test_kill_process(Pid::from_raw(pid).unwrap()).is_err());
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stderr_detachment_failure_does_not_acknowledge_startup() {
+    let directory = tempfile::tempdir().unwrap();
+    let report = directory.path().join("pid");
+    let startup = StartupListener::new().unwrap();
+    let command = child_command("stderr-exhausted", &startup, &report);
+    let error = supervise(command, startup, STARTUP_TIMEOUT).unwrap_err();
+    assert!(error.to_string().contains("before confirming startup"));
+    let stderr = std::fs::read_to_string(report.with_extension("stderr")).unwrap();
+    assert!(
+        stderr.contains("Could not detach browser stderr:"),
+        "{stderr}"
+    );
 }
 
 #[test]

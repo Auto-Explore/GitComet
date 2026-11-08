@@ -7,7 +7,11 @@ use std::process::{Command, Output};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 
-fn run_without_display(mut command: Command, profile: &std::path::Path) -> Output {
+fn run_without_display(
+    mut command: Command,
+    profile: &std::path::Path,
+    foreground: Option<&str>,
+) -> Output {
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
     unlockpt(&master).unwrap();
     let slave = ioctl_tiocgptpeer(
@@ -20,26 +24,60 @@ fn run_without_display(mut command: Command, profile: &std::path::Path) -> Outpu
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("XDG_SESSION_TYPE")
+        .env_remove("GITCOMET_FOREGROUND")
         .env("GITCOMET_PROFILE_ROOT", profile)
         .env(
             "GITCOMET_BROWSER_INSTANCE_FILE",
             profile.join("instance.json"),
-        )
-        .env("GITCOMET_FOREGROUND", "0")
-        .output()
-        .unwrap()
+        );
+    if let Some(foreground) = foreground {
+        command.env("GITCOMET_FOREGROUND", foreground);
+    }
+    command.output().unwrap()
 }
 
 #[test]
 fn terminal_startup_failure_keeps_diagnostics_and_error_status() {
     let profile = tempfile::tempdir().unwrap();
     let command = Command::new(gitcomet_test_bin::gitcomet_bin());
-    let output = run_without_display(command, profile.path());
+    let output = run_without_display(command, profile.path(), Some("0"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("Failed to start the browser:"), "{stderr}");
     assert!(stderr.contains("before confirming startup"), "{stderr}");
     assert!(stderr.contains("Failed to launch"), "{stderr}");
+}
+
+#[test]
+fn terminal_launch_uses_the_build_default_when_foreground_is_unset_or_empty() {
+    for foreground in [None, Some("")] {
+        let profile = tempfile::tempdir().unwrap();
+        let trace_path = profile.path().join("startup.jsonl");
+        let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
+        command.env("GITCOMET_STARTUP_TRACE", &trace_path);
+        let output = run_without_display(command, profile.path(), foreground);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(stderr.contains("Failed to launch"), "{stderr}");
+        assert_eq!(
+            stderr.contains("Failed to start the browser:"),
+            !cfg!(debug_assertions),
+            "{stderr}"
+        );
+        let trace = std::fs::read_to_string(trace_path).unwrap();
+        let entries = trace
+            .lines()
+            .filter(|line| {
+                let row: serde_json::Value = serde_json::from_str(line).unwrap();
+                row["name"] == "app_entry"
+            })
+            .count();
+        assert_eq!(
+            entries,
+            if cfg!(debug_assertions) { 1 } else { 2 },
+            "{trace}"
+        );
+    }
 }
 
 #[test]
@@ -72,7 +110,7 @@ fn a_running_browser_receives_requests_before_relaunch_or_gui_preparation() {
     let trace_path = profile.path().join("startup.jsonl");
     let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
     command.env("GITCOMET_STARTUP_TRACE", &trace_path);
-    let output = run_without_display(command, profile.path());
+    let output = run_without_display(command, profile.path(), Some("0"));
     assert!(output.status.success(), "{output:?}");
     server.join().unwrap();
     let trace = std::fs::read_to_string(trace_path).unwrap();
@@ -131,7 +169,7 @@ fn library_launch_preserves_supplied_arguments_and_process_state_with_terminal_s
             "--nocapture",
         ])
         .env(CHILD, "1");
-    let output = run_without_display(command, profile.path());
+    let output = run_without_display(command, profile.path(), Some("0"));
     assert!(output.status.success(), "{output:?}");
 }
 
@@ -186,7 +224,7 @@ fn a_cli_launch_probes_a_running_browser_only_once() {
     });
     let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
     command.arg("--foreground");
-    let output = run_without_display(command, profile.path());
+    let output = run_without_display(command, profile.path(), Some("0"));
     launch_exited.store(true, Ordering::Release);
     let connections = server.join().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);

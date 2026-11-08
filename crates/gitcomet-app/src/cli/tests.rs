@@ -1665,7 +1665,7 @@ fn foreground_flag_keeps_the_public_browser_mode_shape() {
 }
 
 #[test]
-fn browser_launch_foreground_defaults_to_false() {
+fn browser_launch_does_not_set_the_foreground_flag_by_default() {
     let parsed = parse_launch(vec![OsString::from("gitcomet")], DEFAULT_ABOUT)
         .expect("parse browser mode without flags");
     assert!(!parsed.foreground);
@@ -1677,8 +1677,18 @@ fn browser_launch_foreground_defaults_to_false() {
 
 #[test]
 fn foreground_environment_parses_boolean_values() {
-    assert!(!foreground_requested(false, None).unwrap());
-    for value in ["", "0", "false", " FALSE "] {
+    assert_eq!(
+        foreground_requested(false, None).unwrap(),
+        cfg!(debug_assertions)
+    );
+    for value in ["", "  "] {
+        assert_eq!(
+            foreground_requested(false, Some(value.into())).unwrap(),
+            cfg!(debug_assertions),
+            "{value:?}"
+        );
+    }
+    for value in ["0", "false", " FALSE "] {
         assert!(
             !foreground_requested(false, Some(value.into())).unwrap(),
             "{value}"
@@ -1692,6 +1702,7 @@ fn foreground_environment_parses_boolean_values() {
     }
     assert!(foreground_requested(false, Some("typo".into())).is_err());
     assert!(foreground_requested(true, Some("typo".into())).unwrap());
+    assert!(foreground_requested(true, Some("0".into())).unwrap());
 }
 
 #[test]

@@ -253,14 +253,15 @@ pub(crate) fn foreground_requested(flag: bool, value: Option<OsString>) -> Resul
         return Ok(true);
     }
     let Some(value) = value else {
-        return Ok(false);
+        return Ok(cfg!(debug_assertions));
     };
     match value
         .to_str()
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
     {
-        Some("" | "0" | "false") => Ok(false),
+        Some("") => Ok(cfg!(debug_assertions)),
+        Some("0" | "false") => Ok(false),
         Some("1" | "true") => Ok(true),
         _ => Err("Invalid GITCOMET_FOREGROUND value: expected 1/true or 0/false.".into()),
     }

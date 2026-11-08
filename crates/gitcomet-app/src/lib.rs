@@ -7,8 +7,8 @@
 //! and `main`.
 //!
 //! [`AppLaunch::run_cli`] is the executable entry: before any GUI work a
-//! browser launch forwards to a running instance, and from a terminal it
-//! starts a detached copy of itself and waits for its first window.
+//! browser launch forwards to a running instance. From a terminal, release
+//! builds start a detached copy and wait for its first window.
 //! [`AppLaunch::run`] and [`AppLaunch::run_with_args`] are library entries
 //! that never detach.
 
@@ -159,8 +159,10 @@ impl AppLaunch {
     }
 
     /// Runs as the product executable with the process arguments: forwards
-    /// to a running browser, detaches from an interactive terminal unless
-    /// `--foreground`/`GITCOMET_FOREGROUND=1`, then runs like [`Self::run`].
+    /// to a running browser, detaches release builds from an interactive terminal
+    /// unless `--foreground`/`GITCOMET_FOREGROUND=1`, then runs like [`Self::run`].
+    /// Debug builds stay attached by default; `GITCOMET_FOREGROUND=0` opts in
+    /// to detachment in either build.
     pub fn run_cli(self) -> i32 {
         self.run_args(std::env::args_os().collect(), LaunchEntry::Cli)
     }

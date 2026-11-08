@@ -40,14 +40,15 @@ impl std::fmt::Display for LaunchError {
 // Stderr goes quiet before READY so nothing reaches the terminal after the
 // launcher returns. A failed exchange is reported once on the original stderr.
 pub(crate) fn notify_ready(endpoint: &Path) -> Result<(), String> {
-    let terminal = detach_stderr();
+    let terminal = detach_stderr().map_err(|error| {
+        let message = format!("Could not detach browser stderr: {error}");
+        let _ = writeln!(io::stderr(), "{message}");
+        message
+    })?;
     notify_ready_io(endpoint).map_err(|error| {
         let message = format!("Could not acknowledge browser startup: {error}");
         // Not eprintln!: it panics with EIO on a hung-up terminal.
-        let _ = match terminal {
-            Ok(terminal) => writeln!(std::fs::File::from(terminal), "{message}"),
-            Err(_) => writeln!(io::stderr(), "{message}"),
-        };
+        let _ = writeln!(std::fs::File::from(terminal), "{message}");
         message
     })
 }
