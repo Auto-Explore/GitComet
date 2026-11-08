@@ -605,7 +605,16 @@ fn image_preview_controls_and_wheel_take_precedence_over_window_zoom(
         },
         touch_phase: gpui::TouchPhase::Moved,
     });
-    cx.update(|_, app| assert!(crate::ui_scale::current(app).percent > before));
+    cx.update(|_, app| {
+        assert_eq!(
+            crate::ui_scale::current(app).percent,
+            if cfg!(target_os = "macos") {
+                before
+            } else {
+                crate::ui_scale::step_up(before)
+            }
+        );
+    });
 }
 
 #[gpui::test]

@@ -727,7 +727,8 @@ impl Element for UiScaleScrollCapture {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if !renders_full_chrome(self.view.read(cx).view_mode) {
+        // macOS uses Command +/- for window scaling; scrolling belongs to content.
+        if cfg!(target_os = "macos") || !renders_full_chrome(self.view.read(cx).view_mode) {
             return;
         }
 
