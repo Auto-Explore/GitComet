@@ -449,7 +449,7 @@ fn keys_and_clicks_in_a_hosted_view_stay_in_it(cx: &mut gpui::TestAppContext) {
 
     // The diff's own search, which Escape would close.
     click_debug_selector(cx, "diff_text_empty_space_Inline");
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
     draw(cx);
     assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
     // The click on the diff's empty space selected its last line.
@@ -1351,7 +1351,7 @@ fn keys_and_clicks_in_an_end_of_line_view_stay_in_it(cx: &mut gpui::TestAppConte
     let (hint, pane, renderer, _, cx) = mount_hint(cx, DiffLayout::Inline, old, new, 2, 200.0);
     let diff_focus = cx.update(|_, app| renderer.read(app).diff_panel_focus_handle.clone());
     click_debug_selector(cx, "diff_text_empty_space_Inline");
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
     draw(cx);
     assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
     let selected = cx.update(|_, app| pane.selection(app));
@@ -1904,7 +1904,7 @@ fn keys_and_clicks_in_an_over_view_stay_in_it(cx: &mut gpui::TestAppContext) {
         mount_over(cx, DiffLayout::Inline, old, new, 1, DiffAlign::Start, 200.0);
     let diff_focus = cx.update(|_, app| renderer.read(app).diff_panel_focus_handle.clone());
     click_debug_selector(cx, "diff_text_empty_space_Inline");
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
     draw(cx);
     assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
     let selected = cx.update(|_, app| pane.selection(app));
