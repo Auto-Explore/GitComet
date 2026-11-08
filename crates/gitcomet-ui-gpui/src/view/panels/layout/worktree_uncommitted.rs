@@ -167,6 +167,10 @@ impl DetailsPaneView {
                 ("worktree_files_container", repo_id.0),
                 ("worktree_files_scrollbar", repo_id.0),
                 &self.worktree_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::WorktreeFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::WorktreeFiles,

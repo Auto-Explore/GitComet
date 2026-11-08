@@ -2457,6 +2457,27 @@ impl GitCometView {
             .diff_pane_for_keys(scope, window, cx)
     }
 
+    /// F2/F3 step the open search of the side pane holding focus (the
+    /// sidebar's or the details pane's); false leaves them to the main pane.
+    pub(super) fn step_focused_pane_search(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.sidebar_pane.read(cx).contains_focus(window, cx) {
+            return self
+                .sidebar_pane
+                .update(cx, |pane, cx| pane.step_search(forward, window, cx));
+        }
+        if self.details_pane.read(cx).contains_focus(window, cx) {
+            return self
+                .details_pane
+                .update(cx, |pane, cx| pane.step_review_search(forward, window, cx));
+        }
+        false
+    }
+
     pub(super) fn defer_search_match_navigation(
         &self,
         forward: bool,

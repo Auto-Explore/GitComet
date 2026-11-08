@@ -108,13 +108,18 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
     status_section_focus_handles: [FocusHandle; 4],
     review_file_focus_handles: [FocusHandle; 3],
+    /// Taken by any press in the pane that no child focuses, so Cmd/Ctrl-F
+    /// opens this pane's file filter.
+    details_focus: FocusHandle,
     review_cursor: Option<(
         RepoId,
         crate::view::rows::FileListId,
         review::ReviewRow,
         usize,
     )>,
-    review_search_input: Entity<components::TextInput>,
+    pub(in crate::view) review_search_input: Entity<components::TextInput>,
+    /// The file filter bar's own layout: its width tier and overflow menu.
+    pub(in crate::view) review_search_bar: std::rc::Rc<components::QuickSearchState>,
     review_search_list: Option<(RepoId, crate::view::rows::FileListId)>,
     _review_search_subscription: gpui::Subscription,
     pub(in crate::view) review_details_dismissed: bool,
@@ -548,7 +553,8 @@ impl DetailsPaneView {
         let review_search_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Filter files by path…".into(),
+                    placeholder: "Filter files".into(),
+                    chromeless: true,
                     ..Default::default()
                 },
                 window,
@@ -568,12 +574,15 @@ impl DetailsPaneView {
                     return;
                 };
                 if escape {
-                    this.reset_review_search(cx);
-                    window.focus(this.review_file_focus(list), cx);
-                    cx.notify();
+                    this.review_search_escape(list, window, cx);
                     return;
                 }
-                if enter || down {
+                if enter {
+                    this.review_search_step(list, true, window, cx);
+                    return;
+                }
+                if down {
+                    // Keep the filter active while reviewing its results.
                     this.focus_review_files(Some(list), window, cx);
                     return;
                 }
@@ -623,8 +632,10 @@ impl DetailsPaneView {
             status_section_resize: None,
             status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             review_file_focus_handles: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            details_focus: cx.focus_handle(),
             review_cursor: None,
             review_search_input,
+            review_search_bar: components::QuickSearchState::new(),
             review_search_list: None,
             _review_search_subscription: review_search_subscription,
             review_details_dismissed: false,
@@ -1140,7 +1151,7 @@ impl DetailsPaneView {
         path_display::cached_path_display(&mut cache, path)
     }
 
-    fn file_controller(
+    pub(in crate::view) fn file_controller(
         &self,
         repo_id: RepoId,
         list: crate::view::rows::FileListId,
@@ -1202,10 +1213,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
-        let query = controller.query.clone();
+        let (query, options) = (controller.query.clone(), controller.search_options);
         controller
             .projection_cache
-            .projection_for_query(&key, files, sort, filter, &query)
+            .projection_for_query(&key, files, sort, filter, &query, options)
     }
 
     /// Drop a list's transient layout flip and collapse set, so the next time it
@@ -1330,10 +1341,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
-        let query = controller.query.clone();
+        let (query, options) = (controller.query.clone(), controller.search_options);
         controller
             .projection_cache
-            .projection_for_query(&key, files, sort, filter, &query)
+            .projection_for_query(&key, files, sort, filter, &query, options)
     }
 
     pub(in super::super) fn cached_range_file_projection(
@@ -1351,10 +1362,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
-        let query = controller.query.clone();
+        let (query, options) = (controller.query.clone(), controller.search_options);
         controller
             .projection_cache
-            .projection_for_query(&key, files, sort, filter, &query)
+            .projection_for_query(&key, files, sort, filter, &query, options)
     }
 
     fn file_list_plan_from_projection(
@@ -1632,7 +1643,10 @@ impl DetailsPaneView {
 
     /// The cached main pane reads this projection to render commit-diff file
     /// navigation, so local sort/filter changes must invalidate it explicitly.
-    fn notify_commit_file_projection_dependents(&self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn notify_commit_file_projection_dependents(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let diff_renderer = self.diff_renderer.clone();
         cx.defer(move |cx| {
             let _ = diff_renderer.update(cx, |_pane, cx| cx.notify());
@@ -1985,19 +1999,19 @@ impl DetailsPaneView {
             repo.line_stats_for_area(section.diff_area())
                 .filter(|_| sort.needs_line_stats()),
         );
-        let query = self
-            .file_controller(repo.id, crate::view::rows::FileListId::Status(section))
-            .borrow()
-            .query
-            .to_lowercase();
-        let ordered = if query.is_empty() {
-            ordered
-        } else {
-            ordered
+        let matcher = {
+            let controller =
+                self.file_controller(repo.id, crate::view::rows::FileListId::Status(section));
+            let controller = controller.borrow();
+            crate::view::rows::path_query_matcher(&controller.query, controller.search_options)
+        };
+        let ordered = match matcher {
+            None => ordered,
+            Some(matcher) => ordered
                 .iter()
                 .copied()
-                .filter(|&ix| crate::view::rows::path_matches_query(&entries[ix].path, &query))
-                .collect()
+                .filter(|&ix| crate::view::rows::path_matches_query(&entries[ix].path, &matcher))
+                .collect(),
         };
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
@@ -3095,6 +3109,13 @@ impl DetailsPaneView {
     }
 }
 
+impl DetailsPaneView {
+    /// Whether keyboard focus is anywhere in this pane.
+    pub(in crate::view) fn contains_focus(&self, window: &Window, cx: &App) -> bool {
+        self.details_focus.contains_focused(window, cx)
+    }
+}
+
 impl Render for DetailsPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         #[cfg(any(test, feature = "benchmarks"))]
@@ -3103,6 +3124,14 @@ impl Render for DetailsPaneView {
         }
         div()
             .size_full()
+            .track_focus(&self.details_focus)
+            // Capture runs before children, which may stop the press (a
+            // scrollbar does); a child that focuses itself still wins.
+            .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
+                if !this.details_focus.contains_focused(window, cx) {
+                    window.focus(&this.details_focus, cx);
+                }
+            }))
             .child(self.commit_details_view(cx))
             .child(StatusSectionResizeTracker { view: cx.entity() })
     }

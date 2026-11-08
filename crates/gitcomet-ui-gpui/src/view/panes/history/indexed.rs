@@ -1344,6 +1344,7 @@ impl HistoryView {
                     },
                 )
                 .always_visible()
+                .focus_on_press(self.history_panel_focus_handle.clone())
                 .render(self.theme),
             )
     }

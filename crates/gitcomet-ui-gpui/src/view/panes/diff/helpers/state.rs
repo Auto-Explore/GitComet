@@ -667,6 +667,8 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) diff_search_probe_action: u64,
     pub(in crate::view) diff_search_probe_render: u64,
     pub(in crate::view) diff_search_scroll: ScrollHandle,
+    /// The search bar's own layout: its width tier and overflow menu.
+    pub(in crate::view) diff_search_bar: std::rc::Rc<components::QuickSearchState>,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(in crate::view::panes::diff) _diff_search_subscription: gpui::Subscription,
 

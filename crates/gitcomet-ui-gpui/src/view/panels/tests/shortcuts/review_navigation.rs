@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::rows::FileListId;
+use gitcomet_core::text_search::TextSearchOptions;
 
 #[path = "review_regressions.rs"]
 mod regressions;
@@ -379,8 +380,12 @@ fn review_staged_search_returns_focus_to_staged_results(cx: &mut gpui::TestAppCo
     draw_and_drain_test_window(cx);
     cx.simulate_input("b.rs");
     draw_and_drain_test_window(cx);
+    // Enter selects the next match and keeps typing in the bar; Down moves
+    // into the filtered list.
     cx.simulate_keystrokes("enter");
     wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    cx.simulate_keystrokes("down");
+    draw_and_drain_test_window(cx);
     assert!(cx.update(|window, app| {
         view.read(app)
             .details_pane
@@ -737,6 +742,8 @@ fn review_file_filter_and_context_menu_keep_keyboard_focus(cx: &mut gpui::TestAp
     cx.simulate_keystrokes("enter");
     wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
     sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("down");
+    draw_and_drain_test_window(cx);
     assert!(files_focused(cx, &view));
     cx.simulate_keystrokes("escape");
     draw_and_drain_test_window(cx);
@@ -802,4 +809,212 @@ fn review_tree_and_pane_cycle_respect_focus_and_modals(cx: &mut gpui::TestAppCon
     cx.simulate_keystrokes("f6 shift-f6");
     draw_and_drain_test_window(cx);
     assert_eq!(cx.update(|window, app| window.focused(app)), focus);
+}
+
+fn review_search_input_focused(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> bool {
+    cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_search_input
+            .read(app)
+            .focus_handle()
+            .is_focused(window)
+    })
+}
+
+#[gpui::test]
+fn cmd_f_after_clicking_the_details_heading_opens_the_file_filter(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    assert!(graph_focused(cx, &view));
+    // The heading is plain text: nothing in it takes focus of its own.
+    let heading = cx.debug_bounds("commit_details_heading").unwrap();
+    cx.simulate_click(heading.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("review_file_search").is_some(),
+        "Cmd/Ctrl-F goes to the pane that was clicked"
+    );
+    assert!(cx.debug_bounds("history_find").is_none());
+    assert!(review_search_input_focused(cx, &view));
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("review_file_search").is_none());
+    assert!(
+        files_focused(cx, &view),
+        "closing returns focus to the list"
+    );
+}
+
+#[gpui::test]
+fn pressing_the_committed_files_scrollbar_focuses_the_list(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    let mut repo = review_repo();
+    if let Loadable::Ready(details) = &mut repo.history_state.commit_details {
+        Arc::make_mut(details).files = (0..400)
+            .map(|ix| {
+                CommitFileChange::new(format!("f{ix:03}.rs").into(), FileStatusKind::Modified)
+            })
+            .collect();
+    }
+    repo.history_state.commit_details_rev = 2;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    assert!(graph_focused(cx, &view));
+    let bar = cx
+        .debug_bounds("review_list_scrollbar")
+        .expect("the committed files list overflows");
+    let press = gpui::point(bar.right() - px(3.0), bar.top() + px(40.0));
+    cx.simulate_mouse_move(press, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(press, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(press, gpui::MouseButton::Left, gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(files_focused(cx, &view));
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("review_file_search").is_some());
+}
+
+#[gpui::test]
+fn review_file_filter_steps_through_matches_and_honours_options(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    cx.simulate_keystrokes("enter");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .active_commit_file_source_indices(RepoId(9071))
+                .unwrap()
+                .len()
+        })
+    };
+    cx.simulate_input("RS");
+    draw_and_drain_test_window(cx);
+    assert_eq!(shown(cx), 2, "case-insensitive by default");
+
+    let set_options = |cx: &mut gpui::VisualTestContext, options: TextSearchOptions| {
+        cx.update(|_, app| {
+            view.read(app).details_pane.clone().update(app, |pane, cx| {
+                pane.file_controller(RepoId(9071), FileListId::CommitFiles)
+                    .borrow_mut()
+                    .search_options = options;
+                pane.notify_commit_file_projection_dependents(cx);
+            })
+        });
+        draw_and_drain_test_window(cx);
+    };
+    set_options(
+        cx,
+        TextSearchOptions {
+            match_case: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(shown(cx), 0, "match case");
+    cx.update(|window, app| {
+        view.read(app).details_pane.clone().update(app, |pane, cx| {
+            pane.review_search_input
+                .update(cx, |input, cx| input.set_text("^[ab]\\.rs$", cx));
+            let _ = window;
+        })
+    });
+    draw_and_drain_test_window(cx);
+    set_options(
+        cx,
+        TextSearchOptions {
+            regex: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(shown(cx), 2, "regex");
+    set_options(
+        cx,
+        TextSearchOptions {
+            regex: true,
+            match_case: true,
+            whole_word: true,
+        },
+    );
+    assert_eq!(shown(cx), 2, "whole word around a full path still matches");
+
+    // Enter steps a.rs -> b.rs; the narrow pane keeps ↑/↓ in the "⋮" menu,
+    // whose Next wraps back to a.rs.
+    cx.simulate_keystrokes("enter");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    // Narrow the bar to its overflow tier (the width it was measured at is
+    // unchanged, so it stays there).
+    cx.update(|_, app| {
+        let details = view.read(app).details_pane.clone();
+        details.update(app, |pane, cx| {
+            pane.review_search_bar
+                .set_tier_for_test(components::QuickSearchTier::Overflow);
+            cx.notify();
+        })
+    });
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("review_search_next").is_none());
+    assert!(cx.debug_bounds("review_search_match_case").is_none());
+    let more = cx
+        .debug_bounds("review_search_more")
+        .expect("the overflow menu button");
+    cx.simulate_click(more.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("review_search_menu").is_some(),
+        "the menu opens"
+    );
+    assert!(
+        cx.debug_bounds("review_search_menu_label").is_some(),
+        "it shows the match count"
+    );
+    let menu = cx.debug_bounds("review_search_menu").unwrap();
+    // Entries: three toggles, then Previous and Next; Next is the last row.
+    let next = gpui::point(menu.center().x, menu.bottom() - px(10.0));
+    cx.simulate_click(next, gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
+    assert!(
+        review_search_input_focused(cx, &view),
+        "stepping keeps typing in the bar"
+    );
+}
+
+#[gpui::test]
+fn f3_steps_the_open_file_filter_and_f2_steps_back(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    cx.simulate_keystrokes("enter");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    cx.simulate_input(".rs");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("f3");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("f2");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
+    assert!(review_search_input_focused(cx, &view));
 }

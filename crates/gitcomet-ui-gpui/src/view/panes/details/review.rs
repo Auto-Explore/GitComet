@@ -9,8 +9,8 @@ pub(super) enum ReviewRow {
     Group(usize),
 }
 
-struct ReviewList {
-    plan: Arc<FileListPlan>,
+pub(super) struct ReviewList {
+    pub(super) plan: Arc<FileListPlan>,
 }
 
 impl DetailsPaneView {
@@ -80,7 +80,7 @@ impl DetailsPaneView {
         );
     }
 
-    fn review_list(&self, list: FileListId) -> Option<ReviewList> {
+    pub(super) fn review_list(&self, list: FileListId) -> Option<ReviewList> {
         let repo = self.active_repo()?;
         let plan = match list {
             FileListId::CommitFiles => self.cached_commit_file_plan(
@@ -186,7 +186,7 @@ impl DetailsPaneView {
         }
     }
 
-    fn review_current_row(&self, list: FileListId, data: &ReviewList) -> Option<usize> {
+    pub(super) fn review_current_row(&self, list: FileListId, data: &ReviewList) -> Option<usize> {
         let repo = self.active_repo()?;
         let key = self
             .review_cursor
@@ -278,7 +278,7 @@ impl DetailsPaneView {
         true
     }
 
-    fn select_review_row(
+    pub(super) fn select_review_row(
         &mut self,
         list: FileListId,
         data: &ReviewList,

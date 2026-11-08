@@ -657,6 +657,10 @@ impl DetailsPaneView {
                 ("range_files_container", repo_id.0),
                 ("range_files_scrollbar", repo_id.0),
                 &self.range_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::RangeFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::RangeFiles,

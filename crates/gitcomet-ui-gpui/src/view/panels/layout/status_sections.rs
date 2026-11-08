@@ -696,7 +696,10 @@ impl DetailsPaneView {
             count,
             cx,
         );
-        Self::vertical_scroll_frame_content(theme, container, scrollbar, scroll, list)
+        let focus = self
+            .review_file_focus(crate::view::rows::FileListId::Status(section))
+            .clone();
+        Self::vertical_scroll_frame_content(theme, container, scrollbar, scroll, Some(focus), list)
             .into_any_element()
     }
 }

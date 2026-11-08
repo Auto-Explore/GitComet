@@ -137,9 +137,9 @@ pub(super) fn local_branch_double_click_action(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct BranchHistoryRevealTarget {
-    pub(super) commit_id: CommitId,
-    pub(super) fallback_scope: Option<LogScope>,
+pub(in crate::view) struct BranchHistoryRevealTarget {
+    pub(in crate::view) commit_id: CommitId,
+    pub(in crate::view) fallback_scope: Option<LogScope>,
 }
 
 pub(in crate::view) fn branch_commit_id(
@@ -164,7 +164,7 @@ pub(in crate::view) fn branch_commit_id(
     }
 }
 
-pub(super) fn branch_click_history_reveal_target(
+pub(in crate::view) fn branch_click_history_reveal_target(
     repo: &RepoState,
     target: &BranchMenuTarget,
     is_head: bool,

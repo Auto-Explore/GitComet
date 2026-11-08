@@ -186,7 +186,8 @@ impl HistoryView {
                             interaction: self.scroll_interaction.clone(),
                         },
                     )
-                    .always_visible();
+                    .always_visible()
+                    .focus_on_press(self.history_panel_focus_handle.clone());
                     if self
                         .history_cache
                         .as_ref()
@@ -314,11 +315,6 @@ impl HistoryView {
                     .min_h(px(0.0))
                     .child(div().flex_1().min_h(px(0.0)).child(body)),
             )
-            .child(crate::view::review_navigation::hint(
-                theme,
-                self.ui_scale(),
-                "↑↓ Commits · Enter Files · Esc Working copy",
-            ))
             .children(find_bar)
     }
 

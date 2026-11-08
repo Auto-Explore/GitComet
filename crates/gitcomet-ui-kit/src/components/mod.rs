@@ -76,7 +76,11 @@ pub use picker_prompt::{
     picker_prompt_layout_ordered, picker_row, remove_row_button, row_height as picker_row_height,
     selected_hint_pill,
 };
-pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus, SearchToggles};
+pub use quick_search_bar::{
+    QUICK_SEARCH_CLOSE_TOOLTIP, QUICK_SEARCH_NEXT_MATCH_TOOLTIP, QUICK_SEARCH_PREV_MATCH_TOOLTIP,
+    QuickSearchBar, QuickSearchFeatures, QuickSearchState, QuickSearchStatus, QuickSearchTier,
+    SearchToggles, quick_search_row_height, quick_search_tier_for_width,
+};
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_behind_box, repository_behind_box_width,
     repository_initials, repository_initials_box,

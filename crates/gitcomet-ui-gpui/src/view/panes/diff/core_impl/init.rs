@@ -203,6 +203,7 @@ impl DiffRenderer {
                 components::TextInputOptions {
                     placeholder: "Search diff".into(),
                     multiline: true,
+                    chromeless: true,
                     ..Default::default()
                 },
                 window,
@@ -210,7 +211,6 @@ impl DiffRenderer {
             );
             input.set_submit_on_enter(true);
             input.set_vertical_scroll_handle(Some(diff_search_scroll.clone()));
-            input.set_vertical_padding(Some(4.0), cx);
             input.set_line_height(
                 Some(ui_scale::design_px_from_percent(
                     18.0,
@@ -409,6 +409,7 @@ impl DiffRenderer {
             diff_search_probe_action: 0,
             diff_search_probe_render: 0,
             diff_search_scroll,
+            diff_search_bar: components::QuickSearchState::new(),
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
             file_diff_cache_repo_id: None,

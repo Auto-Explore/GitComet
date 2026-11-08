@@ -458,7 +458,7 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
         "the history find bar is not the diff search"
     );
     assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
-    assert_eq!(find_label(cx, &view), "Type to search");
+    assert_eq!(find_label(cx, &view), "");
 }
 
 #[gpui::test]
@@ -585,7 +585,7 @@ fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
     );
     cx.simulate_keystrokes("secondary-a backspace");
     settle_typing(cx);
-    assert_eq!(find_label(cx, &view), "Type to search");
+    assert_eq!(find_label(cx, &view), "");
     assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
 }
 
@@ -2761,7 +2761,7 @@ fn indexed_history_find_clearing_and_reopening_do_not_restore_a_stale_count(
     assert_eq!(find_label(cx, &view), "1/2");
     cx.simulate_keystrokes("secondary-a backspace");
     draw_and_park(cx);
-    assert_eq!(find_label(cx, &view), "Type to search");
+    assert_eq!(find_label(cx, &view), "");
     type_query(cx, "bob");
     wait_for_find_request(cx, &view, &store, plain_query("bob"));
     assert_eq!(find_label(cx, &view), "Searching…");

@@ -286,6 +286,7 @@ pub(in crate::view) struct CommitFileProjection {
 struct CommitFileProjectionCacheEntry<K: Eq + Clone> {
     key: K,
     query: String,
+    options: gitcomet_core::text_search::TextSearchOptions,
     projection: Arc<CommitFileProjection>,
 }
 
@@ -526,10 +527,22 @@ fn build_commit_file_projection(
     }
 }
 
-pub(in crate::view) fn path_matches_query(path: &std::path::Path, query_lower: &str) -> bool {
-    super::path_display::path_display_string(path)
-        .to_lowercase()
-        .contains(query_lower)
+/// The file filter's matcher, `None` for an empty query (no filtering).
+pub(in crate::view) fn path_query_matcher(
+    query: &str,
+    options: gitcomet_core::text_search::TextSearchOptions,
+) -> Option<gitcomet_core::text_search::TextSearchMatcher> {
+    (!query.is_empty()).then(|| gitcomet_core::text_search::TextSearchMatcher::new(query, options))
+}
+
+/// Whether the filter keeps `path`. An invalid regex keeps nothing, as in the
+/// other searches.
+pub(in crate::view) fn path_matches_query(
+    path: &std::path::Path,
+    matcher: &gitcomet_core::text_search::TextSearchMatcher,
+) -> bool {
+    matcher.regex_error().is_none()
+        && matcher.is_match(&super::path_display::path_display_string(path))
 }
 
 impl<K: Eq + Clone> CommitFileProjectionCache<K> {
@@ -541,7 +554,7 @@ impl<K: Eq + Clone> CommitFileProjectionCache<K> {
         sort: CommitFileSort,
         filter: CommitFileFilter,
     ) -> Arc<CommitFileProjection> {
-        self.projection_for_query(key, files, sort, filter, "")
+        self.projection_for_query(key, files, sort, filter, "", Default::default())
     }
 
     pub(in crate::view) fn projection_for_query(
@@ -551,28 +564,30 @@ impl<K: Eq + Clone> CommitFileProjectionCache<K> {
         sort: CommitFileSort,
         filter: CommitFileFilter,
         query: &str,
+        options: gitcomet_core::text_search::TextSearchOptions,
     ) -> Arc<CommitFileProjection> {
         if let Some(entry) = self.cached.as_ref()
             && entry.key == *key
             && entry.query == query
+            && entry.options == options
         {
             return Arc::clone(&entry.projection);
         }
 
         let mut projection = build_commit_file_projection(files, sort, filter);
-        if !query.is_empty() {
-            let query = query.to_lowercase();
+        if let Some(matcher) = path_query_matcher(query, options) {
             projection.source_indices = projection
                 .source_indices
                 .iter()
                 .copied()
-                .filter(|&ix| path_matches_query(&files[ix].path, &query))
+                .filter(|&ix| path_matches_query(&files[ix].path, &matcher))
                 .collect();
         }
         let projection = Arc::new(projection);
         self.cached = Some(CommitFileProjectionCacheEntry {
             key: key.clone(),
             query: query.to_owned(),
+            options,
             projection: Arc::clone(&projection),
         });
         projection

@@ -577,12 +577,19 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                     return;
                 }
-                let handled = this
-                    .details_pane
-                    .update(cx, |pane, cx| pane.open_review_search(window, cx))
-                    || this
-                        .main_pane
-                        .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                // The search of the pane holding focus; the main pane's
+                // otherwise (history or diff).
+                let handled = if this.sidebar_pane.read(cx).contains_focus(window, cx) {
+                    this.sidebar_pane
+                        .update(cx, |pane, cx| pane.open_search(window, cx))
+                } else if this.details_pane.read(cx).contains_focus(window, cx) {
+                    this.details_pane
+                        .update(cx, |pane, cx| pane.open_review_search(window, cx))
+                } else {
+                    false
+                } || this
+                    .main_pane
+                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
                 if handled {
                     cx.stop_propagation();
                 }
@@ -682,13 +689,21 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(
-                |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                |this, _: &TextInputDiffPrevSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(false, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 },
             ))
             .on_action(cx.listener(
-                |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                |this, _: &TextInputDiffNextSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(true, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 },
@@ -728,13 +743,21 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(
-                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
+                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(false, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_action(
-                cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
+                cx.listener(|this, _: &DiffNextSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(true, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 }),

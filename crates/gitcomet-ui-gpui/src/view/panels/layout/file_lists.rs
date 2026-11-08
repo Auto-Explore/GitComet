@@ -308,6 +308,10 @@ impl DetailsPaneView {
                 ("commit_details_files_container", repo_id.0),
                 ("commit_details_files_scrollbar", repo_id.0),
                 &self.commit_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::CommitFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::CommitFiles,

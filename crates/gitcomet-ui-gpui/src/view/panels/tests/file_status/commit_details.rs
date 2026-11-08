@@ -1351,13 +1351,15 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
         cx.update(|window, app| !input.read(app).focus_handle().is_focused(window)),
         "a press on a surface that takes no focus must still blur the input"
     );
-    // Deliberately nothing focused rather than a fallback surface: the press
-    // landed on something that is not a pane, so handing focus to one would
-    // silently redirect the user's next keystroke. Global bindings still
-    // resolve at the window root.
+    // The press lands in the details pane, which takes focus itself, so
+    // Cmd/Ctrl-F opens this pane's file filter rather than the main pane's.
     assert!(
-        cx.update(|window, app| window.focused(app).is_none()),
-        "blur leaves no element focused"
+        cx.update(|window, app| view
+            .read(app)
+            .details_pane
+            .read(app)
+            .contains_focus(window, app)),
+        "the details pane holds focus after the press"
     );
 }
 
