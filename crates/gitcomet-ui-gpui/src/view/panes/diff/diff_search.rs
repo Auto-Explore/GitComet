@@ -2394,6 +2394,8 @@ impl DiffRenderer {
     fn diff_search_scroll_to_visible_ix(&mut self, visible_ix: usize) {
         self.clear_diff_text_selection();
         self.diff_selection_range = None;
+        // The match replaces the lines the last right-click menu acted on.
+        self.diff_editor_menu_column = None;
         // Only the hitbox-backed canvases below arm this; clearing it here
         // keeps a request from an earlier view alive into one that cannot serve
         // it.

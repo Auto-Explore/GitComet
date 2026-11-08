@@ -254,6 +254,21 @@ impl Default for HistoryPreferences {
     }
 }
 
+/// What staging, unstaging and discarding do to the open diff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StagingPreferences {
+    /// Open the next file once the open one has no changes left in its list.
+    pub(super) open_next_file_after_last_change: bool,
+}
+
+impl Default for StagingPreferences {
+    fn default() -> Self {
+        Self {
+            open_next_file_after_last_change: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct FileEditingPreferences {
     pub(super) auto_save: bool,
@@ -302,6 +317,7 @@ pub(super) struct UiPreferences {
     pub(super) appearance: AppearancePreferences,
     pub(super) change_tracking: ChangeTrackingPreferences,
     pub(super) file_lists: FileListPreferences,
+    pub(super) staging: StagingPreferences,
     pub(super) diff: DiffPreferences,
     pub(super) security: SecurityPreferences,
     pub(super) merge_tool: MergeToolPreferences,
@@ -352,6 +368,11 @@ impl UiPreferences {
                     .unwrap_or_default(),
                 height: session.change_tracking_height,
                 untracked_height: session.untracked_height,
+            },
+            staging: StagingPreferences {
+                open_next_file_after_last_change: session
+                    .open_next_file_after_last_change
+                    .unwrap_or(true),
             },
             file_lists: FileListPreferences {
                 layout: session

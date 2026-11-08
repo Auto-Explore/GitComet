@@ -103,6 +103,8 @@ pub(super) struct StatusNavigationContext<'a> {
     section: StatusSection,
     entries: Vec<&'a gitcomet_core::domain::FileStatus>,
     current_ix: usize,
+    /// False once the open file left the list; `current_ix` is then 0.
+    open_file_listed: bool,
 }
 
 /// The index `delta` rows from `current`, clamped to the list. `None` when the
@@ -124,6 +126,10 @@ impl<'a> StatusNavigationContext<'a> {
 
     fn adjacent_ix(&self, delta: isize) -> Option<usize> {
         step_ix(self.current_ix, self.entries.len(), delta)
+    }
+
+    pub(super) fn section(&self) -> StatusSection {
+        self.section
     }
 
     pub(super) fn next_or_prev_path(&self) -> Option<std::path::PathBuf> {
@@ -197,6 +203,7 @@ pub(super) fn status_navigation_context<'a>(
         section,
         entries,
         current_ix,
+        open_file_listed: true,
     })
 }
 
@@ -226,6 +233,25 @@ pub(super) fn status_navigation_section(
     })
 }
 
+/// The section F1/F4 step through: the open file's, or once its last change
+/// was staged or discarded and it left the list, the list it was in. The
+/// split view cannot tell which that was, so tracked changes come first.
+fn status_step_section(
+    repo: &RepoState,
+    path: &std::path::Path,
+    area: DiffArea,
+    change_tracking_view: ChangeTrackingView,
+) -> Option<StatusSection> {
+    status_navigation_section(repo, path, area, change_tracking_view).or_else(|| {
+        [StatusSection::Unstaged, StatusSection::Untracked]
+            .into_iter()
+            .find(|section| {
+                StatusSectionEntries::from_repo(repo, *section)
+                    .is_some_and(|entries| entries.len() > 0)
+            })
+    })
+}
+
 /// `section_order` is the section's display order in the backing slice's index
 /// space. `None` falls back to source order, which is only correct where the
 /// caller does not care about position (it is what picks a *neighbouring* file).
@@ -252,6 +278,39 @@ pub(super) fn status_navigation_context_for_repo<'a>(
         section,
         entries,
         current_ix,
+        open_file_listed: true,
+    })
+}
+
+/// The list the open working-tree file was in, after its last change was
+/// staged or discarded and it left the list. `None` while it is still listed
+/// or the status is not loaded.
+fn status_navigation_context_without_open_file<'a>(
+    repo: &'a RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    section_order: Option<&[usize]>,
+) -> Option<StatusNavigationContext<'a>> {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
+        return None;
+    };
+    if repo.status_entry_for_path(*area, path).is_some() {
+        return None;
+    }
+    let section = status_step_section(repo, path, *area, change_tracking_view)?;
+    let entries: Vec<_> = match section_order {
+        Some(order) => StatusSectionEntries::from_repo_with_order(repo, section, order.into())?
+            .iter()
+            .collect(),
+        None => StatusSectionEntries::from_repo(repo, section)?
+            .iter()
+            .collect(),
+    };
+    (!entries.is_empty()).then_some(StatusNavigationContext {
+        section,
+        entries,
+        current_ix: 0,
+        open_file_listed: false,
     })
 }
 
@@ -471,13 +530,27 @@ pub(super) fn adjacent_diff_file_target_for_repo(
 
     match diff_target {
         DiffTarget::WorkingTree { .. } => {
-            let navigation = status_navigation_context_for_repo(
+            let navigation = match status_navigation_context_for_repo(
                 repo,
                 diff_target,
                 change_tracking_view,
                 status_section_order,
-            )?;
-            let target_ix = navigation.adjacent_ix(delta)?;
+            ) {
+                Some(navigation) => navigation,
+                None => status_navigation_context_without_open_file(
+                    repo,
+                    diff_target,
+                    change_tracking_view,
+                    status_section_order,
+                )?,
+            };
+            let target_ix = if navigation.open_file_listed {
+                navigation.adjacent_ix(delta)?
+            } else if delta == isize::MAX {
+                navigation.entries.len().checked_sub(1)?
+            } else {
+                0
+            };
             let entry = navigation.entries.get(target_ix)?;
             let path = entry.path.clone();
             let area = navigation.section.diff_area();
@@ -549,7 +622,7 @@ impl DiffRenderer {
         else {
             return None;
         };
-        let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
+        let section = status_step_section(repo, path.as_path(), *area, change_tracking_view)?;
         self.commands
             .navigation
             .as_ref()?
@@ -776,8 +849,6 @@ impl DiffRenderer {
                 path,
                 is_conflicted,
             } => {
-                self.clear_status_multi_selection(repo_id, cx);
-                self.scroll_status_section_to_path(section, &path, cx);
                 if review_landing {
                     self.prepare_review_file_jump(
                         repo_id,
@@ -785,15 +856,7 @@ impl DiffRenderer {
                         delta < 0,
                     );
                 }
-                if is_conflicted {
-                    self.store
-                        .dispatch(Msg::SelectConflictDiff { repo_id, path });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::working_tree(path, area),
-                    });
-                }
+                self.open_status_file(repo_id, section, area, path, is_conflicted, cx);
             }
             AdjacentDiffFileTarget::Commit {
                 commit_id,
@@ -811,6 +874,29 @@ impl DiffRenderer {
         }
 
         true
+    }
+
+    /// Opens a file of a status list, revealing its row.
+    pub(super) fn open_status_file(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+        area: DiffArea,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.clear_status_multi_selection(repo_id, cx);
+        self.scroll_status_section_to_path(section, &path, cx);
+        if is_conflicted {
+            self.store
+                .dispatch(Msg::SelectConflictDiff { repo_id, path });
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::working_tree(path, area),
+            });
+        }
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file(
@@ -963,6 +1049,88 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Once the open file's last change is staged or discarded it leaves its
+    /// list; F1/F4 then open the list's first file (End its last) instead of
+    /// doing nothing.
+    #[test]
+    fn a_step_from_a_file_that_left_its_list_opens_the_first_file() {
+        use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::new(vec![
+                    file_status("s1.txt", Added),
+                    file_status("s2.txt", Modified),
+                ]),
+                unstaged: std::sync::Arc::new(vec![
+                    file_status("a.txt", Untracked),
+                    file_status("b.txt", Modified),
+                    file_status("c.txt", Modified),
+                ]),
+            }
+            .into(),
+        );
+        let opened = |target: Option<AdjacentDiffFileTarget>| match target {
+            Some(AdjacentDiffFileTarget::WorkingTree { path, .. }) => Some(path),
+            _ => None,
+        };
+        for (view, area, order, first, last) in [
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Unstaged,
+                None,
+                "a.txt",
+                "c.txt",
+            ),
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Unstaged,
+                Some(&[2, 0, 1][..]),
+                "c.txt",
+                "b.txt",
+            ),
+            // The split view tries the tracked list first.
+            (
+                ChangeTrackingView::SplitUntracked,
+                DiffArea::Unstaged,
+                None,
+                "b.txt",
+                "c.txt",
+            ),
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Staged,
+                None,
+                "s1.txt",
+                "s2.txt",
+            ),
+        ] {
+            let gone = DiffTarget::working_tree("gone.txt".into(), area);
+            let case = format!("{view:?} {area:?} {order:?}");
+            for delta in [-1, 1, isize::MIN] {
+                assert_eq!(
+                    opened(adjacent_diff_file_target_for_repo(
+                        &repo, &gone, view, delta, None, order
+                    )),
+                    Some(first.into()),
+                    "{case} {delta}"
+                );
+            }
+            assert_eq!(
+                opened(adjacent_diff_file_target_for_repo(
+                    &repo,
+                    &gone,
+                    view,
+                    isize::MAX,
+                    None,
+                    order
+                )),
+                Some(last.into()),
+                "{case} End"
+            );
         }
     }
 

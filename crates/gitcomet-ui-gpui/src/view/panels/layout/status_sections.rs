@@ -326,10 +326,26 @@ impl DetailsPaneView {
             cx.notify();
             return true;
         }
-        if repo.local_actions_in_flight > 0
-            || (keystroke.key == "s" && area != DiffArea::Unstaged)
-            || (keystroke.key == "u" && area != DiffArea::Staged)
+        if repo.local_actions_in_flight > 0 || (keystroke.key == "s" && area != DiffArea::Unstaged)
         {
+            return true;
+        }
+        // Ctrl/Cmd+U unstages in the staged list and discards (after the
+        // confirmation) in the unstaged ones, as their menus show.
+        if keystroke.key == "u" && area == DiffArea::Unstaged {
+            let selection = self.status_section_action_selection(repo_id, section);
+            if !selection.paths.is_empty() {
+                self.open_popover_at(
+                    PopoverKind::DiscardChangesConfirm {
+                        repo_id,
+                        area,
+                        path: selection.popover_path(),
+                    },
+                    crate::view::conflict_markers::centered_dialog_anchor(window),
+                    window,
+                    cx,
+                );
+            }
             return true;
         }
         if keystroke.key == "space"

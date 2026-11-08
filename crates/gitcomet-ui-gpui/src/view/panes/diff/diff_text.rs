@@ -3,6 +3,8 @@ use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
 use crate::view::text_geometry::DiffTextHit;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 mod editor_context_menu;
+mod line_actions;
+pub(in crate::view) use line_actions::DiffLineAction;
 
 #[cfg(test)]
 thread_local! {
@@ -85,6 +87,14 @@ impl DiffRenderer {
         self.diff_text_autoscroll_target = None;
     }
 
+    /// Places the text selection span. It drops the selected rows, so rows
+    /// beside a text selection are always the newer of the two.
+    pub(in crate::view) fn set_diff_text_span(&mut self, anchor: DiffTextPos, head: DiffTextPos) {
+        self.diff_text_anchor = Some(anchor);
+        self.diff_text_head = Some(head);
+        self.diff_selection_range = None;
+    }
+
     /// Drop click affordances projected into the current visible-row space.
     /// Pair and occurrence spans carry row indices and display offsets, so
     /// neither can survive a projection reset or a replacement source.
@@ -100,6 +110,8 @@ impl DiffRenderer {
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.diff_focused_change_block = None;
+        // Not the stage advance: the reload it waits for rebuilds the rows
+        // and clears the selection through here. A target change drops it.
         self.clear_diff_text_selection();
     }
 
@@ -626,9 +638,7 @@ impl DiffRenderer {
         suppress_clicks: usize,
     ) {
         self.diff_text_selecting = false;
-        self.diff_text_anchor = Some(anchor);
-        self.diff_text_head = Some(head);
-        self.diff_selection_range = None;
+        self.set_diff_text_span(anchor, head);
         self.sync_diff_focus_to_text_selection();
         self.diff_suppress_clicks_remaining = suppress_clicks.min(u8::MAX as usize) as u8;
     }
@@ -952,10 +962,10 @@ impl DiffRenderer {
         self.diff_text_occurrences.clear();
         self.diff_text_pending_syntax_click = None;
         self.diff_text_selecting = true;
-        self.diff_text_anchor = Some(pos);
-        self.diff_text_head = Some(pos);
+        self.diff_focused_change_block = None;
+        self.diff_stage_advance = None;
+        self.set_diff_text_span(pos, pos);
         self.diff_selection_anchor = None;
-        self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
         self.begin_diff_text_scroll_tracking(position, cx);
@@ -976,9 +986,9 @@ impl DiffRenderer {
         };
         let pos = hit.pos;
         self.diff_text_selecting = true;
-        self.diff_text_anchor = Some(pos);
-        self.diff_text_head = Some(pos);
-        self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
+        self.diff_stage_advance = None;
+        self.set_diff_text_span(pos, pos);
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
         if let Some(document_region) =
@@ -1581,6 +1591,27 @@ impl DiffRenderer {
         region: DiffTextRegion,
     ) -> Option<(usize, usize)> {
         let (start, end) = self.diff_text_normalized_selection()?;
+        let one_column = view == DiffViewMode::Split
+            && start.region == end.region
+            && matches!(
+                start.region,
+                DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+            );
+        if one_column && start.region != region {
+            return None;
+        }
+        let (first, last) = self.diff_text_selection_line_rows(view)?;
+        (first..=last).contains(&row).then_some((first, last))
+    }
+
+    /// The first and last source rows a line action on the text selection
+    /// takes, wherever it was invoked from: the rows from the first to the
+    /// last line with a selected character, or a selected blank line.
+    pub(super) fn diff_text_selection_line_rows(
+        &self,
+        view: DiffViewMode,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = self.diff_text_normalized_selection()?;
         if start == end {
             return None;
         }
@@ -1588,12 +1619,6 @@ impl DiffRenderer {
             DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
             DiffViewMode::Inline => &[DiffTextRegion::Inline],
         };
-        let one_column = view == DiffViewMode::Split
-            && start.region == end.region
-            && regions.contains(&start.region);
-        if one_column && start.region != region {
-            return None;
-        }
         let takes = |row: usize| {
             regions
                 .iter()
@@ -1603,7 +1628,7 @@ impl DiffRenderer {
         let last = (first..=end.source_visible_ix)
             .rev()
             .find(|&row| takes(row))?;
-        (first..=last).contains(&row).then_some((first, last))
+        Some((first, last))
     }
 
     /// The part of one row a selection covers, or `None` when the selection

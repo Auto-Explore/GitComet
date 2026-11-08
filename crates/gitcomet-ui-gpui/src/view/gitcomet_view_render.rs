@@ -1,3 +1,4 @@
+use super::gitcomet_view::NavKeyFocus;
 use super::*;
 use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
@@ -694,7 +695,7 @@ impl Render for GitCometView {
                         cx.stop_propagation();
                         return;
                     }
-                    this.defer_search_match_navigation(false, cx);
+                    this.defer_search_match_navigation(false, NavKeyFocus::TextInput, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -704,7 +705,7 @@ impl Render for GitCometView {
                         cx.stop_propagation();
                         return;
                     }
-                    this.defer_search_match_navigation(true, cx);
+                    this.defer_search_match_navigation(true, NavKeyFocus::TextInput, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -748,7 +749,7 @@ impl Render for GitCometView {
                         cx.stop_propagation();
                         return;
                     }
-                    this.defer_search_match_navigation(false, cx);
+                    this.defer_search_match_navigation(false, NavKeyFocus::Elsewhere, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -758,7 +759,7 @@ impl Render for GitCometView {
                         cx.stop_propagation();
                         return;
                     }
-                    this.defer_search_match_navigation(true, cx);
+                    this.defer_search_match_navigation(true, NavKeyFocus::Elsewhere, cx);
                     cx.stop_propagation();
                 }),
             )

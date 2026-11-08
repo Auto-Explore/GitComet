@@ -1949,6 +1949,7 @@ impl DiffRenderer {
         self.pending_target = Some(target);
         self.diff_surface_memo.borrow_mut().take();
         self.clear_diff_selection_state();
+        self.diff_stage_advance = None;
         self.diff_autoscroll_pending = true;
         self.ensure_file_diff_cache(cx);
         self.ensure_rendered_patch_diff_cache(cx);
@@ -1981,6 +1982,8 @@ impl DiffRenderer {
             if repositories_changed {
                 self.prune_orphaned_file_editor_stash(cx);
             }
+            // The status lanes and the action count are not in the fingerprint.
+            self.resolve_next_file_advance(cx);
             return false;
         }
         self.notify_fingerprint = fingerprint;
@@ -2005,6 +2008,7 @@ impl DiffRenderer {
         }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
+            self.diff_stage_advance = None;
             self.diff_autoscroll_pending = next_diff_target.is_some();
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
@@ -2037,6 +2041,7 @@ impl DiffRenderer {
         }
 
         self.ensure_rendered_patch_diff_cache(cx);
+        self.resolve_next_file_advance(cx);
 
         cx.notify();
         true
@@ -2422,16 +2427,18 @@ impl DiffRenderer {
             };
 
             self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                source_visible_ix: 0,
-                region,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                source_visible_ix: end_visible_ix,
-                region,
-                offset: end_offset,
-            });
+            self.set_diff_text_span(
+                DiffTextPos {
+                    source_visible_ix: 0,
+                    region,
+                    offset: 0,
+                },
+                DiffTextPos {
+                    source_visible_ix: end_visible_ix,
+                    region,
+                    offset: end_offset,
+                },
+            );
             if self.diff_text_has_selection() {
                 self.diff_text_selection_owner.adopt(window, cx);
             }
@@ -2452,16 +2459,18 @@ impl DiffRenderer {
                 .len();
 
             self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                source_visible_ix: 0,
-                region: DiffTextRegion::Inline,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                source_visible_ix: end_visible_ix,
-                region: DiffTextRegion::Inline,
-                offset: end_offset,
-            });
+            self.set_diff_text_span(
+                DiffTextPos {
+                    source_visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                },
+                DiffTextPos {
+                    source_visible_ix: end_visible_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: end_offset,
+                },
+            );
             if self.diff_text_has_selection() {
                 self.diff_text_selection_owner.adopt(window, cx);
             }
@@ -2490,16 +2499,18 @@ impl DiffRenderer {
             .len();
 
         self.diff_text_selecting = false;
-        self.diff_text_anchor = Some(DiffTextPos {
-            source_visible_ix: 0,
-            region: start_region,
-            offset: 0,
-        });
-        self.diff_text_head = Some(DiffTextPos {
-            source_visible_ix: end_visible_ix,
-            region: end_region,
-            offset: end_offset,
-        });
+        self.set_diff_text_span(
+            DiffTextPos {
+                source_visible_ix: 0,
+                region: start_region,
+                offset: 0,
+            },
+            DiffTextPos {
+                source_visible_ix: end_visible_ix,
+                region: end_region,
+                offset: end_offset,
+            },
+        );
         if self.diff_text_has_selection() {
             self.diff_text_selection_owner.adopt(window, cx);
         }

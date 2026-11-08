@@ -234,11 +234,14 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         // Observers also run after a bound action handled the keystroke (gpui
         // passes that action here); acting again would run F3 twice and skip
         // every other change block.
+        let line_key = crate::view::is_diff_line_key(&event.keystroke);
         if event.action.is_some()
-            || !is_diff_shortcut_candidate(&event.keystroke)
+            || !(line_key || is_diff_shortcut_candidate(&event.keystroke))
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
-                    || context.contains("ChangedFiles")
+                    // File lists own their navigation keys but not S/U,
+                    // which act on the diff's outlined block from there.
+                    || (context.contains("ChangedFiles") && !line_key)
                     || context.contains("ReviewDiff")
                     || context.contains("Terminal")
                     || context.contains("ContextMenu")
@@ -259,6 +262,22 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         else {
             return;
         };
+
+        // Bare S/U/D from outside the diff act only on its outlined change
+        // block, never through the full diff shortcut table (conflict picks).
+        if line_key {
+            let handled = entry
+                .view
+                .update(cx, |view, cx| {
+                    view.handle_outlined_change_line_key(&event.keystroke, window, cx)
+                })
+                .unwrap_or(false);
+            if handled {
+                window.refresh();
+                cx.stop_propagation();
+            }
+            return;
+        }
 
         let handled = entry
             .diff_renderer

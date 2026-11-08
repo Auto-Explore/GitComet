@@ -88,7 +88,8 @@ impl QuickSearchStatus {
 }
 
 /// How much of the bar fits, widest first. Each step down hides one more
-/// group: first the match label and previous/next buttons, then the toggles
+/// group: first previous/next and the in-row match label (which moves under
+/// the bar), then the toggles
 /// (into the "⋮" menu, with stepping), then the search icon.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum QuickSearchTier {
@@ -200,7 +201,7 @@ fn tier_width(
 }
 
 /// The widest tier that fits `width`. `current` is the tier now shown: growing
-/// into a wider tier needs [`HYSTERESIS_PX`] of slack.
+/// into a wider tier needs `HYSTERESIS_PX` of slack.
 pub fn quick_search_tier_for_width(
     width: Pixels,
     features: QuickSearchFeatures,
@@ -388,10 +389,35 @@ impl<V: 'static> QuickSearchBar<V> {
             })
             .flatten();
         let prefix = self.id_prefix.clone();
-        let bar = self.render_bar(tier, theme, ui_scale, cx);
-        let bar = match natural_width {
-            Some(width) => bar.w(width).max_w_full(),
-            None => bar.w_full(),
+        let status = self.status;
+        let bar = self.render_bar(tier, theme, ui_scale, cx).w_full();
+        // A tier without the in-row label shows the status under the bar.
+        let label = status.label();
+        let status_line = (!(features.navigation && tier.shows_navigation()) && !label.is_empty())
+            .then(|| {
+                div()
+                    .px(ui_scale.px(PAD_X_PX))
+                    .pt(ui_scale.px(2.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(status_color(status, theme))
+                    .debug_selector({
+                        let prefix = prefix.clone();
+                        move || format!("{prefix}_match_label")
+                    })
+                    .child(label)
+            });
+        let column = div()
+            .flex()
+            .flex_col()
+            .min_w(px(0.0))
+            .child(bar)
+            .children(status_line);
+        let column = match natural_width {
+            Some(width) => column.w(width).max_w_full(),
+            None => column.w_full(),
         };
 
         div()
@@ -429,7 +455,7 @@ impl<V: 'static> QuickSearchBar<V> {
                 .left_0()
                 .size_full(),
             )
-            .child(bar)
+            .child(column)
     }
 
     fn render_bar(
@@ -461,11 +487,7 @@ impl<V: 'static> QuickSearchBar<V> {
             theme.colors.accent.foreground,
             if theme.is_dark { 0.34 } else { 0.24 },
         );
-        let label_color = if status.is_error() {
-            theme.colors.status.danger.foreground
-        } else {
-            theme.colors.foreground.secondary
-        };
+        let label_color = status_color(status, theme);
         let icon_button = |suffix: &str, icon: &'static str, color| {
             Button::new(id(suffix), "")
                 .start_slot(svg_icon(icon, color, ui_scale.px(14.0)))
@@ -650,7 +672,6 @@ impl<V: 'static> QuickSearchBar<V> {
                     MenuParts {
                         prefix: prefix.clone(),
                         state: Rc::clone(&state),
-                        status,
                         options,
                         on_newline,
                         navigation,
@@ -687,6 +708,14 @@ impl<V: 'static> QuickSearchBar<V> {
         }
 
         bar.children(menu)
+    }
+}
+
+fn status_color(status: QuickSearchStatus, theme: AppTheme) -> gpui::Rgba {
+    if status.is_error() {
+        theme.colors.status.danger.foreground
+    } else {
+        theme.colors.foreground.secondary
     }
 }
 
@@ -731,7 +760,6 @@ const TOGGLES: [Toggle; 3] = [
 struct MenuParts<V: 'static> {
     prefix: SharedString,
     state: Rc<QuickSearchState>,
-    status: QuickSearchStatus,
     options: Option<(SearchToggles, OptionsCallback<V>)>,
     on_newline: Option<BarCallback<V>>,
     navigation: Option<Navigation<V>>,
@@ -748,34 +776,12 @@ fn render_menu<V: 'static>(
     let MenuParts {
         prefix,
         state,
-        status,
         options,
         on_newline,
         navigation,
     } = parts;
     let id = |suffix: &str| -> SharedString { format!("{prefix}_menu_{suffix}").into() };
     let mut items: Vec<AnyElement> = Vec::new();
-
-    let label = status.label();
-    if !label.is_empty() {
-        items.push(
-            div()
-                .px(ui_scale.px(8.0))
-                .py(ui_scale.px(4.0))
-                .text_size(theme.ui_text(12.0))
-                .text_color(if status.is_error() {
-                    theme.colors.status.danger.foreground
-                } else {
-                    theme.colors.foreground.secondary
-                })
-                .debug_selector({
-                    let prefix = prefix.clone();
-                    move || format!("{prefix}_menu_label")
-                })
-                .child(label)
-                .into_any_element(),
-        );
-    }
 
     if let Some((options, on_toggle)) = options {
         for toggle in TOGGLES {

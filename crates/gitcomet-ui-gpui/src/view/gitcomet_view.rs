@@ -2478,9 +2478,29 @@ impl GitCometView {
         false
     }
 
+    /// Bare S or U pressed outside the diff, e.g. in the file list that
+    /// opened it: acts on the change block the diff outlines, if shown.
+    pub(crate) fn handle_outlined_change_line_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.documents_active {
+            return false;
+        }
+        self.diff_renderer.update(cx, |pane, cx| {
+            let Some(action) = pane.diff_line_action_for_key(keystroke) else {
+                return false;
+            };
+            pane.apply_outlined_block_line_action(action, window, cx)
+        })
+    }
+
     pub(super) fn defer_search_match_navigation(
         &self,
         forward: bool,
+        pressed_in: NavKeyFocus,
         cx: &mut gpui::Context<Self>,
     ) {
         let view = cx.weak_entity();
@@ -2496,18 +2516,27 @@ impl GitCometView {
                 }) else {
                     return;
                 };
-                let handled = if target.entity_id() == primary {
-                    main.update(cx, |main, cx| main.navigate_search_match(forward, cx))
+                let (handled, in_diff) = if target.entity_id() == primary {
+                    let in_diff = !main.read(cx).history_is_active_surface(cx);
+                    let handled =
+                        main.update(cx, |main, cx| main.navigate_search_match(forward, cx));
+                    (handled, in_diff)
                 } else {
-                    target.update(cx, |pane, cx| {
+                    let handled = target.update(cx, |pane, cx| {
                         if forward {
                             pane.navigate_next_search_match_or_diff_change(cx)
                         } else {
                             pane.navigate_prev_search_match_or_diff_change(cx)
                         }
-                    })
+                    });
+                    (handled, true)
                 };
                 if handled {
+                    if in_diff && pressed_in == NavKeyFocus::Elsewhere {
+                        target.update(cx, |pane, cx| {
+                            pane.focus_diff_after_navigation(window, cx);
+                        });
+                    }
                     window.refresh();
                 }
             });
@@ -2578,12 +2607,16 @@ impl GitCometView {
         if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
             return;
         }
-        self.defer_text_input_main_pane_action(cx, move |pane, _window, cx| {
-            if previous {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let handled = if previous {
                 pane.navigate_prev_diff_change(cx)
             } else {
                 pane.navigate_next_diff_change(cx)
+            };
+            if handled {
+                pane.focus_diff_after_navigation(window, cx);
             }
+            handled
         });
     }
 
@@ -2903,4 +2936,11 @@ impl GitCometView {
             cx.notify();
         }
     }
+}
+
+/// Where a diff navigation key was pressed: a text field keeps its focus.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum NavKeyFocus {
+    TextInput,
+    Elsewhere,
 }

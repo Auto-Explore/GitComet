@@ -974,6 +974,11 @@ fn review_file_filter_steps_through_matches_and_honours_options(cx: &mut gpui::T
     draw_and_drain_test_window(cx);
     assert!(cx.debug_bounds("review_search_next").is_none());
     assert!(cx.debug_bounds("review_search_match_case").is_none());
+    let bar = cx.debug_bounds("review_search_more").unwrap();
+    let label = cx
+        .debug_bounds("review_search_match_label")
+        .expect("the narrow bar still shows the match count");
+    assert!(label.top() >= bar.bottom(), "the count sits under the bar");
     let more = cx
         .debug_bounds("review_search_more")
         .expect("the overflow menu button");
@@ -982,10 +987,6 @@ fn review_file_filter_steps_through_matches_and_honours_options(cx: &mut gpui::T
     assert!(
         cx.debug_bounds("review_search_menu").is_some(),
         "the menu opens"
-    );
-    assert!(
-        cx.debug_bounds("review_search_menu_label").is_some(),
-        "it shows the match count"
     );
     let menu = cx.debug_bounds("review_search_menu").unwrap();
     // Entries: three toggles, then Previous and Next; Next is the last row.

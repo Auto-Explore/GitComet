@@ -695,3 +695,39 @@ fn status_section_keys_step_through_files(cx: &mut gpui::TestAppContext) {
     press(cx, "down", "b.rs");
     assert!(selected(cx, &view, DiffArea::Unstaged).len() <= 1);
 }
+
+/// Ctrl+U in an unstaged list asks to discard the selection; Ctrl+D, beside
+/// Ctrl+S, does nothing there.
+#[gpui::test]
+fn ctrl_u_in_the_unstaged_list_asks_to_discard(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = fixture(cx);
+    apply_state(cx, &view, app_state_with_active_repo(status_repo()));
+    click_row(
+        cx,
+        StatusSection::CombinedUnstaged,
+        0,
+        gpui::Modifiers::default(),
+    );
+    wait_until_store_diff_target_path(cx, &view, Path::new("a.rs"));
+    let discard_prompt = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            match view
+                .read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+            {
+                Some(PopoverKind::DiscardChangesConfirm { area, path, .. }) => Some((area, path)),
+                _ => None,
+            }
+        })
+    };
+    cx.simulate_keystrokes("ctrl-d");
+    draw_and_drain_test_window(cx);
+    assert_eq!(discard_prompt(cx), None, "Ctrl+D must not discard");
+    cx.simulate_keystrokes("ctrl-u");
+    draw_and_drain_test_window(cx);
+    // No path: the clicked row is an explicit selection, which the dialog
+    // discards, as the list's Discard button does.
+    assert_eq!(discard_prompt(cx), Some((DiffArea::Unstaged, None)));
+}
