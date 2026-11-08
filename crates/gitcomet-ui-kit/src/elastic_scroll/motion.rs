@@ -1,9 +1,9 @@
 use gpui::TouchPhase;
 use std::time::{Duration, Instant};
 
-const MAX_STRETCH: f32 = 36.0;
-const RESISTANCE: f32 = 0.085;
-const SPRING_RATE: f32 = 30.0;
+const MAX_STRETCH: f32 = 72.0;
+const RESISTANCE: f32 = 0.4;
+const SPRING_RATE: f32 = 20.0;
 const MOMENTUM_GAP: Duration = Duration::from_millis(150);
 
 #[derive(Default)]
@@ -212,7 +212,7 @@ mod tests {
         let mut motion = Motion::default();
         motion.begin(TouchPhase::Started, now);
         motion.overscroll(100.0, now);
-        assert!((6.0..8.0).contains(&motion.offset()));
+        assert!((20.0..30.0).contains(&motion.offset()));
         assert!(
             !motion.animating(),
             "holding a finger still needs no frames"
@@ -222,6 +222,23 @@ mod tests {
         motion.begin(TouchPhase::Ended, now);
         assert!(motion.animating());
         motion.advance(now + Duration::from_secs(1));
+        assert_eq!(motion.offset(), 0.0);
+        assert!(!motion.animating());
+    }
+
+    #[test]
+    fn release_has_a_gentle_return_then_settles_without_an_idle_animation() {
+        let now = Instant::now();
+        let mut motion = Motion::default();
+        motion.begin(TouchPhase::Started, now);
+        motion.overscroll(100.0, now);
+        let stretched = motion.offset();
+        motion.begin(TouchPhase::Ended, now);
+        motion.advance(now + Duration::from_millis(40));
+        assert!((0.75..0.9).contains(&(motion.offset() / stretched)));
+        motion.advance(now + Duration::from_millis(200));
+        assert!((0.05..0.15).contains(&(motion.offset() / stretched)));
+        motion.advance(now + Duration::from_millis(650));
         assert_eq!(motion.offset(), 0.0);
         assert!(!motion.animating());
     }
@@ -314,8 +331,8 @@ mod tests {
         let stretch = motion.offset();
         assert_eq!(motion.take_reversal(-2.0, now), 0.0);
         assert!((motion.offset() - (stretch - 2.0)).abs() < 0.001);
-        let remaining = motion.take_reversal(-10.0, now);
-        assert!((remaining - (-10.0 + stretch - 2.0)).abs() < 0.001);
+        let remaining = motion.take_reversal(-(stretch + 10.0), now);
+        assert!((remaining + 12.0).abs() < 0.001);
         assert_eq!(motion.offset(), 0.0);
         assert!(!motion.animating());
     }

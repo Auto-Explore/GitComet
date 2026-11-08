@@ -31,6 +31,186 @@ fn selector(ix: usize) -> &'static str {
     format!("sidebar_sticky_header_{ix}").leak()
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_sidebar_stretches_rows_below_a_fixed_sticky_header(cx: &mut gpui::TestAppContext) {
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = fixture(100);
+    let repo_id = state.repos[0].id;
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+            view.set_theme(AppTheme::from_key("gitcomet_light").unwrap(), cx);
+        });
+        pane.update(app, |pane, _| pane.set_collapsed_keys_for_test(&[]));
+    });
+    draw(cx);
+    let row = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            presentation
+                .rows
+                .iter()
+                .enumerate()
+                .find_map(|(ix, row)| {
+                    (matches!(row, BranchSidebarRow::Branch { .. })
+                        && !pane
+                            .sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .contains(&ix))
+                    .then_some(ix)
+                })
+                .unwrap()
+        })
+    });
+    let body_selector: &'static str = format!("branch_row_{}_{row}", repo_id.0).leak();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, app| {
+            window.activate();
+            pane.update(app, |pane, _| {
+                pane.pending_sidebar_navigation = None;
+                pane.sidebar_scroll_animation = None;
+                pane.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
+                pane.branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+            });
+            // Runtime overrides do not invalidate the deterministic fixture's
+            // cached views; rebuild their live input handlers explicitly.
+            window.refresh();
+        });
+        draw(cx);
+        let header = cx.debug_bounds(selector(0)).unwrap();
+        assert_eq!(
+            header.top(),
+            cx.update(|_, app| pane
+                .read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .top())
+        );
+        let body = cx.debug_bounds(body_selector).unwrap();
+        for (delta, phase) in [
+            (100.0, gpui::TouchPhase::Started),
+            (0.0, gpui::TouchPhase::Ended),
+        ] {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: header.center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                modifiers: Default::default(),
+                touch_phase: phase,
+            });
+            draw(cx);
+            assert_eq!(cx.debug_bounds(selector(0)).unwrap(), header);
+            let moved = cx.debug_bounds(body_selector).unwrap();
+            let status = cx.update(|window, app| {
+                (
+                    window.is_window_active(),
+                    app.reduce_motion(),
+                    pane.read(app).theme.is_dark,
+                    pane.read(app)
+                        .branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .offset()
+                        .y,
+                )
+            });
+            assert!(
+                moved.top() > body.top() + px(20.0),
+                "phase={phase:?}, body={body:?}, moved={moved:?}, active/reduced/dark/logical={status:?}"
+            );
+            let divider = cx.debug_bounds("sidebar_sticky_divider_0").unwrap();
+            assert_eq!(divider.bottom(), header.bottom());
+            assert_eq!(
+                cx.update(|_, app| pane
+                    .read(app)
+                    .branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y),
+                px(0.0)
+            );
+        }
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(cx.debug_bounds(selector(0)).unwrap(), header);
+        assert_eq!(cx.debug_bounds(body_selector).unwrap(), body);
+
+        // Focus the natural group without activating it (cancel the pointer
+        // click), then use Space while the bounce holds it at its top anchor.
+        let group_key = branch_sidebar::local_group_storage_key("shared");
+        let group = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                pane.branch_sidebar_presentation_cached()
+                    .unwrap()
+                    .structure
+                    .headers[group_key.as_str()]
+            })
+        });
+        let group_selector: &'static str = format!("branch_group_{group}").leak();
+        let group_bounds = cx.debug_bounds(group_selector).unwrap();
+        cx.simulate_event(gpui::MouseDownEvent {
+            position: group_bounds.center(),
+            button: gpui::MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        let outside = point(header.right() + px(100.0), header.top());
+        cx.simulate_mouse_move(outside, Some(gpui::MouseButton::Left), Default::default());
+        cx.simulate_event(gpui::MouseUpEvent {
+            position: outside,
+            button: gpui::MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        draw(cx);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: header.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Started,
+        });
+        draw(cx);
+        assert!(cx.debug_bounds(body_selector).unwrap().top() > body.top() + px(20.0));
+        cx.simulate_keystrokes("space");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("space").unwrap(),
+        });
+        draw(cx);
+        cx.update(|_, app| {
+            assert!(branch_sidebar::is_collapsed(
+                &pane.read(app).collapsed_items_for_test(),
+                &group_key
+            ));
+        });
+    });
+}
+
 #[gpui::test]
 fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

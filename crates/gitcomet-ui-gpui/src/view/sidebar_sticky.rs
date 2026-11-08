@@ -327,6 +327,27 @@ pub(super) fn row_y(
     )
 }
 
+/// A pinned row keeps its viewport anchor while the list stretches. Rows that
+/// have not reached an anchor follow the content until they reach one.
+pub(super) fn elastic_row_y(
+    row: usize,
+    rank: usize,
+    count: usize,
+    scroll: f32,
+    height: f32,
+    row_height: f32,
+    displacement: f32,
+) -> f32 {
+    let natural = row as f32 * row_height - scroll;
+    let top = rank as f32 * row_height;
+    let bottom = height - (count - rank) as f32 * row_height;
+    if natural <= top || natural >= bottom {
+        natural.clamp(top, bottom)
+    } else {
+        (natural + displacement).clamp(top, bottom)
+    }
+}
+
 pub(super) fn navigation_offset(
     row: usize,
     headers: &[usize],
@@ -382,6 +403,29 @@ pub(super) fn owning_section(row: &BranchSidebarRow) -> Option<BranchSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elastic_stretch_keeps_edge_headers_fixed_and_moves_unstuck_rows() {
+        for displacement in [-60.0, -20.0, 20.0, 60.0] {
+            assert_eq!(elastic_row_y(0, 0, 3, 0.0, 240.0, 24.0, displacement), 0.0);
+            assert_eq!(
+                elastic_row_y(100, 2, 3, 0.0, 240.0, 24.0, displacement),
+                216.0
+            );
+            assert_eq!(
+                elastic_row_y(4, 1, 3, 0.0, 240.0, 24.0, displacement),
+                96.0 + displacement
+            );
+        }
+        for scroll in [0.0, 48.5, 120.0, 2400.0] {
+            for (rank, row) in [0, 4, 100].into_iter().enumerate() {
+                assert_eq!(
+                    elastic_row_y(row, rank, 3, scroll, 240.0, 24.0, 0.0),
+                    row_y(row, rank, 3, scroll, 240.0, 24.0)
+                );
+            }
+        }
+    }
 
     #[test]
     fn review_collapsed_pinned_groups_remain_sticky_and_count_toward_overflow() {

@@ -21,7 +21,7 @@ distinguished through this API. Smooth mouse-wheel drivers without touch or
 momentum phases scroll normally without elasticity. Line wheels and horizontal
 scrolling keep the existing handlers.
 
-Finger travel is resisted with a bounded hyperbolic curve (36 logical pixels
+Finger travel is resisted with a bounded hyperbolic curve (72 logical pixels
 maximum displacement). A critically damped spring returns the edge after lift
 or momentum impact. A fling throws an edge once per gesture. Inward movement
 takes up displacement before moving into the document, so virtualized content
@@ -33,6 +33,10 @@ History's indexed viewport uses its f64 logical position directly, rather than
 the scrollbar's normalized fractions. Linked split-diff columns share visual
 displacement and retain their existing logical synchronization. Document,
 repository and presentation changes clear their elastic state.
+
+Sidebar sticky rows use the uniform list's measured geometry but paint in a
+separate fixed viewport layer. Pinned headers stay anchored during elasticity;
+headers that have not reached an anchor move with the rows beneath them.
 
 The wrapper is installed in history, branch and file-browser sidebars, the shared
 changed-file lists (including staged and unstaged files), inline and split text

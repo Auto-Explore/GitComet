@@ -287,7 +287,7 @@ fn stretch_moves_content_and_hitboxes_but_not_the_logical_offset_or_header(
         wheel(cx, 100.0, TouchPhase::Started, true);
         let stretched = cx.debug_bounds("elastic_content").unwrap();
         assert!(stretched.top() > content.top() + px(5.0));
-        assert!(stretched.top() < content.top() + px(36.0));
+        assert!(stretched.top() < content.top() + px(72.0));
         assert_eq!(cx.debug_bounds("fixed_header").unwrap(), header);
         assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(0.0));
         wheel(cx, 0.0, TouchPhase::Ended, true);
@@ -318,7 +318,7 @@ fn precise_deltas_move_once_and_stay_clamped_at_both_edges(cx: &mut TestAppConte
         let viewport = cx.debug_bounds("elastic_viewport").unwrap();
         let content = cx.debug_bounds("elastic_content").unwrap();
         assert!(content.bottom() < viewport.bottom());
-        assert!(viewport.bottom() - content.bottom() <= px(36.0));
+        assert!(viewport.bottom() - content.bottom() <= px(72.0));
     });
 }
 
