@@ -242,6 +242,31 @@ pub enum CliOutcome {
     Inform(Informational),
 }
 
+pub(crate) struct ParsedLaunch {
+    pub(crate) outcome: CliOutcome,
+    pub(crate) foreground: bool,
+    pub(crate) startup_socket: Option<PathBuf>,
+}
+
+pub(crate) fn foreground_requested(flag: bool, value: Option<OsString>) -> Result<bool, String> {
+    if flag {
+        return Ok(true);
+    }
+    let Some(value) = value else {
+        return Ok(cfg!(debug_assertions));
+    };
+    match value
+        .to_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("") => Ok(cfg!(debug_assertions)),
+        Some("0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        _ => Err("Invalid GITCOMET_FOREGROUND value: expected 1/true or 0/false.".into()),
+    }
+}
+
 /// Help or version text, printed the way clap would print it.
 #[derive(Debug)]
 pub struct Informational(clap::Error);
@@ -261,11 +286,27 @@ impl Informational {
     }
 }
 
+/// The hidden option, without its leading `--`, that hands a detached
+/// browser its launcher's startup socket.
+pub(crate) const STARTUP_SOCKET_OPTION: &str = "__gitcomet-startup-socket";
+
 /// The clap command, named and versioned after the running product.
 pub(crate) fn cli_command(about: &str) -> clap::Command {
     let identity = gitcomet_core::identity::current();
     let name = identity.executable_name().to_owned();
     Cli::command()
+        .arg(
+            clap::Arg::new("startup_socket")
+                .long(STARTUP_SOCKET_OPTION)
+                .value_parser(clap::value_parser!(PathBuf))
+                .hide(true),
+        )
+        .arg(
+            clap::Arg::new("foreground")
+                .long("foreground")
+                .action(clap::ArgAction::SetTrue)
+                .help("Keep the browser attached to this terminal (default mode only)"),
+        )
         .name(name.clone())
         .version(identity.version().to_owned())
         .about(about.to_owned())
@@ -710,13 +751,30 @@ fn parse_app_mode_from_args_env_and_config(
     git_config: &dyn Fn(&str) -> Option<String>,
     about: &str,
 ) -> Result<CliOutcome, String> {
+    parse_launch_from_args_env_and_config(args, env, git_config, about).map(|parsed| parsed.outcome)
+}
+
+fn parse_launch_from_args_env_and_config(
+    args: Vec<OsString>,
+    env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
+    about: &str,
+) -> Result<ParsedLaunch, String> {
     let normalized_args = normalize_empty_mergetool_base_arg(&args);
 
     let parsed = cli_command(about)
         .try_get_matches_from(normalized_args.iter())
-        .and_then(|matches| Cli::from_arg_matches(&matches));
+        .and_then(|matches| {
+            Cli::from_arg_matches(&matches).map(|cli| {
+                (
+                    cli,
+                    matches.get_flag("foreground"),
+                    matches.get_one::<PathBuf>("startup_socket").cloned(),
+                )
+            })
+        });
     match parsed {
-        Ok(cli) => match cli.command {
+        Ok((cli, foreground, startup_socket)) => match cli.command {
             None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {
                 resolve_difftool_with_env(args, env).map(AppMode::Difftool)
@@ -736,7 +794,11 @@ fn parse_app_mode_from_args_env_and_config(
                 resolve_extract_merge_fixtures(args).map(AppMode::ExtractMergeFixtures)
             }
         }
-        .map(CliOutcome::Run),
+        .map(|mode| ParsedLaunch {
+            outcome: CliOutcome::Run(mode),
+            foreground,
+            startup_socket,
+        }),
         Err(clap_err) => {
             // --help and --version are informational, not errors: they must
             // not fall through to the compat parser and exit 2.
@@ -745,7 +807,11 @@ fn parse_app_mode_from_args_env_and_config(
                 clap_err.kind(),
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) {
-                return Ok(CliOutcome::Inform(Informational(clap_err)));
+                return Ok(ParsedLaunch {
+                    outcome: CliOutcome::Inform(Informational(clap_err)),
+                    foreground: false,
+                    startup_socket: None,
+                });
             }
 
             let compat_args = if normalized_args.len() > 1 {
@@ -756,11 +822,19 @@ fn parse_app_mode_from_args_env_and_config(
             if let Some(mode) =
                 parse_compat_external_mode_with_config(compat_args, env, git_config)?
             {
-                return Ok(CliOutcome::Run(mode));
+                return Ok(ParsedLaunch {
+                    outcome: CliOutcome::Run(mode),
+                    foreground: false,
+                    startup_socket: None,
+                });
             }
             Err(clap_err.to_string())
         }
     }
+}
+
+pub(crate) fn parse_launch(args: Vec<OsString>, about: &str) -> Result<ParsedLaunch, String> {
+    parse_launch_from_args_env_and_config(args, &ProcessEnv, &|_| None, about)
 }
 
 fn parse_app_mode_from_args_and_env(

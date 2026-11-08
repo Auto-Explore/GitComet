@@ -130,6 +130,9 @@ pub(crate) fn run_mode(
     extensions: crate::Extensions,
     repository_options: gitcomet_core::services::RepositoryOptions,
     backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
+    on_ready: Option<crate::ReadyCallback>,
+    bundle: BundleRelaunch,
+    browser_probed: bool,
 ) -> i32 {
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
@@ -153,10 +156,16 @@ pub(crate) fn run_mode(
     #[cfg(feature = "ui-gpui-runtime")]
     let backend = || build_backend(&repository_options, backend_override.clone());
     #[cfg(not(feature = "ui-gpui-runtime"))]
-    let _ = (&repository_options, &backend_override);
+    let _ = (
+        &repository_options,
+        &backend_override,
+        &on_ready,
+        bundle,
+        browser_probed,
+    );
 
-    #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
-    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
+    #[cfg(feature = "ui-gpui-runtime")]
+    if let Some(code) = prepare_platform_launch(&mode, bundle) {
         return code;
     }
 
@@ -201,7 +210,7 @@ pub(crate) fn run_mode(
         AppMode::Browser { path } => {
             #[cfg(feature = "ui-gpui-runtime")]
             {
-                run_browser(path, extensions, backend())
+                run_browser(path, extensions, backend(), on_ready, browser_probed)
             }
 
             #[cfg(not(feature = "ui-gpui-runtime"))]
@@ -251,18 +260,9 @@ pub(crate) fn run_mode(
 }
 
 #[cfg(feature = "ui-gpui-runtime")]
-fn run_browser(
+pub(crate) fn browser_request(
     path: Option<std::path::PathBuf>,
-    extensions: gitcomet_extension_api::Registry,
-    backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
-) -> i32 {
-    let name = identity::current().display_name();
-
-    #[cfg(target_os = "macos")]
-    if maybe_relaunch_browser_from_macos_app_bundle() {
-        return exit_code::SUCCESS;
-    }
-
+) -> gitcomet_ui_gpui::BrowserOpenRequest {
     let path = browser_instance::normalize_browser_path(path);
     let session = {
         let _stage = gitcomet_core::startup_trace::span("browser_session_load");
@@ -273,18 +273,47 @@ fn run_browser(
         .as_deref()
         .and_then(gitcomet_ui_gpui::BrowserOpenTarget::from_key)
         .unwrap_or_default();
-    let initial_browser_request = gitcomet_ui_gpui::BrowserOpenRequest {
-        path: path.clone(),
+    gitcomet_ui_gpui::BrowserOpenRequest {
+        path,
         target: browser_open_target,
-    };
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+pub(crate) fn finish_browser_forward(on_ready: Option<crate::ReadyCallback>) -> i32 {
+    if let Some(on_ready) = on_ready
+        && let Err(error) = on_ready()
+    {
+        eprintln!("{error}");
+        return exit_code::ERROR;
+    }
+    exit_code::SUCCESS
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn run_browser(
+    path: Option<std::path::PathBuf>,
+    extensions: gitcomet_extension_api::Registry,
+    backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
+    on_ready: Option<crate::ReadyCallback>,
+    probed: bool,
+) -> i32 {
+    let name = identity::current().display_name();
+    let initial_browser_request = browser_request(path);
     let instance_result = {
         let _stage = gitcomet_core::startup_trace::span("browser_instance_broker");
-        browser_instance::start_or_forward(initial_browser_request.clone())
+        browser_instance::start_or_forward(initial_browser_request.clone(), probed)
     };
     let mut browser_instance = match instance_result {
-        Ok(browser_instance::StartResult::Forwarded) => return exit_code::SUCCESS,
+        Ok(browser_instance::StartResult::Forwarded) => {
+            return finish_browser_forward(on_ready);
+        }
         Ok(browser_instance::StartResult::Primary(primary)) => Some(primary),
-        Err(err) => {
+        Err(browser_instance::StartError::Forward(error)) => {
+            eprintln!("Could not forward the browser request: {error}");
+            return exit_code::ERROR;
+        }
+        Err(browser_instance::StartError::Broker(err)) => {
             eprintln!(
                 "Could not initialize the {name} browser-instance broker; \
                      launching this process independently: {err}"
@@ -331,7 +360,7 @@ fn run_browser(
         summary: report.summary,
         crash_log_path: report.crash_log_path,
     });
-    let run_result = gitcomet_ui_gpui::UiLaunch::new(backend)
+    let mut ui_launch = gitcomet_ui_gpui::UiLaunch::new(backend)
         .extensions(extensions)
         .initial_request(initial_browser_request)
         .startup_crash_report(startup_report)
@@ -343,8 +372,11 @@ fn run_browser(
                 );
             }
         })
-        .browser_requests(browser_requests)
-        .run();
+        .browser_requests(browser_requests);
+    if let Some(on_ready) = on_ready {
+        ui_launch = ui_launch.on_ready(on_ready);
+    }
+    let run_result = ui_launch.run();
     match run_result {
         Ok(
             gitcomet_ui_gpui::UiRunOutcome::CleanShutdown
@@ -367,6 +399,41 @@ fn run_browser(
             exit_code::ERROR
         }
     }
+}
+
+/// How a macOS browser launch moves into its app bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BundleRelaunch {
+    /// Become the bundled app: keeps the pid a launcher supervises and the
+    /// terminal a foreground launch asked for.
+    Exec,
+    Spawn,
+}
+
+pub(crate) fn bundle_relaunch(
+    cli_browser: bool,
+    supervised: bool,
+    foreground: bool,
+) -> BundleRelaunch {
+    if cli_browser && (supervised || foreground) {
+        BundleRelaunch::Exec
+    } else {
+        BundleRelaunch::Spawn
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn prepare_platform_launch(mode: &AppMode, bundle: BundleRelaunch) -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(mode) {
+        return Some(code);
+    }
+    #[cfg(target_os = "macos")]
+    if matches!(mode, AppMode::Browser { .. }) {
+        return maybe_relaunch_browser_from_macos_app_bundle(bundle);
+    }
+    let _ = (mode, bundle);
+    None
 }
 
 fn mode_uses_configured_git_executable_preference(mode: &AppMode) -> bool {
@@ -439,17 +506,17 @@ fn candidate_macos_app_bundle_paths(resolved_exe: &std::path::Path) -> Vec<std::
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
-fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
+fn maybe_relaunch_browser_from_macos_app_bundle(bundle: BundleRelaunch) -> Option<i32> {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
-        return false;
+        return None;
     }
 
     let Ok(current_exe) = std::env::current_exe() else {
-        return false;
+        return None;
     };
     let resolved_exe = resolve_executable_path_for_bundle_detection(&current_exe);
     if is_macos_app_bundle_executable(&resolved_exe) {
-        return false;
+        return None;
     }
 
     let mut prep_errors = Vec::new();
@@ -473,17 +540,25 @@ fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
             prep_errors.join("; ")
         };
         eprintln!("Failed to prepare macOS app bundle: {details}");
-        return false;
+        return None;
     };
 
-    let mut relaunch = std::process::Command::new(app_exe);
-    relaunch.args(std::env::args_os().skip(1));
-    relaunch.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
-    match relaunch.spawn() {
-        Ok(_) => true,
+    // The process's own arguments, not the ones a library caller passed:
+    // the relaunched executable runs its `main` again.
+    let mut command = std::process::Command::new(app_exe);
+    command.args(std::env::args_os().skip(1));
+    command.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
+    if bundle == BundleRelaunch::Exec {
+        use std::os::unix::process::CommandExt as _;
+        let error = command.exec();
+        eprintln!("Failed to relaunch via macOS app bundle: {error}");
+        return None;
+    }
+    match command.spawn() {
+        Ok(_) => Some(exit_code::SUCCESS),
         Err(err) => {
             eprintln!("Failed to relaunch via macOS app bundle: {err}");
-            false
+            None
         }
     }
 }
@@ -725,6 +800,22 @@ mod tests {
     #[cfg(feature = "ui-gpui-runtime")]
     use std::fs;
     use std::io::{self, Write};
+
+    #[test]
+    fn only_supervised_or_foreground_cli_launches_exec_into_the_bundle() {
+        for (cli_browser, supervised, foreground, expected) in [
+            (true, true, false, BundleRelaunch::Exec),
+            (true, false, true, BundleRelaunch::Exec),
+            (true, false, false, BundleRelaunch::Spawn),
+            (false, false, true, BundleRelaunch::Spawn),
+        ] {
+            assert_eq!(
+                bundle_relaunch(cli_browser, supervised, foreground),
+                expected,
+                "cli_browser={cli_browser} supervised={supervised} foreground={foreground}"
+            );
+        }
+    }
 
     #[derive(Default)]
     struct RecordingWriter {
