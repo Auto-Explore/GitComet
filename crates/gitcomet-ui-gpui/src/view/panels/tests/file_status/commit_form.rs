@@ -1313,3 +1313,34 @@ fn background_repo_commit_success_drops_its_draft(cx: &mut gpui::TestAppContext)
 
     assert_eq!(commit_box_text_of(cx, &view), "");
 }
+
+/// Each commit action is drawn as a framed rectangle; a click anywhere inside
+/// that frame has to land on the button.
+#[gpui::test]
+fn commit_buttons_fill_their_frames(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(staged_repo(45), RepoId(45)), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    for (button, frame) in [
+        ("commit_button", "commit_button_frame"),
+        ("commit_and_push_button", "commit_and_push_button_frame"),
+    ] {
+        let button_bounds = cx.debug_bounds(button).expect(button);
+        let frame_bounds = cx.debug_bounds(frame).expect(frame);
+        // The frame's 1px border sits outside the button on each side.
+        assert!(
+            (frame_bounds.size.width - button_bounds.size.width).abs() <= px(2.0),
+            "{button} is {:?} wide inside a {:?} frame",
+            button_bounds.size.width,
+            frame_bounds.size.width
+        );
+    }
+}

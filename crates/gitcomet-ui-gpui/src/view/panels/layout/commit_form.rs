@@ -248,13 +248,14 @@ impl DetailsPaneView {
             .debug_selector(|| "commit_and_push_button".to_string())
             .gitcomet_tooltip(theme, push_tooltip.into());
         // The frame and raised fill the old split Commit button used.
-        let framed = |button: gpui::Stateful<gpui::Div>| {
+        let framed = |frame_selector: &'static str, button: gpui::Stateful<gpui::Div>| {
             components::filled_action_frame(
                 theme,
                 crate::ui_scale::UiScale::from_percent(ui_scale_percent)
                     .with_appearance(theme.metrics),
             )
             .flex_1()
+            .debug_selector(move || frame_selector.to_string())
             .child(
                 div()
                     .flex()
@@ -264,7 +265,8 @@ impl DetailsPaneView {
                     .rounded(px(theme.radii.control))
                     .bg(theme.colors.surface.raised)
                     .overflow_hidden()
-                    .child(button),
+                    // The whole frame is the click target, not just the label.
+                    .child(button.flex_1()),
             )
         };
         let checkbox = |id: &'static str, label: &'static str, on: bool| {
@@ -414,8 +416,8 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(framed(commit))
-                    .child(framed(commit_and_push)),
+                    .child(framed("commit_button_frame", commit))
+                    .child(framed("commit_and_push_button_frame", commit_and_push)),
             )
     }
 }
