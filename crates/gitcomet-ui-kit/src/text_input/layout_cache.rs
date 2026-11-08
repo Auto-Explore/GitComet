@@ -17,6 +17,7 @@ impl TextInput {
     }
 
     pub(super) fn invalidate_layout_caches_full(&mut self) {
+        self.reset_elastic_scroll();
         self.wrap.cache = None;
         self.layout.last = None;
         self.layout.line_starts = None;
@@ -55,6 +56,7 @@ impl TextInput {
     }
 
     pub(super) fn queue_cursor_autoscroll(&mut self) {
+        self.reset_elastic_scroll();
         self.interaction.pending_cursor_autoscroll = true;
         self.interaction.cursor_autoscroll_retries_remaining = TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
         self.interaction.cursor_autoscroll_layout_waits_remaining =

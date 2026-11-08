@@ -327,8 +327,9 @@ pub(super) fn row_y(
     )
 }
 
-/// A pinned row keeps its viewport anchor while the list stretches. Rows that
-/// have not reached an anchor follow the content until they reach one.
+/// A pinned branch keeps its viewport anchor while the list stretches. Branch
+/// rows that have not reached an anchor follow the content until they reach one.
+/// Header chrome uses `row_y` directly, including at its natural position.
 pub(super) fn elastic_row_y(
     row: usize,
     rank: usize,

@@ -155,12 +155,23 @@ impl DiffRenderer {
                             });
                     let over =
                         self.render_hosted_over_layer(None, scrollbar_gutter, bottom_gutter, cx);
-                    let list = crate::kit::elastic_scroll::ElasticScroll::new(
-                        ("diff_elastic", self.diff_elastic_generation),
+                    let list = self.elastic_diff_vertical(
+                        "diff_elastic",
                         self.diff_scroll.clone(),
                         list,
-                    )
-                    .shared_motion(self.diff_elastic_scroll.clone());
+                        true,
+                    );
+                    let list = if self.diff_word_wrap {
+                        list.into_any_element()
+                    } else {
+                        self.elastic_diff_horizontal(
+                            "diff_horizontal_elastic",
+                            self.diff_scroll.0.borrow().base_handle.clone(),
+                            list,
+                            true,
+                        )
+                        .into_any_element()
+                    };
                     div()
                         .id("diff_scroll_container")
                         .relative()
@@ -267,25 +278,38 @@ impl DiffRenderer {
                         bottom_gutter,
                         cx,
                     );
-                    let left = crate::kit::elastic_scroll::ElasticScroll::new(
-                        ("diff_split_left_elastic", self.diff_elastic_generation),
+                    let left = self.elastic_diff_vertical(
+                        "diff_split_left_elastic",
                         self.diff_scroll.clone(),
                         left,
+                        vertical_sync_enabled,
                     );
-                    let right = crate::kit::elastic_scroll::ElasticScroll::new(
-                        ("diff_split_right_elastic", self.diff_elastic_generation),
+                    let right = self.elastic_diff_vertical(
+                        "diff_split_right_elastic",
                         self.diff_split_right_scroll.clone(),
                         right,
+                        vertical_sync_enabled,
                     );
-                    let left = if vertical_sync_enabled {
-                        left.shared_motion(self.diff_elastic_scroll.clone())
+                    let (left, right) = if self.diff_word_wrap {
+                        (left.into_any_element(), right.into_any_element())
                     } else {
-                        left
-                    };
-                    let right = if vertical_sync_enabled {
-                        right.shared_motion(self.diff_elastic_scroll.clone())
-                    } else {
-                        right
+                        let linked = self.diff_scroll_sync.includes_horizontal();
+                        (
+                            self.elastic_diff_horizontal(
+                                "diff_split_left_horizontal_elastic",
+                                self.diff_scroll.0.borrow().base_handle.clone(),
+                                left,
+                                linked,
+                            )
+                            .into_any_element(),
+                            self.elastic_diff_horizontal(
+                                "diff_split_right_horizontal_elastic",
+                                self.diff_split_right_scroll.0.borrow().base_handle.clone(),
+                                right,
+                                linked,
+                            )
+                            .into_any_element(),
+                        )
                     };
                     // Built before `resize_handle` captures `cx`.
                     let split_annotate_handle = self

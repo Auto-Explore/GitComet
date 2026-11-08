@@ -245,6 +245,120 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         row += 1.0;
     }
 
+    #[cfg(target_os = "macos")]
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
+        cx.update(|window, app| {
+            window.activate();
+            pane.update(app, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                pane.conflict_resolver_input
+                    .update(cx, |input, cx| input.set_cursor_offset(0, cx));
+                cx.notify();
+            });
+            window.refresh();
+        });
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                window.simulate_next_frame(app);
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+        let (source, output_before) = cx.update(|_, app| {
+            let pane = pane.read(app);
+            (
+                pane.conflict_resolver_diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds(),
+                pane.conflict_resolver_input
+                    .read(app)
+                    .hotspot_bounds(&(0..1))
+                    .unwrap(),
+            )
+        });
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: source.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            touch_phase: gpui::TouchPhase::Started,
+            ..Default::default()
+        });
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let pane = pane.read(app);
+            assert!(pane.diff_elastic_scroll.displacement() > px(20.0));
+            let (output_vertical, _) = pane.conflict_output_elastic_states();
+            assert_eq!(output_vertical.displacement(), px(0.0));
+            assert_eq!(
+                pane.conflict_resolver_input
+                    .read(app)
+                    .hotspot_bounds(&(0..1))
+                    .unwrap(),
+                output_before,
+                "the independently scrolling output must not follow a source-column edge pull"
+            );
+        });
+
+        // A viewport resize can turn fitting output into a horizontally
+        // overflowing document. Its first edge gesture keeps one spring
+        // while the new range is measured during that gesture's paint.
+        cx.simulate_resize(size(px(3600.0), px(1000.0)));
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.reset_diff_elastic_scroll();
+                pane.conflict_resolver.hide_resolved = false;
+                pane.conflict_resolver.collapse_context = false;
+                reset_conflict_scroll_matrix_offsets(pane);
+                pane.conflict_resolver_input
+                    .update(cx, |input, cx| input.set_text("long line ".repeat(30), cx));
+                cx.notify();
+            });
+        });
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                window.simulate_next_frame(app);
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+        let output = cx.update(|_, app| {
+            let pane = pane.read(app);
+            assert_eq!(
+                pane.conflict_resolved_output_editor_scroll.max_offset().x,
+                px(0.0)
+            );
+            pane.conflict_resolved_output_editor_scroll.bounds()
+        });
+        cx.simulate_resize(size(px(1200.0), px(1000.0)));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: point(output.left() + px(32.0), output.center().y),
+            delta: gpui::ScrollDelta::Pixels(point(px(100.0), px(0.0))),
+            touch_phase: gpui::TouchPhase::Started,
+            ..Default::default()
+        });
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let pane = pane.read(app);
+            assert!(pane.conflict_resolved_output_editor_scroll.max_offset().x > px(0.0));
+            let (_, output_horizontal) = pane.conflict_output_elastic_states();
+            assert!(output_horizontal.displacement() > px(20.0));
+            assert_eq!(
+                output_horizontal.displacement(),
+                pane.diff_horizontal_elastic_scroll.displacement()
+            );
+        });
+    });
+
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver independence fixture");
 }
 

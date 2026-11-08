@@ -715,6 +715,11 @@ impl PopoverHost {
                                     scaled_px(180.0),
                                 )
                                 .debug_selector("rebase_reword_description_scroll_surface")
+                                .motion_state(
+                                    self.rebase_reword_description_input
+                                        .read(cx)
+                                        .vertical_elastic_scroll_state(),
+                                )
                                 .render(theme, self.rebase_reword_description_input.clone()),
                             ),
                     )
@@ -795,24 +800,28 @@ impl PopoverHost {
             };
             let up = arrow(components::MenuScrollDirection::Up, cx);
             let down = arrow(components::MenuScrollDirection::Down, cx);
-            menu_layer::scroll_area_with_arrows(
-                restrict_scroll_to_vertical_axis(
-                    div()
-                        .id("context_menu_scroll")
-                        .debug_selector(|| "context_menu_scroll".to_string())
-                        .min_h(px(0.0))
-                        .max_h(layout.content_max_h)
-                        .track_scroll(&self.context_menu_scroll)
-                        .overflow_y_scroll()
-                        .on_scroll_wheel(cx.listener(|this, _e: &ScrollWheelEvent, _w, _cx| {
-                            this.latch_context_menu_placement();
-                        })),
-                )
-                .child(panel),
-                up,
-                down,
+            let area = restrict_scroll_to_vertical_axis(
+                div()
+                    .id("context_menu_scroll")
+                    .debug_selector(|| "context_menu_scroll".to_string())
+                    .min_h(px(0.0))
+                    .max_h(layout.content_max_h)
+                    .track_scroll(&self.context_menu_scroll)
+                    .overflow_y_scroll()
+                    .on_scroll_wheel(cx.listener(|this, _e: &ScrollWheelEvent, _w, _cx| {
+                        this.latch_context_menu_placement();
+                    })),
             )
-            .into_any_element()
+            .child(panel);
+            let placement = self.context_menu_placement.clone();
+            let area = crate::kit::elastic_scroll::ElasticScroll::new(
+                "context_menu_elastic",
+                self.context_menu_scroll.clone(),
+                area,
+            )
+            .vertical_only()
+            .on_scroll(move |_, _, _| placement.borrow_mut().latch());
+            menu_layer::scroll_area_with_arrows(area, up, down).into_any_element()
         } else {
             panel.into_any_element()
         };

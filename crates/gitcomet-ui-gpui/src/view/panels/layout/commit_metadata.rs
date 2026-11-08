@@ -202,6 +202,7 @@ impl DetailsPaneView {
         &self,
         theme: AppTheme,
         repo_id: RepoId,
+        cx: &App,
     ) -> AnyElement {
         components::ScrollContainer::vertical(
             ("commit_details_message_scroll_surface", repo_id.0),
@@ -211,6 +212,11 @@ impl DetailsPaneView {
         )
         .container_id(("commit_details_message_container", repo_id.0))
         .debug_selector("commit_details_message_scroll_surface")
+        .motion_state(
+            self.commit_details_message_input
+                .read(cx)
+                .vertical_elastic_scroll_state(),
+        )
         .render(theme, self.commit_details_message_link_menu.clone())
     }
 }

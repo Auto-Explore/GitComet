@@ -1125,18 +1125,21 @@ fn prompt_banner_details(
     id: &'static str,
     text: impl Into<SharedString>,
 ) -> impl IntoElement {
-    restrict_scroll_to_vertical_axis(
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .max_h(ui_scale::scaler(ui_scale_percent)(96.0))
-            .overflow_y_scroll(),
-    )
-    .child(
-        div()
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.secondary)
-            .child(text.into()),
+    crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+        format!("{id}_elastic"),
+        restrict_scroll_to_vertical_axis(
+            div()
+                .id(id)
+                .debug_selector(move || id.to_string())
+                .max_h(ui_scale::scaler(ui_scale_percent)(96.0))
+                .overflow_y_scroll(),
+        )
+        .child(
+            div()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(text.into()),
+        ),
     )
 }
 

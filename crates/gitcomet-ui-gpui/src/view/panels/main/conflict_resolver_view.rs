@@ -904,6 +904,7 @@ impl DiffRenderer {
                                             .selected(preview_mode == ConflictResolverPreviewMode::Text)
                                             .selected_bg(view_toggle_selected_bg)
                                             .on_click(theme, cx, |this, _e, _w, cx| {
+                                                this.reset_diff_elastic_scroll();
                                                 this.conflict_resolver.resolver_preview_mode =
                                                     ConflictResolverPreviewMode::Text;
                                                 // Rendered rows and conflict
@@ -929,6 +930,7 @@ impl DiffRenderer {
                                         )
                                         .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.reset_diff_elastic_scroll();
                                             this.conflict_resolver.resolver_preview_mode =
                                                 ConflictResolverPreviewMode::Preview;
                                             let _ = this.request_conflict_file_load_mode(
@@ -1396,6 +1398,16 @@ impl DiffRenderer {
                                                 }
                                             },
                                         ));
+                                        let base_list = self.elastic_conflict_source_list(
+                                            (
+                                                "conflict_three_way_base_elastic",
+                                                "conflict_three_way_base_horizontal_elastic",
+                                            ),
+                                            self.conflict_resolver_diff_scroll.clone(),
+                                            base_list,
+                                            0,
+                                            cx,
+                                        );
 
                                         let ours_list = uniform_list(
                                             "conflict_three_way_ours_list",
@@ -1424,6 +1436,16 @@ impl DiffRenderer {
                                                 }
                                             },
                                         ));
+                                        let ours_list = self.elastic_conflict_source_list(
+                                            (
+                                                "conflict_three_way_ours_elastic",
+                                                "conflict_three_way_ours_horizontal_elastic",
+                                            ),
+                                            self.conflict_preview_ours_scroll.clone(),
+                                            ours_list,
+                                            1,
+                                            cx,
+                                        );
 
                                         let theirs_list = uniform_list(
                                             "conflict_three_way_theirs_list",
@@ -1452,6 +1474,16 @@ impl DiffRenderer {
                                                 }
                                             },
                                         ));
+                                        let theirs_list = self.elastic_conflict_source_list(
+                                            (
+                                                "conflict_three_way_theirs_elastic",
+                                                "conflict_three_way_theirs_horizontal_elastic",
+                                            ),
+                                            self.conflict_preview_theirs_scroll.clone(),
+                                            theirs_list,
+                                            2,
+                                            cx,
+                                        );
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -1652,6 +1684,16 @@ impl DiffRenderer {
                                                 }
                                             },
                                         ));
+                                        let left_list = self.elastic_conflict_source_list(
+                                            (
+                                                "conflict_two_way_left_elastic",
+                                                "conflict_two_way_left_horizontal_elastic",
+                                            ),
+                                            self.conflict_resolver_diff_scroll.clone(),
+                                            left_list,
+                                            0,
+                                            cx,
+                                        );
 
                                         let right_list = uniform_list(
                                             "conflict_diff_right_list",
@@ -1680,6 +1722,16 @@ impl DiffRenderer {
                                                 }
                                             },
                                         ));
+                                        let right_list = self.elastic_conflict_source_list(
+                                            (
+                                                "conflict_two_way_right_elastic",
+                                                "conflict_two_way_right_horizontal_elastic",
+                                            ),
+                                            self.conflict_preview_theirs_scroll.clone(),
+                                            right_list,
+                                            2,
+                                            cx,
+                                        );
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -2053,6 +2105,18 @@ impl DiffRenderer {
                                                     // free-text `TextInput`.
                                                     let streamed =
                                                         self.conflict_resolved_output_is_streamed();
+                                                    let output_scroll = if streamed {
+                                                        self.conflict_resolved_preview_scroll.0.borrow().base_handle.clone()
+                                                    } else {
+                                                        self.conflict_resolved_output_editor_scroll.clone()
+                                                    };
+                                                    let (output_elastic_y, output_elastic_x) = self.conflict_output_elastic_states();
+                                                    self.conflict_resolver_input.update(cx, |input, _| {
+                                                        input.set_elastic_scroll_states(Some(output_elastic_y), Some(output_elastic_x));
+                                                    });
+                                                    let outline_list = self.elastic_conflict_output_vertical(
+                                                        "conflict_output_gutter_elastic", output_scroll.clone(), outline_list, cx,
+                                                    );
                                                     let output_gutter_scroll =
                                                         self.conflict_resolved_preview_gutter_scroll
                                                             .clone();
@@ -2241,7 +2305,9 @@ impl DiffRenderer {
                                                                                 .h_full()
                                                                                 .min_h(px(0.0))
                                                                                 .pl_2()
-                                                                                .child(if streamed {
+                                                                                .child(self.elastic_conflict_output_body(
+                                                                                    output_scroll.clone(),
+                                                                                    if streamed {
                                                                                     // Read-only streamed output: a virtualized
                                                                                     // uniform_list over the projection, scrolling
                                                                                     // both axes so it stays coupled to the columns.
@@ -2293,7 +2359,7 @@ impl DiffRenderer {
                                                                                         )
                                                                                         .child(self.conflict_resolver_input.clone())
                                                                                         .into_any_element()
-                                                                                }),
+                                                                                }, cx)),
                                                                         ),
                                                                 ),
                                                         )
@@ -2609,6 +2675,111 @@ impl DiffRenderer {
             .into_any_element()
     }
 
+    fn elastic_conflict_output_vertical(
+        &self,
+        id: &'static str,
+        scroll: gpui::ScrollHandle,
+        body: impl IntoElement,
+        cx: &gpui::Context<Self>,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let (vertical, _) = self.conflict_output_elastic_states();
+        crate::kit::elastic_scroll::ElasticScroll::new(
+            (id, self.diff_elastic_generation),
+            scroll,
+            body,
+        )
+        .vertical_only()
+        .shared_motion(vertical)
+        .on_scroll(
+            cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
+                this.conflict_resolved_preview_scroll
+                    .0
+                    .borrow_mut()
+                    .deferred_scroll_to_item = None;
+                this.conflict_resolved_preview_gutter_scroll
+                    .0
+                    .borrow_mut()
+                    .deferred_scroll_to_item = None;
+                if event.delta.pixel_delta(window.line_height()).y != px(0.0) {
+                    this.record_conflict_vertical_wheel_master(3);
+                    cx.notify();
+                }
+            }),
+        )
+    }
+
+    fn elastic_conflict_output_body(
+        &self,
+        scroll: gpui::ScrollHandle,
+        body: impl IntoElement,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
+        let body = self.elastic_conflict_output_vertical(
+            "conflict_output_elastic",
+            scroll.clone(),
+            body,
+            cx,
+        );
+        let (_, horizontal) = self.conflict_output_elastic_states();
+        let view = cx.weak_entity();
+        crate::kit::elastic_scroll::ElasticScroll::horizontal(
+            (
+                "conflict_output_horizontal_elastic",
+                self.diff_elastic_generation,
+            ),
+            scroll,
+            body,
+        )
+        .horizontal_only()
+        .shared_motion(horizontal)
+        .on_logical_scroll(move |remaining, event, window, cx| {
+            let event = gpui::ScrollWheelEvent {
+                position: event.position,
+                delta: gpui::ScrollDelta::Pixels(point(remaining, px(0.0))),
+                modifiers: event.modifiers,
+                touch_phase: event.touch_phase,
+            };
+            let _ = view.update(cx, |this, cx| {
+                if this.forward_conflict_output_horizontal_wheel(&event, window) {
+                    cx.notify();
+                }
+            });
+        })
+        .into_any_element()
+    }
+
+    fn elastic_conflict_source_list(
+        &self,
+        ids: (&'static str, &'static str),
+        scroll: gpui::UniformListScrollHandle,
+        list: impl IntoElement,
+        master: usize,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
+        let list = self
+            .elastic_diff_vertical(
+                ids.0,
+                scroll.clone(),
+                list,
+                self.diff_scroll_sync.includes_vertical(),
+            )
+            .on_scroll(
+                cx.listener(move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                    if event.delta.pixel_delta(window.line_height()).y != px(0.0) {
+                        this.record_conflict_vertical_wheel_master(master);
+                        cx.notify();
+                    }
+                }),
+            );
+        self.elastic_diff_horizontal(
+            ids.1,
+            scroll.0.borrow().base_handle.clone(),
+            list,
+            self.diff_scroll_sync.includes_horizontal(),
+        )
+        .into_any_element()
+    }
+
     fn render_conflict_markdown_preview_column(
         &mut self,
         theme: AppTheme,
@@ -2705,16 +2876,21 @@ impl DiffRenderer {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(
-                        div()
-                            .id(list_id)
-                            .size_full()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&handle)
-                            .pr(vertical_scrollbar_gutter)
-                            .child(rows::render_markdown_document(
-                                tab_width, &document, &context,
-                            )),
+                        self.elastic_diff_vertical(
+                            list_id,
+                            handle.clone(),
+                            div()
+                                .id(list_id)
+                                .size_full()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .track_scroll(&handle)
+                                .pr(vertical_scrollbar_gutter)
+                                .child(rows::render_markdown_document(
+                                    tab_width, &document, &context,
+                                )),
+                            vertical_sync_enabled,
+                        ),
                     )
                     .when(!vertical_sync_enabled, |d| {
                         d.child(

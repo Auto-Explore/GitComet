@@ -1,3 +1,4 @@
+use self::scroll_sync::ConflictPreviewSyncGroup;
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
@@ -468,9 +469,79 @@ impl DiffRenderer {
         self.markdown_interaction.plain_link = None;
     }
 
-    fn reset_diff_elastic_scroll(&mut self) {
+    pub(in crate::view) fn reset_diff_elastic_scroll(&mut self) {
         self.diff_elastic_scroll.reset();
+        self.diff_horizontal_elastic_scroll.reset();
+        self.file_editor_elastic_vertical.reset();
+        self.file_editor_elastic_horizontal.reset();
+        self.conflict_output_elastic_vertical.reset();
+        self.conflict_output_elastic_horizontal.reset();
         self.diff_elastic_generation = self.diff_elastic_generation.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn elastic_diff_vertical(
+        &self,
+        id: &'static str,
+        driver: impl crate::kit::elastic_scroll::ElasticScrollDriver,
+        child: impl IntoElement,
+        linked: bool,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let element = crate::kit::elastic_scroll::ElasticScroll::new(
+            (id, self.diff_elastic_generation),
+            driver,
+            child,
+        )
+        .vertical_only();
+        if linked {
+            element.shared_motion(self.diff_elastic_scroll.clone())
+        } else {
+            element
+        }
+    }
+
+    pub(in crate::view) fn elastic_diff_horizontal(
+        &self,
+        id: &'static str,
+        scroll: gpui::ScrollHandle,
+        child: impl IntoElement,
+        linked: bool,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let element = crate::kit::elastic_scroll::ElasticScroll::horizontal(
+            (id, self.diff_elastic_generation),
+            scroll,
+            child,
+        )
+        .horizontal_only();
+        if linked {
+            element.shared_motion(self.diff_horizontal_elastic_scroll.clone())
+        } else {
+            element
+        }
+    }
+
+    pub(in crate::view) fn conflict_output_elastic_states(
+        &self,
+    ) -> (
+        crate::kit::elastic_scroll::ElasticScrollState,
+        crate::kit::elastic_scroll::ElasticScrollState,
+    ) {
+        let linked = matches!(
+            self.conflict_preview_sync_group(),
+            ConflictPreviewSyncGroup::ColumnsAndOutput
+                | ConflictPreviewSyncGroup::TwoWayPairAndOutput
+        );
+        // The resolved result is an independent vertical document, even
+        // when its horizontal axis participates in source-column sync.
+        let vertical = self.conflict_output_elastic_vertical.clone();
+        // Membership follows presentation and sync policy, including a
+        // zero-range follower. A layout gaining horizontal range must not
+        // replace its spring halfway through the first edge gesture.
+        let horizontal = if linked && self.diff_scroll_sync.includes_horizontal() {
+            self.diff_horizontal_elastic_scroll.clone()
+        } else {
+            self.conflict_output_elastic_horizontal.clone()
+        };
+        (vertical, horizontal)
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -1303,6 +1374,7 @@ impl DiffRenderer {
         if self.mergetool_output_scroll_sync == next {
             return;
         }
+        self.reset_diff_elastic_scroll();
         self.mergetool_output_scroll_sync = next;
         self.schedule_ui_settings_persist(cx);
         cx.notify();

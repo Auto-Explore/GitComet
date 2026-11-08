@@ -551,6 +551,8 @@ impl DiffRenderer {
             file_editor_search_reveal_x_pending: false,
             file_editor_provider_theme_epoch: 1,
             file_editor_scroll,
+            file_editor_elastic_vertical: Default::default(),
+            file_editor_elastic_horizontal: Default::default(),
             file_editor_gutter_scroll: UniformListScrollHandle::new(),
             file_editor_gutter_row_height: theme.editor_row_height(ui_scale::current(cx).percent),
             conflict_resolved_gutter_row_height: theme
@@ -611,6 +613,8 @@ impl DiffRenderer {
             conflict_resolved_outline_background_delay_override: None,
             diff_scroll: UniformListScrollHandle::default(),
             diff_elastic_scroll: crate::kit::elastic_scroll::ElasticScrollState::default(),
+            diff_horizontal_elastic_scroll: crate::kit::elastic_scroll::ElasticScrollState::default(
+            ),
             diff_elastic_generation: 0,
             diff_split_right_scroll: UniformListScrollHandle::default(),
             diff_list_built: Default::default(),
@@ -623,6 +627,8 @@ impl DiffRenderer {
             conflict_output_gutter_wheel_sync_pending: false,
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             conflict_resolved_output_editor_scroll: ScrollHandle::new(),
+            conflict_output_elastic_vertical: Default::default(),
+            conflict_output_elastic_horizontal: Default::default(),
             conflict_resolved_preview_gutter_scroll: UniformListScrollHandle::default(),
             conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),

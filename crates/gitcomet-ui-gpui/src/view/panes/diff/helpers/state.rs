@@ -1092,6 +1092,8 @@ pub(crate) struct DiffRenderer {
     // History view, scroll handles, and gutter geometry.
     pub(in crate::view) diff_scroll: UniformListScrollHandle,
     pub(in crate::view) diff_elastic_scroll: crate::kit::elastic_scroll::ElasticScrollState,
+    pub(in crate::view) diff_horizontal_elastic_scroll:
+        crate::kit::elastic_scroll::ElasticScrollState,
     pub(in crate::view) diff_elastic_generation: u64,
     pub(in crate::view) diff_split_right_scroll: UniformListScrollHandle,
     /// How the list on `diff_scroll` was last built, which its handle's
@@ -1116,6 +1118,10 @@ pub(crate) struct DiffRenderer {
     /// scroll-sync group, so it stands in for `conflict_resolved_preview_scroll`
     /// (which now only backs the read-only projection paths).
     pub(in crate::view) conflict_resolved_output_editor_scroll: ScrollHandle,
+    pub(in crate::view) conflict_output_elastic_vertical:
+        crate::kit::elastic_scroll::ElasticScrollState,
+    pub(in crate::view) conflict_output_elastic_horizontal:
+        crate::kit::elastic_scroll::ElasticScrollState,
     pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
@@ -1123,6 +1129,10 @@ pub(crate) struct DiffRenderer {
     /// content size inside an `overflow_scroll` container tracking this handle,
     /// and reads the same handle to window its line shaping.
     pub(in crate::view) file_editor_scroll: ScrollHandle,
+    pub(in crate::view) file_editor_elastic_vertical:
+        crate::kit::elastic_scroll::ElasticScrollState,
+    pub(in crate::view) file_editor_elastic_horizontal:
+        crate::kit::elastic_scroll::ElasticScrollState,
     /// Gutter list, mirrored to `file_editor_scroll`'s vertical offset.
     pub(in crate::view) file_editor_gutter_scroll: UniformListScrollHandle,
     /// UI-scaled row height the gutter list paints at, computed by the render

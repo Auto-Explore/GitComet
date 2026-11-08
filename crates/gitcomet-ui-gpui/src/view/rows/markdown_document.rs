@@ -2332,6 +2332,7 @@ fn render_code(
         "markdown_document_code_block_scrollbar",
         first_row_ix,
         context,
+        body,
         |block| {
             block
                 .debug_selector(move || format!("markdown_preview_code_shell_{first_row_ix}"))
@@ -2343,7 +2344,6 @@ fn render_code(
                     if context.theme.is_dark { 0.90 } else { 0.80 },
                 ))
                 .rounded(scaled(4.0, context))
-                .child(body)
         },
     )
 }
@@ -2504,7 +2504,8 @@ fn render_table(
         "markdown_document_table_scrollbar",
         first_row_ix,
         context,
-        |block| block.child(div().flex().w_full().min_w(px(0.0)).child(grid)),
+        div().flex().w_full().min_w(px(0.0)).child(grid),
+        |block| block,
     )
 }
 
@@ -2778,7 +2779,8 @@ fn scrolling_block(
     scrollbar_name: &'static str,
     first_row_ix: usize,
     context: &MarkdownDocumentContext,
-    build: impl FnOnce(gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
+    content: impl IntoElement,
+    build_shell: impl FnOnce(gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
 ) -> AnyElement {
     let handle = context.block_scrolls.for_block(first_row_ix);
     let mut block = div().id((name, first_row_ix));
@@ -2800,19 +2802,30 @@ fn scrolling_block(
             components::ScrollbarAxis::Horizontal,
         ));
 
-    let scrollbar = components::Scrollbar::horizontal((scrollbar_name, first_row_ix), handle);
+    let scrollbar =
+        components::Scrollbar::horizontal((scrollbar_name, first_row_ix), handle.clone());
     #[cfg(test)]
     let scrollbar = scrollbar.debug_selector(scrollbar_name);
 
     // The bar is positioned against this wrapper rather than the scroller: it
     // has to stay put while the content slides under it.
-    div()
-        .relative()
-        .w_full()
-        .min_w(px(0.0))
-        .child(build(block))
-        .child(scrollbar.render(context.theme))
-        .into_any_element()
+    build_shell(
+        div()
+            .id(format!("{name}_shell_{first_row_ix}"))
+            .relative()
+            .w_full()
+            .min_w(px(0.0)),
+    )
+    .child(
+        crate::kit::elastic_scroll::ElasticScroll::horizontal(
+            format!("{name}_elastic_{first_row_ix}"),
+            handle,
+            block.child(content),
+        )
+        .horizontal_only(),
+    )
+    .child(scrollbar.render(context.theme))
+    .into_any_element()
 }
 
 fn render_image(

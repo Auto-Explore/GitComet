@@ -211,6 +211,146 @@ fn elastic_sidebar_stretches_rows_below_a_fixed_sticky_header(cx: &mut gpui::Tes
     });
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sections(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(100);
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    // Match the reported sidebar: one worktree, no submodules and no stashes.
+    repo.worktrees = long_list_tests::fixture(1, CollapsedSidebarSection::Worktrees).repos[0]
+        .worktrees
+        .clone();
+    repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    let repo_id = repo.id;
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+        });
+        pane.update(app, |pane, _| pane.set_collapsed_keys_for_test(&[]));
+    });
+    draw(cx);
+    let (headers, body_row, count) = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            (
+                presentation
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, row)| {
+                        matches!(
+                            row,
+                            BranchSidebarRow::WorktreesHeader { .. }
+                                | BranchSidebarRow::SubmodulesHeader { .. }
+                                | BranchSidebarRow::StashHeader { .. }
+                        )
+                        .then_some(ix)
+                    })
+                    .collect::<Vec<_>>(),
+                presentation
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, BranchSidebarRow::WorktreeItem { .. }))
+                    .unwrap(),
+                presentation.rows.len(),
+            )
+        })
+    });
+    let body_selector: &'static str = format!("worktree_row_{}_{body_row}", repo_id.0).leak();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, app| {
+            window.activate();
+            pane.update(app, |pane, _| {
+                pane.pending_sidebar_navigation = None;
+                pane.sidebar_scroll_animation = None;
+                pane.branches_scroll
+                    .scroll_to_item_strict(count - 1, gpui::ScrollStrategy::Bottom);
+            });
+            window.refresh();
+        });
+        draw(cx);
+        let before = headers
+            .iter()
+            .map(|&ix| cx.debug_bounds(selector(ix)).unwrap())
+            .collect::<Vec<_>>();
+        let body = cx.debug_bounds(body_selector).unwrap();
+        let offset = cx.update(|_, app| {
+            pane.read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+        });
+        assert_eq!(before.len(), 3);
+        // At least one header is between the edge stacks. This is the case
+        // that the old anchor-only correction failed to protect.
+        cx.update(|_, app| {
+            let handle = pane.read(app).branches_scroll.0.borrow();
+            let row_height = handle.last_item_size.unwrap().contents.height / count as f32;
+            assert!(headers.iter().zip(&before).any(|(&ix, bounds)| {
+                (bounds.top() - (handle.base_handle.bounds().top() + offset.y + row_height * ix))
+                    .abs()
+                    < px(0.5)
+            }));
+        });
+        for (delta, phase) in [
+            (-100.0, gpui::TouchPhase::Started),
+            (0.0, gpui::TouchPhase::Ended),
+        ] {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: before[2].center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                modifiers: Default::default(),
+                touch_phase: phase,
+            });
+            draw(cx);
+            for (&ix, bounds) in headers.iter().zip(&before) {
+                assert_eq!(
+                    cx.debug_bounds(selector(ix)).unwrap(),
+                    *bounds,
+                    "header {ix} moved during {phase:?}"
+                );
+            }
+            assert!(cx.debug_bounds(body_selector).unwrap().top() < body.top() - px(20.0));
+            assert_eq!(
+                cx.update(|_, app| pane
+                    .read(app)
+                    .branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()),
+                offset
+            );
+        }
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(cx.debug_bounds(body_selector).unwrap(), body);
+        for (&ix, bounds) in headers.iter().zip(&before) {
+            assert_eq!(cx.debug_bounds(selector(ix)).unwrap(), *bounds);
+        }
+    });
+}
+
 #[gpui::test]
 fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

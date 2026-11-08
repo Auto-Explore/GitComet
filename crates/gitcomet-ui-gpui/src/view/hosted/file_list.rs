@@ -781,22 +781,14 @@ impl Render for FileListView {
             let ui_scale = ui_scale::UiScale::current(cx);
             crate::view::rows::StickyGroupHeaders {
                 headers: rows.headers(),
-                header: Rc::new(move |row, row_height, _cx| {
+                header: Rc::new(move |row, row_height, pinned, _cx| {
                     group_header(
-                        &list, list_id, &rows, row, true, theme, ui_scale, row_height,
+                        &list, list_id, &rows, row, pinned, theme, ui_scale, row_height,
                     )
                 }),
             }
         });
-        self.body.update(cx, |body, _| {
-            body.refresh(
-                None,
-                sticky.map(|sticky| {
-                    Rc::new(move |list: gpui::UniformList| list.with_decoration(sticky.clone()))
-                        as _
-                }),
-            )
-        });
+        self.body.update(cx, |body, _| body.refresh(None, sticky));
         div()
             .id(("hosted_file_list", self.view_id.0))
             .debug_selector(move || format!("hosted_file_list_{list_id}"))

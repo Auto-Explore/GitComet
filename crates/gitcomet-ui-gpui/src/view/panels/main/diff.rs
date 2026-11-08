@@ -336,18 +336,23 @@ impl DiffRenderer {
                         input.set_text(e, cx);
                         input.set_read_only(true, cx);
                     });
-                    div()
-                        .id("diff_file_image_error_scroll")
-                        .bg(theme.colors.surface.canvas)
-                        .font_family(editor_font_family.clone())
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.diff_raw_scroll)
-                        .child(self.diff_raw_input.clone())
-                        .into_any_element()
+                    self.elastic_diff_vertical(
+                        "diff_file_image_error_scroll_elastic",
+                        self.diff_raw_scroll.clone(),
+                        div()
+                            .id("diff_file_image_error_scroll")
+                            .bg(theme.colors.surface.canvas)
+                            .font_family(editor_font_family.clone())
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.diff_raw_scroll)
+                            .child(self.diff_raw_input.clone()),
+                        true,
+                    )
+                    .into_any_element()
                 }
                 DiffFileImageState::Ready { has_file } => {
                     if !has_file {
@@ -517,18 +522,23 @@ impl DiffRenderer {
                             input.set_text(e, cx);
                             input.set_read_only(true, cx);
                         });
-                        div()
-                            .id("diff_file_error_scroll")
-                            .bg(theme.colors.surface.canvas)
-                            .font_family(editor_font_family.clone())
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.diff_raw_scroll)
-                            .child(self.diff_raw_input.clone())
-                            .into_any_element()
+                        self.elastic_diff_vertical(
+                            "diff_file_error_scroll_elastic",
+                            self.diff_raw_scroll.clone(),
+                            div()
+                                .id("diff_file_error_scroll")
+                                .bg(theme.colors.surface.canvas)
+                                .font_family(editor_font_family.clone())
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.diff_raw_scroll)
+                                .child(self.diff_raw_input.clone()),
+                            true,
+                        )
+                        .into_any_element()
                     }
                 }
                 DiffFileState::Ready { has_file } if wants_diagram_preview => {
@@ -589,18 +599,23 @@ impl DiffRenderer {
                             input.set_text(error.to_string(), cx);
                             input.set_read_only(true, cx);
                         });
-                        div()
-                            .id("diff_file_error_scroll")
-                            .bg(theme.colors.surface.canvas)
-                            .font_family(editor_font_family.clone())
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.diff_raw_scroll)
-                            .child(self.diff_raw_input.clone())
-                            .into_any_element()
+                        self.elastic_diff_vertical(
+                            "diff_file_error_scroll_elastic",
+                            self.diff_raw_scroll.clone(),
+                            div()
+                                .id("diff_file_error_scroll")
+                                .bg(theme.colors.surface.canvas)
+                                .font_family(editor_font_family.clone())
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.diff_raw_scroll)
+                                .child(self.diff_raw_input.clone()),
+                            true,
+                        )
+                        .into_any_element()
                     } else if file_diff_ready_shows_processing(
                         has_file,
                         text_cache_active,
@@ -814,17 +829,22 @@ impl DiffRenderer {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(
-                        div()
-                            .id("diff_markdown_preview_document")
-                            .debug_selector(|| "diff_markdown_preview_document".to_string())
-                            .size_full()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll_handle)
-                            .pt(edge_gap)
-                            .pb(edge_gap)
-                            .pr(scrollbar_gutter)
-                            .child(body),
+                        self.elastic_diff_vertical(
+                            "diff_markdown_document_elastic",
+                            scroll_handle.clone(),
+                            div()
+                                .id("diff_markdown_preview_document")
+                                .debug_selector(|| "diff_markdown_preview_document".to_string())
+                                .size_full()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .track_scroll(&scroll_handle)
+                                .pt(edge_gap)
+                                .pb(edge_gap)
+                                .pr(scrollbar_gutter)
+                                .child(body),
+                            true,
+                        ),
                     )
                     .child(
                         components::Scrollbar::new(

@@ -526,6 +526,95 @@ fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::
         outer_after_boundary_handoff > outer_before_boundary_handoff + px(0.5),
         "expected wheel scrolling to bubble to the outer settings page once the UI font list reaches its boundary"
     );
+
+    #[cfg(target_os = "macos")]
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let _ = settings_window.update(&mut settings_cx, |settings, window, cx| {
+            window.activate();
+            settings
+                .ui_font_scroll
+                .0
+                .borrow_mut()
+                .deferred_scroll_to_item = None;
+            settings
+                .ui_font_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+            window.refresh();
+        });
+        settings_cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        settings_cx.run_until_parked();
+
+        let outer = settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                settings.settings_window_scroll.offset()
+            })
+            .unwrap();
+        let frame = settings_cx
+            .debug_bounds("settings_window_ui_font_list_container")
+            .unwrap();
+        let row = settings_cx
+            .debug_bounds("settings_window_ui_font_0")
+            .unwrap();
+        let viewport = settings_cx.debug_bounds("settings_window_scroll").unwrap();
+        let position = point(
+            frame.center().x,
+            frame
+                .center()
+                .y
+                .clamp(viewport.top() + px(8.0), viewport.bottom() - px(8.0)),
+        );
+        assert!(frame.contains(&position));
+        settings_cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            touch_phase: gpui::TouchPhase::Started,
+            ..Default::default()
+        });
+        settings_cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        settings_cx.run_until_parked();
+
+        let (outer_after, inner_after) = settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                (
+                    settings.settings_window_scroll.offset(),
+                    settings.ui_font_scroll.0.borrow().base_handle.offset(),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            outer_after, outer,
+            "precise edge gestures stay in the dropdown"
+        );
+        assert_eq!(
+            inner_after.y,
+            px(0.0),
+            "the logical list offset stays clamped"
+        );
+        assert_eq!(
+            settings_cx
+                .debug_bounds("settings_window_ui_font_list_container")
+                .unwrap(),
+            frame
+        );
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_ui_font_0")
+                .unwrap()
+                .top()
+                > row.top() + px(20.0),
+            "the dropdown rows stretch within their fixed frame"
+        );
+    });
 }
 
 #[gpui::test]

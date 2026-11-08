@@ -20,6 +20,9 @@ use gpui::{
 use palette::IntoColor;
 use std::time::{Duration, Instant};
 
+mod elastic;
+use elastic::TerminalElasticScroll;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TerminalTextMetrics {
     pub(crate) font_size: Pixels,
@@ -82,6 +85,7 @@ pub struct TerminalViewportView {
     pub pty_sender: Option<crate::backend::PtySender>,
     pub(crate) layout_cache: Option<TerminalLayoutCache>,
     pub(crate) render_cache: TerminalRenderCache,
+    scroll_elastic: TerminalElasticScroll,
     pub cursor_blink_visible: bool,
     pub(crate) cursor_blink_hold_until: Instant,
     pub cursor_blink_active: bool,
@@ -153,6 +157,7 @@ pub(super) struct TerminalScrollbarDriver {
     pub(super) line_height: Pixels,
     pub(super) fallback_history: usize,
     pub(super) fallback_display: usize,
+    elastic: TerminalElasticScroll,
 }
 
 impl ScrollbarDriver for TerminalScrollbarDriver {
@@ -188,6 +193,7 @@ impl ScrollbarDriver for TerminalScrollbarDriver {
         if axis != ScrollbarAxis::Vertical {
             return;
         }
+        self.elastic.reset();
         let Some(ref term_lock) = self.term_lock else {
             return;
         };
@@ -401,6 +407,7 @@ impl TerminalViewportView {
             pty_sender,
             layout_cache: None,
             render_cache: TerminalRenderCache::default(),
+            scroll_elastic: Default::default(),
             cursor_blink_visible: true,
             cursor_blink_hold_until: Instant::now(),
             cursor_blink_active: false,
@@ -428,6 +435,7 @@ impl TerminalViewportView {
     }
 
     pub fn invalidate_layout(&mut self, cx: &mut gpui::Context<Self>) {
+        self.scroll_elastic.reset();
         self.layout_cache = None;
         self.render_cache = TerminalRenderCache::default();
         cx.notify();
@@ -472,6 +480,7 @@ impl TerminalViewportView {
     }
 
     fn reset_focus(&mut self, cx: &mut gpui::Context<Self>) {
+        self.scroll_elastic.reset();
         self.deactivate_cursor_blink();
         if self.was_focused {
             self.was_focused = false;
@@ -626,6 +635,7 @@ impl TerminalViewportView {
     }
 
     pub(super) fn queue_input(&mut self, bytes: Vec<u8>, cx: &mut gpui::Context<Self>) {
+        self.scroll_elastic.reset();
         if let Some(ref pty) = self.pty_sender {
             pty.write(bytes);
             self.reset_cursor_blink(cx);
@@ -711,6 +721,7 @@ impl TerminalViewportView {
     }
 
     pub(super) fn clear_screen_and_scrollback(&mut self, cx: &mut gpui::Context<Self>) {
+        self.scroll_elastic.reset();
         let Some(term_lock) = &self.term_lock else {
             return;
         };
@@ -944,6 +955,7 @@ impl TerminalViewportView {
             _ => return false,
         };
         drop(term);
+        self.scroll_elastic.reset();
         cx.notify();
         true
     }
@@ -954,6 +966,9 @@ impl TerminalViewportView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Precise normal-buffer input is owned by the elastic adapter. Line
+        // wheels and terminal applications retain this existing input path.
+        self.scroll_elastic.reset();
         let metrics = self.terminal_layout_snapshot(window, cx).metrics;
         let Some((delta_y, step_rows)) = terminal_scroll_wheel_delta(event, metrics.line_height)
         else {
@@ -1001,17 +1016,8 @@ impl TerminalViewportView {
             return;
         }
 
-        if self
-            .last_content
-            .as_ref()
-            .map(|c| c.mode.contains(TerminalModes::ALT_SCREEN))
-            .unwrap_or(false)
-        {
-            let app_cursor = self
-                .last_content
-                .as_ref()
-                .map(|c| c.mode.contains(TerminalModes::APP_CURSOR))
-                .unwrap_or(false);
+        if mouse_mode.contains(TerminalModes::ALT_SCREEN) {
+            let app_cursor = mouse_mode.contains(TerminalModes::APP_CURSOR);
             let bytes = terminal_alt_screen_scroll_bytes(delta_y, step_rows, app_cursor);
             self.queue_input(bytes, cx);
             return;
@@ -1310,7 +1316,10 @@ impl TerminalViewportView {
 
     /// One autoscroll step. Returns whether anything changed.
     pub(super) fn tick_selection_autoscroll(&mut self) -> bool {
-        let Some(bounds) = self.viewport_bounds else {
+        let Some(bounds) = self
+            .viewport_bounds
+            .map(|bounds| self.scroll_elastic.fixed_bounds(bounds))
+        else {
             return false;
         };
         let Some(cache) = self.layout_cache.as_ref() else {
@@ -1762,11 +1771,19 @@ impl Render for TerminalViewportView {
         let view = cx.entity().clone();
         let theme = self.theme;
         let term_lock = self.term_lock.clone();
+        let line_height = self
+            .terminal_layout_snapshot(window, cx)
+            .metrics
+            .line_height;
+        let scroll_driver =
+            self.scroll_elastic
+                .driver(term_lock.clone(), line_height, self.last_content.as_ref());
         div()
             .track_focus(&self.focus_handle)
             .key_context("Terminal")
             .w_full()
             .h_full()
+            .bg(terminal_default_background(theme))
             .cursor(gpui::CursorStyle::IBeam)
             .on_mouse_down(
                 MouseButton::Left,
@@ -1832,7 +1849,7 @@ impl Render for TerminalViewportView {
                                 let focus_handle = self.focus_handle.clone();
                                 let pty_sender = self.pty_sender.clone();
                                 let view = view.clone();
-                                gpui::canvas(
+                                let canvas = gpui::canvas(
                                     move |bounds, window, cx| {
                                         view.update(cx, |this, cx| {
                                             this.build_terminal_canvas_paint_state(
@@ -1860,15 +1877,50 @@ impl Render for TerminalViewportView {
                                     },
                                 )
                                 .w_full()
-                                .h_full()
+                                .h_full();
+                                let gate = self.scroll_elastic.clone();
+                                let gate_term = term_lock.clone();
+                                let gate_view = cx.weak_entity();
+                                gitcomet_ui_kit::elastic_scroll::ElasticScroll::new(
+                                    "terminal_scrollback_elastic",
+                                    scroll_driver,
+                                    canvas,
+                                )
+                                .vertical_only()
+                                .motion_state(self.scroll_elastic.motion.clone())
+                                .when_wheel(move |event, _window, cx| {
+                                    let accepts = gate.accepts_wheel(gate_term.as_ref(), event);
+                                    if !accepts {
+                                        let displaced = gate.motion.displacement() != px(0.0);
+                                        gate.reset();
+                                        if displaced {
+                                            let _ = gate_view.update(cx, |_, cx| cx.notify());
+                                        }
+                                    }
+                                    accepts
+                                })
+                                .on_scroll(cx.listener(
+                                    |this, event, window, cx| {
+                                        // A mode can change between the gate and the
+                                        // driver locking the backend. Preserve the
+                                        // terminal application's original packet.
+                                        if !this
+                                            .scroll_elastic
+                                            .accepts_wheel(this.term_lock.as_ref(), event)
+                                        {
+                                            this.handle_scroll_wheel(event, window, cx);
+                                        } else if this.selecting
+                                            && event.delta.pixel_delta(window.line_height()).y
+                                                != px(0.0)
+                                        {
+                                            this.selection_drag_moved = true;
+                                        }
+                                    },
+                                ))
                             }),
                     )
                     .child({
-                        let line_height = self
-                            .terminal_layout_snapshot(window, cx)
-                            .metrics
-                            .line_height;
-                        Scrollbar::new(
+                        let scrollbar = Scrollbar::new(
                             "terminal_scrollbar",
                             TerminalScrollbarDriver {
                                 term_lock: term_lock.clone(),
@@ -1881,10 +1933,13 @@ impl Render for TerminalViewportView {
                                     .last_content
                                     .as_ref()
                                     .map_or(0, |c| c.display_offset),
+                                elastic: self.scroll_elastic.clone(),
                             },
                         )
-                        .always_visible()
-                        .render(theme)
+                        .always_visible();
+                        #[cfg(test)]
+                        let scrollbar = scrollbar.debug_selector("terminal_scrollback_scrollbar");
+                        scrollbar.render(theme)
                     }),
             )
             // Last child, so its window-level listeners are registered last and
