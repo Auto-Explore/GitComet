@@ -1027,3 +1027,38 @@ fn a_cancelled_open_settles_waiting_hosted_reads_until_the_next_open() {
         );
     }
 }
+
+#[test]
+fn a_maintenance_recommendation_for_a_parked_tab_reopens_it() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/maintenance-parked");
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    state.repos[0].common_dir = Some(Arc::from(std::path::Path::new(
+        "/tmp/maintenance-parked/.git",
+    )));
+    open_repo_ready(
+        &mut repos,
+        &ids,
+        &mut state,
+        "/tmp/maintenance-parked-active",
+    );
+    park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoMaintenanceChecked {
+            repo_id: id,
+            needed: true,
+        }),
+    );
+    assert!(state.repos[0].maintenance.recommended);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == id))
+    );
+}

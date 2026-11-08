@@ -21,6 +21,7 @@ pub(super) fn is_pinned(state: &AppState, repo: &RepoState) -> bool {
             .keys()
             .any(|(id, lifetime, _)| *id == repo.id && *lifetime == repo.lifetime())
         || has_pending_continuation(state, repo.id)
+        || repo.maintenance.recommended
         || has_unfinished_operation(repo)
 }
 
@@ -503,6 +504,17 @@ mod tests {
         assert!(runtimes.has_repository(&RepoId(1)));
         assert!(!runtimes.has_repository(&RepoId(2)));
         state.repos[0].bare_mode_conversion = BareModeConversionState::Idle;
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
+        assert!(!runtimes.has_repository(&RepoId(1)));
+    }
+
+    #[test]
+    fn a_maintenance_recommendation_pins_its_tab_until_answered() {
+        let (mut state, mut runtimes, _) = visited_repos(4);
+        state.repos[0].maintenance.recommended = true;
+        park_inactive(&mut state, &mut runtimes, SystemTime::now());
+        assert!(runtimes.has_repository(&RepoId(1)));
+        state.repos[0].maintenance.recommended = false;
         park_inactive(&mut state, &mut runtimes, SystemTime::now());
         assert!(!runtimes.has_repository(&RepoId(1)));
     }
