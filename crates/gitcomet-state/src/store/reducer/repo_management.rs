@@ -368,7 +368,15 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
     repo.diff_state.blame = Loadable::NotLoaded;
     repo.clear_retained_blame();
     repo.diff_state.clear_loads();
-    repo.diff_state.inline_submodule_diff = None;
+    if let Some(inline) = repo.diff_state.inline_submodule_diff.as_mut() {
+        inline.diff = Loadable::NotLoaded;
+        inline.diff_file = Loadable::NotLoaded;
+        inline.diff_file_image = Loadable::NotLoaded;
+        inline.diff_rev = inline.diff_rev.wrapping_add(1);
+        inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+        repo.diff_state.inline_submodule_diff_rev =
+            repo.diff_state.inline_submodule_diff_rev.wrapping_add(1);
+    }
     repo.bump_diff_state_rev();
     repo.file_browser.entries = Loadable::NotLoaded;
     repo.file_browser.stale = true;
