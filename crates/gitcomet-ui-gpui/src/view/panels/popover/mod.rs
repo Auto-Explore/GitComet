@@ -191,6 +191,7 @@ pub(in super::super) struct PopoverHost {
     change_tracking_view: ChangeTrackingView,
     commit_amend_enabled: bool,
     commit_push_after_enabled: bool,
+    commit_skip_hooks_enabled: bool,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
     diff_reveal_whitespace_chars: bool,

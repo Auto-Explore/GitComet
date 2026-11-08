@@ -1,10 +1,11 @@
-//! Git LFS pointer files (spec: git-lfs `docs/spec.md`). Parsing is strict so
-//! a text file that merely mentions LFS is never mistaken for a pointer.
+//! Git LFS pointer files (spec: git-lfs `docs/spec.md`). [`parse_pointer`] is
+//! strict, so a text file that merely mentions LFS never shows as a pointer;
+//! [`parse_pointer_like_git_lfs`] takes what git-lfs itself uploads.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Pointers are at most this long; anything larger is content.
+/// git-lfs reads only blobs shorter than this as pointers.
 pub const POINTER_MAX_BYTES: usize = 1024;
 pub const SPEC_URL: &str = "https://git-lfs.github.com/spec/v1";
 /// Pre-1.0 spec URL that git-lfs still accepts.
@@ -44,10 +45,10 @@ pub fn looks_like_pointer(bytes: &[u8]) -> bool {
 }
 
 /// Parse a pointer: `version` first, then `key value` lines in ascending key
-/// order, LF endings, at most [`POINTER_MAX_BYTES`]. Extension keys are
+/// order, LF endings, shorter than [`POINTER_MAX_BYTES`]. Extension keys are
 /// tolerated; `oid sha256:<64 hex>` and `size <n>` are required.
 pub fn parse_pointer(bytes: &[u8]) -> Option<LfsPointer> {
-    if bytes.len() > POINTER_MAX_BYTES || !looks_like_pointer(bytes) {
+    if bytes.len() >= POINTER_MAX_BYTES || !looks_like_pointer(bytes) {
         return None;
     }
     let text = std::str::from_utf8(bytes).ok()?;
@@ -83,6 +84,106 @@ pub fn parse_pointer(bytes: &[u8]) -> Option<LfsPointer> {
         oid: oid?,
         size: size?,
     })
+}
+
+/// Spec URLs git-lfs reads, its alpha one included.
+const GIT_LFS_READ_VERSIONS: [&str; 3] = ["http://git-media.io/v/2", LEGACY_SPEC_URL, SPEC_URL];
+/// git-lfs only parses text that contains one of these.
+const GIT_LFS_MARKERS: [&[u8]; 3] = [b"git-media", b"hawser", b"git-lfs"];
+const GIT_LFS_KEYS: [&[u8]; 3] = [b"version", b"oid", b"size"];
+
+/// Parse a pointer as git-lfs reads one (`lfs/pointer.go`, `DecodeFrom`),
+/// which takes more than it writes: white space around the text, CRLF, blank
+/// lines, extension lines before `version`, signed or zero-padded sizes and
+/// the alpha spec URL. Its `pre-push` hook uploads what this accepts.
+pub fn parse_pointer_like_git_lfs(bytes: &[u8]) -> Option<LfsPointer> {
+    if bytes.len() >= POINTER_MAX_BYTES {
+        return None;
+    }
+    let text = trim_space(bytes);
+    if !GIT_LFS_MARKERS
+        .iter()
+        .any(|marker| memchr::memmem::find(text, marker).is_some())
+    {
+        return None;
+    }
+    let mut values: [Option<&[u8]>; 3] = [None; 3];
+    let mut found = 0;
+    let mut extensions: Vec<(&[u8], &[u8])> = Vec::new();
+    for line in text.split(|&byte| byte == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        let space = memchr::memchr(b' ', line)?;
+        let (key, value) = (&line[..space], &line[space + 1..]);
+        // Nothing follows `size`, extensions included.
+        if found == GIT_LFS_KEYS.len() {
+            return None;
+        }
+        if key == GIT_LFS_KEYS[found] {
+            values[found] = Some(value);
+            found += 1;
+            continue;
+        }
+        extension_priority(key)?;
+        extensions.retain(|(seen, _)| *seen != key);
+        extensions.push((key, value));
+    }
+    let [Some(version), Some(oid), Some(size)] = values else {
+        return None;
+    };
+    if !GIT_LFS_READ_VERSIONS
+        .iter()
+        .any(|known| known.as_bytes() == version)
+    {
+        return None;
+    }
+    let oid = sha256_oid(oid)?;
+    let size: i64 = std::str::from_utf8(size).ok()?.parse().ok()?;
+    let mut priorities = [false; 10];
+    for (key, value) in extensions {
+        sha256_oid(value)?;
+        if std::mem::replace(&mut priorities[extension_priority(key)?], true) {
+            return None;
+        }
+    }
+    Some(LfsPointer {
+        oid,
+        size: u64::try_from(size).ok()?,
+    })
+}
+
+fn sha256_oid(value: &[u8]) -> Option<LfsOid> {
+    LfsOid::from_hex(std::str::from_utf8(value.strip_prefix(b"sha256:")?).ok()?)
+}
+
+/// The digit of an `ext-<digit>-<name>` key, prefix-matched as git-lfs's
+/// `\Aext-\d{1}-\w+` is.
+fn extension_priority(key: &[u8]) -> Option<usize> {
+    match key.strip_prefix(b"ext-")? {
+        [digit @ b'0'..=b'9', b'-', word, ..] if word.is_ascii_alphanumeric() || *word == b'_' => {
+            Some(usize::from(digit - b'0'))
+        }
+        _ => None,
+    }
+}
+
+/// Go's `bytes.TrimSpace`: Unicode white space off both ends, stopping at
+/// invalid UTF-8.
+fn trim_space(bytes: &[u8]) -> &[u8] {
+    let leading = bytes.utf8_chunks().next().map_or(0, |chunk| {
+        chunk.valid().len() - chunk.valid().trim_start().len()
+    });
+    let bytes = &bytes[leading..];
+    let trailing = bytes
+        .utf8_chunks()
+        .last()
+        .filter(|chunk| chunk.invalid().is_empty())
+        .map_or(0, |chunk| {
+            chunk.valid().len() - chunk.valid().trim_end().len()
+        });
+    &bytes[..bytes.len() - trailing]
 }
 
 /// Location of an object below the LFS storage directory.
@@ -192,6 +293,80 @@ mod tests {
         let mut oversized = pointer(&good);
         oversized.extend(std::iter::repeat_n(b'x', POINTER_MAX_BYTES));
         assert!(parse_pointer(&oversized).is_none());
+        // git-lfs treats a 1024-byte blob as content.
+        let padded = |length: usize| {
+            let short = pointer(&format!("ext-0-pad x\n{good}"));
+            let pad = "x".repeat(length - short.len() + 1);
+            pointer(&format!("ext-0-pad {pad}\n{good}"))
+        };
+        assert_eq!(padded(1023).len(), 1023);
+        assert!(parse_pointer(&padded(1023)).is_some());
+        assert!(parse_pointer(&padded(1024)).is_none());
+    }
+
+    /// Each case matches what `git lfs push --dry-run` (git-lfs 3.8.1) lists.
+    #[test]
+    fn reads_pointers_as_git_lfs_does() {
+        let v = format!("version {SPEC_URL}");
+        let oid = format!("oid sha256:{OID}");
+        let padded = |length: usize| {
+            let mut text = format!("{v}\n{oid}\nsize 9\n").into_bytes();
+            text.resize(length, b' ');
+            text
+        };
+        let accepted = [
+            format!("{v}\r\n{oid}\r\nsize 9\r\n"),
+            format!("{v}\n{oid}\nsize 0009\n"),
+            format!("{v}\n{oid}\nsize +9\n"),
+            format!("{v}\n{oid}\nsize -0\n"),
+            format!("\n{v}\n\n{oid}\nsize 9\n\n"),
+            format!("\u{a0}{v}\n{oid}\nsize 9 \n"),
+            format!("ext-0-foo sha256:{OID}\n{v}\n{oid}\nsize 9\n"),
+            format!("{v}\next-1-a sha256:{OID}\n{oid}\nsize 9\n"),
+            format!("version http://git-media.io/v/2\n{oid}\nsize 9\n"),
+            format!("version {LEGACY_SPEC_URL}\n{oid}\nsize 9"),
+        ];
+        for text in accepted
+            .iter()
+            .map(String::as_bytes)
+            .chain([&padded(1023)[..]])
+        {
+            let parsed = parse_pointer_like_git_lfs(text);
+            assert_eq!(
+                parsed.map(|pointer| pointer.oid.to_hex()).as_deref(),
+                Some(OID),
+                "{:?}",
+                String::from_utf8_lossy(text)
+            );
+        }
+        assert_eq!(
+            parse_pointer_like_git_lfs(accepted[1].as_bytes()).map(|pointer| pointer.size),
+            Some(9)
+        );
+
+        let rejected = [
+            String::new(),
+            " \n\t\n".to_string(),
+            format!("{v}\n{oid}\nsize 9\nfoo bar\n"),
+            format!("{v}\n{oid}\nsize 9\next-1-a sha256:{OID}\n"),
+            format!("{v}\next-1-a sha256:{OID}\next-1-b sha256:{OID}\n{oid}\nsize 9\n"),
+            format!("{v}\n{oid}\nsize\t9\n"),
+            format!("{v}\n{oid}\nsize -9\n"),
+            format!("{v}\n{oid}\nsize 9223372036854775808\n"),
+            format!("{v}\noid sha256:{}\nsize 9\n", OID.to_uppercase()),
+            format!("{oid}\n{v}\nsize 9\n"),
+        ];
+        for text in rejected
+            .iter()
+            .map(String::as_bytes)
+            .chain([&padded(1024)[..]])
+        {
+            assert!(
+                parse_pointer_like_git_lfs(text).is_none(),
+                "{:?}",
+                String::from_utf8_lossy(text)
+            );
+        }
     }
 
     #[test]

@@ -12,10 +12,11 @@ use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
-    ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
-    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, RewordCommitOutcome,
-    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
-    SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget, WorktreeCheckout,
+    ConflictFileStages, ConflictSide, ForcePushLease, GitHooks, GitRepository,
+    InteractiveRebaseEntry, MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result,
+    RewordCommitOutcome, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    WorktreeCheckout,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1482,7 +1483,17 @@ impl GitRepository for GixRepo {
     ) -> Result<CommitOperationOutcome> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.commit_with_identity_impl(message, identity, false)
+        self.commit_with_identity_impl(message, identity, false, GitHooks::Run)
+    }
+    fn commit_with_hooks(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: GitHooks,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.commit_with_identity_impl(message, identity, false, hooks)
     }
     fn commit_amend_with_identity(
         &self,
@@ -1491,7 +1502,17 @@ impl GitRepository for GixRepo {
     ) -> Result<CommitOperationOutcome> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.commit_with_identity_impl(message, identity, true)
+        self.commit_with_identity_impl(message, identity, true, GitHooks::Run)
+    }
+    fn commit_amend_with_hooks(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: GitHooks,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.commit_with_identity_impl(message, identity, true, hooks)
     }
 
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
@@ -1622,6 +1643,16 @@ impl GitRepository for GixRepo {
     ) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.push_after_commit_set_upstream_with_output_impl(target)
+    }
+
+    fn push_after_commit_with_hooks(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.push_after_commit_with_hooks_impl(target, set_upstream, hooks)
     }
 
     fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {

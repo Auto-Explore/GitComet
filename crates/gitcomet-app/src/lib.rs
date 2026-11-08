@@ -20,6 +20,8 @@ mod launch;
     all(test, feature = "ui-gpui-runtime")
 ))]
 mod linux_wayland_fallback;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos_launch_path;
 mod mergetool_mode;
 mod setup_mode;
 
@@ -132,8 +134,16 @@ impl AppLaunch {
     }
 
     /// Runs with the process arguments and returns the exit code.
+    ///
+    /// On macOS, a launch from Finder or the Dock, which gets launchd's bare
+    /// system `PATH`, first restarts itself in place with the Homebrew,
+    /// MacPorts and `/etc/paths` directories on `PATH`, so that the helpers
+    /// Git config names, such as `git-lfs`, are found.
     pub fn run(self) -> i32 {
-        self.run_with_args(std::env::args_os().collect())
+        let args: Vec<OsString> = std::env::args_os().collect();
+        #[cfg(target_os = "macos")]
+        macos_launch_path::restart_with_package_manager_path(&args);
+        self.run_with_args(args)
     }
 
     /// Runs with `args` (including the program name) and returns the exit code.

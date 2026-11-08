@@ -13,7 +13,7 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, SignatureFormats,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::services::CommandOutput;
+use gitcomet_core::services::{CommandOutput, UPSTREAM_CONFIG_WRITE_FAILED};
 use rustc_hash::FxHashSet;
 use smallvec::{Array, SmallVec};
 use std::io;
@@ -1347,6 +1347,18 @@ fn sequencer_operation_label(output: &CommandOutput, error: Option<&Error>) -> &
         .unwrap_or("Rebase")
 }
 
+/// How a push ended, from its stderr. One that sets an upstream (`-u`, or
+/// `push.autoSetupRemote`) exits 0 when only saving the upstream failed.
+fn push_outcome(output: &CommandOutput) -> &'static str {
+    if output.stderr.contains(UPSTREAM_CONFIG_WRITE_FAILED) {
+        "Pushed, but the upstream was not saved"
+    } else if output.stderr.contains("Everything up-to-date") {
+        "Everything up-to-date"
+    } else {
+        "Completed"
+    }
+}
+
 fn summarize_command(
     command: &RepoCommandKind,
     output: &CommandOutput,
@@ -1538,38 +1550,14 @@ fn summarize_command(
             };
             format!("Squash {reference}: {base}")
         }
-        RepoCommandKind::Push => {
-            if output.stderr.contains("Everything up-to-date") {
-                "Push: Everything up-to-date".to_string()
-            } else {
-                "Push: Completed".to_string()
-            }
-        }
+        RepoCommandKind::Push => format!("Push: {}", push_outcome(output)),
         RepoCommandKind::PushAfterCommit { set_upstream, .. } => {
-            let base = if output.stderr.contains("Everything up-to-date") {
-                "Everything up-to-date"
-            } else {
-                "Completed"
-            };
-            if *set_upstream {
-                format!("Push after commit -u: {base}")
-            } else {
-                format!("Push after commit: {base}")
-            }
+            let flag = if *set_upstream { " -u" } else { "" };
+            format!("Push after commit{flag}: {}", push_outcome(output))
         }
-        RepoCommandKind::ForcePush => {
-            if output.stderr.contains("Everything up-to-date") {
-                "Force push: Everything up-to-date".to_string()
-            } else {
-                "Force push: Completed".to_string()
-            }
-        }
+        RepoCommandKind::ForcePush => format!("Force push: {}", push_outcome(output)),
         RepoCommandKind::ForcePushWithLease { .. } => {
-            if output.stderr.contains("Everything up-to-date") {
-                "Force push with lease: Everything up-to-date".to_string()
-            } else {
-                "Force push with lease: Completed".to_string()
-            }
+            format!("Force push with lease: {}", push_outcome(output))
         }
         RepoCommandKind::PushWithTags { request } => format!(
             "{} to {}/{}: Completed",
@@ -1578,12 +1566,7 @@ fn summarize_command(
             request.branch
         ),
         RepoCommandKind::PushSetUpstream { remote, branch } => {
-            let base = if output.stderr.contains("Everything up-to-date") {
-                "Everything up-to-date"
-            } else {
-                "Completed"
-            };
-            format!("Push -u {remote}/{branch}: {base}")
+            format!("Push -u {remote}/{branch}: {}", push_outcome(output))
         }
         RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
             format!(
