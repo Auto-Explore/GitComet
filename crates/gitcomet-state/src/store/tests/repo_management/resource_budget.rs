@@ -326,6 +326,7 @@ fn hosted_requests_wait_for_cold_or_initial_background_open_and_keep_the_latest_
                     repo_id: id,
                     lifetime,
                     view,
+                    request: None,
                     target: DiffTarget::working_tree(path.into(), DiffArea::Unstaged),
                 }),
             );
