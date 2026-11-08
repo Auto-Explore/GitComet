@@ -95,8 +95,16 @@ fn isolated_filesystem() -> &'static std::sync::Mutex<gitcomet_core::filesystem:
 /// so elsewhere only the active repository is watched.
 #[cfg(target_os = "macos")]
 const WARM_INACTIVE_REPO_MONITORS: usize = 2;
+
+#[cfg(target_os = "macos")]
+fn warm_inactive_repo_monitors(warm_backends: usize) -> usize {
+    WARM_INACTIVE_REPO_MONITORS.min(warm_backends)
+}
+
 #[cfg(not(target_os = "macos"))]
-const WARM_INACTIVE_REPO_MONITORS: usize = 0;
+fn warm_inactive_repo_monitors(_warm_backends: usize) -> usize {
+    0
+}
 
 /// The `count` most recently active open tabs that are neither active nor
 /// leased, most recent first.
@@ -469,7 +477,9 @@ impl WorkerLoopContext<'_> {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
             let warm = warm_inactive_repos(
                 &state,
-                WARM_INACTIVE_REPO_MONITORS,
+                warm_inactive_repo_monitors(
+                    repos.warm_repository_count(std::time::SystemTime::now()),
+                ),
             );
             let watched = state
                 .repos
