@@ -1256,10 +1256,20 @@ pub(super) fn push_test_state(
     state: Arc<AppState>,
     cx: &mut impl gpui::AppContext,
 ) {
+    let state = with_one_sided_sides(state);
     this.store.replace_snapshot_for_test(Arc::clone(&state));
+    crate::view::test_support::install_working_tree_repositories(&this.store);
     this.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });
+}
+
+/// Records each selected diff's one side as the reducer's load plan does;
+/// hand-built states never pass through it.
+pub(super) fn with_one_sided_sides(state: Arc<AppState>) -> Arc<AppState> {
+    let mut state = Arc::unwrap_or_clone(state);
+    AppStore::record_planned_one_sided_sides_for_test(&mut state);
+    Arc::new(state)
 }
 
 /// Sets `repo.status` with a single file and `repo.diff_state.diff_target` in one call.
@@ -1529,6 +1539,7 @@ mod commit_file_selection;
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod crlf_selection;
 mod diagrams;
 mod diff_marker_refresh;
 mod diff_stage_gutter;

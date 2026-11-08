@@ -6439,8 +6439,9 @@ A["foo & bar"] & B --> C"#;
     }
 
     #[test]
-    fn bare_edge_shorthand_is_still_accepted_as_flowchart() {
-        let parsed = parse_mermaid("A --> B").unwrap();
+    fn bare_edge_shorthand_requires_a_flowchart_header() {
+        assert!(parse_mermaid("A --> B").is_err());
+        let parsed = parse_mermaid("flowchart LR\nA --> B").unwrap();
         assert_eq!(parsed.graph.kind, DiagramKind::Flowchart);
         assert_eq!(parsed.graph.edges.len(), 1);
     }

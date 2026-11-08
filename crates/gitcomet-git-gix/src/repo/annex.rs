@@ -525,7 +525,7 @@ impl super::GixRepo {
                 arg.to_str()
                     .is_some_and(|arg| arg.split('-').all(|n| n.parse::<u64>().is_ok()))
             });
-        let names_targets = by_key || numbered_unused;
+        let names_targets = by_key || numbered_unused || args.iter().any(|arg| arg == "--all");
         if paths.is_empty() && !names_targets {
             return Err(backend(format!("{label}: no paths given")));
         }
@@ -657,12 +657,30 @@ impl super::GixRepo {
         };
         let content = if content { "--content" } else { "--no-content" };
         let label = format!("git annex {verb}");
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
+            return self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label);
+        }
         match self.run_annex_plain(&[verb, content], &[], &label) {
             Err(error) if unknown_annex_command(&error, verb) => {
                 self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label)
             }
             result => result,
         }
+    }
+
+    fn run_annex_paths(
+        &self,
+        mut args: Vec<OsString>,
+        paths: &[PathBuf],
+        label: &str,
+    ) -> Result<CommandOutput> {
+        if paths.is_empty()
+            && self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare
+        {
+            args.push("--all".into());
+            return self.run_annex_json(&args, paths, &format!("{label} (all versions)"));
+        }
+        self.run_annex_json(&args, paths, label)
     }
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
@@ -693,7 +711,7 @@ impl super::GixRepo {
                     validate_name(from, "remote")?;
                     args.push(format!("--from={from}").into());
                 }
-                self.run_annex_json(&args, paths, "git annex get")
+                self.run_annex_paths(args, paths, "git annex get")
             }
             C::AnnexGetKeys { keys } => {
                 for key in keys {
@@ -775,7 +793,7 @@ impl super::GixRepo {
                 if *force {
                     args.push("--force".into());
                 }
-                self.run_annex_json(&args, paths, "git annex drop")
+                self.run_annex_paths(args, paths, "git annex drop")
             }
             C::AnnexCopy { paths, to } | C::AnnexMove { paths, to } => {
                 validate_name(to, "remote")?;
@@ -786,7 +804,7 @@ impl super::GixRepo {
                 };
                 let mut args = os(&[verb, "--json-progress"]);
                 args.push(format!("--to={to}").into());
-                self.run_annex_json(&args, paths, &format!("git annex {verb}"))
+                self.run_annex_paths(args, paths, &format!("git annex {verb}"))
             }
             C::AnnexUnlock { paths } => {
                 self.run_annex_json(&os(&["unlock"]), paths, "git annex unlock")
@@ -872,6 +890,17 @@ impl super::GixRepo {
                     "git annex describe",
                 )
             }
+            C::AnnexVerifyRemote { name, id } => {
+                validate_name(name, "remote")?;
+                if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return Err(backend(format!("invalid verification ID: {id:?}")));
+                }
+                self.run_annex_plain(
+                    &["verifyremote"],
+                    &[name.as_str(), "--safe", id.as_str()],
+                    "git annex verifyremote",
+                )
+            }
             C::AnnexNumcopies { copies } => {
                 if *copies == 0 {
                     return Err(backend("numcopies must be at least 1"));
@@ -930,6 +959,36 @@ impl super::GixRepo {
     /// Repositories and numcopies for the repo summary, read from git-annex's
     /// logs. Running `git annex info` instead would merge fetched branches,
     /// write remotes' uuids into config and probe URL remotes over the network.
+    /// Remotes whose `annex-verified` setting still waits for the user, each
+    /// with the configuration and ID `git annex verifyremote` shows for it.
+    pub(super) fn unverified_remotes(
+        &self,
+        config: &gix::config::Snapshot<'_>,
+    ) -> Vec<gitcomet_core::large_files::AnnexRemoteCheck> {
+        let waiting: Vec<String> = config
+            .plumbing()
+            .sections_by_name("remote")
+            .into_iter()
+            .flatten()
+            .filter(|section| {
+                section
+                    .value("annex-verified")
+                    .is_some_and(|value| value != "verified")
+            })
+            .filter_map(|section| Some(section.header().subsection_name()?.to_string()))
+            .filter(|name| validate_name(name, "remote").is_ok())
+            .collect();
+        waiting
+            .into_iter()
+            .filter_map(|name| {
+                let mut cmd = self.git_annex(&["verifyremote"]);
+                cmd.arg(&name);
+                let output = run_git_with_output_until_done(cmd, "git annex verifyremote").ok()?;
+                parse_remote_check(&name, &output.stdout)
+            })
+            .collect()
+    }
+
     pub(super) fn annex_repositories(
         &self,
         repo: &gix::Repository,
@@ -1056,9 +1115,54 @@ impl super::GixRepo {
     }
 }
 
+/// The configuration and `--safe` ID from `git annex verifyremote <name>`;
+/// `None` once it reports no change since the last confirmation.
+fn parse_remote_check(
+    name: &str,
+    output: &str,
+) -> Option<gitcomet_core::large_files::AnnexRemoteCheck> {
+    let id = output
+        .split_once("--safe ")?
+        .1
+        .split_whitespace()
+        .next()
+        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()))?;
+    let configuration = output
+        .lines()
+        .skip_while(|line| !line.trim_end().ends_with("configuration of the remote:"))
+        .skip(1)
+        .map(str::trim)
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(gitcomet_core::large_files::AnnexRemoteCheck {
+        name: name.to_string(),
+        configuration,
+        id: id.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_configuration_and_id_verifyremote_shows() {
+        let shown = "This is the configuration of the remote:\n\ttype=directory encryption=none\n\n\
+                     Is this a location that you expected to be using?\n\
+                     If so, run:  git-annex verifyremote backup --safe 12\n\
+                     If not, run: git-annex verifyremote backup --unsafe\n";
+        let check = parse_remote_check("backup", shown).unwrap();
+        assert_eq!(check.configuration, "type=directory encryption=none");
+        assert_eq!(check.id, "12");
+        assert_eq!(
+            parse_remote_check(
+                "backup",
+                "There have been no changes to the remote's configuration since it was last verified.\n"
+            ),
+            None
+        );
+    }
 
     #[test]
     fn parses_progress_items_and_refusals() {

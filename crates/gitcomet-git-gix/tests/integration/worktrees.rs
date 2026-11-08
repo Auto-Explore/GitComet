@@ -1,5 +1,6 @@
 use crate::test_git_env;
 use gitcomet_core::domain::Upstream;
+use gitcomet_core::error::{ErrorKind, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, WorktreeCheckout};
 use gitcomet_git_gix::GixBackend;
@@ -106,6 +107,148 @@ fn worktree_add_list_remove_round_trip() {
             .iter()
             .all(|worktree| !same_path(&worktree.path, &linked_path)),
         "linked worktree should be removed"
+    );
+}
+
+fn assert_remove_refused(
+    opened: &dyn gitcomet_core::services::GitRepository,
+    linked: &Path,
+    expected: GitFailureId,
+) {
+    let error = opened
+        .remove_worktree_with_output(linked)
+        .expect_err("plain remove should be refused");
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected a git failure: {error:?}");
+    };
+    assert_eq!(failure.id(), expected, "{error}");
+    assert!(linked.exists(), "a refused remove must keep the worktree");
+}
+
+#[test]
+fn worktree_remove_classifies_the_refusals_that_force_overrides() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let sub = root.join("sub");
+    fs::create_dir_all(&sub).expect("create submodule directory");
+    run_git(&sub, &["init"]);
+    run_git(
+        &sub,
+        &[
+            "-c",
+            "user.email=you@example.com",
+            "-c",
+            "user.name=You",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "sub",
+        ],
+    );
+    let repo = cloned_repo(root);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "../sub",
+            "sub",
+        ],
+    );
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+    let opened = GixBackend.open(&repo).expect("open repository");
+    let add_detached = |path: &Path| {
+        opened
+            .add_worktree_with_output(
+                path,
+                &WorktreeCheckout::Existing {
+                    reference: "HEAD".to_string(),
+                },
+            )
+            .expect("add linked worktree");
+    };
+
+    let dirty = root.join("dirty");
+    add_detached(&dirty);
+    fs::write(dirty.join("seed.txt"), "edited\n").expect("edit tracked file");
+    assert_remove_refused(
+        opened.as_ref(),
+        &dirty,
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Changes),
+    );
+
+    // Git refuses even a clean worktree once its submodule is checked out.
+    let with_submodule = root.join("with-submodule");
+    add_detached(&with_submodule);
+    run_git(
+        &with_submodule,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+        ],
+    );
+    assert_remove_refused(
+        opened.as_ref(),
+        &with_submodule,
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules),
+    );
+
+    opened
+        .force_remove_worktree_with_output(&with_submodule)
+        .expect("force removes a worktree with submodules");
+    assert!(!with_submodule.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_remove_classifies_refusals_under_a_localized_git() {
+    // Git translates both refusals that `--force` overrides.
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "worktree_remove_classifies_refusals_under_a_localized_git",
+        r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = remove ]; then
+        if [ "${LC_ALL-}" = C ]; then
+            printf '%s\n' 'fatal: working trees containing submodules cannot be moved or removed' >&2
+        else
+            printf '%s\n' 'Schwerwiegend: Arbeitsverzeichnisse, die Submodule enthalten, können nicht verschoben oder entfernt werden.' >&2
+        fi
+        exit 128
+    fi
+done
+exec git "$@"
+"#,
+        || {
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let repo = cloned_repo(dir.path());
+            let opened = GixBackend.open(&repo).expect("open repository");
+            let linked = dir.path().join("linked");
+            fs::create_dir_all(&linked).expect("create worktree directory");
+            assert_remove_refused(
+                opened.as_ref(),
+                &linked,
+                GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules),
+            );
+        },
     );
 }
 

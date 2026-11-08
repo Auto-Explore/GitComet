@@ -209,4 +209,5 @@ pub(crate) fn open_gix(workdir: &Path) -> gix::Repository {
 #[cfg(test)]
 pub(crate) fn open_repo(workdir: &Path) -> crate::repo::GixRepo {
     crate::repo::GixRepo::new(workdir.to_path_buf(), open_gix(workdir).into_sync())
+        .expect("open native repository topology")
 }

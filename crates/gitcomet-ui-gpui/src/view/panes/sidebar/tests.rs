@@ -139,9 +139,23 @@ fn sidebar_notify_fingerprint_tracks_sidebar_mode() {
 }
 
 #[test]
+fn bare_mode_change_repaints_the_explorer_without_a_directory_reload() {
+    let mut state = AppState {
+        repos: vec![repo_state(RepoId(1), "/tmp/bare-explorer-fingerprint")],
+        active_repo: Some(RepoId(1)),
+        ..AppState::test_default()
+    };
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    let normal = SidebarNotifyFingerprint::from_state(&state);
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    assert_ne!(normal, SidebarNotifyFingerprint::from_state(&state));
+}
+
+#[test]
 fn sidebar_notify_fingerprint_tracks_live_worktree_badge_branch_changes() {
     let mut active = repo_state(RepoId(1), "/tmp/repo");
     active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/old".to_string()),
@@ -168,6 +182,7 @@ fn sidebar_notify_fingerprint_tracks_live_worktree_badge_branch_changes() {
 fn sidebar_notify_fingerprint_tracks_worktree_badge_removal_when_tab_closes() {
     let mut active = repo_state(RepoId(1), "/tmp/repo");
     active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature".to_string()),
@@ -193,6 +208,7 @@ fn sidebar_notify_fingerprint_tracks_worktree_badge_removal_when_tab_closes() {
 fn sidebar_notify_fingerprint_tracks_worktree_badge_removal_when_worktree_detaches() {
     let mut active = repo_state(RepoId(1), "/tmp/repo");
     active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature".to_string()),
@@ -308,6 +324,7 @@ fn sidebar_notify_fingerprint_ignores_inactive_repo_changes() {
 fn sidebar_notify_fingerprint_ignores_unrelated_open_repo_branch_changes() {
     let mut active = repo_state(RepoId(1), "/tmp/active");
     active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/active-feature"),
         head: None,
         branch: Some("feature".to_string()),
@@ -463,4 +480,42 @@ fn collapsed_popover_search_stays_within_the_open_section() {
         ["main"]
     );
     assert!(branch_names(&filter_rows("release", CollapsedSidebarSection::Local)).is_empty());
+}
+
+/// The accent row colours, the eye column and the "Focusing x/y" banner are
+/// computed while rendering, not stored in the cached rows, so without this
+/// the sidebar keeps painting the pre-focus rows until something else happens
+/// to repaint it.
+#[test]
+fn sidebar_notify_fingerprint_tracks_the_history_focus() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
+
+    let mut state = AppState {
+        repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    let unfocused = SidebarNotifyFingerprint::from_state(&state);
+
+    state.repos[0].history_state.history_focus =
+        HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+    let focused = SidebarNotifyFingerprint::from_state(&state);
+    assert_ne!(
+        focused, unfocused,
+        "focusing a ref must repaint the sidebar"
+    );
+
+    // Adding a second ref is also a repaint: the banner's count changes.
+    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
+        HistoryFocus::local_branch("feature"),
+        HistoryFocus::local_branch("main"),
+    ]);
+    assert_ne!(SidebarNotifyFingerprint::from_state(&state), focused);
+
+    state.repos[0].history_state.history_focus = HistoryFocusSet::default();
+    assert_eq!(
+        SidebarNotifyFingerprint::from_state(&state),
+        unfocused,
+        "clearing the focus returns the sidebar to its unfocused painting"
+    );
 }

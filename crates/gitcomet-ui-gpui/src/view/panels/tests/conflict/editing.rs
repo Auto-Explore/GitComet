@@ -2,6 +2,133 @@
 
 use super::*;
 
+#[gpui::test]
+fn razor_view_conflict_output_preserves_embedded_styles_after_live_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_conflict_output_styles(cx, "Index.cshtml");
+}
+
+#[gpui::test]
+fn razor_component_conflict_output_preserves_embedded_styles_after_live_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_conflict_output_styles(cx, "Index.razor");
+}
+
+fn assert_razor_conflict_output_styles(cx: &mut gpui::TestAppContext, filename: &str) {
+    let ours = concat!(
+        "@* Razor comment *@\n",
+        "@{ var title = \"server ours\"; }\n",
+        "<p class=\"card\">@title</p>\n",
+        "<script>const label = \"client:@title:suffix\";</script>\n",
+    );
+    let base = ours.replace("ours", "base");
+    let theirs = ours.replace("ours", "theirs");
+    let current = format!("<<<<<<< ours\n{ours}=======\n{theirs}>>>>>>> theirs\n");
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let path = std::path::Path::new(filename);
+    std::fs::write(workdir.join(path), &current).unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.live_syntax_unbounded_for_tests = true;
+        });
+    });
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(1001),
+        &workdir,
+        path,
+        &base,
+        ours,
+        &theirs,
+        &current,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "Razor conflict initialized",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(path),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    let renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.ensure_conflict_resolved_output_materialized(cx)
+        });
+    });
+    cx.run_until_parked();
+
+    for edited in [false, true] {
+        let expected_text = if edited {
+            ours.replace("ours", "edited 😀")
+        } else {
+            ours.to_owned()
+        };
+        if edited {
+            let start = ours.find("ours").unwrap();
+            cx.update(|_, app| {
+                renderer.update(app, |pane, cx| {
+                    pane.conflict_resolver_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(start..start + "ours".len(), "edited 😀", cx);
+                    });
+                });
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                assert!(pane.conflict_resolved_output_projection.is_none());
+                assert_eq!(
+                    pane.conflict_resolved_preview_syntax_language,
+                    Some(rows::DiffSyntaxLanguage::Razor)
+                );
+                assert_eq!(pane.conflict_resolver_input.read(cx).text(), expected_text);
+                let document = pane
+                    .conflict_resolved_output_live_syntax
+                    .as_ref()
+                    .expect("live Razor conflict output");
+                assert_eq!(document.language(), rows::DiffSyntaxLanguage::Razor);
+                let expected = document
+                    .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        pane.theme,
+                    ))
+                    .highlights_for_byte_range(0..expected_text.len());
+                let rendered = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..expected_text.len())
+                });
+                assert_eq!(
+                    rendered, expected,
+                    "{filename}: resolved output must retain engine runs"
+                );
+                for (token, color) in [
+                    ("Razor comment", pane.theme.syntax.comment),
+                    ("var", pane.theme.syntax.keyword),
+                    ("server", pane.theme.syntax.string),
+                    ("p class", pane.theme.syntax.tag),
+                    ("class", pane.theme.syntax.attribute),
+                    ("const", pane.theme.syntax.keyword),
+                    ("client:", pane.theme.syntax.string),
+                    (":suffix", pane.theme.syntax.string),
+                ] {
+                    let offset = expected_text.find(token).unwrap();
+                    let actual = rendered.iter().find(|(range, _)| range.contains(&offset));
+                    assert_eq!(
+                        actual.and_then(|(_, style)| style.color),
+                        Some(color.into_color()),
+                        "{filename}: {token:?} lost its language style after edit={edited}"
+                    );
+                }
+            });
+        });
+    }
+}
+
 /// The input columns stream a whole-file conflict, but the resolved output is
 /// editable at any size — the two gates are independent. `StreamedLargeFile`
 /// describes how the A/B/C columns render; it never demotes the output pane to

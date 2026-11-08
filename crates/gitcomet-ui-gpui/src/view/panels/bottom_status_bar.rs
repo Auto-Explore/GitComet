@@ -187,7 +187,7 @@ impl BottomStatusBarView {
                         .hook_activity
                         .iter()
                         .filter(|operation| {
-                            operation.is_reportable() && operation.status.is_active()
+                            operation.has_activity_details() && operation.status.is_active()
                         })
                         .count(),
                     repo.feedback.hook_activity.iter().rev().any(|operation| {
@@ -445,9 +445,9 @@ impl BarItemOwner for BottomStatusBarView {
             .gitcomet_tooltip(
                 theme,
                 if keep_minimized {
-                    "Git hook activity — keep minimized enabled".into()
+                    "Git activity — keep minimized enabled".into()
                 } else {
-                    "Git hook activity".into()
+                    "Git activity".into()
                 },
             )
             .debug_selector(|| "bottom_hook_activity".to_string());

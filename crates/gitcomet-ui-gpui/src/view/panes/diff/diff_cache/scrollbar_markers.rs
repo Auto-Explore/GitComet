@@ -244,7 +244,10 @@ impl DiffRenderer {
         }
 
         if is_file_view {
-            self.diff_visible_indices = (0..current_len).collect();
+            if !self.diff_visible_indices.is_empty() {
+                self.diff_visible_indices = Arc::from([]);
+            }
+            self.diff_visible_inline_map = Some(PatchInlineVisibleMap::identity(current_len));
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
             if recompute_search && self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();

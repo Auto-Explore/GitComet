@@ -46,6 +46,7 @@ fn window_stores_share_one_undo_history() {
             Arc::new(FailingBackend),
             AppState::test_default(),
             crate::store::repository_preferences::PreferenceHub::new(None),
+            crate::store::auto_fetch::AutoFetchCoordinator::new(),
             FilesystemScope::Process,
         )
     };

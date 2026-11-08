@@ -5,6 +5,8 @@ use crate::test_support::{
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
 
+mod tracking;
+
 /// Runs git in `workdir` with `input` on its stdin; it must succeed.
 fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
     use std::io::Write as _;
@@ -1342,8 +1344,12 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
-    let second = repo.all_branches_tips(&handle, None).expect("tips again");
+    let first = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips");
+    let second = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips again");
     assert!(
         Arc::ptr_eq(&first, &second),
         "an unchanged ref namespace must serve the cached tips"
@@ -1357,14 +1363,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "main moved away from topic");
     assert!(!Arc::ptr_eq(&first, &moved));
 
     git_success(tmp.path(), &["tag", "-m", "v2", "v2"]);
     let tagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after tag");
     assert!(
         Arc::ptr_eq(&moved, &tagged),
@@ -1373,14 +1379,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     git_success(tmp.path(), &["branch", "-D", "topic"]);
     let deleted = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after delete");
     assert_eq!(deleted.len(), 1);
 
     write_file(tmp.path(), "a.txt", "dirty\n");
     git_success(tmp.path(), &["stash", "-q"]);
     let stashed = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after stash");
     assert!(
         stashed.len() > deleted.len(),
@@ -1404,7 +1410,9 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
+    let first = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips");
     assert_eq!(
         first.len(),
         1,
@@ -1414,7 +1422,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "latest still reaches c1 through the tag");
 
@@ -1422,10 +1430,10 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // symbolic ref that follows it now seeds a different commit.
     git_success(tmp.path(), &["update-ref", "refs/tags/moving", "HEAD"]);
     let retagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after retag");
     let fresh = open_repo(tmp.path())
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("fresh tips");
     assert_eq!(retagged.as_ref(), fresh.as_ref());
     assert_eq!(retagged.len(), 1, "latest now resolves to main's tip");
@@ -1433,7 +1441,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // An annotated tag makes the symbolic chain end at a tag object.
     git_success(tmp.path(), &["tag", "-f", "-m", "old", "moving", "HEAD~1"]);
     let annotated = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after annotated retag");
     assert_eq!(annotated.len(), 2, "latest resolves back to c1");
 }
@@ -2060,8 +2068,9 @@ fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
 
     let result = gitcomet_core::services::GitRepository::read_history(
         &repo,
-        HistoryMode::AllBranches,
+        &HistoryMode::AllBranches.into(),
         None,
+        &Default::default(),
         &gitcomet_core::services::HistoryReadRequest::Page {
             limit: 50,
             cursor: None,
@@ -2091,7 +2100,13 @@ fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
         let repo = open_repo(workdir);
         let cancel = CancellationToken::new();
         let index = repo
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         let id = gix::ObjectId::from_bytes_or_panic(index.id_bytes(0).unwrap());
@@ -2150,7 +2165,13 @@ fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
         assert_eq!(block.snapshot, index.snapshot);
         assert_eq!(block.commits[0].id, index.commit_id(0).unwrap());
         let rebuilt = repo
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         assert!(Arc::ptr_eq(&index, &rebuilt));
@@ -2163,7 +2184,7 @@ fn peel_failure_reports_underlying_io_error() {
     let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
 
     let error = repo
-        .all_branches_tips(&repo.repo(), None)
+        .all_branches_tips(&repo.repo(), &HistoryMode::AllBranches.into(), None)
         .expect_err("stale store cannot map pack A");
     let message = error.to_string();
     assert!(
@@ -2252,4 +2273,104 @@ fn config_change_reuses_the_object_store() {
         &config.into_sync().objects,
         &repo.thread_safe_repo().0.objects
     ));
+}
+
+/// Refs in the namespaces a hidden-refs filter targets, beside branches.
+fn hidden_refs_probe_repo(workdir: &Path, loose_checkpoints: usize) -> String {
+    init_test_repo(workdir);
+    git_success(workdir, &["checkout", "-q", "-b", "main"]);
+    commit_file(workdir, "a.txt", "1\n", "c1");
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let mut stdin = String::new();
+    for i in 0..5_000 {
+        stdin.push_str(&format!("create refs/heads/topic/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/remotes/origin/topic/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/pull/{i}/head {head}\n"));
+    }
+    for i in 0..2_000 {
+        stdin.push_str(&format!("create refs/t3/checkpoints/t/turn/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/claude/checkpoint-{i} {head}\n"));
+    }
+    git_with_stdin(workdir, &["update-ref", "--stdin"], stdin.as_bytes());
+    git_success(workdir, &["pack-refs", "--all"]);
+    let mut loose = String::new();
+    for i in 0..loose_checkpoints {
+        loose.push_str(&format!(
+            "create refs/t3/checkpoints/loose/turn/{i} {head}\n"
+        ));
+    }
+    if !loose.is_empty() {
+        git_with_stdin(workdir, &["update-ref", "--stdin"], loose.as_bytes());
+    }
+    head
+}
+
+const HIDDEN_REFS_PROBE_PREFIXES: [&str; 10] = [
+    "refs/t3",
+    "refs/claude",
+    "refs/gitcomet-pro",
+    "refs/jj/keep",
+    "refs/wip",
+    "refs/prefetch",
+    "refs/original",
+    "refs/notes",
+    "refs/pull",
+    "refs/changes",
+];
+
+#[test]
+#[ignore = "timing probe"]
+fn timing_all_branches_tips_hidden_refs() {
+    for (label, loose, filtered) in [
+        ("packed_unfiltered", 0, false),
+        ("packed_filtered", 0, true),
+        ("loose2k_filtered", 2_000, true),
+    ] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        hidden_refs_probe_repo(tmp.path(), loose);
+        let options = gitcomet_core::services::RepositoryOptions::default()
+            .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
+                if filtered {
+                    &HIDDEN_REFS_PROBE_PREFIXES[..]
+                } else {
+                    &[][..]
+                }
+                .iter()
+                .copied(),
+            ));
+        let repo = crate::repo::GixRepo::new_with_options(
+            tmp.path().to_path_buf(),
+            crate::test_support::open_gix(tmp.path()).into_sync(),
+            options,
+        )
+        .expect("open");
+        let handle = repo.repo();
+        let tips = repo
+            .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+            .expect("tips");
+        let runs = 30;
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            std::hint::black_box(
+                repo.all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+                    .expect("tips"),
+            );
+        }
+        let warm = start.elapsed() / runs;
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            *repo.history_cache.tips.lock().unwrap() = None;
+            std::hint::black_box(
+                repo.all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+                    .expect("tips"),
+            );
+        }
+        let cold = start.elapsed() / runs;
+        println!(
+            "timing {label} tips={} warm={:.2}ms cold={:.2}ms",
+            tips.len(),
+            warm.as_secs_f64() * 1e3,
+            cold.as_secs_f64() * 1e3
+        );
+    }
 }

@@ -127,6 +127,19 @@ impl TextInput {
         }
     }
 
+    /// Polls the provider while the answer is still pending.
+    pub(super) fn highlights_polling_provider(
+        &mut self,
+        byte_range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+        let resolved = self.effective_highlights_for_window(byte_range);
+        if resolved.pending {
+            self.ensure_highlight_provider_poll(cx);
+        }
+        resolved.highlights
+    }
+
     fn resolve_current_highlight_source(
         &mut self,
         byte_range: &Range<usize>,

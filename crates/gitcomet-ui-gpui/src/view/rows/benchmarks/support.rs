@@ -183,6 +183,7 @@ pub(crate) fn build_synthetic_repo_state_with_tags(
         };
         worktrees_vec.push(Worktree {
             path,
+            bare: false,
             head: Some(target.clone()),
             branch: Some(format!("feature/worktree/{ix}")),
             detached: ix % 7 == 0,
@@ -232,6 +233,7 @@ pub(crate) fn build_synthetic_repo_state_with_tags(
 
     // Minimal "repo is open" status.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
 
     repo
 }
@@ -493,6 +495,7 @@ pub(crate) fn build_repo_switch_minimal_repo_state(repo_id: RepoId, workdir: &st
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.open_rev = 1;
     repo
 }

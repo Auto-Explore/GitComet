@@ -25,6 +25,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
     store_for_test.dispatch(Msg::RemoveWorktree {
         repo_id,
         path: base.join("repo1").join("worktree_to_remove"),
+        delete_branch: None,
     });
 
     let selector = worktrees_spinner_selector(repo_id);

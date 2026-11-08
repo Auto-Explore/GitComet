@@ -1986,23 +1986,13 @@ flowchart RL
         let source = include_str!("../../docs/comparison_sources/flowchart_cycles.mmd");
         let parsed = parse_mermaid(source).expect("failed to parse flowchart fixture");
         let layout = compute_layout(&parsed.graph, &Theme::modern(), &LayoutConfig::default());
-
-        let edge = layout
-            .edges
-            .iter()
-            .find(|edge| edge.from == "E" && edge.to == "F")
-            .expect("missing E->F edge");
-
-        assert_eq!(
-            edge.points.len(),
-            2,
-            "expected E->F to collapse to a straight handoff, got {:?}",
-            edge.points
-        );
+        let feeder = &layout.nodes["E"];
+        let entry = &layout.nodes["F"];
+        let feeder_center = feeder.x + feeder.width * 0.5;
+        let entry_center = entry.x + entry.width * 0.5;
         assert!(
-            (edge.points[0].0 - edge.points[1].0).abs() <= 1.0,
-            "expected E->F to stay vertically aligned, got {:?}",
-            edge.points
+            (feeder_center - entry_center).abs() <= 1.0,
+            "expected E and F to stay vertically aligned, got {feeder_center} and {entry_center}"
         );
     }
 

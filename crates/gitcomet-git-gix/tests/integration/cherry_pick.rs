@@ -9,17 +9,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-#[cfg(unix)]
-fn install_prepare_commit_msg_hook(repo: &Path, script: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let hook = repo.join(".git").join("hooks").join("prepare-commit-msg");
-    fs::write(&hook, script).expect("write prepare-commit-msg hook");
-    let mut permissions = fs::metadata(&hook).expect("stat hook").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(hook, permissions).expect("make hook executable");
-}
-
 fn run_git(repo: &Path, args: &[&str]) {
     let output = git_output(repo, args);
     assert!(
@@ -932,8 +921,9 @@ fn cherry_pick_continue_surfaces_hook_failure_on_later_step() {
             true,
         )
         .expect("first conflict should pause");
-    install_prepare_commit_msg_hook(
+    gitcomet_core::test_support::script::install_hook(
         &repo,
+        "prepare-commit-msg",
         "#!/bin/sh\nif grep -q 'second change' \"$1\"; then\n  echo GITCOMET_PREPARE_HOOK_FAILURE >&2\n  exit 1\nfi\nexit 0\n",
     );
 

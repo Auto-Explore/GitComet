@@ -149,12 +149,8 @@ impl GitRepository for RecordedGitlinkRepository {
         self.inner.fetch_all(_prune)
     }
 
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
-        self.inner.pull(_mode, _prune)
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        self.inner.pull(_mode)
     }
 
     fn push(&self) -> Result<()> {
@@ -770,6 +766,7 @@ fn auth_worktree_retry_prepares_the_path_only_when_git_is_available() {
                 repo_id: RepoId(1),
                 command: RepoCommandKind::RemoveWorktree {
                     path: "linked".into(),
+                    delete_branch: None,
                 },
             },
         });
@@ -829,7 +826,8 @@ fn cancelled_maintenance_refresh(status: Option<FileStatusKind>) {
         assert!(
             repo.loads_in_flight
                 .request_log(crate::model::PendingLogLoad {
-                    scope: repo.history_state.history_scope,
+                    focus: Default::default(),
+                    walk: repo.history_state.history_scope.into(),
                     author: repo.history_state.history_author_filter.clone(),
                     limit: 200,
                     cursor: None,
@@ -1008,7 +1006,8 @@ fn cancelled_action_uses_its_inner_log_refresh_without_an_extra_head_query() {
             assert!(
                 repo.loads_in_flight
                     .request_log(crate::model::PendingLogLoad {
-                        scope,
+                        focus: Default::default(),
+                        walk: scope.into(),
                         author: None,
                         limit: 200,
                         cursor: None,

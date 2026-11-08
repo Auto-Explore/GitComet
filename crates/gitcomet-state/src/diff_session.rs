@@ -8,8 +8,8 @@
 
 use crate::model::{Loadable, RepoId, Shared};
 use gitcomet_core::domain::{
-    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffTarget, FileDiffImage,
-    FileDiffText,
+    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
@@ -43,6 +43,9 @@ pub struct DiffSession {
     pub generation: u64,
     /// Bumped on every change to the session, for fingerprints.
     pub rev: u64,
+    /// The last [`DiffSessionMsg::Open`] request its pane numbered, so the
+    /// pane can tell a snapshot that answers it from one taken before.
+    pub open_request: Option<u64>,
     /// The complete diff state, shared with the built-in pane.
     pub diff_state: crate::model::DiffState,
     /// Once requested, blame follows subsequent reloads and retargets.
@@ -73,6 +76,7 @@ impl DiffSession {
             encoding: None,
             generation: 0,
             rev: 0,
+            open_request: None,
             diff_state: crate::model::DiffState {
                 diff_target: Some(target.clone()),
                 ..Default::default()
@@ -118,6 +122,7 @@ impl DiffSession {
         self.pending.patch
             || self.pending.file_text
             || self.pending.image
+            || self.pending.preview_text
             || self.pending.blame
             || self.pending.attributes
     }
@@ -149,6 +154,7 @@ pub(crate) struct DiffSessionLoads {
     pub patch: bool,
     pub file_text: bool,
     pub image: bool,
+    pub preview_text: bool,
     pub blame: bool,
 }
 
@@ -314,6 +320,9 @@ pub enum DiffSessionMsg {
         lifetime: u64,
         view: DiffViewId,
         target: DiffTarget,
+        /// The pane's number for this open, kept as the session's
+        /// `open_request`; `None` for an open its renderer asked for.
+        request: Option<u64>,
     },
     SetEncoding {
         repo_id: RepoId,
@@ -406,6 +415,7 @@ pub enum DiffSessionContent {
     /// enum travels through every session message.
     FileText(Result<Option<Box<FileDiffText>>>),
     Image(Result<Option<FileDiffImage>>),
+    PreviewText(Result<Option<DiffPreviewTextFile>>),
     Blame(Result<Vec<BlameLine>>),
 }
 
@@ -418,6 +428,8 @@ pub enum DiffSessionWork {
         patch: bool,
         file_text: bool,
         image: bool,
+        /// The one side an added or deleted file has, read whole.
+        preview_text_side: Option<DiffPreviewTextSide>,
     },
     Blame {
         path: PathBuf,
@@ -475,6 +487,7 @@ impl DiffSessionEffect {
                 patch,
                 file_text,
                 image,
+                preview_text_side,
                 ..
             } => {
                 let text = error.to_string();
@@ -492,6 +505,9 @@ impl DiffSessionEffect {
                 }
                 if image {
                     replies.push(reply(DiffSessionContent::Image(Err(error()))));
+                }
+                if preview_text_side.is_some() {
+                    replies.push(reply(DiffSessionContent::PreviewText(Err(error()))));
                 }
                 replies
             }
@@ -529,6 +545,7 @@ mod tests {
                 patch: true,
                 file_text: true,
                 image: true,
+                preview_text_side: None,
             },
             cancellation: CancellationToken::new(),
         }

@@ -20,7 +20,6 @@ exclude = [
     "tmp/",
     "docs/benchmarks/",
     "docs/comparisons/",
-    "docs/comparison_sources/",
     "docs/conformance-report/",
     "docs/diagrams/",
     "docs/examples/",
@@ -76,11 +75,6 @@ png = [
 [lib]
 name = "mermaid_rs_renderer"
 path = "src/lib.rs"
-# Upstream's unit tests and doc examples read fixtures the published crate does
-# not ship; GitComet's tests live in gitcomet-diagrams.
-test = false
-doctest = false
-bench = false
 
 [[bin]]
 name = "mmdr"

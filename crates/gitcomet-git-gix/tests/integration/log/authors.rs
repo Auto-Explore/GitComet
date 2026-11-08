@@ -32,7 +32,11 @@ fn author_catalog_includes_unloaded_history_and_reuses_unchanged_inputs() {
                 .all(|commit| commit.author.as_ref() == "Recent author")
         );
         let names = repo
-            .history_authors(HistoryMode::FullReachable, &cancel)
+            .history_authors(
+                &HistoryMode::FullReachable.into(),
+                &Default::default(),
+                &cancel,
+            )
             .unwrap();
         assert_eq!(names.len(), 2);
         assert!(names.iter().any(|name| name.as_ref() == "Older author"));
@@ -45,14 +49,22 @@ fn author_catalog_includes_unloaded_history_and_reuses_unchanged_inputs() {
         )
         .unwrap();
         let again = repo
-            .history_authors(HistoryMode::FullReachable, &cancel)
+            .history_authors(
+                &HistoryMode::FullReachable.into(),
+                &Default::default(),
+                &cancel,
+            )
             .unwrap();
         assert!(Arc::ptr_eq(&names, &again));
         cancel.cancel();
         assert!(matches!(
-            repo.history_authors(HistoryMode::FullReachable, &cancel)
-                .unwrap_err()
-                .kind(),
+            repo.history_authors(
+                &HistoryMode::FullReachable.into(),
+                &Default::default(),
+                &cancel
+            )
+            .unwrap_err()
+            .kind(),
             ErrorKind::Cancelled
         ));
     }
@@ -80,8 +92,8 @@ fn author_catalog_matches_history_scopes_and_refreshes_when_heads_move() {
     run_git(dir.path(), &["checkout", "-q", "master"]);
     let repo = GixBackend.open(dir.path()).unwrap();
     let cancel = CancellationToken::new();
-    let names = |mode| {
-        repo.history_authors(mode, &cancel)
+    let names = |mode: HistoryMode| {
+        repo.history_authors(&mode.into(), &Default::default(), &cancel)
             .unwrap()
             .iter()
             .map(|name| name.to_string())
@@ -125,7 +137,7 @@ fn author_catalog_handles_empty_repositories() {
         HistoryMode::FirstParent,
     ] {
         assert!(
-            repo.history_authors(mode, &CancellationToken::new())
+            repo.history_authors(&mode.into(), &Default::default(), &CancellationToken::new())
                 .unwrap()
                 .is_empty()
         );

@@ -61,7 +61,7 @@ repository lifetimes, and document ownership.
 - `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window and hosts extensions (`view/extension_host.rs`). With none registered it installs nothing.
 - `crates/gitcomet-app`: process launch (`AppLaunch`): identity install, crash reporting, CLI (clap), browser-instance broker, difftool/mergetool/setup/uninstall modes. GUI dependencies are optional (`ui-gpui` feature).
 - `crates/gitcomet`: the executable: allocator, platform resources, packaging, and instrumentation binaries.
-- `crates/gitcomet-extension-example` and `crates/gitcomet-extension-example-app`: a neutral example product built only on public upstream interfaces, with an extension registering one of every contribution; the UI host's tests run it (`view/tests/extensions.rs`), and CI builds the product in its own context.
+- `crates/gitcomet-extension-example` and `crates/gitcomet-extension-example-app`: a neutral example product built only on public upstream interfaces, with an extension registering most kinds of contribution; the UI host's tests run it (`view/tests/extensions.rs`), and CI builds the product in its own context.
 
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.
@@ -143,8 +143,10 @@ python3 scripts/ci/run.py test --context workspace
 python3 scripts/ci/run.py doc --context workspace
 ```
 
-Use `--context core`, `diagrams`, `state`, `backend`, `app`, or `ui` for a focused
-run. The `app` context disables GUI features. Run the same commands with
+Use `--context core`, `diagrams`, `state`, `backend`, `app`, `app-gui`, or `ui` for a focused
+run. The `app` context disables GUI features; `app-gui` covers browser startup,
+terminal detachment, and the browser-instance broker in the application crates.
+Run the same commands with
 `--context example` to check the downstream extension product in its separate
 feature context. Recompile a context after changing its code.
 

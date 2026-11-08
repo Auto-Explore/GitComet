@@ -157,6 +157,7 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.history_state.selected_commit = Some(commit_id.clone());
         repo.file_browser.active = active;
         repo.file_browser.source = FileSource::Commit(commit_id);
@@ -183,6 +184,7 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
         // any ClearDiffSelection, so observing it makes the assertion stable.
         store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: false,
+            ..RemoteSettings::default()
         }));
         wait_until(cx, "working-tree selection", |_| {
             !store
@@ -1095,7 +1097,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::All,
             })
         );
     });
@@ -1193,7 +1196,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -1226,7 +1232,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1273,7 +1280,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -1302,7 +1312,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1349,7 +1360,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
     });
@@ -1406,7 +1418,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
                 crate::view::test_support::popover_kind(view.read(app), app),
                 Some(PopoverKind::CommitMenu {
                     repo_id,
-                    commit_id: commit_id.clone()
+                    commit_id: commit_id.clone(),
+                    refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                        "feature"
+                    ))),
                 })
             );
             assert_eq!(
@@ -1431,7 +1446,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
         assert_eq!(
@@ -1540,6 +1558,7 @@ fn history_row_click_and_drag(cx: &mut gpui::TestAppContext, cached: bool) {
     // Everything the panes read is already loaded, so rendering never has
     // to ask the store (and its worker threads) for data.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
     repo.branches_rev = 1;
@@ -1670,6 +1689,7 @@ fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: boo
     // Everything the sidebar reads is already loaded, so opening a section
     // popover never has to ask the store (and its worker threads) for data.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
     repo.branches_rev = 1;
@@ -2183,7 +2203,10 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: hovered_commit.clone()
+                commit_id: hovered_commit.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -2339,7 +2362,10 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: CommitId("tip".into())
+                commit_id: CommitId("tip".into()),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -2369,7 +2395,10 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: CommitId("tip".into())
+                commit_id: CommitId("tip".into()),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             }),
             "a signature reply must not dismiss the refs item menu"
         );
@@ -2691,7 +2720,7 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
             let history = history_view.read(app);
             history.history_cache.as_ref().is_some_and(|cache| {
                 cache.base.request.history_scope == LogScope::CurrentBranch
-                    && cache.base.request.remote_branches_rev == 0
+                    && cache.base.request.remote_branches == Default::default()
                     && cache.decorations.row_vms.len() == 1
                     && cache.decorations.row_vms[0]
                         .branches_text
@@ -2737,8 +2766,8 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
             let history = history_view.read(app);
             history.history_cache.as_ref().is_some_and(|cache| {
                 cache.base.request.history_scope == LogScope::CurrentBranch
-                    && cache.base.request.remote_branches_rev == 0
-                    && cache.decorations.request.remote_branches_rev == 2
+                    && cache.base.request.remote_branches == Default::default()
+                    && cache.decorations.request.remote_branches.rev == 2
                     && cache.decorations.row_vms.len() == 1
                     && cache.decorations.row_vms[0]
                         .branches_text
@@ -2782,6 +2811,84 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
     assert_eq!(after_base_request, before_base_request);
     assert!(after_branches_text.contains("origin/main"));
     assert!(after_branches_text.contains("upstream/main"));
+}
+
+#[gpui::test]
+fn hiding_a_remote_drops_its_branch_labels_from_the_graph(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+    let mut shown_repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-hidden-remote-labels"),
+        },
+    );
+    shown_repo.history_state.history_scope = LogScope::CurrentBranch;
+    shown_repo.head_branch = Loadable::Ready("main".to_string());
+    shown_repo.head_branch_rev = 1;
+    shown_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+    shown_repo.branches_rev = 1;
+    shown_repo.remote_branches = Loadable::Ready(Arc::new(vec![
+        remote_branch("origin", "main", "tip"),
+        remote_branch("upstream", "main", "tip"),
+    ]));
+    shown_repo.remote_branches_rev = 1;
+    shown_repo.log = Loadable::Ready(Arc::clone(&page));
+    shown_repo.log_rev = 1;
+    shown_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    shown_repo.history_state.log_rev = 1;
+    let mut hidden_repo = shown_repo.clone();
+    crate::view::test_support::hide_remotes_in_history(&mut hidden_repo, &["upstream"]);
+    let state_with = |repo: RepoState| {
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        })
+    };
+    let shown_cache = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view
+                .read(app)
+                .history_cache
+                .as_ref()
+                .and_then(|cache| {
+                    let row = cache.decorations.row_vms.first()?;
+                    Some((
+                        Arc::clone(&cache.base.graph_rows),
+                        row.branches_text.as_ref().to_owned(),
+                    ))
+                })
+        })
+    };
+    let branches_text = |cx: &mut gpui::VisualTestContext| shown_cache(cx).map(|(_, text)| text);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    ensure_history_cache_for_tests(cx, &view, state_with(shown_repo));
+    wait_until(cx, "both remotes label the commit", |cx| {
+        branches_text(cx)
+            .is_some_and(|text| text.contains("origin/main") && text.contains("upstream/main"))
+    });
+    let (graph_before, _) = shown_cache(cx).unwrap();
+
+    ensure_history_cache_for_tests(cx, &view, state_with(hidden_repo));
+    wait_until(cx, "the hidden remote's label is gone", |cx| {
+        branches_text(cx)
+            .is_some_and(|text| text.contains("origin/main") && !text.contains("upstream/main"))
+    });
+    let (graph_after, _) = shown_cache(cx).unwrap();
+    assert!(
+        Arc::ptr_eq(&graph_before, &graph_after),
+        "a HEAD-only graph keeps its rows; only the labels change"
+    );
 }
 
 #[gpui::test]

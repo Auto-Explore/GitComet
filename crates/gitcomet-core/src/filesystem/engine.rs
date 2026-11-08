@@ -257,6 +257,96 @@ impl Filesystem {
         self.revision
     }
 
+    pub fn mutation_paths(&self, operation: &Operation) -> io::Result<Vec<PathBuf>> {
+        let mut operation = operation.clone();
+        normalize_operation_paths(&mut operation)?;
+        self.normalized_mutation_paths(&operation)
+    }
+
+    fn normalized_mutation_paths(&self, operation: &Operation) -> io::Result<Vec<PathBuf>> {
+        let mut paths = match operation {
+            Operation::Save { path, .. }
+            | Operation::CreateFile { path }
+            | Operation::CreateDirectory { path } => vec![path.clone()],
+            Operation::Transfer {
+                sources,
+                destination,
+                intent,
+            } => {
+                let mut paths = vec![destination.clone()];
+                if *intent == TransferIntent::Move {
+                    paths.extend(sources.iter().cloned());
+                }
+                paths
+            }
+            Operation::Duplicate { sources }
+            | Operation::Trash { sources }
+            | Operation::DeletePermanently { sources, .. } => sources.clone(),
+            Operation::Rename { source, .. } => vec![source.clone()],
+            Operation::CompleteOutbound {
+                receipt,
+                intent,
+                source_removed,
+            } => {
+                if *intent == Some(TransferIntent::Move) && !source_removed {
+                    receipt.paths.clone()
+                } else {
+                    Vec::new()
+                }
+            }
+            Operation::Undo | Operation::Redo => {
+                let entry = if matches!(operation, Operation::Undo) {
+                    self.undo.back()
+                } else {
+                    self.redo.last()
+                };
+                entry
+                    .into_iter()
+                    .flat_map(|entry| &entry.steps)
+                    .filter_map(|step| step.change.as_ref())
+                    .flat_map(|change| change.old.iter().chain(change.new.iter()))
+                    .map(|path| absolute_identity(path))
+                    .collect::<io::Result<Vec<_>>>()?
+            }
+        };
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    pub fn execute_checked(
+        &mut self,
+        mut request: Request,
+        check: impl FnOnce(&[PathBuf]) -> io::Result<()>,
+        progress: impl FnMut(Progress),
+    ) -> OperationResult {
+        let paths = normalize_operation_paths(&mut request.operation)
+            .and_then(|()| self.normalized_mutation_paths(&request.operation));
+        let result = paths
+            .as_ref()
+            .map_err(|error| io::Error::new(error.kind(), error.to_string()))
+            .and_then(|paths| check(paths));
+        if let Err(error) = result {
+            return OperationResult {
+                saved_version: None,
+                moved_versions: BTreeMap::new(),
+                id: request.id,
+                items: vec![ItemResult {
+                    source: paths
+                        .ok()
+                        .and_then(|paths| paths.into_iter().next())
+                        .unwrap_or_default(),
+                    destination: None,
+                    outcome: ItemOutcome::Failed(error.to_string()),
+                }],
+                changes: Vec::new(),
+                undo_available: !self.undo.is_empty(),
+                redo_available: !self.redo.is_empty(),
+            };
+        }
+        self.execute(request, progress)
+    }
+
     pub fn changes_since(&self, revision: u64) -> Vec<PathChange> {
         self.changes
             .iter()
@@ -966,6 +1056,73 @@ fn native_trash(
     result
 }
 
+fn normalize_operation_paths(operation: &mut Operation) -> io::Result<()> {
+    let normalize_entries = |paths: &mut [PathBuf]| -> io::Result<()> {
+        for path in paths {
+            *path = absolute_identity(path)?;
+        }
+        Ok(())
+    };
+    match operation {
+        Operation::Save {
+            path,
+            worktree,
+            overwrite,
+            ..
+        } => {
+            if let Some(root) = worktree {
+                let relative = path
+                    .strip_prefix(&*root)
+                    .map_err(|_| invalid("Save path is outside the repository worktree"))?;
+                let relative = crate::path_utils::validated_repo_relative_path(relative)?;
+                *root = resolve_save_worktree(root, *overwrite)?;
+                *path = crate::path_utils::symlink_free_write_target(root, &relative)?;
+            }
+            *path = resolve_save_path(path, *overwrite)?.path;
+        }
+        Operation::CreateFile { path } | Operation::CreateDirectory { path } => {
+            *path = absolute_identity(path)?;
+        }
+        Operation::Transfer {
+            sources,
+            destination,
+            ..
+        } => {
+            normalize_entries(sources)?;
+            *destination = transfer_destination(destination)?;
+        }
+        Operation::Duplicate { sources }
+        | Operation::Trash { sources }
+        | Operation::DeletePermanently { sources, .. } => normalize_entries(sources)?,
+        Operation::Rename { source, .. } => *source = absolute_identity(source)?,
+        Operation::CompleteOutbound {
+            receipt,
+            intent,
+            source_removed,
+        } => {
+            if *intent == Some(TransferIntent::Move) && !*source_removed {
+                normalize_entries(&mut receipt.paths)?;
+            }
+        }
+        Operation::Undo | Operation::Redo => {}
+    }
+    Ok(())
+}
+
+fn transfer_destination(path: &Path) -> io::Result<PathBuf> {
+    let destination = canonical_path(path)?;
+    if !destination.is_dir() {
+        return Err(invalid("The destination must be a folder"));
+    }
+    if destination
+        .components()
+        .any(|component| component.as_os_str().eq_ignore_ascii_case(".git"))
+    {
+        return Err(invalid("Git metadata is protected"));
+    }
+    Ok(destination)
+}
+
 fn jobs(operation: &Operation) -> io::Result<Vec<(PathBuf, Option<PathBuf>)>> {
     match operation {
         Operation::Save { path, .. }
@@ -993,19 +1150,7 @@ fn jobs(operation: &Operation) -> io::Result<Vec<(PathBuf, Option<PathBuf>)>> {
                         .any(|parent| parent != p && p.starts_with(parent))
             });
             let destination = match operation {
-                Operation::Transfer { destination, .. } => {
-                    let destination = canonical_path(destination)?;
-                    if !destination.is_dir() {
-                        return Err(invalid("The destination must be a folder"));
-                    }
-                    if destination
-                        .components()
-                        .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
-                    {
-                        return Err(invalid("Git metadata is protected"));
-                    }
-                    Some(destination)
-                }
+                Operation::Transfer { destination, .. } => Some(transfer_destination(destination)?),
                 _ => None,
             };
             sources

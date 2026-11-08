@@ -301,6 +301,7 @@ use gitcomet_ui_media::rendered_preview::{
 use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
+mod canvas_overlays;
 mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;
@@ -318,6 +319,7 @@ mod file_list_controller;
 mod file_operations;
 mod fingerprint;
 mod git_version_notice;
+pub(crate) mod history_focus;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
@@ -389,8 +391,8 @@ use caches::{
     HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
     HistoryBranchChipKind, HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest,
     HistoryDecorationCache, HistoryDecorationCacheRequest, HistoryDecorationRowVm,
-    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryStashIdsCache,
-    HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryRemoteBranchesKey,
+    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -440,14 +442,15 @@ pub use mod_helpers::{
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WorkspaceBootstrap,
 };
 use panels::{
-    ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_density, action_bar_height, bottom_status_bar_height,
+    ActionBarView, BottomStatusBarView, CommitMenuRefs, HistoryMenuRef, PopoverHost,
+    PopoverHostInit, RepoTabsBarView, action_bar_density, action_bar_height,
+    bottom_status_bar_height,
 };
 pub(crate) use panes::DiffRenderer;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
-    HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,
-    SidebarPaneView, history_primary_selection,
+    CollapsedSidebarSection, CommitRewordDraft, CommitRewordSubmission, DetailsPaneInit,
+    DetailsPaneView, DiffRendererInit, HistoryPrimarySelection, HistoryView, MainPaneView,
+    ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
 };
 pub(crate) use settings_window::{
     SettingsWindowView, open_settings_window, open_settings_window_to_workspace,
@@ -524,6 +527,9 @@ const fn history_message_text_left_px(show_graph_color_marker: bool) -> f32 {
         HISTORY_COL_HANDLE_PX / 2.0
     }
 }
+
+/// An extension's row-mark icon, the size of the hosted file list's glyph.
+const ROW_MARK_ICON_PX: f32 = 14.0;
 
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
@@ -725,7 +731,8 @@ impl Element for UiScaleScrollCapture {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if !renders_full_chrome(self.view.read(cx).view_mode) {
+        // macOS uses Command +/- for window scaling; scrolling belongs to content.
+        if cfg!(target_os = "macos") || !renders_full_chrome(self.view.read(cx).view_mode) {
             return;
         }
 

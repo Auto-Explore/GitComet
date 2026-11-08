@@ -3,6 +3,43 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::AutoFetchUpdated {
+                repo_id,
+                lifetime,
+                revision,
+                snapshot,
+                ..
+            } => f
+                .debug_struct("AutoFetchUpdated")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .field("revision", revision)
+                .field("snapshot", snapshot)
+                .finish_non_exhaustive(),
+            InternalMsg::AutoFetchRefresh { repo_id, lifetime } => f
+                .debug_struct("AutoFetchRefresh")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .finish(),
+            InternalMsg::QuiesceRepository { common_dir, .. } => f
+                .debug_struct("QuiesceRepository")
+                .field("common_dir", common_dir)
+                .finish_non_exhaustive(),
+            InternalMsg::RepositoryModeLoaded { repo_id, result } => f
+                .debug_struct("RepositoryModeLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareConversionPreviewLoaded { repo_id, result } => f
+                .debug_struct("BareConversionPreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareModeDisabled { common_dir, result } => f
+                .debug_struct("BareModeDisabled")
+                .field("common_dir", common_dir)
+                .field("result", result)
+                .finish(),
             InternalMsg::AuthPromptValidated {
                 generation, result, ..
             } => f
@@ -158,6 +195,11 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::HeadBranchLoaded { repo_id, result } => f
                 .debug_struct("HeadBranchLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::HeadTrackingLoaded { repo_id, result } => f
+                .debug_struct("HeadTrackingLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
@@ -625,6 +667,11 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("BranchAlreadyExists")
                 .field("action", action)
                 .field("prompt", prompt)
+                .finish(),
+            InternalMsg::BranchNotFullyMerged { repo_id, name } => f
+                .debug_struct("BranchNotFullyMerged")
+                .field("repo_id", repo_id)
+                .field("name", name)
                 .finish(),
             InternalMsg::RepoActionFinishedInWorktree {
                 repo_id,

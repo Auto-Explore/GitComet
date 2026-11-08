@@ -1,0 +1,38 @@
+erDiagram
+  AUTHOR ||--o{ ARTICLE : writes
+  ARTICLE ||--o{ TAG_MAP : has
+  TAG ||--o{ TAG_MAP : "used in"
+  ARTICLE ||--o{ COMMENT : receives
+  READER ||--o{ COMMENT : posts
+  READER ||--o{ SUBSCRIPTION : subscribes
+  AUTHOR ||--o{ SUBSCRIPTION : "subscribed to"
+
+  AUTHOR {
+    int id PK
+    string name
+    string bio
+    string avatar_url
+  }
+  ARTICLE {
+    int id PK
+    int author_id FK
+    string title
+    text content
+    date published_at
+    string status
+  }
+  TAG {
+    int id PK
+    string name UK
+  }
+  TAG_MAP {
+    int article_id FK
+    int tag_id FK
+  }
+  COMMENT {
+    int id PK
+    int article_id FK
+    int reader_id FK
+    text body
+    date created_at
+  }

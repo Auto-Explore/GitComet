@@ -1,0 +1,95 @@
+==================
+Comments
+==================
+
+@* here is a comment *@
+@{
+//csharp comment
+}
+
+---
+
+(compilation_unit
+  (razor_comment)
+  (razor_block
+    (comment)))
+
+==================
+Empty Comment
+==================
+
+@* *@
+@{
+//csharp comment
+}
+---
+
+(compilation_unit
+  (razor_comment)
+  (razor_block
+    (comment)))
+
+==================
+Comment with @
+==================
+
+@* @ *@
+@{
+//csharp @ comment
+}
+---
+
+(compilation_unit
+  (razor_comment)
+  (razor_block
+    (comment)))
+
+====================
+Multi-line Comment
+====================
+@* here is a comment 
+over multiple lines *@
+@{
+//csharp comment
+}
+----
+
+(compilation_unit
+  (razor_comment)
+  (razor_block
+    (comment)))
+
+====
+Commented Code Block
+====
+@*
+    @{
+        /* C# comment */
+        // Another C# comment
+    }
+    <!-- HTML comment -->
+*@
+@{
+//actual code
+}
+
+---
+
+(compilation_unit
+  (razor_comment)
+  (razor_block
+    (comment)))
+
+===
+HTML Comment
+===
+<h1>
+<!-- Important heading -->
+IMPORTANT
+</h1>
+---
+
+(compilation_unit
+  (element
+    (html_comment)
+    (html_text)))

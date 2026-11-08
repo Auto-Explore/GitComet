@@ -1,0 +1,391 @@
+use super::*;
+
+struct ReviewPreview {
+    _owner: gpui::Entity<GitCometView>,
+    pane: DiffPane,
+}
+
+impl Render for ReviewPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .font_family("IBM Plex Sans")
+            .child(self.pane.view())
+            .child(self._owner.read(cx).popover_host.clone())
+    }
+}
+
+/// A hint as an extension would host it after a line's text.
+struct LineHintPreview {
+    theme: AppTheme,
+}
+
+impl Render for LineHintPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .pl(scale.px(24.0))
+            .pr(scale.px(8.0))
+            .text_size(self.theme.ui_text(11.0))
+            .text_color(self.theme.colors.foreground.secondary)
+            .child("Grace Hopper, 2 days ago · Flip the default")
+    }
+}
+
+/// A suggestion as an extension would float it over the text below a line.
+struct SuggestionPreview {
+    theme: AppTheme,
+}
+
+impl Render for SuggestionPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .mr(scale.px(12.0))
+            .p(scale.px(8.0))
+            .flex()
+            .items_center()
+            .gap(scale.px(8.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .shadow_md()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child("Suggested: return the flag instead")
+            .child(
+                components::Button::new("capture_suggestion_apply", "Apply").render(theme, scale),
+            )
+    }
+}
+
+/// An AI explanation as an extension would host it between the lines: a
+/// pending mark, a title and header buttons over wrapping text.
+struct ExplanationPreview {
+    theme: AppTheme,
+}
+
+impl Render for ExplanationPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
+        let icon = |path: &'static str| {
+            crate::kit::icons::svg_icon(path, theme.colors.foreground.secondary, scale.px(14.0))
+        };
+        div()
+            .mx(scale.px(12.0))
+            .my(scale.px(4.0))
+            .p(scale.px(8.0))
+            .flex()
+            .flex_col()
+            .gap(scale.px(6.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(scale.px(6.0))
+                    .child(crate::kit::icons::svg_spinner(
+                        "capture_explanation_pending",
+                        theme.colors.accent.foreground,
+                        scale.px(12.0),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("AI explanation · line 2"),
+                    )
+                    .child(icon("icons/generic_maximize.svg"))
+                    .child(icon("icons/generic_close.svg")),
+            )
+            .child(
+                "The function now returns true for every call. Check that its callers need this \
+                 unconditional result and that the relevant tests cover the changed behaviour.",
+            )
+            .child("Mixed direction: עברית and English remain readable.")
+    }
+}
+
+/// A review thread as an extension would host it between the lines.
+struct ThreadPreview {
+    theme: AppTheme,
+    reply: gpui::Entity<components::TextInput>,
+}
+
+impl Render for ThreadPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .mx(scale.px(12.0))
+            .my(scale.px(4.0))
+            .p(scale.px(8.0))
+            .flex()
+            .flex_col()
+            .gap(scale.px(6.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(scale.px(6.0))
+                    .child(components::author_avatar(theme, scale, "Grace Hopper"))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Grace Hopper"),
+                    ),
+            )
+            .child("Should this stay false for the dry run?")
+            .child(self.reply.clone())
+            .child(div().flex().justify_end().child(
+                components::Button::new("capture_thread_resolve", "Resolve").render(theme, scale),
+            ))
+    }
+}
+
+#[test]
+#[ignore = "renders hosted views with native fonts and a GPU"]
+fn hosted_views_visual_capture() {
+    let mut cx = gpui::HeadlessAppContext::with_platform(
+        gpui_platform::current_platform(true).text_system(),
+        Arc::new(crate::assets::GitCometAssets::default()),
+        || Some(Box::new(gpui_wgpu::WgpuHeadlessRenderer::new().unwrap())),
+    );
+    cx.update(|app| {
+        gitcomet_ui_kit::bundled_fonts::register(app).unwrap();
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+        app.set_global(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..Default::default()
+        });
+    });
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/hosted-view-previews");
+    std::fs::create_dir_all(&directory).unwrap();
+    for scale in [100, 150, 200] {
+        cx.update(|app| ui_scale::set_default(app, scale));
+        for width in [420.0, 900.0] {
+            for layout in [DiffLayout::Inline, DiffLayout::Split] {
+                let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+                let handle = cx
+                    .open_window(gpui::size(px(width), px(700.0)), move |window, app| {
+                        ui_scale::apply_to_window(window, scale);
+                        let owner =
+                            app.new(|cx| GitCometView::new(store, events, None, window, cx));
+                        let host = owner.read(app).extension_window.as_ref().unwrap().host();
+                        let pane = host
+                            .create_snapshot_pane(
+                                DiffSnapshot::new(
+                                    "example.rs",
+                                    "fn current() -> bool {\n    false\n}\n",
+                                    "fn current() -> bool {\n    true\n}\n",
+                                ),
+                                DiffPaneOptions {
+                                    layout,
+                                    ..Default::default()
+                                },
+                                app,
+                            )
+                            .unwrap();
+                        let marker =
+                            |color: gpui::Hsla, icon: &'static str, label: &'static str| {
+                                gitcomet_extension_api::DiffAnnotation::new(color)
+                                    .with_glyph(gitcomet_extension_api::RowGlyph::Icon(icon.into()))
+                                    .with_label(label)
+                            };
+                        pane.set_annotations(
+                            gitcomet_extension_api::DiffAnnotations::new()
+                                .with(
+                                    DiffLineSide::New,
+                                    1,
+                                    marker(gpui::blue(), "icons/pin.svg", "Flagged"),
+                                )
+                                .with(
+                                    DiffLineSide::New,
+                                    2,
+                                    gitcomet_extension_api::DiffAnnotation::new(gpui::blue())
+                                        .with_people([
+                                            "Ada Lovelace",
+                                            "Grace Hopper",
+                                            "Alan Turing",
+                                        ])
+                                        .with_label("3 comments"),
+                                )
+                                .with(
+                                    DiffLineSide::New,
+                                    3,
+                                    marker(gpui::green(), "icons/circle_check.svg", "Resolved"),
+                                ),
+                            app,
+                        );
+                        let theme = host.theme(app);
+                        let thread = app.new(|cx| ThreadPreview {
+                            theme,
+                            reply: cx.new(|cx| {
+                                components::TextInput::new_inert(
+                                    components::TextInputOptions {
+                                        placeholder: "Write a reply".into(),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            }),
+                        });
+                        let hint = app.new(|_| LineHintPreview { theme });
+                        let suggestion = app.new(|_| SuggestionPreview { theme });
+                        let explanation = app.new(|_| ExplanationPreview { theme });
+                        pane.set_views(
+                            vec![
+                                gitcomet_extension_api::DiffHostedView::end_of_line(
+                                    gitcomet_extension_api::DiffScrollAnchor {
+                                        side: DiffLineSide::New,
+                                        line: 1,
+                                    },
+                                    hint,
+                                ),
+                                gitcomet_extension_api::DiffHostedView::block(
+                                    gitcomet_extension_api::DiffScrollAnchor {
+                                        side: DiffLineSide::New,
+                                        line: 2,
+                                    },
+                                    explanation,
+                                ),
+                                gitcomet_extension_api::DiffHostedView::block(
+                                    gitcomet_extension_api::DiffScrollAnchor {
+                                        side: DiffLineSide::New,
+                                        line: 2,
+                                    },
+                                    thread,
+                                ),
+                                gitcomet_extension_api::DiffHostedView::over(
+                                    gitcomet_extension_api::DiffScrollAnchor {
+                                        side: DiffLineSide::New,
+                                        line: 3,
+                                    },
+                                    gitcomet_extension_api::DiffAlign::End,
+                                    suggestion,
+                                ),
+                            ],
+                            app,
+                        );
+                        app.new(|_| ReviewPreview {
+                            _owner: owner,
+                            pane,
+                        })
+                    })
+                    .unwrap();
+                for _ in 0..4 {
+                    cx.run_until_parked();
+                    cx.update_window(handle.into(), |_, window, app| {
+                        window.refresh();
+                        let _ = window.draw(app);
+                    })
+                    .unwrap();
+                }
+                cx.capture_screenshot(handle.into())
+                    .unwrap()
+                    .save(directory.join(format!("{layout:?}-{scale}-{width}.png")))
+                    .unwrap();
+                if scale == 100 && width == 900.0 && layout == DiffLayout::Inline {
+                    let quiet = handle
+                        .read_with(&cx, |preview, _| preview.pane.clone())
+                        .unwrap();
+                    cx.update(|app| {
+                        let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+                        policy.engine_label = false;
+                        policy.header_divider = false;
+                        quiet.set_policy(policy, app);
+                    });
+                    for _ in 0..4 {
+                        cx.run_until_parked();
+                        cx.update_window(handle.into(), |_, window, app| {
+                            window.refresh();
+                            let _ = window.draw(app);
+                        })
+                        .unwrap();
+                    }
+                    cx.capture_screenshot(handle.into())
+                        .unwrap()
+                        .save(directory.join("quiet-header.png"))
+                        .unwrap();
+                    use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+                    let owner = handle
+                        .read_with(&cx, |preview, _| preview._owner.clone())
+                        .unwrap();
+                    cx.update(|app| {
+                        owner.update(app, |owner, cx| {
+                            owner.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
+                        })
+                    });
+                    for (name, items) in [
+                        (
+                            "notifications",
+                            vec![
+                                HostedMenuItem::action(HostedAction::new("Subscribed", |_| {}))
+                                    .with_icon("icons/check.svg")
+                                    .disabled(true),
+                                HostedMenuItem::action(HostedAction::new("Not subscribed", |_| {})),
+                                HostedMenuItem::action(HostedAction::new("Ignore", |_| {})),
+                            ],
+                        ),
+                        (
+                            "single-pr-actions",
+                            vec![
+                                HostedMenuItem::action(HostedAction::new("Open on GitHub", |_| {})),
+                                HostedMenuItem::action(HostedAction::new("Notifications…", |_| {})),
+                                HostedMenuItem::Separator,
+                                HostedMenuItem::action(HostedAction::new(
+                                    "Refresh local worktrees",
+                                    |_| {},
+                                ))
+                                .with_tooltip("No local worktree at this revision"),
+                            ],
+                        ),
+                    ] {
+                        let menu = cx.update(|app| {
+                            let host = owner.read(app).extension_window.as_ref().unwrap().host();
+                            host.open_menu(gpui::point(px(300.0), px(64.0)), items, app)
+                                .unwrap()
+                        });
+                        for _ in 0..4 {
+                            cx.run_until_parked();
+                            cx.update_window(handle.into(), |_, window, app| {
+                                window.refresh();
+                                let _ = window.draw(app);
+                            })
+                            .unwrap();
+                        }
+                        cx.capture_screenshot(handle.into())
+                            .unwrap()
+                            .save(directory.join(format!("{name}.png")))
+                            .unwrap();
+                        cx.update(|app| menu.close(app));
+                        cx.run_until_parked();
+                    }
+                }
+                cx.update_window(handle.into(), |_, window, _| window.remove_window())
+                    .unwrap();
+                cx.run_until_parked();
+            }
+        }
+    }
+}

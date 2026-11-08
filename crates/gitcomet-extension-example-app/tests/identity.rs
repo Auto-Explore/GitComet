@@ -5,7 +5,11 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn example(args: &[&str], home: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_comet-example"))
+    example_at(Path::new(env!("CARGO_BIN_EXE_comet-example")), args, home)
+}
+
+fn example_at(executable: &Path, args: &[&str], home: &Path) -> Output {
+    Command::new(executable)
         .args(args)
         .env("HOME", home)
         .env_remove("XDG_STATE_HOME")
@@ -49,7 +53,10 @@ fn version_and_help_name_the_example_product() {
 #[test]
 fn git_tool_setup_registers_only_the_example_tools() {
     let home = tempfile::tempdir().unwrap();
-    let setup = example(&["setup", "--dry-run"], home.path());
+    let source = Path::new(env!("CARGO_BIN_EXE_comet-example"));
+    let executable = home.path().join(source.file_name().unwrap());
+    std::fs::copy(source, &executable).unwrap();
+    let setup = example_at(&executable, &["setup", "--dry-run"], home.path());
     assert_eq!(setup.status.code(), Some(0));
     let setup = stdout(&setup);
     assert!(setup.contains("mergetool.comet-example.cmd"), "{setup}");
@@ -57,7 +64,11 @@ fn git_tool_setup_registers_only_the_example_tools() {
     assert!(setup.contains("comet-example.backup.*"), "{setup}");
     assert!(!setup.contains("gitcomet"), "{setup}");
 
-    let uninstall = stdout(&example(&["uninstall", "--dry-run"], home.path()));
+    let uninstall = stdout(&example_at(
+        &executable,
+        &["uninstall", "--dry-run"],
+        home.path(),
+    ));
     assert!(
         uninstall.contains("mergetool.comet-example.cmd"),
         "{uninstall}"

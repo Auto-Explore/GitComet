@@ -1117,11 +1117,33 @@ impl ToastHost {
         let operation_id = progress.operation_id;
         let repo_id = progress.repo_id;
         let accent = theme.colors.accent.foreground;
-        let percent = progress
-            .progress
-            .as_ref()
-            .and_then(|meter| meter.percent)
-            .unwrap_or(0);
+        let percent = progress.progress.as_ref().and_then(|meter| meter.percent);
+
+        let details_button = components::Button::new(
+            format!("operation_progress_details_{}", operation_id.0),
+            "Details",
+        )
+        .style(components::ButtonStyle::Outlined)
+        .disabled(progress.command.is_none())
+        .on_click(theme, cx, move |this, _e, window, cx| {
+            let root_view = this.root_view.clone();
+            let window_handle = window.window_handle();
+            cx.defer(move |cx| {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.open_popover_centered(
+                            PopoverKind::HookActivity {
+                                repo_id,
+                                operation_id: Some(operation_id),
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            });
+        })
+        .debug_selector(move || format!("operation_progress_details_{}", operation_id.0));
 
         let root_view = self.root_view.clone();
         let stop_button = components::Button::new(
@@ -1205,13 +1227,40 @@ impl ToastHost {
                     )
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(status)),
             )
-            .child(components::progress_bar(
-                theme,
-                ui_scale,
-                crate::view::clone_progress::clone_progress_fill_ratio(percent),
-                with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
-            ))
-            .child(div().pt_1().child(stop_button));
+            .when_some(percent, |this, percent| {
+                this.child(
+                    components::progress_bar(
+                        theme,
+                        ui_scale,
+                        crate::view::clone_progress::clone_progress_fill_ratio(percent),
+                        with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
+                    )
+                    .debug_selector(move || format!("operation_progress_bar_{}", operation_id.0)),
+                )
+            })
+            .when(!progress.latest_line.is_empty(), |this| {
+                this.child(
+                    div()
+                        .debug_selector(move || {
+                            format!("operation_progress_output_{}", operation_id.0)
+                        })
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .line_clamp(2)
+                        .overflow_hidden()
+                        .child(progress.latest_line.clone()),
+                )
+            })
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .gap_2()
+                    .when(progress.label == "Pull", |actions| {
+                        actions.child(details_button)
+                    })
+                    .child(stop_button),
+            );
 
         self.render_progress_shell(ui_scale, content)
     }
@@ -1228,13 +1277,14 @@ impl ToastHost {
             .expect("hook progress renderer requires at least one operation");
         let repo_id = latest.repo_id;
         let operation_id = latest.operation.id;
-        let hook_name = latest.operation.active_hook_name().unwrap_or("Git");
         let title = if progress.len() > 1 {
-            format!("{} Git hook runs active", progress.len())
+            format!("{} Git operations active", progress.len())
         } else if latest.operation.status == GitHookOperationStatus::Cancelling {
-            format!("Stopping {hook_name} hook…")
-        } else {
+            "Stopping…".to_string()
+        } else if let Some(hook_name) = latest.operation.active_hook_name() {
             format!("Running {hook_name} hook…")
+        } else {
+            format!("{} in progress…", latest.operation.label)
         };
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -1251,7 +1301,7 @@ impl ToastHost {
                                 root.open_popover_centered(
                                     PopoverKind::HookActivity {
                                         repo_id,
-                                        operation_id: None,
+                                        operation_id: Some(operation_id),
                                     },
                                     window,
                                     cx,
@@ -1461,8 +1511,10 @@ impl Render for ToastHost {
         {
             self.render_count += 1;
         }
-        let shows_hook_progress =
-            |progress: &HookProgressToast| self.hook_activity_dialog_repo != Some(progress.repo_id);
+        let shows_hook_progress = |progress: &HookProgressToast| {
+            progress.operation.command.is_none()
+                && self.hook_activity_dialog_repo != Some(progress.repo_id)
+        };
         // Decide "nothing to show" before cloning anything: this renders every
         // frame of the app's life, almost always empty.
         if self.toasts.is_empty()
@@ -1507,7 +1559,11 @@ impl Render for ToastHost {
         for progress in self
             .operation_progress
             .iter()
-            .filter(|progress| progress.is_visible(now))
+            .filter(|progress| {
+                progress.is_visible(now)
+                    && (progress.command.is_none()
+                        || self.hook_activity_dialog_repo != Some(progress.repo_id))
+            })
             .cloned()
             .collect::<Vec<_>>()
         {

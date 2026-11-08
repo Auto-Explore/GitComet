@@ -9,6 +9,7 @@ use gitcomet_git_gix::GixBackend;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 mod authors;
+mod focus;
 mod ref_filter;
 mod sharing;
 mod snapshot_refresh;

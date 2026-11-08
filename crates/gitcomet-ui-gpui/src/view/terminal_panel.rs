@@ -1719,7 +1719,13 @@ fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
 /// Works uniformly across platforms via `sysinfo`. Called only on user-initiated
 /// close, so a one-shot process snapshot is acceptable.
 fn terminal_process_has_running_child_command(pid: u32) -> bool {
-    let mut system = sysinfo::System::new();
+    let mut system = match sysinfo::System::new() {
+        Ok(system) => system,
+        Err(err) => {
+            eprintln!("Failed to check running commands for terminal process {pid}: {err}");
+            return true;
+        }
+    };
     // We must enumerate all processes to find any whose *parent* is `pid` (a
     // child-of-pid query can't be narrowed to a single PID), but we only read
     // `parent()`, which is base info — so skip the expensive cmd/environ/exe/cwd

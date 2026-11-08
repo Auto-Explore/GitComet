@@ -21,6 +21,17 @@ use gitcomet_extension_api::{
 };
 use std::rc::Rc;
 
+/// The details pane's own tab.
+const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
+
+/// The details tabs listed for the active repository: the contributions in
+/// its view, the selected one, and whether the details pane's own tab leads.
+pub(in crate::view) struct DetailsListing {
+    tabs: Vec<(usize, SharedString, Option<SharedString>)>,
+    selected: Option<usize>,
+    own: bool,
+}
+
 /// A contribution built per repository: its title, tab icon and builder.
 pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
@@ -260,6 +271,18 @@ pub(in crate::view) struct ViewTabs {
     pub(in crate::view) selected: Option<usize>,
 }
 
+/// What fills a repository's main slot, first match wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::view) enum MainSlot {
+    /// A standalone document.
+    Document,
+    /// An extension's canvas overlay, built or not yet.
+    Overlay(usize),
+    /// The selected repository view.
+    View(usize),
+    History,
+}
+
 /// The More tab's invoker, so the tab shows open while its menu does.
 pub(in crate::view) const MORE_VIEWS_INVOKER: &str = "repository_view_more";
 
@@ -302,7 +325,11 @@ impl GitCometView {
             .unwrap_or(gitcomet_extension_api::ViewTarget::History);
         self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_active_view(active_view.clone(), cx));
-        let enabled = !self.window_gated && navigation.is_none();
+        let covered = match self.main_slot() {
+            MainSlot::Overlay(_) => true,
+            MainSlot::Document | MainSlot::View(_) | MainSlot::History => false,
+        };
+        let enabled = !self.window_gated && navigation.is_none() && !covered;
         let slot = navigation.as_ref().and_then(|_| {
             let repo = self.active_repo()?;
             self.repository_views.as_ref()?.active_action_bar(repo)
@@ -312,6 +339,7 @@ impl GitCometView {
             bar.set_active_view(active_view, cx);
             bar.set_extension_navigation(navigation, slot, cx);
             bar.set_view_tabs(tabs, cx);
+            bar.set_canvas_covered(covered, cx);
         });
         crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
     }
@@ -694,6 +722,11 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let key = repo_key(&repo);
+        // Asking for the main canvas, even the view already behind an
+        // overlay, uncovers it.
+        if matches!(area, RoutedArea::Main) {
+            self.hide_canvas_overlay_for(key, cx);
+        }
         let (count, current, build, bar_build) = match area {
             RoutedArea::Main => {
                 let Some(router) = self.repository_views.as_ref() else {
@@ -781,89 +814,154 @@ impl GitCometView {
             self.follow_view(&repo, window, cx);
             // The old view may have hidden the field that held focus. Give
             // it to the newly selected view even before its first frame.
-            let focus = self.repository_views.as_ref().and_then(|router| {
-                let index = router.selected(&repo)?;
-                let (_, descriptor) = router.views.get(index)?;
-                let view = router.built(&repo, index)?;
-                descriptor.focus.as_ref()?.as_ref()(&view, cx)
-            });
-            if let Some(focus) = focus {
-                window.focus(&focus, cx);
-            } else if index.is_some() {
-                window.focus(&self.repository_view_focus, cx);
-            } else {
-                let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
-                window.focus(&focus, cx);
-            }
+            self.focus_main_view(&repo, window, cx);
         }
         self.sync_sidebar_tabs(cx);
         self.sync_extension_navigation(cx);
         if let Some(extension) = &self.extension_window {
             extension.emit(gitcomet_extension_api::ShellEvent::ViewChanged, cx);
+            if matches!(area, RoutedArea::Main) {
+                extension.emit(gitcomet_extension_api::ShellEvent::MainViewChanged, cx);
+            }
         }
         cx.notify();
     }
 
-    /// The details area's strip of tabs: the details pane's own first, then
-    /// each contribution with its icon.
-    fn details_strip(
+    /// Gives the keyboard to `repo`'s main view: the selected extension view's
+    /// own focus, its scope, or History's diff.
+    pub(in crate::view) fn focus_main_view(
         &self,
-        tabs: Vec<(usize, SharedString, Option<SharedString>)>,
-        selected: Option<usize>,
-        own: bool,
+        repo: &RepoState,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        let ui_scale = ui_scale::UiScale::current(cx);
-        let mut strip = components::navigation_tab_strip(theme.colors.surface.canvas, ui_scale)
-            .id("details_tab_strip")
-            .debug_selector(|| "details_tab_strip".to_string())
-            .border_b_1()
-            .border_color(theme.colors.stroke.subtle);
-        let builtin = ("Details".into(), Some("icons/side_panel_right.svg".into()));
-        let entries = own
-            .then(|| ("details_tab_details".to_string(), builtin, None))
-            .into_iter()
-            .chain(tabs.into_iter().map(|(index, title, icon)| {
-                (format!("details_tab_{index}"), (title, icon), Some(index))
-            }));
-        for (id, (title, icon), index) in entries {
-            let mut tab = components::NavTab::new(id, title).selected(selected == index);
-            if let Some(icon) = icon {
-                tab = tab.icon(icon);
-            }
-            strip = strip.child(tab.render(theme, ui_scale).on_activate(
-                false,
-                controls::ControlActivation::ManagedFocus,
-                cx.listener(move |this, _, window, cx| {
-                    this.select_routed_view(RoutedArea::Details, index, window, cx);
-                }),
-            ));
+    ) {
+        if self.main_slot() == MainSlot::Document {
+            self.documents
+                .update(cx, |documents, cx| documents.focus_active(window, cx));
+            return;
         }
-        strip
+        let selected = self
+            .repository_views
+            .as_ref()
+            .and_then(|router| router.selected(repo));
+        let focus = self.repository_views.as_ref().and_then(|router| {
+            let index = selected?;
+            let (_, descriptor) = router.views.get(index)?;
+            let view = router.built(repo, index)?;
+            descriptor.focus.as_ref()?.as_ref()(&view, cx)
+        });
+        if let Some(focus) = focus {
+            window.focus(&focus, cx);
+        } else if selected.is_some() {
+            window.focus(&self.repository_view_focus, cx);
+        } else {
+            let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+        }
     }
 
-    /// The main area for the active repository: History, the extension view
-    /// selected from the action bar's tabs, or an open standalone document.
-    pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
+    /// What the details header lists for the active repository; `None`
+    /// when its view lists no contributed details tab, and the details pane
+    /// mounts without a header.
+    pub(in crate::view) fn details_listing(&self) -> Option<DetailsListing> {
+        let router = self.details_tabs.as_ref()?;
+        let repo = self.active_repo()?;
+        let tabs = router.listed_tabs(&self.active_view_target(repo));
+        if tabs.is_empty() {
+            return None;
+        }
+        Some(DetailsListing {
+            selected: router.selected(repo),
+            own: self.panel_has_host_tabs(repo, PanelArea::Details),
+            tabs,
+        })
+    }
+
+    /// The details area's header: the details pane's own tab first when it
+    /// leads, then each contribution, with the router index each tab selects.
+    pub(in crate::view) fn details_header(
+        listing: &DetailsListing,
+        cx: &mut App,
+    ) -> (components::PanelHeader, Vec<Option<usize>>) {
+        let builtin = (
+            "details_tab_details".to_string(),
+            SharedString::from("Details"),
+            Some(SharedString::from(DETAILS_TAB_ICON)),
+            None,
+        );
+        let mut header = components::PanelHeader::new("details_tab_control", cx);
+        let mut targets = Vec::with_capacity(listing.tabs.len() + 1);
+        for (id, title, icon, index) in
+            listing
+                .own
+                .then_some(builtin)
+                .into_iter()
+                .chain(listing.tabs.iter().map(|(index, title, icon)| {
+                    (
+                        format!("details_tab_{index}"),
+                        title.clone(),
+                        icon.clone(),
+                        Some(*index),
+                    )
+                }))
+        {
+            header = header.tab(id, title.clone(), icon, listing.selected == index, title);
+            targets.push(index);
+        }
+        (header, targets)
+    }
+
+    /// What fills the active repository's main slot. Drawing, the diff keys,
+    /// Back and Forward and the action bar all follow this one answer.
+    pub(in crate::view) fn main_slot(&self) -> MainSlot {
         // A standalone document takes the main slot; the panes around it stay.
         if self.documents_active {
-            return stable_cached_fill_view(self.documents.clone());
+            return MainSlot::Document;
         }
-        let history = || stable_cached_fill_view(self.main_pane.clone());
-        let active = self
+        if let Some(index) = self.shown_canvas_overlay() {
+            return MainSlot::Overlay(index);
+        }
+        let selected = self
             .repository_views
             .as_ref()
             .zip(self.active_repo())
-            .and_then(|(router, repo)| router.active_view(repo));
-        match active {
+            .and_then(|(router, repo)| router.selected(repo));
+        match selected {
+            Some(index) => MainSlot::View(index),
+            None => MainSlot::History,
+        }
+    }
+
+    /// The main area for the active repository, as [`Self::main_slot`] says.
+    pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
+        match self.main_slot() {
+            MainSlot::Document => stable_cached_fill_view(self.documents.clone()),
+            // The view behind stays built and is drawn again once uncovered;
+            // until the overlay's first build, the slot stays empty.
+            MainSlot::Overlay(index) => {
+                let slot = div().size_full().track_focus(&self.canvas_overlay_focus);
+                match self.canvas_overlay_view(index) {
+                    Some(overlay) => slot.child(overlay),
+                    None => slot,
+                }
+                .into_any_element()
+            }
             // The scope `diff_shortcut_target` searches for hosted panes.
-            Some(view) => div()
-                .size_full()
-                .track_focus(&self.repository_view_focus)
-                .child(view)
-                .into_any_element(),
-            None => history(),
+            MainSlot::View(index) => {
+                let view = self
+                    .active_repo()
+                    .zip(self.repository_views.as_ref())
+                    .and_then(|(repo, router)| router.built(repo, index));
+                match view {
+                    Some(view) => div()
+                        .size_full()
+                        .track_focus(&self.repository_view_focus)
+                        .child(view)
+                        .into_any_element(),
+                    None => stable_cached_fill_view(self.main_pane.clone()),
+                }
+            }
+            MainSlot::History => stable_cached_fill_view(self.main_pane.clone()),
         }
     }
 
@@ -885,23 +983,34 @@ impl GitCometView {
         let Some(repo) = self.active_repo() else {
             return Some(details());
         };
-        let tabs = router.listed_tabs(&self.active_view_target(repo));
-        if tabs.is_empty() {
-            return None;
-        }
-        let selected = router.selected(repo);
+        let listing = self.details_listing()?;
         // A view whose tabs replace Details shows one of them; the tab that
         // opens with it is selected when it opens.
-        let own = self.panel_has_host_tabs(repo, PanelArea::Details);
         let active = router.active_view(repo).or_else(|| {
-            (!own)
+            (!listing.own)
                 .then(|| {
-                    tabs.iter()
+                    listing
+                        .tabs
+                        .iter()
                         .find_map(|(index, ..)| router.built(repo, *index))
                 })
                 .flatten()
         });
-        let strip = self.details_strip(tabs, selected, own, cx);
+        let (header, targets) = Self::details_header(&listing, cx);
+        let theme = self.theme;
+        let strip = header
+            .render(
+                theme,
+                ui_scale::UiScale::current(cx),
+                crate::theme::content_header_bg(theme),
+                Vec::new(),
+                cx,
+                move |this, segment, window, cx| {
+                    this.select_routed_view(RoutedArea::Details, targets[segment], window, cx);
+                },
+            )
+            .id("details_tab_strip")
+            .debug_selector(|| "details_tab_strip".to_string());
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),

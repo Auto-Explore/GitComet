@@ -83,7 +83,7 @@ fn failed_detached_checkout_restores_head_after_unchanged_refresh(scope: LogScop
             }
             assert!(effects.iter().any(|effect| matches!(
                 effect,
-                Effect::LoadLog { scope: loaded_scope, .. } if *loaded_scope == scope
+                Effect::LoadLog { walk, .. } if walk.mode() == scope
             )));
             let head_reply = Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
                 repo_id,

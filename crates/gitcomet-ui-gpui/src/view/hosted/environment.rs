@@ -5,7 +5,7 @@ use gpui::{AnyWindowHandle, App, WeakEntity};
 #[derive(Clone)]
 pub(in crate::view) enum DiffPreferences {
     Window(WeakEntity<AppUiModel>),
-    Fixed(crate::view::preferences::UiPreferences),
+    Fixed(Box<crate::view::preferences::UiPreferences>),
 }
 
 impl DiffPreferences {
@@ -14,7 +14,7 @@ impl DiffPreferences {
             Self::Window(model) => model
                 .read_with(cx, |model, _| model.preferences.clone())
                 .unwrap_or_default(),
-            Self::Fixed(preferences) => preferences.clone(),
+            Self::Fixed(preferences) => preferences.as_ref().clone(),
         }
     }
 }

@@ -32,8 +32,19 @@ pub(super) fn schedule_open_repo(
             repo_id,
             spec.workdir.display()
         );
-        match backend.open_cancellable(&spec.workdir, &cancellation) {
-            Ok(repo) => {
+        match backend
+            .open_cancellable(&spec.workdir, &cancellation)
+            .and_then(|repo| {
+                let repository_mode = repo.repository_mode()?;
+                let head_commit = if repository_mode == gitcomet_core::domain::RepositoryMode::Bare
+                {
+                    repo.head_commit_id()?
+                } else {
+                    None
+                };
+                Ok((repo, repository_mode, head_commit))
+            }) {
+            Ok((repo, repository_mode, head_commit)) => {
                 if cancellation.is_cancelled() || msg_tx.is_cancelled() {
                     repo_load_trace::trace!(
                         "drop_open_repo_ok_after_cancel repo_id={:?} path={}",
@@ -69,6 +80,8 @@ pub(super) fn schedule_open_repo(
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                        repository_mode,
+                        head_commit,
                         preferences: Some(preferences),
                         repo_id,
                         spec,

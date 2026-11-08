@@ -86,6 +86,9 @@ pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
+    if super::background::background_git_enabled() {
+        credentials_without_prompts(&mut cmd);
+    }
     #[cfg(any(test, feature = "test-support"))]
     crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
@@ -135,7 +138,7 @@ pub(super) fn git_timeout_error(
             stdout,
             stderr,
             Some(format!(
-                "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                "after {} seconds without output or progress (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
                 timeout.as_secs()
             )),
         )
@@ -164,6 +167,17 @@ pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
 }
 
 pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error {
+    let id = classify_git_failure(&String::from_utf8_lossy(&output.stderr));
+    git_command_failed_error_with_id(label, output, id)
+}
+
+/// A failure whose kind the caller established from repository state
+/// rather than Git's (translated) message.
+pub(crate) fn git_command_failed_error_with_id(
+    label: &str,
+    output: GitOutput,
+    id: GitFailureId,
+) -> Error {
     let GitOutput {
         status,
         stdout,
@@ -176,7 +190,6 @@ pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error 
         .map(|text| text.trim().to_string())
         .find(|text| !text.is_empty())
         .map(add_git_failure_hint);
-    let id = classify_git_failure(&String::from_utf8_lossy(&stderr));
     let detail = detail.map(|detail| add_lfs_failure_hint(detail, id));
     Error::new(ErrorKind::Git(
         GitFailure::new(label, id, status.code(), stdout, stderr, detail)
@@ -196,8 +209,8 @@ pub(super) fn add_git_failure_hint(mut detail: String) -> String {
     detail
 }
 
-/// Recognise Git LFS failures, which arrive as filter or hook stderr on an
-/// otherwise ordinary command, so the UI can say what to do next.
+/// Recognise failures the UI can offer a next step for: local overwrites,
+/// refused worktree removals, and Git LFS filter or hook errors.
 pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
     let lower = stderr.to_ascii_lowercase();
     // One line must name git-lfs as the program that is missing: a present
@@ -217,6 +230,10 @@ pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
         || lower.contains("the following untracked working tree files would be overwritten")
     {
         GitFailureId::WorktreeWouldBeOverwritten
+    } else if lower.contains("contains modified or untracked files, use --force to delete it") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Changes)
+    } else if lower.contains("working trees containing submodules cannot be moved or removed") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules)
     } else if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")
@@ -321,6 +338,7 @@ pub(super) fn command_cancellation_requested(
 ) -> bool {
     cancellation.is_some_and(CancellationToken::is_cancelled)
         || operation_cancellation.is_some_and(CancellationToken::is_cancelled)
+        || super::background::background_git_cancelled()
 }
 
 pub(super) fn reject_cancelled_command(
@@ -631,32 +649,45 @@ pub(super) fn run_command_with_timeout_auth(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
 ) -> Result<GitOutput> {
-    run_command_with_timeout_auth_stdin(cmd, label, timeout, cancellation, allow_auth, None)
+    run_command_with_timeout_auth_activity(
+        cmd,
+        label,
+        timeout,
+        cancellation,
+        allow_auth,
+        CommandActivity::Report,
+    )
 }
 
-fn run_command_with_timeout_auth_stdin(
+enum CommandActivity {
+    Report,
+    Silent,
+}
+
+fn run_command_with_timeout_auth_activity(
     mut cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
-    stdin: Option<Stdio>,
+    activity: CommandActivity,
 ) -> Result<GitOutput> {
     let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
-    if let Some(stdin) = stdin {
-        cmd.stdin(stdin);
-    }
     let operation = git_operation::current();
     reject_cancelled_command(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
     let liveness = LivenessClock::new();
-    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
-    let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
+    let activity = match activity {
+        CommandActivity::Report => operation.as_ref(),
+        CommandActivity::Silent => None,
+    };
+    let trace2 = Trace2Monitor::start(&mut cmd, activity, &liveness);
+    let lfs_progress = LfsProgressMonitor::start(&mut cmd, activity, &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = if allow_auth { command_git_auth() } else { None };
         let script = create_askpass_script()
@@ -677,7 +708,7 @@ fn run_command_with_timeout_auth_stdin(
     })?;
     timing.stage("spawn");
 
-    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
+    let (activity_sender, activity_handle) = start_activity_output_aggregator(activity);
     let stdout_handle = spawn_read_pipe(
         child.stdout.take(),
         activity_sender
@@ -776,6 +807,26 @@ fn run_command_with_timeout_auth_stdin(
 
 pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<GitOutput> {
     run_command_with_timeout(cmd, label, git_command_timeout(), None)
+}
+
+pub(crate) fn run_git_metadata_output(cmd: Command, label: &str) -> Result<GitOutput> {
+    run_command_with_timeout_auth_activity(
+        cmd,
+        label,
+        git_command_timeout(),
+        None,
+        false,
+        CommandActivity::Silent,
+    )
+}
+
+pub(crate) fn run_git_metadata_capture(cmd: Command, label: &str) -> Result<Vec<u8>> {
+    let output = run_git_metadata_output(cmd, label)?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(git_command_failed_error(label, output))
+    }
 }
 
 /// Run a local git command, feeding `input` to its stdin and returning captured

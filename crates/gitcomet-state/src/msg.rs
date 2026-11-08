@@ -11,6 +11,7 @@ mod repo_command_kind;
 mod repo_external_change;
 mod repo_path;
 mod repo_path_list;
+mod repository_requirement;
 mod status;
 mod store_event;
 

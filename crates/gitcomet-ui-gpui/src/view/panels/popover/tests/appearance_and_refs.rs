@@ -11,6 +11,7 @@ fn ref_repo() -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.branches = Loadable::Ready(Arc::new(vec![
         Branch {
@@ -64,7 +65,7 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
             this.ui_model.update(cx, |model, cx| model.set_state(state.clone(), cx));
             this.popover_host.update(cx, |host, cx| {
                 host.state = state.clone();
-                host.open_popover_at(PopoverKind::CommitMenu { repo_id: RepoId(1), commit_id: commit_id.clone() }, point(px(10.0), px(10.0)), window, cx);
+                host.open_popover_at(PopoverKind::CommitMenu { repo_id: RepoId(1), commit_id: commit_id.clone(), refs: CommitMenuRefs::All }, point(px(10.0), px(10.0)), window, cx);
                 let model = host.context_menu_model(host.popover.as_ref().unwrap(), cx).unwrap();
                 let groups = model.items.iter().filter_map(|item| match item {
                     ContextMenuItem::Entry { label, action, .. } if matches!(action.as_ref(), ContextMenuAction::ToggleHistoryRefGroup { .. }) => Some(label.as_ref()), _ => None,
@@ -108,6 +109,180 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
 }
 
 #[gpui::test]
+fn commit_menu_for_one_picked_ref_lists_only_that_ref(cx: &mut gpui::TestAppContext) {
+    #[derive(Debug, PartialEq)]
+    struct OpenedMenu {
+        /// Ref group headers, plus the tags loading/error label.
+        groups: Vec<String>,
+        /// What the commit section's "Copy branch name" entries copy.
+        copied_branch_names: Vec<String>,
+        expanded: Option<HistoryMenuRef>,
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut repo = ref_repo();
+    let commit_id = repo.branches.ready().unwrap()[0].target.clone();
+    let state_with = |repo: RepoState| {
+        Arc::new(AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        })
+    };
+    let open = |state: Arc<AppState>, refs: CommitMenuRefs, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.state = state.clone();
+                this.popover_host.update(cx, |host, cx| {
+                    host.state = state.clone();
+                    host.open_popover_at(
+                        PopoverKind::CommitMenu {
+                            repo_id: RepoId(1),
+                            commit_id: commit_id.clone(),
+                            refs,
+                        },
+                        point(px(10.0), px(10.0)),
+                        window,
+                        cx,
+                    );
+                    let model = host
+                        .context_menu_model(host.popover.as_ref().unwrap(), cx)
+                        .unwrap();
+                    let groups = model
+                        .items
+                        .iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, action, .. }
+                                if matches!(
+                                    action.as_ref(),
+                                    ContextMenuAction::ToggleHistoryRefGroup { .. }
+                                ) =>
+                            {
+                                Some(label.to_string())
+                            }
+                            ContextMenuItem::Label(text)
+                                if text.as_ref().to_lowercase().contains("tags") =>
+                            {
+                                Some(text.as_ref().to_string())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    // Expanded groups carry their own "Copy branch name"; skip them.
+                    let commit_section = model.groups.last().map_or(0, |group| group.end);
+                    let copied_branch_names = model.items[commit_section..]
+                        .iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, action, .. }
+                                if label.starts_with("Copy branch name") =>
+                            {
+                                match action.as_ref() {
+                                    ContextMenuAction::CopyText { text } => Some(text.clone()),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    OpenedMenu {
+                        groups,
+                        copied_branch_names,
+                        expanded: host.expanded_history_ref.clone(),
+                    }
+                })
+            })
+        })
+    };
+    let local_release = HistoryMenuRef::Branch(BranchMenuTarget::local("release"));
+    let remote_release = HistoryMenuRef::Branch(BranchMenuTarget::remote("team/alice", "release"));
+    let tag_release = HistoryMenuRef::Tag("release".into());
+
+    // Same-named refs of every kind: the pick must match its kind, not its name.
+    let state = state_with(repo.clone());
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::All, cx),
+        OpenedMenu {
+            groups: vec![
+                "Local branch main".into(),
+                "Local branch release".into(),
+                "Remote branch team/alice/release".into(),
+                "Tag release".into(),
+            ],
+            copied_branch_names: vec!["main".into(), "release".into()],
+            expanded: None,
+        }
+    );
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(local_release.clone()),
+            cx
+        ),
+        OpenedMenu {
+            groups: vec!["Local branch release".into()],
+            copied_branch_names: vec!["release".into()],
+            expanded: Some(local_release),
+        }
+    );
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(remote_release.clone()),
+            cx
+        ),
+        OpenedMenu {
+            groups: vec!["Remote branch team/alice/release".into()],
+            copied_branch_names: vec!["team/alice/release".into()],
+            expanded: Some(remote_release),
+        }
+    );
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::Only(tag_release.clone()), cx),
+        OpenedMenu {
+            groups: vec!["Tag release".into()],
+            copied_branch_names: vec![],
+            expanded: Some(tag_release.clone()),
+        }
+    );
+    assert_eq!(
+        open(state, CommitMenuRefs::Hidden, cx),
+        OpenedMenu {
+            groups: vec![],
+            copied_branch_names: vec![],
+            expanded: None,
+        }
+    );
+
+    // Unloaded tags only concern menus that would list a tag.
+    repo.tags = Loadable::Loading;
+    let state = state_with(repo);
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local("main"))),
+            cx,
+        )
+        .groups,
+        ["Local branch main"]
+    );
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::Only(tag_release), cx).groups,
+        ["Loading tags…"]
+    );
+    assert_eq!(
+        open(state, CommitMenuRefs::All, cx).groups,
+        [
+            "Local branch main",
+            "Local branch release",
+            "Remote branch team/alice/release",
+            "Loading tags…"
+        ]
+    );
+}
+
+#[gpui::test]
 fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -131,6 +306,7 @@ fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppC
                     PopoverKind::CommitMenu {
                         repo_id: RepoId(1),
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     point(px(10.0), px(10.0)),
                     window,
@@ -203,6 +379,56 @@ fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppC
             .debug_bounds(format!("context_menu_group_{}", range.start).leak())
             .unwrap();
         assert!(commit_action.top() >= group.bottom());
+    }
+}
+
+#[gpui::test]
+fn the_push_menu_disables_push_without_remotes_and_says_why(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let with_remote = ref_repo();
+    let mut without_remotes = ref_repo();
+    without_remotes.remotes = Loadable::Ready(Arc::new(Vec::new()));
+
+    for (repo, expected_reason) in [
+        (with_remote, None),
+        (without_remotes, Some("Add a remote to push to first")),
+    ] {
+        let state = Arc::new(AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        });
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.state = state.clone();
+                this.popover_host.update(cx, |host, cx| {
+                    host.state = state;
+                    let model = host
+                        .context_menu_model(&PopoverKind::PushPicker, cx)
+                        .expect("expected a push menu");
+                    let (ix, disabled) = model
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find_map(|(ix, item)| match item {
+                            ContextMenuItem::Entry {
+                                action, disabled, ..
+                            } if matches!(action.as_ref(), ContextMenuAction::Push { .. }) => {
+                                Some((ix, *disabled))
+                            }
+                            _ => None,
+                        })
+                        .expect("expected a Push entry");
+                    assert_eq!(disabled, expected_reason.is_some());
+                    assert_eq!(
+                        model.entry_tooltips.get(&ix).map(|text| text.as_ref()),
+                        expected_reason
+                    );
+                });
+            });
+        });
     }
 }
 
@@ -441,26 +667,23 @@ fn pull_controls_on_adjusted_branches_follow_annex_support_and_settings(
                 annex_pull_push: takeover,
                 ..Default::default()
             };
+            // An adjusted branch has no upstream, so only the annex takeover pulls.
             let enabled = takeover
                 && match &repo.large_file_support {
                     Loadable::Ready(support) => support.annex.in_use(),
                     _ => true,
                 };
-            assert_eq!(pull_enabled(&repo, &settings), enabled, "main Pull button");
-            if enabled {
-                assert_eq!(
-                    pull_request(&repo, &settings),
-                    PullRequest::Pull,
-                    "the enabled action must dispatch"
-                );
-                let mut loading = repo.clone();
-                loading.remotes = Loadable::Loading;
-                assert_eq!(
-                    pull_request(&loading, &settings),
-                    PullRequest::Pull,
-                    "annex takeover does not require an upstream or a loaded remote list"
-                );
-            }
+            let pull_enabled =
+                |repo: &RepoState| pull_unavailable_reason(repo, &settings).is_none();
+            assert_eq!(pull_enabled(&repo), enabled, "main Pull button");
+            let mut loading = repo.clone();
+            loading.remotes = Loadable::Loading;
+            loading.remote_branches = Loadable::Loading;
+            assert_eq!(
+                pull_enabled(&loading),
+                enabled,
+                "annex takeover does not need loaded remotes"
+            );
             let state = Arc::new(AppState {
                 active_repo: Some(repo.id),
                 repos: vec![repo.clone()],

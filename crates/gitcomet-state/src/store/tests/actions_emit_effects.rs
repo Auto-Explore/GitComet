@@ -88,6 +88,7 @@ mod large_files;
 mod command_completion;
 mod head_changes;
 mod remote_commands;
+mod reword;
 mod sequencers;
 mod submodules;
 mod tags;

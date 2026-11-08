@@ -43,8 +43,8 @@ impl ReducerInputs {
         if !state.git_runtime.is_available() {
             return;
         }
-        if let Msg::RemoveWorktree { repo_id, path } | Msg::ForceRemoveWorktree { repo_id, path } =
-            message
+        if let Msg::RemoveWorktree { repo_id, path, .. }
+        | Msg::ForceRemoveWorktree { repo_id, path, .. } = message
             && state.repos.iter().any(|repo| repo.id == *repo_id)
         {
             *path = self
@@ -330,7 +330,7 @@ impl PreparedReduction {
         Self { message, inputs }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks", feature = "test-support"))]
     pub(in crate::store) fn new(
         message: Msg,
         state: &AppState,
@@ -431,9 +431,8 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
                 }
             }
         }
-        Msg::RemoveWorktree { repo_id, path } | Msg::ForceRemoveWorktree { repo_id, path } => {
-            paths.in_workdir(state, *repo_id, path)
-        }
+        Msg::RemoveWorktree { repo_id, path, .. }
+        | Msg::ForceRemoveWorktree { repo_id, path, .. } => paths.in_workdir(state, *repo_id, path),
         Msg::SubmitAuthPrompt {
             username, secret, ..
         } => {
@@ -442,8 +441,8 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
                 && super::auth::prepare_staged_git_auth(prompt.kind, username.as_deref(), secret)
                     .is_ok()
                 && let AuthRetryOperation::RepoCommand { repo_id, command } = &prompt.operation
-                && let RepoCommandKind::RemoveWorktree { path }
-                | RepoCommandKind::ForceRemoveWorktree { path } = command
+                && let RepoCommandKind::RemoveWorktree { path, .. }
+                | RepoCommandKind::ForceRemoveWorktree { path, .. } = command
             {
                 paths.in_workdir(state, *repo_id, path)
             }
@@ -591,6 +590,7 @@ fn internal_needs_preparation(message: &InternalMsg) -> bool {
         | InternalMsg::RepoActionFinished { .. }
         | InternalMsg::RepoPathsActionFinished { .. }
         | InternalMsg::BranchAlreadyExists { .. }
+        | InternalMsg::BranchNotFullyMerged { .. }
         | InternalMsg::RepoActionFinishedInWorktree { .. }
         | InternalMsg::RepoCommandFinished { .. }
         | InternalMsg::DiffLoaded { .. }
@@ -600,6 +600,9 @@ fn internal_needs_preparation(message: &InternalMsg) -> bool {
         | InternalMsg::SubmoduleSummaryLoaded { .. }
         | InternalMsg::TextAttributesLoaded { .. }
         | InternalMsg::CommitDetailsLoaded { .. }
+        | InternalMsg::StatusLoaded { .. }
+        | InternalMsg::WorktreeStatusLoaded { .. }
+        | InternalMsg::StagedStatusLoaded { .. }
         | InternalMsg::LargeFileSupportLoaded { .. }
         | InternalMsg::FileBrowserLoaded { .. } => true,
         _ => false,
@@ -903,6 +906,16 @@ fn capture_internal(
                 state.active_repo,
             );
         }
+        InternalMsg::BranchNotFullyMerged { repo_id, .. } => {
+            capture_action(
+                state,
+                repos,
+                inputs,
+                *repo_id,
+                RepoActionKind::DeleteBranch,
+                state.active_repo,
+            );
+        }
         InternalMsg::RepoActionFinishedInWorktree {
             repo_id,
             action,
@@ -971,6 +984,17 @@ fn capture_internal(
                 && util::selected_conflict_target(repo, selected).is_none()
             {
                 inputs.marker(repo, selected);
+            }
+        }
+        // Landing status can change which side the selected file has, and the
+        // re-plan that follows classifies it against the new entry.
+        InternalMsg::StatusLoaded { repo_id, .. }
+        | InternalMsg::WorktreeStatusLoaded { repo_id, .. }
+        | InternalMsg::StagedStatusLoaded { repo_id, .. } => {
+            if let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
+                && let Some(DiffTarget::WorkingTree { path, .. }) = &repo.diff_state.diff_target
+            {
+                inputs.queue_marker(repo, path);
             }
         }
         InternalMsg::CommitDetailsLoaded {
@@ -1070,6 +1094,9 @@ fn cancelled_selection_refresh(
         InternalMsg::BranchAlreadyExists { prompt, .. } if prompt.repo_id == repo_id => {
             AlreadyHandled
         }
+        InternalMsg::BranchNotFullyMerged {
+            repo_id: completed, ..
+        } if *completed == repo_id => AlreadyHandled,
         InternalMsg::RepoCommandFinished {
             repo_id: completed,
             command,
@@ -1077,7 +1104,7 @@ fn cancelled_selection_refresh(
         } => {
             let removes_selected_repo = result.is_ok()
                 && matches!(command,
-                    RepoCommandKind::RemoveWorktree { path } | RepoCommandKind::ForceRemoveWorktree { path }
+                    RepoCommandKind::RemoveWorktree { path, .. } | RepoCommandKind::ForceRemoveWorktree { path, .. }
                         if *path == repo.spec.workdir
                 );
             if removes_selected_repo
@@ -1194,8 +1221,8 @@ fn capture_command(
         }
     }
     if succeeded
-        && let RepoCommandKind::RemoveWorktree { path }
-        | RepoCommandKind::ForceRemoveWorktree { path } = command
+        && let RepoCommandKind::RemoveWorktree { path, .. }
+        | RepoCommandKind::ForceRemoveWorktree { path, .. } = command
     {
         let mut order: Vec<_> = state.repos.iter().map(|repo| repo.id).collect();
         let mut active = state.active_repo;

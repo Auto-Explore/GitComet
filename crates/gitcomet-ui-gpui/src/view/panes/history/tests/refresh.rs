@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{LogPage, WorktreeDirtySummary};
 use gitcomet_core::services::{CancellationToken, HistoryReadRequest, HistoryReadResult};
 
-pub(super) fn mount(
+pub(in super::super) fn mount(
     cx: &mut gpui::TestAppContext,
     page: Arc<LogPage>,
 ) -> (
@@ -22,6 +22,7 @@ pub(super) fn mount(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.log = Loadable::Ready(Arc::clone(&page));
     repo.history_state.log = Loadable::Ready(page);
@@ -389,8 +390,9 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     let repo = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let HistoryReadResult::Page { page, snapshot } = repo
         .read_history(
-            LogScope::AllBranches,
+            &LogScope::AllBranches.into(),
             None,
+            &Default::default(),
             &HistoryReadRequest::Page {
                 limit: 6_000,
                 cursor: None,
@@ -419,7 +421,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     }
 }
 
-pub(super) fn indexed_fixture(
+pub(in super::super) fn indexed_fixture(
     count: usize,
 ) -> (
     gitcomet_core::history_index::HistoryIndexHandle,
@@ -583,6 +585,248 @@ fn logical_top(
         let logical = scroll.logical.as_ref().unwrap();
         (logical.top, logical.within, logical.total)
     })
+}
+
+#[gpui::test]
+fn indexed_tab_round_trip_reuses_the_presented_graph_without_a_bootstrap_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    state.repos[0].head_branch = Loadable::Ready("older-tip".into());
+    state.repos[0].head_branch_rev += 1;
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![branch(
+        "older-tip",
+        commits[300].id.as_ref(),
+    )]));
+    state.repos[0].branches_rev += 1;
+    install_index(&mut state, index);
+    let mut other = state.repos[0].clone();
+    other.id = RepoId(2);
+    other.spec.workdir = PathBuf::from("/tmp/history-other-indexed-tab");
+    other.head_branch = Loadable::Ready("newer-tip".into());
+    other.head_branch_rev += 1;
+    other.branches = Loadable::Ready(Arc::new(vec![branch(
+        "newer-tip",
+        commits[100].id.as_ref(),
+    )]));
+    other.branches_rev += 1;
+    state.repos.push(other);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "first tab indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let (first, first_window, first_position) = cx.update(|_, app| {
+        history.update(app, |history, _| {
+            let mut scroll = history.scroll_interaction.borrow_mut();
+            let logical = scroll.logical.as_mut().unwrap();
+            logical.set_position(5.0 * logical.height + 7.0);
+            (
+                history.indexed.presentation.clone().unwrap(),
+                history.indexed.window.clone().unwrap(),
+                logical.position(),
+            )
+        })
+    });
+    state.active_repo = Some(RepoId(2));
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "second tab indexed viewport", |cx| {
+        cx.update(|_, app| {
+            history
+                .read(app)
+                .indexed
+                .presentation
+                .as_ref()
+                .is_some_and(|shown| shown.key.repo_id == RepoId(2))
+        })
+    });
+    cx.update(|_, app| {
+        history.update(app, |history, cx| {
+            history.update_history_row_hover(
+                Some((0, HistoryRowHoverArea::Author)),
+                Some("other tab author".into()),
+                cx,
+            );
+        });
+    });
+    state.active_repo = Some(RepoId(1));
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    cx.update(|window, app| {
+        history.update(app, |history, cx| {
+            history.state = Arc::new(state);
+            history.ensure_indexed_history(cx);
+            history.apply_indexed_history(cx);
+            let shown = history
+                .indexed
+                .presentation
+                .as_ref()
+                .expect("a warm tab must present its prepared graph on its first frame");
+            assert!(Arc::ptr_eq(shown, &first));
+            assert!(std::rc::Rc::ptr_eq(
+                history.indexed.window.as_ref().unwrap(),
+                &first_window,
+            ));
+            assert_eq!(
+                history
+                    .scroll_interaction
+                    .borrow()
+                    .logical
+                    .as_ref()
+                    .unwrap()
+                    .position(),
+                first_position,
+            );
+            assert!(!history.indexed_is_building());
+            assert!(history.history_cache.is_none());
+            assert!(history.row_hover.is_none());
+            assert!(history.row_hover_tooltip.is_none());
+        });
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("indexed_history_viewport").is_some());
+}
+
+#[gpui::test]
+fn indexed_tab_with_a_ready_index_does_not_build_an_incomplete_bootstrap_graph(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, _) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    state.repos[0].id = RepoId(2);
+    state.repos[0].head_branch = Loadable::Ready("older-tip".into());
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![branch(
+        "older-tip",
+        commits[300].id.as_ref(),
+    )]));
+    state.active_repo = Some(RepoId(2));
+    cx.update(|window, app| {
+        let history = view.read(app).main_pane.read(app).history_view.clone();
+        history.update(app, |history, cx| {
+            history.state = Arc::new(state);
+            let _ = history.render(window, cx);
+            assert!(history.indexed_is_building());
+            assert!(history.history_cache.is_none());
+            assert!(history.history_cache_inflight.is_none());
+        });
+    });
+}
+
+#[gpui::test]
+fn leaving_a_cold_indexed_tab_does_not_block_the_next_tabs_bootstrap(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, _) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    let mut other = state.repos[0].clone();
+    other.id = RepoId(2);
+    other.spec.workdir = PathBuf::from("/tmp/history-fresh-paged-tab");
+    state.repos.push(other);
+    install_index(&mut state, index);
+    cx.update(|window, app| {
+        let history = view.read(app).main_pane.read(app).history_view.clone();
+        history.update(app, |history, cx| {
+            history.state = Arc::new(state.clone());
+            history.ensure_indexed_history(cx);
+            assert!(history.indexed_is_building());
+            state.active_repo = Some(RepoId(2));
+            history.state = Arc::new(state);
+            let _ = history.render(window, cx);
+            assert!(!history.indexed_is_building());
+            assert!(
+                history
+                    .history_cache_inflight
+                    .as_ref()
+                    .is_some_and(|request| { request.base_request.repo_id == RepoId(2) })
+            );
+            assert!(history.retained_indexed_tabs.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+fn changing_a_cold_indexed_query_does_not_block_its_new_bootstrap(cx: &mut gpui::TestAppContext) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, _) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    cx.update(|window, app| {
+        let history = view.read(app).main_pane.read(app).history_view.clone();
+        history.update(app, |history, cx| {
+            history.state = Arc::new(state.clone());
+            history.ensure_indexed_history(cx);
+            assert!(history.indexed_is_building());
+        });
+        state.repos[0].history_state.log_snapshot = None;
+        state.repos[0].history_state.history_scope = LogScope::CurrentBranch;
+        let state = Arc::new(state);
+        view.read(app).ui_model.clone().update(app, |model, cx| {
+            model.set_state(Arc::clone(&state), cx);
+        });
+        history.update(app, |history, _| history.state = state);
+        window.refresh();
+        let _ = window.draw(app);
+        let history = history.read(app);
+        assert!(!history.indexed_is_building());
+        assert!(
+            history
+                .history_cache_inflight
+                .as_ref()
+                .is_some_and(|request| {
+                    request.base_request.history_scope == LogScope::CurrentBranch
+                })
+        );
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    let mut other = state.repos[0].clone();
+    other.id = RepoId(2);
+    other.spec.workdir = PathBuf::from("/tmp/history-tab-invalidation");
+    state.repos.push(other);
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    for id in [RepoId(1), RepoId(2)] {
+        state.active_repo = Some(id);
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+        wait_until(cx, "prepared indexed tab", |cx| {
+            cx.update(|_, app| {
+                history
+                    .read(app)
+                    .indexed
+                    .presentation
+                    .as_ref()
+                    .is_some_and(|shown| shown.key.repo_id == id)
+            })
+        });
+    }
+    state.repos[0].branches =
+        Loadable::Ready(Arc::new(vec![branch("new-tip", commits[100].id.as_ref())]));
+    state.repos[0].branches_rev += 1;
+    state.active_repo = Some(RepoId(1));
+    cx.update(|_, app| {
+        history.update(app, |history, cx| {
+            history.state = Arc::new(state.clone());
+            history.ensure_indexed_history(cx);
+            assert!(history.indexed.presentation.is_none());
+            assert!(history.indexed_is_building());
+            assert!(history.retained_indexed_tabs.contains_key(&RepoId(2)));
+            state.repos.retain(|repo| repo.id != RepoId(2));
+            history.state = Arc::new(state);
+            history.ensure_indexed_history(cx);
+            assert!(history.retained_indexed_tabs.is_empty());
+        });
+    });
 }
 
 #[gpui::test]
@@ -1854,4 +2098,42 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
             }
         }
     }
+}
+
+#[gpui::test]
+fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
+    let (index, commits) = indexed_fixture(10);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
+    state.repos[0].remote_branches = Loadable::Ready(Arc::new(
+        ["origin", "upstream"]
+            .map(|remote| remote_branch(remote, "main", commits[0].id.as_ref()))
+            .to_vec(),
+    ));
+    state.repos[0].remote_branches_rev += 1;
+    install_index(&mut state, index);
+    let labels = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .indexed
+                .window
+                .as_ref()
+                .and_then(|window| window.cache.decorations.row_vms.first())
+                .map(|row| row.branches_text.as_ref().to_owned())
+        })
+    };
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "both remotes label the tip", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && text.contains("upstream/main"))
+    });
+
+    crate::view::test_support::hide_remotes_in_history(&mut state.repos[0], &["upstream"]);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "the hidden remote's label is gone", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && !text.contains("upstream/main"))
+    });
 }

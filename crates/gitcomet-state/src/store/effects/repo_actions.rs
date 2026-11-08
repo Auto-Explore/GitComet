@@ -3,14 +3,15 @@ use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
-use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitHooks, GitRepository};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, message_subject, missing_repo_error, path_context, paths_context,
-    send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
+    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, path_context,
+    paths_context, send_or_log, short_commit_id, single_line_context, spawn_with_repo,
+    spawn_with_repo_or_else,
 };
 
 /// Runs a repo action against the repo's handle, or finishes it at once when
@@ -35,7 +36,26 @@ fn spawn_repo_action(
         move |repo, msg_tx| {
             let gate = super::super::mutation_gate::for_repo(repo.as_ref());
             let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            if let Err(error) = super::super::repository_requirement::check(
+                repo.as_ref(),
+                action.repository_requirement(),
+            ) {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(InternalMsg::RepoActionFinished {
+                        repo_id,
+                        action,
+                        result: Err(error),
+                    }),
+                );
+                return;
+            }
+            let tracking_repo = action.changes_tracking().then(|| Arc::clone(&repo));
+            let tracking_sender = msg_tx.clone();
             task(repo, msg_tx);
+            if let Some(repo) = tracking_repo {
+                tracking_sender.refresh_other_tracking(repo_id, repo.as_ref());
+            }
         },
         move |msg_tx| {
             send_or_log(
@@ -116,8 +136,13 @@ fn schedule_repo_action_with_result<T, F, M>(
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();
-            run(repo)
+            super::super::repository_requirement::check(
+                repo.as_ref(),
+                gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+            )
+            .and_then(|()| run(Arc::clone(&repo)))
         };
+        msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
         let outcome = GitOperationTask::outcome(&result);
         let message = finish(repo_id, result);
         operation.finish(outcome, message);
@@ -233,6 +258,16 @@ fn open_worktree_holding_branch(
         ))));
     }
     Ok(handle)
+}
+
+fn is_branch_not_fully_merged(result: &Result<(), Error>) -> bool {
+    matches!(
+        result,
+        Err(error) if matches!(
+            error.kind(),
+            ErrorKind::Git(failure) if failure.id() == GitFailureId::BranchNotFullyMerged
+        )
+    )
 }
 
 fn is_branch_already_exists(result: &Result<(), Error>) -> bool {
@@ -613,6 +648,7 @@ pub(super) fn schedule_delete_branch(
     name: String,
 ) {
     let context = single_line_context(&name);
+    let refused_name = name.clone();
     schedule_repo_action_with_hook(
         executor,
         repos,
@@ -622,7 +658,20 @@ pub(super) fn schedule_delete_branch(
         context,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
-        repo_action_finished(RepoActionKind::DeleteBranch),
+        move |repo_id, result| {
+            if is_branch_not_fully_merged(&result) {
+                InternalMsg::BranchNotFullyMerged {
+                    repo_id,
+                    name: refused_name,
+                }
+            } else {
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::DeleteBranch,
+                    result,
+                }
+            }
+        },
     );
 }
 
@@ -920,6 +969,15 @@ pub(super) fn schedule_discard_worktree_changes_paths(
     );
 }
 
+fn commit_context(message: &str, hooks: GitHooks) -> Option<String> {
+    let subject = message_subject(message).unwrap_or_else(|| "No commit message".to_string());
+    Some(if hooks.skipped() {
+        format!("{subject} · {SKIPPING_HOOKS_CONTEXT}")
+    } else {
+        subject
+    })
+}
+
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -927,9 +985,10 @@ pub(super) fn schedule_commit(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -939,7 +998,7 @@ pub(super) fn schedule_commit(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.commit_with_identity(&message, identity.as_ref())
+                repo.commit_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
@@ -953,9 +1012,10 @@ pub(super) fn schedule_commit_amend(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -965,7 +1025,7 @@ pub(super) fn schedule_commit_amend(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.commit_amend_with_identity(&message, identity.as_ref())
+                repo.commit_amend_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },

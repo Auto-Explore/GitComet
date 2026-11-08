@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, LogPage, ReflogEntry, RepoSpec, RepoStatus, StashEntry,
 };
-use gitcomet_core::error::{GitFailure, GitFailureId};
+use gitcomet_core::error::{GitFailure, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
@@ -32,10 +32,12 @@ pub(super) struct TrackingRepo {
     worktrees: Arc<Mutex<Vec<gitcomet_core::domain::Worktree>>>,
     create_attempts: Arc<Mutex<Vec<String>>>,
     actions: Arc<Mutex<Vec<String>>>,
+    unmerged_branches: Arc<Mutex<BTreeSet<String>>>,
+    worktree_removal_blocker: Arc<Mutex<Option<WorktreeRemovalBlocker>>>,
 }
 
 impl TrackingRepo {
-    fn new(workdir: PathBuf) -> Self {
+    pub(super) fn new(workdir: PathBuf) -> Self {
         Self {
             spec: RepoSpec { workdir },
             branches: Arc::new(Mutex::new(vec!["main".to_string()])),
@@ -43,7 +45,32 @@ impl TrackingRepo {
             worktrees: Arc::new(Mutex::new(Vec::new())),
             create_attempts: Arc::new(Mutex::new(Vec::new())),
             actions: Arc::new(Mutex::new(Vec::new())),
+            unmerged_branches: Arc::new(Mutex::new(BTreeSet::new())),
+            worktree_removal_blocker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// `branch -d` refuses it until it is force-deleted.
+    pub(super) fn add_unmerged_branch(&self, name: &str) {
+        self.add_branch(name);
+        self.unmerged_branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(name.to_string());
+    }
+
+    pub(super) fn block_worktree_removal(&self, blocker: WorktreeRemovalBlocker) {
+        *self
+            .worktree_removal_blocker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(blocker);
+    }
+
+    fn record(&self, action: String) {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(action);
     }
 
     fn add_branch(&self, name: &str) {
@@ -259,11 +286,40 @@ impl GitRepository for TrackingRepo {
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {
+        self.record(format!("delete-branch:{name}"));
+        if self
+            .unmerged_branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(name)
+        {
+            return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                "git branch -d",
+                GitFailureId::BranchNotFullyMerged,
+                Some(1),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ))));
+        }
         let mut branches = self
             .branches
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         branches.retain(|branch| branch != name);
+        Ok(())
+    }
+
+    fn delete_branch_force(&self, name: &str) -> Result<()> {
+        self.record(format!("force-delete-branch:{name}"));
+        self.unmerged_branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(name);
+        self.branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|branch| branch != name);
         Ok(())
     }
 
@@ -358,6 +414,35 @@ impl GitRepository for TrackingRepo {
         Ok(result)
     }
 
+    // Git refuses a plain removal while a blocker is set; labels match the backend's.
+    fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.record(format!("remove:{}", path.display()));
+        let label = format!("git worktree remove {}", path.display());
+        let blocker = *self
+            .worktree_removal_blocker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match blocker {
+            Some(blocker) => Err(Error::new(ErrorKind::Git(GitFailure::new(
+                label,
+                GitFailureId::WorktreeRemovalBlocked(blocker),
+                Some(128),
+                Vec::new(),
+                b"fatal: working trees containing submodules cannot be moved or removed".to_vec(),
+                None,
+            )))),
+            None => Ok(CommandOutput::empty_success(label)),
+        }
+    }
+
+    fn force_remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.record(format!("force-remove:{}", path.display()));
+        Ok(CommandOutput::empty_success(format!(
+            "git worktree remove --force {}",
+            path.display()
+        )))
+    }
+
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
@@ -421,17 +506,48 @@ impl GitRepository for TrackingRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn run_large_file_command(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        if let gitcomet_core::large_files::LargeFileCommand::AnnexVerifyRemote { name, id } =
+            command
+        {
+            self.record(format!("annex-verifyremote:{name}:{id}"));
+        }
+        Ok(CommandOutput::empty_success("git annex"))
+    }
+
+    fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        self.record(format!("remove-remote:{name}"));
+        Ok(CommandOutput::empty_success("git remote remove"))
+    }
+
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        self.record("force-push".to_string());
+        Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn push_force_with_lease_with_output(
+        &self,
+        lease: &gitcomet_core::services::ForcePushLease,
+    ) -> Result<CommandOutput> {
+        self.record(format!(
+            "force-push:{}/{}:{}",
+            lease.remote, lease.branch, lease.expected
+        ));
+        Ok(CommandOutput::empty_success(
+            "git push --force-with-lease=…",
+        ))
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -493,6 +609,85 @@ pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn wait_for_force_delete_prompt(
+    store: &AppStore,
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    name: &str,
+) {
+    wait_until("the force-delete prompt", || {
+        store
+            .snapshot()
+            .force_delete_branch_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.name == name)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+    });
+    crate::view::test_support::redraw(cx);
+}
+
+/// The refusal is recognised from repository state, so no message text is
+/// read: the dialog replaces the error, a cancel forces nothing, and the next
+/// refusal asks again.
+#[gpui::test]
+fn unmerged_branch_offers_force_delete(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("force-delete-unmerged");
+    repo.add_unmerged_branch("feature");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let popover = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        })
+    };
+    let delete = || {
+        store.dispatch(Msg::DeleteBranch {
+            repo_id,
+            name: "feature".to_string(),
+        })
+    };
+
+    delete();
+    wait_for_force_delete_prompt(&store, &view, cx, "feature");
+    assert!(matches!(
+        popover(cx),
+        Some(PopoverKind::ForceDeleteBranchConfirm(prompt)) if prompt.name == "feature"
+    ));
+    click_debug_selector(cx, "force_delete_branch_cancel");
+    wait_until("the dismissal", || {
+        store.snapshot().force_delete_branch_prompt.is_none()
+    });
+
+    delete();
+    wait_for_force_delete_prompt(&store, &view, cx, "feature");
+    click_debug_selector(cx, "force_delete_branch_go");
+    wait_until("the forced delete", || {
+        repo.actions()
+            .iter()
+            .any(|done| done == "force-delete-branch:feature")
+    });
+    assert_eq!(
+        repo.actions()
+            .iter()
+            .filter(|done| done.as_str() == "force-delete-branch:feature")
+            .count(),
+        1,
+        "only the confirmed prompt forces"
+    );
 }
 
 fn wait_for_branch_exists_prompt(
@@ -2792,7 +2987,7 @@ fn review_ancestor_collapse_during_search_preserves_saved_collapse(cx: &mut gpui
 
 /// Builds a repo whose branch list is `main`, `feat/a`, `feat/b/c` and
 /// `features/x`, plus `origin/feat/a`, then returns the group menu's model.
-fn branch_group_menu_model(
+pub(super) fn branch_group_menu_model(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
     remote: Option<&str>,
@@ -3838,6 +4033,7 @@ fn rename_collision_dialog_checkout_existing_checks_out_target(cx: &mut gpui::Te
 #[gpui::test]
 fn branch_exists_dialog_notes_worktree_holding_the_branch(cx: &mut gpui::TestAppContext) {
     let worktrees = vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/gitcomet-ui-other-worktree"),
         head: None,
         branch: Some("main".to_string()),

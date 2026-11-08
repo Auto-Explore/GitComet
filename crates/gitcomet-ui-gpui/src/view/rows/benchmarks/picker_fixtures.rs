@@ -106,6 +106,7 @@ impl PickerPromptFrameFixture {
                 }));
         }
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.ref_metadata = Loadable::Ready(Arc::new(build_synthetic_ref_metadata(&repo)));
 
         let mut cx = gpui::TestAppContext::single();

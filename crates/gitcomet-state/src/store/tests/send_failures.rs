@@ -218,11 +218,7 @@ impl GitRepository for ReadyOpenRepo {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -530,11 +526,7 @@ impl GitRepository for BlockingDiffRepo {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -560,6 +552,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
         Arc::new(std::sync::atomic::AtomicBool::new(true)),
         super::worker_channel::StoreInstanceId::next(),
         crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::auto_fetch::AutoFetchCoordinator::new(),
         crate::store::isolated_filesystem(),
     );
 
@@ -589,6 +582,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         Arc::clone(&alive),
         super::worker_channel::StoreInstanceId::next(),
         crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::auto_fetch::AutoFetchCoordinator::new(),
         crate::store::isolated_filesystem(),
     );
     let store = AppStore {
@@ -624,7 +618,8 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         .expect("expected final AppStore drop to send worker shutdown")
     {
         super::worker_channel::StoreWorkerCommand::Shutdown => {}
-        super::worker_channel::StoreWorkerCommand::BarrierForTest(_) => {
+        super::worker_channel::StoreWorkerCommand::BarrierForTest(_)
+        | super::worker_channel::StoreWorkerCommand::RepoMonitorBarrierForTest { .. } => {
             panic!("expected shutdown command, got worker barrier")
         }
         super::worker_channel::StoreWorkerCommand::Repository { .. } => {
@@ -634,6 +629,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
             panic!("expected shutdown command, got checked repository activation")
         }
         super::worker_channel::StoreWorkerCommand::Msg(_)
+        | super::worker_channel::StoreWorkerCommand::SetAutoFetchAllowed(_)
         | super::worker_channel::StoreWorkerCommand::Traced(..) => {
             panic!("expected shutdown command, got message command")
         }

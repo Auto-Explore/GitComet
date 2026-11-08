@@ -928,7 +928,7 @@ pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>)
 
 #[cfg(target_os = "macos")]
 pub(super) fn prompt_apply_patch(cx: &mut App) {
-    if find_normal_gitcomet_window(cx).is_none() {
+    if find_normal_gitcomet_window(cx).is_none() || normal_window_repository_is_bare(cx) {
         return;
     }
 

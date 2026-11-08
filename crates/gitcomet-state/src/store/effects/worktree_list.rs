@@ -78,6 +78,7 @@ mod tests {
 
     fn list(branch: &str) -> Arc<Vec<Worktree>> {
         Arc::new(vec![Worktree {
+            bare: false,
             path: "/linked".into(),
             head: None,
             branch: Some(branch.into()),

@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::services::HistorySnapshot;
+use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 
 pub(super) struct HistoryAuthorsCache {
     snapshot: HistorySnapshot,
@@ -9,7 +9,8 @@ pub(super) struct HistoryAuthorsCache {
 impl GixRepo {
     pub(in super::super) fn history_authors_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
@@ -20,10 +21,12 @@ impl GixRepo {
             &repo,
             shared.id,
             shared.common.id,
-            mode,
+            walk,
             None,
+            focus,
             cancellation,
         )?;
+        let mode = walk.mode();
         let snapshot = query.snapshot();
         let tips = query.tips;
         let shallow = query.shallow;

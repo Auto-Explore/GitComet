@@ -2,7 +2,7 @@
 //! verification re-verifies the loaded history.
 
 use super::util;
-use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RemoteSettings};
+use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, Loadable, RemoteSettings};
 use crate::msg::Effect;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -54,12 +54,21 @@ pub(super) fn set_git_log_settings(
     let verification_toggled =
         state.git_log_settings.verify_commit_signatures != verify_commit_signatures;
     state.git_log_settings.verify_commit_signatures = verify_commit_signatures;
-    if !verification_toggled {
-        return Vec::new();
+    let mut effects = Vec::new();
+    let git_log_settings = state.git_log_settings;
+    if let Some(repo_state) = state
+        .active_repo
+        .and_then(|repo_id| state.repos.iter_mut().find(|repo| repo.id == repo_id))
+        && matches!(repo_state.open, Loadable::Ready(()))
+    {
+        util::append_tag_load_effects(repo_state, git_log_settings, &mut effects);
     }
-    // A fresh opt-in waits for discovery before starting any verifier.
-    state.signing_tools = Default::default();
-    util::reverify_all_commit_signatures_effects(state)
+    if verification_toggled {
+        // A fresh opt-in waits for discovery before starting any verifier.
+        state.signing_tools = Default::default();
+        effects.extend(util::reverify_all_commit_signatures_effects(state));
+    }
+    effects
 }
 
 pub(super) fn set_remote_settings(state: &mut AppState, settings: RemoteSettings) -> Vec<Effect> {
@@ -78,6 +87,27 @@ pub(super) fn set_large_file_tools_state(
 ) -> Vec<Effect> {
     state.large_file_tools = tools;
     Vec::new()
+}
+
+/// Every repository's walk carries the filter; each one whose walk changed
+/// reloads its history once.
+pub(super) fn set_history_hidden_refs(
+    state: &mut AppState,
+    filter: gitcomet_core::services::HistoryRefFilter,
+) -> Vec<Effect> {
+    if state.history_hidden_refs == filter {
+        return Vec::new();
+    }
+    state.history_hidden_refs = filter;
+    let mut effects = Vec::new();
+    for ix in 0..state.repos.len() {
+        let walk = state.repos[ix].history_walk();
+        state.repos[ix].history_state.hidden_refs = state.history_hidden_refs.clone();
+        if state.repos[ix].history_walk() != walk {
+            effects.extend(util::restart_history_walk(state, ix));
+        }
+    }
+    effects
 }
 
 pub(super) fn set_large_file_settings(

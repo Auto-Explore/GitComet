@@ -1,6 +1,5 @@
 //! Independent generations and a bounded cache for indexed history requests.
 use crate::model::{RepoId, RepoLoadEpoch};
-use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::history_index::{HistoryIndexHandle, HistoryIndexProgress, HistoryRange};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
 use std::collections::{BTreeMap, VecDeque};
@@ -125,8 +124,10 @@ pub enum IndexedHistoryEffect {
     Build {
         repo_id: RepoId,
         seq: u64,
-        mode: HistoryMode,
+        walk: gitcomet_core::services::HistoryWalk,
         author: Option<String>,
+        /// The refs the index is focused on, empty for the normal seed.
+        focus: gitcomet_core::domain::HistoryFocusSet,
         cancellation: CancellationToken,
     },
     Range {

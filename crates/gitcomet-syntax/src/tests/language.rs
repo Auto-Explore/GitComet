@@ -639,6 +639,18 @@ const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
             &[K::Comment, K::String, K::Tag, K::PunctuationBracket],
         ),
         (
+            DiffSyntaxLanguage::Razor,
+            "@* c *@\n@{ var x = 1; }\n<div id=\"x\">@x</div>\n",
+            &[
+                K::Comment,
+                K::String,
+                K::Number,
+                K::Keyword,
+                K::Tag,
+                K::PunctuationBracket,
+            ],
+        ),
+        (
             DiffSyntaxLanguage::Xml,
             "<!-- c -->\n<root a=\"x\">t</root>\n",
             &[K::Comment, K::String, K::Tag, K::PunctuationBracket],

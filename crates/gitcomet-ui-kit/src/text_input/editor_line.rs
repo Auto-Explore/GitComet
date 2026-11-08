@@ -58,6 +58,12 @@ impl EditorLine {
         } else {
             source
         };
+        // Row extraction removed the terminal CR, including one at EOF.
+        // Remaining CRs keep their source byte/cell without phantom rows.
+        let display = match crate::text_runs::single_line_display_text(&display, false) {
+            std::borrow::Cow::Borrowed(_) => display,
+            std::borrow::Cow::Owned(text) => text.into(),
+        };
         let projected_runs;
         let runs = if line.tabs.is_some() {
             let mut offset = 0;

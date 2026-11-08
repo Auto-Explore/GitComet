@@ -1,4 +1,17 @@
 use super::*;
+
+#[test]
+fn bare_monitor_uses_metadata_without_worktree_ignore_rules() {
+    let (_directory, root) = repository();
+    run_git(&root, &["config", "core.bare", "true"]);
+    let mut rules = TestRules::load(&root, Arc::new(gitcomet_git_gix::GixBackend));
+    assert!(!rules.failed);
+    assert!(rules.matcher.is_none());
+    run_git(&root, &["config", "core.bare", "false"]);
+    rules.reload(&root);
+    assert!(!rules.failed);
+    assert!(rules.matcher.is_some());
+}
 use crate::model::LoadKind;
 mod efficiency;
 mod hooks_directory_noise;

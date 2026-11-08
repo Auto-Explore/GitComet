@@ -1,6 +1,6 @@
 # Vendored from the `tree-sitter-html 0.23.2` crates.io release
-# (https://github.com/tree-sitter/tree-sitter-html, MIT -- see LICENSE), for one
-# fix in `src/scanner.c`, marked `GitComet:` there.
+# (https://github.com/tree-sitter/tree-sitter-html, MIT -- see LICENSE), with
+# local raw-text boundary and qualified tag-name fixes in `src/scanner.c`.
 #
 # `scan_raw_text` closed a `<script>` on the characters `</script` alone. The HTML
 # spec's script-data end-tag-name state closes it only when the tag name is
@@ -8,6 +8,8 @@
 # matters because `"</script"` inside a JavaScript string or comment is exactly
 # where those characters appear in practice, and closing there left the rest of
 # the script rendered as markup.
+# `scan_tag_name` also accepts dots so qualified Blazor components have one
+# complete name in the shared HTML injection.
 #
 # `src/` is regenerated (tree-sitter-cli 0.26.13, ABI 15) and the `tree_sitter/`
 # headers come from vendor/tree-sitter-headers -- see the README there.

@@ -362,6 +362,87 @@ fn pull_error_is_formatted_as_command_and_output() {
 }
 
 #[test]
+fn pull_timeout_preserves_the_reason_command_and_output() {
+    use gitcomet_core::error::{GitFailure, GitFailureId};
+
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let command = "git -c fetch.pruneTags=false -C /tmp/repo pull --progress --rebase --no-prune -- origin refs/heads/main";
+    let reason = "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)";
+    let error = Error::new(ErrorKind::Git(GitFailure::new(
+        command,
+        GitFailureId::Timeout,
+        None,
+        b"Updating abc123..def456\n".to_vec(),
+        b"Receiving objects: 45% (45/100)\r".to_vec(),
+        Some(reason.into()),
+    )));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Rebase,
+            },
+            result: Err(error),
+        }),
+    );
+    let entry = &state.repos[0].feedback.command_log[0];
+    assert!(
+        entry.summary.starts_with("Pull timed out:\n\n"),
+        "{}",
+        entry.summary
+    );
+    assert_eq!(entry.command, command);
+    assert_eq!(entry.kind, crate::model::CommandLogKind::Pull);
+    assert_eq!(entry.failure_id, Some(GitFailureId::Timeout));
+    assert!(entry.summary.contains(reason));
+    assert!(entry.summary.contains("Updating abc123..def456"));
+    assert!(entry.summary.contains("Receiving objects: 45% (45/100)"));
+    assert!(entry.hook_operation_id.is_none());
+}
+
+#[test]
+fn pull_cancellation_is_distinct_from_failure_and_timeout() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Rebase,
+            },
+            result: Err(Error::new(ErrorKind::Cancelled)),
+        }),
+    );
+    let entry = &state.repos[0].feedback.command_log[0];
+    assert_eq!(entry.summary, "Pull cancelled");
+    assert!(!entry.ok);
+    assert!(entry.failure_id.is_none());
+}
+
+#[test]
 fn fetch_all_emits_effect_with_global_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
@@ -465,7 +546,57 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
 }
 
 #[test]
-fn pull_variants_snapshot_the_global_remote_prune_setting() {
+fn a_single_remote_fetch_follows_the_prune_setting_and_refreshes_remote_branches() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
+    let repo_id = RepoId(1);
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::Remote {
+            repo_id,
+            remote: "fork".to_string(),
+        }),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::FetchRemote { remote, prune: true, auth: None, .. })]
+            if remote == "fork"
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchRemote {
+                remote: "fork".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success("git fetch fork")),
+        }),
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert!(
+        matches!(state.repos[0].remote_branches, Loadable::Loading),
+        "a fetch reloads the remote branches"
+    );
+}
+
+#[test]
+fn pull_variants_are_independent_of_the_fetch_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
@@ -493,7 +624,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
         [Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Rebase,
-            prune: false,
             ..
         })]
     ));
@@ -515,7 +645,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
             repo_id: RepoId(1),
             remote,
             branch,
-            prune: true,
             ..
         })] if remote == "origin" && branch == "feature"
     ));
@@ -820,6 +949,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
+        hooks: gitcomet_core::services::GitHooks::Run,
     });
 
     let effects = reduce(
@@ -855,6 +985,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
+        hooks: gitcomet_core::services::GitHooks::Run,
     });
 
     let effects = reduce(
@@ -872,6 +1003,144 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { .. })
     )));
     assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+#[test]
+fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
+    use gitcomet_core::services::GitHooks;
+
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Commit {
+            repo_id,
+            message: "wip".to_string(),
+            push_after_commit: true,
+            hooks: GitHooks::Skip,
+        },
+    );
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::Commit {
+                hooks: GitHooks::Skip,
+                ..
+            }]
+        ),
+        "{effects:?}"
+    );
+    assert_eq!(
+        state.repos[0]
+            .pending
+            .commit_retry
+            .as_ref()
+            .map(|retry| retry.hooks),
+        Some(GitHooks::Skip)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                local_branch: Some("main".to_string()),
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            }),
+        }),
+    );
+    let context = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { context, .. }) => {
+                Some(context.clone())
+            }
+            _ => None,
+        })
+        .expect("the commit is pushed");
+    assert_eq!(context.hooks, GitHooks::Skip);
+
+    let target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context,
+            auth: None,
+            result: Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push {
+                target: target.clone(),
+            }),
+        }),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
+                target: effect_target,
+                set_upstream: false,
+                hooks: GitHooks::Skip,
+                ..
+            }) if effect_target == &target
+        )),
+        "{effects:?}"
+    );
+
+    // A branch with no upstream yet keeps skipping hooks too.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("main".to_string()),
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: GitHooks::Skip,
+            },
+            auth: None,
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
+                    target: target.clone(),
+                },
+            ),
+        }),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
+                target: effect_target,
+                set_upstream: true,
+                hooks: GitHooks::Skip,
+                ..
+            }) if effect_target == &target
+        )),
+        "{effects:?}"
+    );
 }
 
 #[test]
@@ -911,6 +1180,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
                 local_branch: Some("main".to_string()),
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
             auth: Some(auth.clone()),
             result: Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push {
@@ -925,6 +1195,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
             repo_id: id,
             target: effect_target,
             set_upstream: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
             auth: Some(effect_auth),
         }) if *id == repo_id && effect_target == &target && effect_auth == &auth
     )));
@@ -962,6 +1233,7 @@ fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
                 local_branch: Some("feature".to_string()),
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
             auth: None,
             result: Ok(
@@ -1016,6 +1288,7 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
                 local_branch: Some("main".to_string()),
                 pre_head: Some(expected.clone()),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
             auth: None,
             result: Ok(
@@ -1076,6 +1349,7 @@ fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refr
                 local_branch: Some("main".to_string()),
                 pre_head: Some(expected),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
             auth: None,
             result: Ok(

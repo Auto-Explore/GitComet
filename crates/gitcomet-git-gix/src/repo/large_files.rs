@@ -104,6 +104,126 @@ fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
 }
 
+/// Whether a commit `head` reaches and `hidden` does not adds or changes a
+/// blob git-lfs's `pre-push` hook would upload.
+pub(super) fn introduces_lfs_pointers(
+    repo: &gix::Repository,
+    head: gix::ObjectId,
+    hidden: Vec<gix::ObjectId>,
+) -> Result<bool> {
+    let walk = repo
+        .rev_walk([head])
+        .with_hidden(hidden)
+        .all()
+        .map_err(|e| backend_error("walk pushed commits", e))?;
+    let mut state = gix::diff::tree::State::default();
+    for info in walk {
+        let info = info.map_err(|e| backend_error("walk pushed commits", e))?;
+        if commit_adds_lfs_pointer(repo, info.id, &info.parent_ids, &mut state)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether one pushed commit adds or changes a blob git-lfs would upload. A
+/// blob a merge takes from another parent came with that parent, which is
+/// scanned too or already pushed.
+fn commit_adds_lfs_pointer(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    parent_ids: &[gix::ObjectId],
+    state: &mut gix::diff::tree::State,
+) -> Result<bool> {
+    use gix::diff::tree::recorder::Change;
+
+    let Some(tree) = commit_tree(repo, id)? else {
+        return Ok(false);
+    };
+    let parents = parent_ids
+        .iter()
+        .map(|&parent| commit_tree(repo, parent))
+        .collect::<Result<Vec<_>>>()?;
+    let empty = repo.empty_tree();
+    let first = parents.first().and_then(Option::as_ref).unwrap_or(&empty);
+    let mut changes = gix::diff::tree::Recorder::default();
+    gix::diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&first.data, first.id.kind()),
+        gix::objs::TreeRefIter::from_bytes(&tree.data, tree.id.kind()),
+        state,
+        &repo.objects,
+        &mut changes,
+    )
+    .map_err(|e| backend_error("diff pushed commit", e))?;
+    for change in changes.records {
+        let (entry_mode, oid, path) = match change {
+            Change::Addition {
+                entry_mode,
+                oid,
+                path,
+                ..
+            }
+            | Change::Modification {
+                entry_mode,
+                oid,
+                path,
+                ..
+            } => (entry_mode, oid, path),
+            Change::Deletion { .. } => continue,
+        };
+        let from_other_parent = || {
+            parents.iter().skip(1).flatten().any(|parent| {
+                parent
+                    .lookup_entry(path.split(|&byte| byte == b'/'))
+                    .is_ok_and(|entry| entry.is_some_and(|entry| entry.oid() == oid))
+            })
+        };
+        if entry_mode.is_blob() && git_lfs_uploads(repo, oid)? && !from_other_parent() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A commit's tree; `None` past a shallow boundary, where the commit is absent.
+fn commit_tree(repo: &gix::Repository, id: gix::ObjectId) -> Result<Option<gix::Tree<'_>>> {
+    let Some(object) = repo
+        .try_find_object(id)
+        .map_err(|e| backend_error("read pushed commit", e))?
+    else {
+        return Ok(None);
+    };
+    let commit = object
+        .try_into_commit()
+        .map_err(|e| backend_error("read pushed commit", e))?;
+    commit
+        .tree()
+        .map(Some)
+        .map_err(|e| backend_error("read pushed tree", e))
+}
+
+/// Whether git-lfs's `pre-push` hook would upload content for this blob. It
+/// skips size 0, which the empty blob reads as. A blob missing here, as in a
+/// partial clone, is left to git-lfs.
+fn git_lfs_uploads(repo: &gix::Repository, id: gix::ObjectId) -> Result<bool> {
+    let Some(header) = repo
+        .try_find_header(id)
+        .map_err(|e| backend_error("read pushed blob", e))?
+    else {
+        return Ok(true);
+    };
+    if header.size() >= lfs::POINTER_MAX_BYTES as u64 {
+        return Ok(false);
+    }
+    let Some(blob) = repo
+        .try_find_object(id)
+        .map_err(|e| backend_error("read pushed blob", e))?
+    else {
+        return Ok(true);
+    };
+    Ok(lfs::parse_pointer_like_git_lfs(&blob.data).is_some_and(|pointer| pointer.size > 0))
+}
+
 fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::Backend(format!("{context}: {error}")))
 }
@@ -337,7 +457,7 @@ pub(super) struct AttributeSources {
 }
 
 fn tracked_attribute_sources(
-    index: &gix::worktree::Index,
+    index: &gix::index::State,
 ) -> impl Iterator<Item = (PathBuf, gix::ObjectId)> + '_ {
     index.entries().iter().filter_map(move |entry| {
         let path = entry.path(index);
@@ -402,6 +522,21 @@ fn scan_lfs_attributes(
     cache: Option<&Mutex<Option<AttributeSources>>>,
     found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
+    if repo.workdir().is_none() {
+        if crate::refs::head_oid(repo)?.is_none() {
+            return scan_lfs_attribute_sources(repo, cancellation, std::iter::empty(), found);
+        }
+        let tree = crate::refs::head_tree_id_or_empty(repo)?;
+        let index = repo
+            .index_from_tree(&tree)
+            .map_err(|error| backend_error("read committed LFS patterns", error))?;
+        return scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            tracked_attribute_sources(&index).map(|(path, id)| (path, Some(id))),
+            found,
+        );
+    }
     let index = repo
         .index_or_empty()
         .map_err(|e| backend_error("read index for LFS patterns", e))?;
@@ -429,12 +564,12 @@ fn scan_lfs_attribute_sources(
     sources: impl Iterator<Item = (PathBuf, Option<gix::ObjectId>)>,
     mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
-    let workdir = repo.workdir().unwrap_or(repo.common_dir());
-    // Include the untracked root and the local attribute overrides too.
-    let sources = sources.chain([
-        (PathBuf::from(".gitattributes"), None),
-        (PathBuf::from(".git/info/attributes"), None),
-    ]);
+    let sources = sources
+        .chain(
+            repo.workdir()
+                .map(|_| (PathBuf::from(".gitattributes"), None)),
+        )
+        .chain([(PathBuf::from(".git/info/attributes"), None)]);
     let mut saw_root = false;
     for (source, id) in sources {
         cancellation.check_cancelled()?;
@@ -445,12 +580,12 @@ fn scan_lfs_attribute_sources(
             saw_root = true;
         }
         let full = if source == Path::new(".git/info/attributes") {
-            repo.common_dir().join("info/attributes")
+            Some(repo.common_dir().join("info/attributes"))
         } else {
-            workdir.join(&source)
+            repo.workdir().map(|workdir| workdir.join(&source))
         };
-        let bytes = std::fs::read(full)
-            .ok()
+        let bytes = full
+            .and_then(|path| std::fs::read(path).ok())
             .or_else(|| repo.find_object(id?).ok().map(|object| object.data.clone()));
         let Some(bytes) = bytes else {
             continue;
@@ -743,11 +878,13 @@ impl super::GixRepo {
             assistant_running: super::annex::assistant_running(&repo.common_dir().join("annex")),
             repositories: Vec::new(),
             numcopies: None,
+            unverified_remotes: Vec::new(),
         };
         let mut annex = annex;
         if annex.initialized() {
             cancellation.check_cancelled()?;
             (annex.repositories, annex.numcopies) = self.annex_repositories(&repo);
+            annex.unverified_remotes = self.unverified_remotes(&config);
         }
         *self
             .large_file_scan

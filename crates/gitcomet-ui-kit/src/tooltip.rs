@@ -100,7 +100,7 @@ struct TooltipBubbleView {
 }
 
 impl Render for TooltipBubbleView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if current_tooltip_dismiss_epoch(cx) != self.epoch {
             return div();
         }
@@ -123,11 +123,16 @@ impl Render for TooltipBubbleView {
         // larger pointer.
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let max_width =
+            (window.viewport_size().width - scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX)).max(px(0.0));
         div()
+            .max_w(window.viewport_size().width)
             .pl(scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX))
             .pt(scaled_px(TOOLTIP_CURSOR_OFFSET_Y_PX))
             .child(
                 div()
+                    .debug_selector(|| "tooltip_bubble".to_owned())
+                    .max_w(max_width)
                     .px_2()
                     .py_1()
                     .bg(self.theme.colors.tooltip.background)
@@ -137,9 +142,10 @@ impl Render for TooltipBubbleView {
                     .text_size(self.theme.ui_text(12.0))
                     .text_color(self.theme.colors.tooltip.foreground)
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(scaled_px(6.0))
-                    .child(self.text.clone())
+                    .child(div().min_w_0().child(self.text.clone()))
                     .children(
                         self.shortcuts
                             .iter()

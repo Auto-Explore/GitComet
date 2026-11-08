@@ -2,17 +2,19 @@ use super::*;
 use gitcomet_core::history_index::{
     HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
 };
-use gitcomet_core::services::HistorySnapshot;
+use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+/// Everything a history walk reads. Excluded refs are already applied to
+/// `tips`, so two walks that start from the same commits share results.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in super::super) struct HistoryQuery {
     pub common: u64,
     pub generation: u64,
     pub mode: HistoryMode,
     pub author: Option<AuthorFilter>,
-    pub exclusions: gitcomet_core::services::HistoryRefFilter,
+    pub focus: HistoryFocusSet,
     pub tips: Arc<[gix::ObjectId]>,
     pub shallow: ShallowSnapshot,
 }
@@ -26,8 +28,9 @@ impl HistoryQuery {
 impl GixRepo {
     pub(in super::super) fn build_history_index_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
@@ -37,8 +40,9 @@ impl GixRepo {
             &store.to_thread_local(),
             shared.id,
             shared.common.id,
-            mode,
+            walk,
             author,
+            focus,
             cancellation,
         )?;
         shared
@@ -51,22 +55,20 @@ impl GixRepo {
         repo: &gix::Repository,
         generation: u64,
         common: u64,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<HistoryQuery> {
         let shallow = shallow_snapshot(repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>())
-        };
+        let mode = walk.mode();
+        let tips = self.history_tips(repo, walk, focus, Some(cancellation))?;
         Ok(HistoryQuery {
             common,
             generation,
             mode,
             author: AuthorFilter::new(author),
-            exclusions: self.history_ref_filter.clone(),
+            focus: focus.clone(),
             tips,
             shallow,
         })

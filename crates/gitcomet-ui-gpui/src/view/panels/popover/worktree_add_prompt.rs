@@ -585,6 +585,7 @@ mod tests {
             target: CommitId(Arc::from("2222222222222222222222222222222222222222")),
         }]));
         repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/ws/main"),
             head: None,
             branch: Some("main".to_string()),
@@ -713,6 +714,7 @@ mod tests {
     fn checkout_branch_offers_another_worktree_that_has_the_branch() {
         let mut repo = request_repo();
         repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/ws/held"),
             head: None,
             branch: Some("free".to_string()),
@@ -756,6 +758,7 @@ mod tests {
         let mut repo = request_repo();
         repo.head_branch = Loadable::Ready("HEAD".to_string());
         repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/ws/main"),
             head: None,
             branch: None,

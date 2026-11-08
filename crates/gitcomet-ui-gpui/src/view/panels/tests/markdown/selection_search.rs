@@ -3,6 +3,39 @@
 use super::*;
 
 #[gpui::test]
+fn crlf_markdown_text_and_code_drag_selection(cx: &mut gpui::TestAppContext) {
+    use super::super::crlf_selection::drag_between_alpha_and_gamma;
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    for (name, source) in [
+        ("crlf_markdown_text", "alpha\r\n\r\nbeta\r\n\r\ngamma\r\n"),
+        (
+            "crlf_markdown_code",
+            "```text\r\nalpha\r\nbeta\r\ngamma\r\n```\r\n",
+        ),
+    ] {
+        let fixture = RenderedPreviewFixture::open(
+            cx,
+            &view,
+            gitcomet_state::model::RepoId(9904),
+            name,
+            source,
+        );
+        for reverse in [false, true] {
+            let copied = drag_between_alpha_and_gamma(cx, &view, DiffTextRegion::Inline, reverse);
+            assert!(copied.starts_with("lpha"), "{copied:?}");
+            assert!(copied.contains("beta"), "{copied:?}");
+            assert!(copied.ends_with("gam"), "{copied:?}");
+            assert!(!copied.contains(['␍', '↵']));
+        }
+        fixture.cleanup();
+    }
+}
+
+#[gpui::test]
 fn full_markdown_disclosure_title_toggles_and_keeps_selection_gestures(
     cx: &mut gpui::TestAppContext,
 ) {

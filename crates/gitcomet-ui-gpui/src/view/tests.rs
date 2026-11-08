@@ -243,6 +243,7 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
@@ -279,6 +280,7 @@ fn open_repo_state_with_workdir(workdir: &str) -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo
 }
 
@@ -349,6 +351,9 @@ fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Wor
 }
 
 mod bar_placement;
+mod bare_mode;
+mod canvas_overlays;
+mod commit_box_items;
 mod extension_signals;
 mod extension_view_panels;
 mod extension_views;
@@ -358,10 +363,13 @@ mod hosted_file_lists;
 mod hosted_panes;
 mod invalidation;
 mod notifications;
+mod panel_headers;
 mod previews;
+mod repo_tab_incoming;
 mod routing_palette;
 mod selection;
 mod sidebar_file_history_tab;
+mod sidebar_focus;
 mod sidebar_header;
 mod sidebar_layout;
 mod window_lifecycle;

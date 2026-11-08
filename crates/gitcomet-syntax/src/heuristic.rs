@@ -271,6 +271,7 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // fallback only runs for lines past MAX_TREESITTER_LINE_BYTES or in
         // HeuristicOnly mode.
         DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Razor
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Svelte
@@ -1135,6 +1136,7 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         | DiffSyntaxLanguage::Ada
         | DiffSyntaxLanguage::Vhdl => HeuristicSingleQuote::ValuePositionOnly,
         DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Razor
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Svelte

@@ -119,7 +119,10 @@ pub fn resolved_git_dir(workdir: &Path) -> Option<PathBuf> {
 /// open it correctly.
 pub fn git_dir_for_workdir(workdir: &Path) -> PathBuf {
     let dot_git = workdir.join(".git");
-    if workdir.extension().is_some_and(|ext| ext == "git") && dot_git.exists() {
+    if (workdir.extension().is_some_and(|ext| ext == "git")
+        || workdir.file_name().is_some_and(|name| name == ".git"))
+        && dot_git.exists()
+    {
         dot_git
     } else {
         workdir.to_path_buf()
@@ -358,6 +361,14 @@ mod tests {
         fs::create_dir(inner.join(".git")).expect("create .git subdir");
         let result = git_dir_for_workdir(&inner);
         assert_eq!(result, inner.join(".git"));
+    }
+
+    #[test]
+    fn dot_git_named_checkout_returns_its_inner_git_directory() {
+        let dir = tempdir().expect("create temp dir");
+        let checkout = dir.path().join(".git");
+        fs::create_dir_all(checkout.join(".git")).expect("create checkout metadata");
+        assert_eq!(git_dir_for_workdir(&checkout), checkout.join(".git"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::formats;
 use formats::{fixture, git};
-use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, HistoryMode};
+use gitcomet_core::domain::{BareConversionHead, CommitId, DiffArea, DiffTarget, HistoryMode};
 use gitcomet_core::services::{CancellationToken, GitBackend, SequencerState};
 use gitcomet_git_gix::GixBackend;
 use std::{fs, path::Path};
@@ -41,6 +41,134 @@ fn commit_file(path: &Path, text: &str, message: &str) -> CommitId {
     git(path, &["add", "."]);
     git(path, &["commit", "-m", message]);
     CommitId(git(path, &["rev-parse", "HEAD"]).into())
+}
+
+#[test]
+fn reftable_focus_reads_local_branches_remote_branches_and_remotes() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
+    use gitcomet_core::services::{HistoryReadRequest, HistoryReadResult};
+
+    if !formats::reftable_available() {
+        return;
+    }
+    for hash in ["sha1", "sha256"] {
+        let dir = fixture(hash, "reftable");
+        let root = commit_file(dir.path(), "root\n", "root");
+        git(dir.path(), &["branch", "side"]);
+        // A configured remote: focus resolves remote targets through its
+        // fetch refspecs, as the sidebar lists them.
+        git(
+            dir.path(),
+            &["remote", "add", "fork", "https://example.invalid/fork.git"],
+        );
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/fork/side", root.as_ref()],
+        );
+        commit_file(dir.path(), "root\nchild\n", "child");
+        let repo = GixBackend.open(dir.path()).unwrap();
+
+        for target in [
+            HistoryFocus::local_branch("side"),
+            HistoryFocus::remote_branch("fork", "side"),
+            HistoryFocus::remote("fork"),
+        ] {
+            let result = repo
+                .read_history(
+                    &HistoryMode::FirstParent.into(),
+                    None,
+                    &HistoryFocusSet::from_iter([target]),
+                    &HistoryReadRequest::Page {
+                        limit: 100,
+                        cursor: None,
+                        snapshot: None,
+                    },
+                    &CancellationToken::new(),
+                    &mut |_| {},
+                )
+                .unwrap();
+            let HistoryReadResult::Page { page, .. } = result else {
+                panic!("expected a focused history page");
+            };
+            assert_eq!(page.commits.len(), 1);
+            assert_eq!(page.commits[0].id, root);
+        }
+    }
+}
+
+#[test]
+fn bare_conversion_uses_native_reftable_head_instead_of_the_placeholder() {
+    if !formats::reftable_available() {
+        return;
+    }
+    for hash in ["sha1", "sha256"] {
+        let source = fixture(hash, "reftable");
+        let commit = commit_file(source.path(), "root\n", "root");
+        for head in [
+            BareConversionHead::Branch {
+                name: "main".into(),
+                commit: Some(commit.clone()),
+            },
+            BareConversionHead::Detached {
+                commit: commit.clone(),
+            },
+            BareConversionHead::Branch {
+                name: "unborn".into(),
+                commit: None,
+            },
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let bare = directory.path().join("history.git");
+            git(
+                directory.path(),
+                &[
+                    "clone",
+                    "--bare",
+                    "--ref-format=reftable",
+                    source.path().to_str().unwrap(),
+                    bare.to_str().unwrap(),
+                ],
+            );
+            match &head {
+                BareConversionHead::Branch { name, .. } => {
+                    git(
+                        &bare,
+                        &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")],
+                    );
+                }
+                BareConversionHead::Detached { commit } => {
+                    git(
+                        &bare,
+                        &["update-ref", "--no-deref", "HEAD", commit.as_ref()],
+                    );
+                }
+            }
+            assert_eq!(
+                fs::read(bare.join("HEAD")).unwrap(),
+                b"ref: refs/heads/.invalid\n"
+            );
+            let repo = GixBackend.open(&bare).unwrap();
+            let preview = repo.preview_disable_bare_mode().unwrap();
+            assert_eq!(preview.head, head);
+            repo.disable_bare_mode(&preview).unwrap();
+            assert_eq!(git(&bare, &["rev-parse", "--show-ref-format"]), "reftable");
+            assert_eq!(git(&bare, &["rev-parse", "--is-bare-repository"]), "false");
+            match head {
+                BareConversionHead::Branch { commit: None, name } => {
+                    assert_eq!(git(&bare, &["symbolic-ref", "--short", "HEAD"]), name);
+                    assert!(!bare.join("file.txt").exists());
+                }
+                BareConversionHead::Branch {
+                    commit: Some(commit),
+                    ..
+                }
+                | BareConversionHead::Detached { commit } => {
+                    assert_eq!(git(&bare, &["rev-parse", "HEAD"]), commit.as_ref());
+                    assert_eq!(fs::read(bare.join("file.txt")).unwrap(), b"root\n");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -166,8 +294,9 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
             );
             assert_eq!(
                 repo.build_history_index(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     None,
+                    &Default::default(),
                     &CancellationToken::new(),
                     &mut |_| {}
                 )

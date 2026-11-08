@@ -419,6 +419,13 @@ impl RepoMonitorManager {
             .is_some_and(|handle| handle.monitor_enabled.load(Ordering::Relaxed))
     }
 
+    #[cfg(test)]
+    pub(super) fn barrier_for_test(&self, repo_id: RepoId, reply: mpsc::Sender<()>) {
+        if let Some(handle) = self.handles.get(&repo_id) {
+            let _ = handle.msg_tx.send(MonitorMsg::Barrier(reply));
+        }
+    }
+
     pub(super) fn start(
         &mut self,
         repo_id: RepoId,

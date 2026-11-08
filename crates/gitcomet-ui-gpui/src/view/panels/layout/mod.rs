@@ -10,6 +10,7 @@ mod commit_card;
 mod commit_details;
 mod commit_form;
 mod commit_metadata;
+mod commit_reword;
 mod comparison;
 mod file_lists;
 mod status_sections;
@@ -20,6 +21,10 @@ mod worktree_uncommitted;
 #[cfg(test)]
 use commit_form::*;
 use commit_metadata::*;
+pub(in crate::view) use commit_reword::commit_reword_availability;
+#[cfg(test)]
+pub(in crate::view) use commit_reword::commit_reword_blocker;
+pub(in crate::view) use commit_reword::commit_reword_submittable;
 use comparison::*;
 #[cfg(test)]
 use file_lists::*;

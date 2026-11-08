@@ -130,6 +130,7 @@ pub(super) fn open_view(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let state = Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],

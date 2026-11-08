@@ -164,6 +164,8 @@ fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec,
@@ -780,6 +782,8 @@ fn last_drop_failing_selects_the_previous_valid_drop() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: valid,
             spec,

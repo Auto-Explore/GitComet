@@ -48,6 +48,10 @@ pub(super) fn single_line_context(value: impl AsRef<str>) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Appended to a commit's or push's activity context when it runs with
+/// `--no-verify`.
+pub(super) const SKIPPING_HOOKS_CONTEXT: &str = "skipping Git hooks";
+
 pub(super) fn message_subject(message: &str) -> Option<String> {
     message
         .lines()
@@ -138,6 +142,10 @@ impl GitOperationTask {
 
     pub(super) fn attach(&self) -> GitOperationScope {
         git_operation::attach(&self.context)
+    }
+
+    pub(super) fn cancellation(&self) -> &gitcomet_core::services::CancellationToken {
+        self.context.cancellation()
     }
 
     pub(super) fn outcome<T>(result: &Result<T, Error>) -> GitOperationOuterOutcome {

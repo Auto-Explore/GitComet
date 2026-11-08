@@ -135,6 +135,7 @@ fn check_folder_drop_clears_highlight(
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         store.replace_snapshot_for_test(Arc::new(AppState {
             repos: vec![repo],
             active_repo: Some(repo_id),
@@ -212,6 +213,7 @@ fn check_folder_drop_clears_highlight(
                 },
             );
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             let mut snapshot = view.state.as_ref().clone();
             snapshot.repos.retain(|repo| repo.id != repo_id);
             snapshot.repos.push(repo);
@@ -568,6 +570,7 @@ fn dropping_multiple_folders_on_repository_bar_opens_each(cx: &mut gpui::TestApp
         },
     );
     seeded.open = Loadable::Ready(());
+    seeded.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![seeded],
         active_repo: Some(seeded_id),
@@ -708,6 +711,7 @@ fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let restored = Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
@@ -1438,6 +1442,7 @@ fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let idle = Arc::new(AppState {
         active_repo: Some(repo_id),
         repos: vec![repo],
@@ -1553,6 +1558,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         },
     );
     ready_repo.open = Loadable::Ready(());
+    ready_repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     state.repos.push(ready_repo);
     store_for_assert.replace_snapshot_for_test(Arc::new(state));
     cx.update(|_window, app| {
@@ -2103,6 +2109,7 @@ fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.loads_in_flight
             .request_worktree_dirty(gitcomet_state::model::WorktreeDirtyScope::All);
         repo

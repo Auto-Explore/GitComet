@@ -12,6 +12,14 @@ fn file_diff_ready_shows_processing(
     has_file && (!cache_active || cache_inflight) && !has_rendered_rows
 }
 
+/// The image inputs hold the old side first, then the new.
+const fn image_side_index(side: gitcomet_core::domain::DiffPreviewTextSide) -> usize {
+    match side {
+        gitcomet_core::domain::DiffPreviewTextSide::Old => 0,
+        gitcomet_core::domain::DiffPreviewTextSide::New => 1,
+    }
+}
+
 fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool {
     has_file && !cache_active
 }
@@ -385,7 +393,7 @@ impl DiffRenderer {
                             },
                             Input::default(),
                         ];
-                        let selected = if inputs[1].source.is_some()
+                        let present_side = if inputs[1].source.is_some()
                             || inputs[1].preview.is_some()
                             || self.file_image_diff_cache_new_svg_path.is_some()
                         {
@@ -393,8 +401,14 @@ impl DiffRenderer {
                         } else {
                             0
                         };
-                        if is_content_view {
-                            inputs[1 - selected] = Input::default();
+                        // Content, or an added or deleted image: one picture.
+                        let single_side = if is_content_view {
+                            Some(present_side)
+                        } else {
+                            self.one_sided_change_side().map(image_side_index)
+                        };
+                        if let Some(side) = single_side {
+                            inputs[1 - side] = Input::default();
                         }
                         let present = inputs.each_ref().map(|input| input.source.is_some());
                         let group = self.prepare_image_preview(inputs, cap, cx);
@@ -441,8 +455,8 @@ impl DiffRenderer {
                                     .into_any_element()
                             }
                         };
-                        let content = if is_content_view {
-                            crate::view::rendered_preview::PreviewContent::File(image(selected))
+                        let content = if let Some(side) = single_side {
+                            crate::view::rendered_preview::PreviewContent::File(image(side))
                         } else {
                             crate::view::rendered_preview::PreviewContent::Diff {
                                 old: image(0),
@@ -676,7 +690,7 @@ impl DiffRenderer {
         // The split's two sides share the width left of the scrollbar but for
         // the 1px divider, clamped like the text split's columns.
         let split_available =
-            (self.main_pane_content_width(cx) - scrollbar_gutter - px(1.0)).max(px(0.0));
+            (self.main_pane_content_width() - scrollbar_gutter - px(1.0)).max(px(0.0));
         let (split_left_w, _) = diff_split_column_widths_from_available(
             split_available,
             px(DIFF_SPLIT_COL_MIN_PX),

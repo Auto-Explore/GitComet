@@ -109,6 +109,7 @@ mod tests {
 
     fn entry(command: &str, ok: bool, seconds: u64) -> CommandLogEntry {
         CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: UNIX_EPOCH + Duration::from_secs(seconds),
             ok,
             command: command.to_string(),
@@ -116,9 +117,10 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
         }
     }
 
@@ -146,6 +148,7 @@ mod tests {
                 message: "message".into(),
                 amend,
                 push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         }
     }
@@ -277,6 +280,7 @@ mod tests {
             message: "message".into(),
             amend: true,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         });
         assert_eq!(p.advance(&state_with(repo)), Some(false));
         assert!(!p.settled());

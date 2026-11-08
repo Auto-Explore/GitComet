@@ -63,6 +63,16 @@ impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache
         previous
     }
 
+    /// Evict the least recently used entry, for callers enforcing a byte
+    /// budget in addition to the entry limit.
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
+        let evicted = self.cache.pop_lru();
+        if evicted.is_some() {
+            self.metrics.evictions = self.metrics.evictions.saturating_add(1);
+        }
+        evicted
+    }
+
     pub fn len(&self) -> usize {
         self.cache.len()
     }
@@ -147,5 +157,26 @@ impl<K: Eq> LruTouchQueue<K> {
 
     pub fn pop_oldest(&mut self) -> Option<K> {
         self.order.pop_front()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_eviction_observes_recency_and_counts_only_removed_entries() {
+        let mut cache = new_fx_lru_cache(3);
+        cache.put(1, "first");
+        cache.put(2, "second");
+        cache.put(3, "third");
+        assert_eq!(cache.get(&1), Some(&"first"));
+        assert_eq!(cache.pop_lru(), Some((2, "second")));
+        assert_eq!(cache.pop_lru(), Some((3, "third")));
+        assert_eq!(cache.pop_lru(), Some((1, "first")));
+        assert_eq!(cache.pop_lru(), None);
+        assert!(cache.is_empty());
+        assert_eq!(cache.metrics().hits, 1);
+        assert_eq!(cache.metrics().evictions, 3);
     }
 }

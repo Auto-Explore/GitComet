@@ -2,6 +2,29 @@
 use super::*;
 
 #[test]
+fn bare_mode_change_invalidates_the_open_diff_without_losing_its_target() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/bare-diff-fingerprint".into(),
+        },
+    ));
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    state.repos[0].diff_state.diff_target =
+        Some(DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged));
+    let normal =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    assert_ne!(
+        normal,
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state)))
+    );
+}
+
+#[test]
 fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
     let repo_id = RepoId(1);
     let mut state = AppState::test_default();

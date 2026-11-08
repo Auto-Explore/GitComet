@@ -71,6 +71,9 @@ pub enum GitOperationEvent {
     /// An explicit command needs an activity row (and cancellation) even
     /// before it produces hook events or transfer progress.
     CommandStarted,
+    CommandInvocation {
+        command: String,
+    },
     Output {
         chunks: Vec<GitOutputChunk>,
     },

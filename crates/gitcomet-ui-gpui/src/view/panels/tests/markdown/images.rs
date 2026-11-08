@@ -677,6 +677,50 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     fixture.cleanup();
 }
 
+#[gpui::test]
+fn an_svg_root_background_is_painted_under_the_picture(cx: &mut gpui::TestAppContext) {
+    // star-history.com charts draw black ink on `<svg style="background:#fff">`;
+    // left transparent they vanish into a dark theme.
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(9_431),
+        "markdown_svg_background",
+        "![chart](chart.svg)\n",
+    );
+    let chart = fixture.workdir.join("docs/chart.svg");
+    std::fs::write(
+        &chart,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\" style=\"background:#fff\"><rect x=\"20\" width=\"20\" height=\"20\"/></svg>",
+    )
+    .expect("write the chart the document points at");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let image = window
+            .get_asset::<gpui::ImgResourceLoader>(&gpui::Resource::from(chart.clone()), app)
+            .expect("the preview loaded the chart")
+            .expect("the chart decodes");
+        let corner = &image.as_bytes(0).expect("one frame")[..4];
+        assert_eq!(
+            corner,
+            [255, 255, 255, 255],
+            "white canvas, not transparent"
+        );
+    });
+
+    fixture.cleanup();
+}
+
 fn diff_scroll_offset_y(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,

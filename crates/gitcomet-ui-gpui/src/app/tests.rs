@@ -12,6 +12,65 @@ use std::time::{Duration, Instant};
 
 struct TestBackend;
 
+#[gpui::test]
+fn first_window_readiness_precedes_extension_window_hooks(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{Extension, ExtensionId, Registrar, WindowExtension, WindowHost};
+    use std::rc::Rc;
+
+    struct CheckReadiness(Rc<Cell<usize>>, Rc<Cell<usize>>);
+
+    impl Extension for CheckReadiness {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("dev.gitcomet.readiness-test").unwrap()
+        }
+
+        fn register(&self, _: &mut Registrar) {}
+
+        fn window_opened(
+            &self,
+            _: WindowHost,
+            _: &mut Window,
+            _: &mut gpui::App,
+        ) -> Option<Box<dyn WindowExtension>> {
+            assert_eq!(
+                self.0.get(),
+                1,
+                "the launcher must already know a window exists"
+            );
+            self.1.set(self.1.get() + 1);
+            None
+        }
+    }
+
+    let calls = Rc::new(Cell::new(0));
+    let hooks = Rc::new(Cell::new(0));
+    let seen = calls.clone();
+    let readiness = readiness::StartupReadiness::new(Some(Box::new(move || {
+        seen.set(seen.get() + 1);
+        Ok(())
+    })));
+    let registry = gitcomet_extension_api::Registry::build(vec![Box::new(CheckReadiness(
+        calls.clone(),
+        hooks.clone(),
+    ))])
+    .unwrap();
+    cx.update(|app| {
+        crate::workspaces::initialize_for_test(app, Vec::new());
+        crate::view::extension_host::install_registry(registry, app);
+        readiness.watch(app);
+        for _ in 0..2 {
+            open_gitcomet_window(
+                app,
+                Arc::new(TestBackend),
+                &normal_empty_launch_config(None),
+            );
+        }
+    });
+    assert_eq!(calls.get(), 1);
+    assert_eq!(hooks.get(), 2);
+    assert!(readiness.result().is_ok());
+}
+
 #[test]
 fn window_startup_failure_retains_the_full_cause() {
     let err = anyhow::anyhow!("Gl: No GPU adapter found that can configure the display surface")
@@ -264,6 +323,20 @@ fn macos_file_menu_hides_unconfigured_external_editor_action() {
     assert!(entries.iter().any(|(label, action)| {
         label == crate::menu_labels::OPEN_IN_FILE_EXPLORER && action == LocateFileInExplorer.name()
     }));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_apply_patch_menu_is_disabled_for_bare_repositories() {
+    for bare in [false, true] {
+        let menus = macos_app_menus_with_options(true, true, bare);
+        let file = menus
+            .iter()
+            .find(|menu| menu.name.as_ref() == "File")
+            .unwrap();
+        let patch = file.items.iter().find(|item| matches!(item, MenuItem::Action { action, .. } if action.name() == ApplyPatch.name())).unwrap();
+        assert_eq!(patch.is_disabled(), bare);
+    }
 }
 
 fn seed_worktree_repo(
@@ -2421,6 +2494,28 @@ fn explicit_repository_launch_config_marks_initial_path_as_explicit() {
 fn recent_repository_label_formats_repo_name_and_parent() {
     let label = recent_repository_label(Path::new("/Users/sampo/projects/gitcomet"));
     assert_eq!(label, "gitcomet - /Users/sampo/projects");
+}
+
+/// The recents list holds far more repositories than a native submenu should
+/// show, so the macOS menu keeps to the newest few and leaves the rest to the
+/// searchable repository switcher.
+#[test]
+fn recent_repositories_menu_lists_only_the_newest_repositories() {
+    let recent: Vec<PathBuf> = (0..150)
+        .map(|ix| PathBuf::from(format!("/work/repo-{ix:03}")))
+        .collect();
+
+    let listed: Vec<PathBuf> = recent_repository_menu_paths(recent.clone()).collect();
+
+    assert_eq!(listed.len(), RECENT_REPOSITORIES_MENU_LIMIT);
+    assert_eq!(listed, recent[..RECENT_REPOSITORIES_MENU_LIMIT]);
+
+    let short = recent[..3].to_vec();
+    assert_eq!(
+        recent_repository_menu_paths(short.clone()).collect::<Vec<_>>(),
+        short,
+        "a list under the limit is listed whole"
+    );
 }
 
 #[test]

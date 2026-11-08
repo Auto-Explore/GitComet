@@ -46,7 +46,7 @@ impl ReferenceEffect {
                 result: Err(error),
             },
             ReferenceEffect::LoadUpstreamDivergence { repo_id } => {
-                InternalMsg::UpstreamDivergenceLoaded {
+                InternalMsg::HeadTrackingLoaded {
                     repo_id,
                     result: Err(error),
                 }

@@ -1,0 +1,10 @@
+flowchart TD
+  subgraph One["LR subgraph"]
+    direction LR
+    A[Alpha] --> B[Beta] --> C[Gamma]
+  end
+  subgraph Two["TB subgraph"]
+    direction TB
+    D[Delta] --> E[Epsilon]
+  end
+  C --> D

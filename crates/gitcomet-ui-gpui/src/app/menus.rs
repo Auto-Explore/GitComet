@@ -45,12 +45,24 @@ pub(super) fn install_macos_app_menu(cx: &mut App, backend: Arc<dyn GitBackend>)
 }
 
 #[cfg(target_os = "macos")]
+pub(super) fn normal_window_repository_is_bare(cx: &mut App) -> bool {
+    find_normal_gitcomet_window(cx).is_some_and(|window| {
+        window
+            .view
+            .read_with(cx, |view, _| view.active_repository_is_bare())
+            .is_ok_and(|bare| bare)
+    })
+}
+
+#[cfg(target_os = "macos")]
 pub(super) fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
+    let bare = normal_window_repository_is_bare(cx);
     let mut menus = macos_app_menus_with_options(
         crate::external_editor::configured_setting().is_some(),
         find_normal_gitcomet_window(cx).is_some(),
+        bare,
     );
-    let extension_items = crate::view::extension_host::macos_menu_items(cx);
+    let extension_items = crate::view::extension_host::macos_menu_items(bare, cx);
     if !extension_items.is_empty()
         && let Some(file) = menus.get_mut(1)
     {
@@ -68,13 +80,14 @@ pub(super) fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
 /// about the external-editor item do not have to restate that half.
 #[cfg(all(test, target_os = "macos"))]
 pub(super) fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
-    macos_app_menus_with_options(external_editor_configured, true)
+    macos_app_menus_with_options(external_editor_configured, true, false)
 }
 
 #[cfg(target_os = "macos")]
 pub(super) fn macos_app_menus_with_options(
     external_editor_configured: bool,
     normal_window_available: bool,
+    bare: bool,
 ) -> Vec<Menu> {
     let mut file_items = vec![
         MenuItem::action("New Window", NewWindow),
@@ -114,7 +127,7 @@ pub(super) fn macos_app_menus_with_options(
             crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
             OpenRemoteInBrowser,
         ),
-        MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
+        MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch).disabled(bare),
         MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
             manual_update_check_menu_disabled(
                 crate::view::update_checks_disabled_by_environment()
@@ -198,17 +211,36 @@ pub(crate) fn refresh_macos_app_menus(cx: &mut App) {
 #[cfg(target_os = "macos")]
 pub(super) fn refresh_macos_app_menus_for_external_editor(cx: &mut App, configured: bool) {
     let normal_window_available = find_normal_gitcomet_window(cx).is_some();
+    let bare = normal_window_repository_is_bare(cx);
     cx.set_menus(macos_app_menus_with_options(
         configured,
         normal_window_available,
+        bare,
     ));
+}
+
+/// How many recent repositories the macOS "Recent Repositories" submenu lists.
+///
+/// The recents list itself holds many more, and the repository switcher lists
+/// and searches every one of them. A native submenu has no search and is rebuilt
+/// whenever the active repository changes, so it keeps to the newest few.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const RECENT_REPOSITORIES_MENU_LIMIT: usize = 15;
+
+/// The recent repositories the macOS "Recent Repositories" submenu lists:
+/// the newest [`RECENT_REPOSITORIES_MENU_LIMIT`], most recent first.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn recent_repository_menu_paths(
+    recent_repos: Vec<PathBuf>,
+) -> impl Iterator<Item = PathBuf> {
+    recent_repos
+        .into_iter()
+        .take(RECENT_REPOSITORIES_MENU_LIMIT)
 }
 
 #[cfg(target_os = "macos")]
 pub(super) fn recent_repo_menu_items() -> Vec<MenuItem> {
-    session::load()
-        .recent_repos
-        .into_iter()
+    recent_repository_menu_paths(session::load().recent_repos)
         .map(|path| {
             MenuItem::action(
                 recent_repository_label(&path),

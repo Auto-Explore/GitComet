@@ -3,7 +3,7 @@ use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::diff::diff_search::DiffSearchOptions;
 use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
-use crate::view::panes::diff::{DiffBody, DiskSurface};
+use crate::view::panes::diff::{DiffBody, DiskSurface, EngineNotice};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -313,6 +313,11 @@ impl DiffRenderer {
             // dead key, and swallowing it here would stop the buffer composing
             // `é`. Escape above is the way out from inside the editor; Alt+E
             // only enters it, from a view where nothing is being typed.
+            return false;
+        }
+
+        // An extension's view in the diff owns the keys typed in it.
+        if self.hosted_view_focused(window, cx) {
             return false;
         }
 
@@ -1216,27 +1221,16 @@ impl DiffRenderer {
                     .map(|repo| &self.bound_diff_state(repo).blame)
             })
             .flatten();
-        // A rendered preview has no annotation gutter to draw into, so the
-        // toggle greys out there rather than silently doing nothing — matching
-        // Alt+B, which is inert for the same reason. Text mode still annotates.
-        let preview_blocks_blame = self.is_markdown_preview_active();
         let mut shortcuts: Vec<SharedString> = Vec::new();
-        let (tooltip, errored): (SharedString, bool) = if preview_blocks_blame {
-            (
-                "Blame is unavailable in the rendered preview\nSwitch to Text to annotate".into(),
-                false,
-            )
-        } else {
-            match blame_status {
-                Some(Loadable::Loading) => ("Loading blame…".into(), false),
-                Some(Loadable::Error(message)) => (
-                    format!("Blame failed: {message}\nToggle off and on to retry").into(),
-                    true,
-                ),
-                _ => {
-                    shortcuts.push(crate::kit::components::alt_shortcut("B").into());
-                    ("Toggle blame annotations".into(), false)
-                }
+        let (tooltip, errored): (SharedString, bool) = match blame_status {
+            Some(Loadable::Loading) => ("Loading blame…".into(), false),
+            Some(Loadable::Error(message)) => (
+                format!("Blame failed: {message}\nToggle off and on to retry").into(),
+                true,
+            ),
+            _ => {
+                shortcuts.push(crate::kit::components::alt_shortcut("B").into());
+                ("Toggle blame annotations".into(), false)
             }
         };
         let selected_bg = if errored {
@@ -1250,7 +1244,6 @@ impl DiffRenderer {
         components::Button::new("diff_annotate", "Blame")
             .borderless()
             .style(components::ButtonStyle::Subtle)
-            .disabled(preview_blocks_blame)
             .selected(self.annotate_enabled)
             .selected_bg(selected_bg)
             .on_click(theme, cx, |this, _e, window, cx| {
@@ -1285,16 +1278,13 @@ impl DiffRenderer {
     ) -> impl gpui::IntoElement {
         let dirty = editing && self.file_editor_is_dirty();
         let path = self.editable_path_for_current_target();
-        // A rendered preview has no buffer to type into, and a file with no
-        // working-tree path (a range comparison, a whole-tree diff) has nothing
-        // to edit.
-        let blocked_by_preview = self.is_markdown_preview_active();
-        let blocked_by_kind = path
-            .as_ref()
-            .is_some_and(|p| self.content_preview_is_picture(p));
-        let disabled = path.is_none() || blocked_by_preview || blocked_by_kind;
-        let tooltip: SharedString = if blocked_by_preview {
-            "Editing is unavailable in the rendered preview\nSwitch to Text to edit".into()
+        // A view with no working-tree path (a range comparison, a whole-tree
+        // diff) has nothing to edit.
+        let blocked_by_kind = path.as_ref().is_some_and(|p| self.preview_is_picture(p));
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
+        let disabled = is_bare || path.is_none() || blocked_by_kind;
+        let tooltip: SharedString = if is_bare {
+            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
         } else if blocked_by_kind {
             "This file is not text; editing is not supported".into()
         } else if path.is_none() {
@@ -1334,8 +1324,10 @@ impl DiffRenderer {
     /// Alt+E shortcut and the context-menu entries so the three cannot disagree
     /// about what is editable.
     pub(in crate::view) fn can_edit_current_target(&self) -> bool {
-        self.editable_path_for_current_target()
-            .is_some_and(|path| !self.content_preview_is_picture(&path))
+        !self.active_repo().is_some_and(RepoState::is_bare)
+            && self
+                .editable_path_for_current_target()
+                .is_some_and(|path| !self.preview_is_picture(&path))
     }
 
     /// Enter or leave the editor for the file on screen.
@@ -1344,6 +1336,16 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            self.commands.send(
+                DiffCommand::Toast(
+                    components::ToastKind::Warning,
+                    gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                ),
+                cx,
+            );
+            return;
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
@@ -1382,11 +1384,9 @@ impl DiffRenderer {
 
     /// Throw the buffer away and restore the view that opened the editor.
     ///
-    /// Discarding is the user saying they are done with this edit, so it exits
-    /// the way Escape and the Edit toggle do rather than leaving them parked in
-    /// an editor over text they just abandoned. Deliberately *not* routed
-    /// through `toggle_file_editor`, whose exit path flushes the buffer — it
-    /// would stash the very edits this is dropping.
+    /// The Cancel action abandons only the unsaved buffer. Deliberately not
+    /// routed through `toggle_file_editor`, whose exit path flushes the buffer
+    /// and would stash the very edits this is dropping.
     pub(in crate::view) fn discard_file_editor_buffer_and_exit(
         &mut self,
         window: &mut Window,
@@ -1407,7 +1407,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        // The toolbar button is disabled in these states, but the keyboard
+        // The action-bar button is disabled in these states, but the keyboard
         // shortcut can still arrive. A no-op save must not unexpectedly act as
         // an editor-close shortcut.
         if self.file_editor_loading()
@@ -1540,57 +1540,6 @@ impl DiffRenderer {
                 )
                 .into_any_element(),
         )
-    }
-
-    /// The explicit "Save" button, shown while editing with auto-save off.
-    fn file_editor_save_button(
-        &self,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
-        components::Button::new("file_editor_save", "Save")
-            .style(components::ButtonStyle::Outlined)
-            .disabled(!self.file_editor_is_dirty())
-            .on_click(theme, cx, |this, _e, window, cx| {
-                this.save_file_editor_buffer_and_exit(window, cx);
-            })
-            .debug_selector(|| "file_editor_save".to_string())
-            .gitcomet_tooltip_keyed(
-                theme,
-                "Save the file and return".into(),
-                vec![crate::kit::components::secondary_shortcut("S").into()],
-            )
-    }
-
-    /// "Discard", shown beside Save while editing.
-    ///
-    /// Throws the buffer away and re-reads the file, with no confirmation: the
-    /// button is only enabled while there is something to discard, and it sits
-    /// next to the Save that is the alternative. The close/quit dialog is the
-    /// place that asks, because there the choice is being forced on the user
-    /// rather than made by them.
-    fn file_editor_discard_button(
-        &self,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
-        let dirty = self.file_editor_is_dirty();
-        components::Button::new("file_editor_discard", "Discard")
-            .style(components::ButtonStyle::Subtle)
-            .borderless()
-            .disabled(!dirty)
-            .on_click(theme, cx, |this, _e, window, cx| {
-                this.discard_file_editor_buffer_and_exit(window, cx);
-            })
-            .debug_selector(|| "file_editor_discard".to_string())
-            .gitcomet_tooltip(
-                theme,
-                if dirty {
-                    "Throw away the unsaved changes and return to the previous view".into()
-                } else {
-                    SharedString::from("No unsaved changes")
-                },
-            )
     }
 
     pub(in crate::view) fn open_search_for_active_view(
@@ -1820,6 +1769,7 @@ impl DiffRenderer {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
+        let engine_text = self.diff_engine_notice();
         let engine_notice = if matches!(surface.body, DiffBody::FileDiff | DiffBody::Patch)
             && !inline_submodule_diff_active
             && !surface.markdown_preview
@@ -1827,6 +1777,7 @@ impl DiffRenderer {
             && !is_diagram_preview_view
             && self.effective_diff_engine() == DiffEngine::Difftastic
             && !self.collapsed_difftastic_has_only_text_changes()
+            && (self.store.policy.engine_label || matches!(engine_text, EngineNotice::Explained(_)))
         {
             let mut notice = div()
                 .debug_selector(|| "diff_engine_notice".to_string())
@@ -1838,8 +1789,11 @@ impl DiffRenderer {
                 .gap_2()
                 .px_2()
                 .py_1()
-                .border_b_1()
-                .border_color(theme.colors.stroke.default)
+                .when(self.store.policy.header_divider, |notice| {
+                    notice
+                        .border_b_1()
+                        .border_color(theme.colors.stroke.default)
+                })
                 .child(
                     div()
                         .debug_selector(|| "diff_engine_notice_label".to_string())
@@ -1848,7 +1802,7 @@ impl DiffRenderer {
                         .whitespace_normal()
                         .text_xs()
                         .text_color(theme.colors.foreground.secondary)
-                        .child(self.diff_engine_label()),
+                        .child(engine_text.text()),
                 );
             if matches!(
                 self.diff_engine_status,
@@ -2029,31 +1983,19 @@ impl DiffRenderer {
                         cx.notify();
                     });
 
-                let diff_edit_btn = self
-                    .file_edit_toggle_button(theme, view_toggle_selected_bg, is_file_editor, cx)
-                    .into_any_element();
-                let diff_annotate_btn =
-                    self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
-
                 controls = controls
-                    .child(diff_edit_btn)
-                    .child(diff_annotate_btn)
+                    .when(!surface.markdown_preview, |d| {
+                        d.child(self.file_edit_toggle_button(
+                            theme,
+                            view_toggle_selected_bg,
+                            is_file_editor,
+                            cx,
+                        ))
+                        .child(self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx))
+                    })
                     // Keep the view mode beside the action menu so it remains
                     // reachable when the header clips its leading controls.
-                    .child(view_toggle)
-                    // `is_file_editor`, not `is_file_editor_active`: edit mode
-                    // can be on while a submodule summary or an
-                    // untracked-directory notice owns the body, and a Save
-                    // control over a body with no buffer is a trap.
-                    // Discard sits before Save, so the pair reads as the two
-                    // ways out of an unsaved buffer in the order they are meant.
-                    .when(
-                        is_file_editor && self.file_editor_shows_save_controls(),
-                        |d| {
-                            d.child(self.file_editor_discard_button(theme, cx))
-                                .child(self.file_editor_save_button(theme, cx))
-                        },
-                    );
+                    .child(view_toggle);
             }
         } else {
             // File content view (e.g. a file shown at a commit): expose the
@@ -2066,24 +2008,16 @@ impl DiffRenderer {
             // for a file the preview declines: an editable buffer must never sit
             // under Inline/Split and hunk arrows that navigate a diff which is
             // not on screen.
-            controls = controls
-                .child(self.file_edit_toggle_button(
-                    theme,
-                    annotate_selected_bg,
-                    is_file_editor,
-                    cx,
-                ))
-                .child(self.diff_annotate_toggle_button(theme, annotate_selected_bg, cx))
-                // Saving is explicit only when auto-save is off; with it on the
-                // button would never be enabled long enough to click, and
-                // neither would the Discard beside it.
-                .when(
-                    is_file_editor && self.file_editor_shows_save_controls(),
-                    |d| {
-                        d.child(self.file_editor_discard_button(theme, cx))
-                            .child(self.file_editor_save_button(theme, cx))
-                    },
-                );
+            controls =
+                controls.when(!surface.markdown_preview, |d| {
+                    d.child(self.file_edit_toggle_button(
+                        theme,
+                        annotate_selected_bg,
+                        is_file_editor,
+                        cx,
+                    ))
+                    .child(self.diff_annotate_toggle_button(theme, annotate_selected_bg, cx))
+                });
         }
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
@@ -2607,6 +2541,7 @@ impl DiffRenderer {
                                     .into_any_element()
                             } else {
                                 let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                                self.note_diff_list_built(diff_len, window, cx);
                                 let list = uniform_list(
                                     "conflict_compare_diff",
                                     diff_len,
@@ -2829,8 +2764,11 @@ impl DiffRenderer {
                     } else {
                         crate::theme::content_header_bg(theme)
                     })
-                    .border_b_1()
-                    .border_color(theme.colors.stroke.default),
+                    .when(self.store.policy.header_divider, |header| {
+                        header
+                            .border_b_1()
+                            .border_color(theme.colors.stroke.default)
+                    }),
             )
             .when_some(disk_notice, |d, strip| d.child(strip))
             .when_some(engine_notice, |d, strip| d.child(strip))

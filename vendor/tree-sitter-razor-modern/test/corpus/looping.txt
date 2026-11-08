@@ -1,0 +1,237 @@
+======
+For
+======
+
+@for (var i = 0; i < people.Length; i++)
+{
+    var person = people[i];
+    <p>Name: @person.Name</p>
+    <p>Age: @person.Age</p>
+}
+
+----
+
+(compilation_unit
+  (razor_for
+    (variable_declaration
+      (implicit_type)
+      (variable_declarator
+        (identifier)
+        (integer_literal)))
+    (binary_expression
+      (identifier)
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (postfix_unary_expression
+      (identifier))
+    (local_declaration_statement
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (identifier)))))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+======
+ForEach
+======
+
+@foreach (var person in people)
+{
+    <p>Name: @person.Name</p>
+    <p>Age: @person.Age</p>
+}
+
+-----
+
+(compilation_unit
+  (razor_foreach
+    (implicit_type)
+    (identifier)
+    (identifier)
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+======
+While
+======
+
+@{ var i = 0; }
+@while (i < people.Length)
+{
+    var person = people[i];
+    <p>Name: @person.Name</p>
+    <p>Age: @person.Age</p>
+
+    i++;
+}
+
+-----
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))))
+  (razor_while
+    (razor_condition
+      (binary_expression
+        (identifier)
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (local_declaration_statement
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (identifier)))))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (expression_statement
+      (postfix_unary_expression
+        (identifier)))))
+
+=====
+Do while
+=====
+@{ var i = 0; }
+@do
+{
+    var person = people[i];
+    <p>Name: @person.Name</p>
+    <p>Age: @person.Age</p>
+
+    i++;
+} while (i < people.Length);
+
+----
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))))
+  (razor_do_while
+    (local_declaration_statement
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (identifier)))))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (expression_statement
+      (postfix_unary_expression
+        (identifier)))
+    (razor_condition
+      (binary_expression
+        (identifier)
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+========
+For with multiple conditions
+========
+
+    @for (int i = 1; i <= 5; i++)
+    {
+      if (i % 2 == 0)
+      {
+         <p>Even: @i</p>
+      } else {
+         <p>Odd: @i</p>
+      }
+    }
+
+---
+
+(compilation_unit
+  (razor_for
+    (variable_declaration
+      (predefined_type)
+      (variable_declarator
+        (identifier)
+        (integer_literal)))
+    (binary_expression
+      (identifier)
+      (integer_literal))
+    (postfix_unary_expression
+      (identifier))
+    (if_statement
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (integer_literal))
+        (integer_literal))
+      (block
+        (element
+          (html_text)
+          (razor_implicit_expression
+            (identifier))))
+      (block
+        (element
+          (html_text)
+          (razor_implicit_expression
+            (identifier)))))))

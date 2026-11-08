@@ -38,6 +38,7 @@ impl SidebarStickyFrameFixture {
             &build_synthetic_commits(1),
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         let mut pinned = BTreeSet::new();
         if let Loadable::Ready(branches) = &repo.branches {
             for branch in branches.iter().take(pins / 2) {

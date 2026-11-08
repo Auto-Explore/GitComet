@@ -230,6 +230,7 @@ pub(super) struct HistoryPreferences {
     pub(super) verify_commit_signatures: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
+    pub(super) hidden_ref_settings: gitcomet_state::model::HiddenRefSettings,
 }
 
 impl Default for HistoryPreferences {
@@ -248,6 +249,7 @@ impl Default for HistoryPreferences {
             verify_commit_signatures: false,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
+            hidden_ref_settings: Default::default(),
         }
     }
 }
@@ -266,12 +268,14 @@ pub(super) struct RepositoryPreferences {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RemotePreferences {
     pub(super) prune_deleted_remote_branches_on_fetch: bool,
+    pub(super) auto_fetch: gitcomet_state::model::AutoFetchSettings,
 }
 
 impl Default for RemotePreferences {
     fn default() -> Self {
         Self {
             prune_deleted_remote_branches_on_fetch: true,
+            auto_fetch: Default::default(),
         }
     }
 }
@@ -438,6 +442,7 @@ impl UiPreferences {
                 verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(false),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
+                hidden_ref_settings: session.hidden_ref_settings(),
             },
             file_editing: FileEditingPreferences {
                 auto_save: session.auto_save_file_edits.unwrap_or(false),
@@ -450,6 +455,10 @@ impl UiPreferences {
                 prune_deleted_remote_branches_on_fetch: session
                     .fetch_prune_deleted_remote_branches
                     .unwrap_or(true),
+                auto_fetch: gitcomet_state::model::AutoFetchSettings {
+                    enabled: session.auto_fetch_enabled.unwrap_or(false),
+                    interval: session.auto_fetch_interval_minutes.unwrap_or_default(),
+                },
             },
             maintenance: MaintenancePreferences {
                 recommend: session.recommend_repo_maintenance.unwrap_or(true),
@@ -513,6 +522,8 @@ mod tests {
         );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
+        assert!(!preferences.remotes.auto_fetch.enabled);
+        assert_eq!(preferences.remotes.auto_fetch.interval.minutes(), 30);
         assert_eq!(
             preferences.maintenance.recommend,
             gitcomet_state::model::MaintenanceSettings::default().recommend

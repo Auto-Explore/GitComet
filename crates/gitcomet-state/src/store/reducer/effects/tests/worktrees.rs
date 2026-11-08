@@ -3,6 +3,7 @@ use crate::model::LoadKind;
 
 fn listing(branch: &str) -> Arc<Vec<Worktree>> {
     Arc::new(vec![Worktree {
+        bare: false,
         path: "/tmp/linked".into(),
         head: Some(CommitId(branch.into())),
         branch: Some(branch.into()),

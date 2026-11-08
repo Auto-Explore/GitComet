@@ -47,6 +47,7 @@ fn publish(
                 },
             );
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
             repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));

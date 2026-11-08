@@ -479,10 +479,22 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     let second = Path::new("second.txt");
     std::fs::write(workdir.join(first), "original A").unwrap();
     std::fs::write(workdir.join(second), second_contents).unwrap();
+    // One repo lifetime for every push: a fresh one per navigation leaves the
+    // first handle installed, and the store retires it before the saves.
+    let seeded = editor_state(repo_id, &workdir, first);
+    let editing = |relative: &Path| {
+        let mut state = (*seeded).clone();
+        state.repos[0].diff_state.diff_target =
+            Some(gitcomet_core::domain::DiffTarget::working_tree(
+                relative.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
+        Arc::new(state)
+    };
     let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            push_test_state(view, editor_state(repo_id, &workdir, first), cx);
+            push_test_state(view, editing(first), cx);
         });
     });
     cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
@@ -509,7 +521,7 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     for relative in [second, first, second] {
         cx.update(|_, app| {
             view.update(app, |view, cx| {
-                push_test_state(view, editor_state(repo_id, &workdir, relative), cx);
+                push_test_state(view, editing(relative), cx);
             });
         });
         cx.update(|_, app| {

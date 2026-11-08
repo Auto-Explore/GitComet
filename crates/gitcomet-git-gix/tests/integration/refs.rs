@@ -171,7 +171,13 @@ fn dangling_symrefs_are_left_out_of_every_listing() {
     );
     assert_eq!(
         opened
-            .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::AllBranches.into(),
+                None,
+                &Default::default(),
+                &cancellation,
+                &mut |_| {}
+            )
             .expect("all-branches history index")
             .expect("indexed history")
             .len(),
@@ -576,6 +582,49 @@ fn list_branches_reflects_new_upstream_without_reopen() {
             branch: "feature".to_string(),
         })
     );
+}
+
+/// `git branch --set-upstream-to` honours `branch.autoSetupRebase`, so
+/// setting an upstream from GitComet must too.
+#[test]
+fn set_upstream_honours_auto_setup_rebase() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote_repo = dir.path().join("remote.git");
+    let work_repo = dir.path().join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+    run_git(&work_repo, &["init", "-b", "main"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
+    let origin_url = git_remote_url(&remote_repo);
+    run_git(&work_repo, &["remote", "add", "origin", &origin_url]);
+    run_git(&work_repo, &["commit", "--allow-empty", "-m", "base"]);
+    run_git(&work_repo, &["push", "origin", "main"]);
+    let opened = GixBackend.open(&work_repo).unwrap();
+
+    // Like Git, a setting that asks for no rebase leaves the old value.
+    for (setting, rebase) in [
+        ("always", "true"),
+        ("remote", "true"),
+        ("local", "false"),
+        ("never", "false"),
+    ] {
+        run_git(&work_repo, &["config", "branch.autoSetupRebase", setting]);
+        run_git(&work_repo, &["config", "branch.main.rebase", "false"]);
+        opened
+            .set_upstream_branch_with_output("main", &upstream("origin", "main"))
+            .expect("set upstream");
+
+        let actual = run_git_capture(&work_repo, &["config", "branch.main.rebase"]);
+        assert_eq!(actual.trim(), rebase, "{setting}");
+    }
 }
 
 #[test]

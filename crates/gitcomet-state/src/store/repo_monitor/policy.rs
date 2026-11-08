@@ -93,16 +93,17 @@ impl PolicySnapshot {
             excluded |= self.excluded_roots.contains(ancestor);
             worktree |= ancestor == self.workdir;
         }
-        // Watchman fsmonitor queries create cookies directly in Git directories.
-        // Filter that read-side effect in every discovered administrative root,
-        // without hiding similarly named worktree files or branch/tag refs.
+        // Watchman fsmonitor queries create cookies directly in Git directories,
+        // and every fetch rewrites FETCH_HEAD there, even one that moves no ref.
+        // Filter both in every discovered administrative root, without hiding
+        // similarly named worktree files or branch/tag refs.
         if git
             && path
                 .parent()
                 .is_some_and(|parent| self.git_roots.contains(parent))
-            && path
-                .file_name()
-                .is_some_and(|name| name.as_encoded_bytes().starts_with(b".watchman-cookie-"))
+            && path.file_name().is_some_and(|name| {
+                name == "FETCH_HEAD" || name.as_encoded_bytes().starts_with(b".watchman-cookie-")
+            })
         {
             return PathClass::Cache;
         }
@@ -332,6 +333,7 @@ impl WatchInputs {
         let backend_discovered = discovered.is_some();
         let info = discovered.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
+            info.worktrees.push(workdir.to_path_buf());
             if let Some(root) = root_git {
                 info.cache_dirs.extend(
                     ["objects", "lfs"]

@@ -1803,6 +1803,7 @@ impl RepoTabDragFixture {
                     },
                 );
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.log = Loadable::Ready(Arc::new(LogPage {
                     commits: commits.clone(),
                     next_cursor: None,

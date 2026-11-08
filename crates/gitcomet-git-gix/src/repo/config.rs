@@ -237,7 +237,7 @@ mod tests {
     fn text_loads_reuse_repo_until_configuration_changes() {
         let dir = tempfile::tempdir().unwrap();
         let repo = gix::init(dir.path()).unwrap();
-        let repo = GixRepo::new(dir.path().to_path_buf(), repo.into_sync());
+        let repo = GixRepo::new(dir.path().to_path_buf(), repo.into_sync()).unwrap();
         let cached = Arc::clone(&repo.config_repo.lock().unwrap().repo);
         for _ in 0..3 {
             repo.text_attributes_impl(std::path::Path::new("a.txt"))

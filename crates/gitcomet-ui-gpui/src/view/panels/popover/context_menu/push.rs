@@ -3,12 +3,9 @@ use super::*;
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let repo_id = this.active_repo_id();
     let repo = this.active_repo();
-    let push_disabled = repo.is_none_or(|repo| {
-        matches!(
-            push_request(repo, &this.state.large_file_settings),
-            PushRequest::NotReady
-        )
-    });
+    let push_unavailable = repo
+        .and_then(|repo| push_request(repo, &this.state.large_file_settings).unavailable_reason());
+    let push_disabled = repo.is_none() || push_unavailable.is_some();
     let force_push_disabled = repo.is_none_or(|repo| !head_branch_has_live_upstream(repo));
     let repo_id = repo_id.unwrap_or(RepoId(0));
     let upstream = super::active_branch_tracking_upstream(this);
@@ -36,6 +33,11 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             action: Box::new(ContextMenuAction::Push { repo_id }),
         },
     ]);
+    if let Some(reason) = push_unavailable {
+        model
+            .entry_tooltips
+            .insert(model.items.len() - 1, reason.into());
+    }
     for mode in gitcomet_core::tag_push::TagPushMode::ALL {
         let request = repo.and_then(|repo| {
             super::super::tag_push::request(repo, mode, &this.state.large_file_settings)
@@ -53,6 +55,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             mode.label().to_string()
         };
         let ix = model.items.len();
+        let unavailable = this.push_with_tags_unavailable(mode);
         model.items.push(ContextMenuItem::Entry {
             label: label.into(),
             icon: Some("icons/tag.svg".into()),
@@ -60,7 +63,9 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             disabled: request.is_none() || push_disabled,
             action: Box::new(ContextMenuAction::PushWithTags { repo_id, mode }),
         });
-        if let Some(request) = request.as_ref() {
+        if let Some(reason) = unavailable {
+            model.entry_tooltips.insert(ix, reason.into());
+        } else if let Some(request) = request.as_ref() {
             model
                 .entry_tooltips
                 .insert(ix, super::super::tag_push::tooltip(request, preview).into());

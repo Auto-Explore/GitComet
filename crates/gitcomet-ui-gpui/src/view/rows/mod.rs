@@ -1226,7 +1226,7 @@ pub(in crate::view) use diff_text::{
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds, inject_background_prepared_diff_syntax_document,
-    live_syntax_document_supported, live_syntax_reparse,
+    line_display_text, live_syntax_document_supported, live_syntax_reparse,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_document_is_available, prepared_diff_syntax_line_for_inline_diff_row,
@@ -1250,8 +1250,8 @@ pub(in crate::view) use self::diff_canvas::{
     diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,
-    diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, is_streamable_diff_text,
-    whitespace_visible_diff_offset_map,
+    diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, horizontal_column,
+    is_streamable_diff_text, whitespace_visible_diff_offset_map,
 };
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{

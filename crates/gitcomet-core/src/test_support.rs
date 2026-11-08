@@ -19,7 +19,12 @@ use crate::error::{Error, ErrorKind};
 use crate::services::{GitRepository, PullMode, Result};
 use std::path::{Path, PathBuf};
 
+pub mod child_test;
 pub mod git_fixture;
+#[cfg(unix)]
+pub mod localized_git;
+#[cfg(unix)]
+pub mod script;
 pub mod symlink;
 
 fn unsupported<T>() -> Result<T> {
@@ -172,7 +177,7 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn pull(&self, _mode: PullMode, _prune: bool) -> Result<crate::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<crate::services::CommandOutput> {
         unsupported()
     }
 

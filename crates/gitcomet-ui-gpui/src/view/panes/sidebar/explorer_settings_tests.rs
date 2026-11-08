@@ -12,6 +12,7 @@ fn files_state(mode: SidebarMode) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.file_browser.active = true;
     repo.file_browser.entries = Loadable::Ready(Arc::new(vec![FileEntry {
         name: "main.rs".to_string(),

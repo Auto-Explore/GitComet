@@ -699,6 +699,7 @@ fn build_real_repo_state(
 ) -> RepoState {
     let mut repo = RepoState::new_opening(RepoId(1), spec);
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.open_rev = 1;
     repo.head_branch = match head_branch {
         Some(branch) => Loadable::Ready(branch),

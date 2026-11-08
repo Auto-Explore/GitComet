@@ -60,16 +60,9 @@ pub(super) fn panel(
 
     let mut dialog = ConfirmDialog::new(title, DIALOG_460_WIDTH)
         .section(
-            // `ConfirmDialog` only pins a `min_w`, so an unwrapped body line grows
-            // the whole dialog to its natural width. Capping this long intro
-            // paragraph at the dialog width forces it to wrap and keeps the dialog
-            // at 460px. Source paths below have no wrap points, so a pathologically
-            // long submodule path could still widen it — acceptable for this rare
-            // dialog rather than hard-pinning every ConfirmDialog to a fixed width.
             div()
                 .px_2()
                 .pt_1()
-                .max_w(scaled_px(460.0))
                 .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(format!("Git blocks local file transport for submodules by default. Trusting these sources will allow {} to enable file transport only for this repo/source pair.", crate::view::product_name())),

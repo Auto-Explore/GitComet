@@ -1,4 +1,179 @@
 use super::*;
+use palette::IntoColor;
+
+#[gpui::test]
+fn razor_view_prepared_diff_preserves_styles_in_inline_and_split(cx: &mut gpui::TestAppContext) {
+    assert_razor_prepared_diff_styles(cx, "Index.cshtml");
+}
+
+#[gpui::test]
+fn razor_component_prepared_diff_preserves_styles_in_inline_and_split(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_prepared_diff_styles(cx, "Index.razor");
+}
+
+fn assert_razor_prepared_diff_styles(cx: &mut gpui::TestAppContext, filename: &str) {
+    let old_text = concat!(
+        "@* Razor comment *@\n",
+        "@{\n",
+        "    var title = \"server before\";\n",
+        "}\n",
+        "<p class=\"card\">@title</p>\n",
+        "<script>\n",
+        "const label = \"client:@title:suffix\";\n",
+        "</script>\n",
+    );
+    let new_text = old_text.replace("before", "after");
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let path = std::path::Path::new(filename);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                foreground_parse: std::time::Duration::from_secs(1),
+            });
+        });
+    });
+    seed_file_diff_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(1000),
+        &workdir,
+        path,
+        old_text,
+        &new_text,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "Razor prepared diff documents",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_path == Some(workdir.join(path))
+                && [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight]
+                    .into_iter()
+                    .all(|side| {
+                        pane.file_diff_split_prepared_syntax_document(side)
+                            .is_some()
+                    })
+        },
+        |pane| {
+            format!(
+                "language={:?} rows={}",
+                pane.file_diff_cache_language,
+                pane.file_diff_cache_rows.len()
+            )
+        },
+    );
+
+    for mode in [DiffViewMode::Split, DiffViewMode::Inline] {
+        cx.update(|_, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.diff_view = mode;
+                    pane.clear_diff_text_style_caches();
+                    pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
+                    cx.notify();
+                });
+        });
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "Razor diff rows rendered with prepared syntax",
+            |pane| {
+                [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight]
+                    .into_iter()
+                    .all(|side| {
+                        pane.file_diff_split_prepared_syntax_document(side)
+                            .is_some_and(|document| {
+                                !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(
+                                    document,
+                                )
+                            })
+                    })
+                    && pane.syntax_chunk_poll_task.is_none()
+                    && razor_rendered_diff_rows(pane).is_some()
+            },
+            |pane| {
+                format!(
+                    "mode={:?} styled_rows={:?}",
+                    pane.diff_view,
+                    razor_rendered_diff_rows(pane).map(|rows| rows.len())
+                )
+            },
+        );
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert_eq!(
+                pane.file_diff_cache_language,
+                Some(rows::DiffSyntaxLanguage::Razor)
+            );
+            let mut checked = 0;
+            for styled in razor_rendered_diff_rows(pane).unwrap() {
+                for (token, color) in [
+                    ("Razor comment", pane.theme.syntax.comment),
+                    ("var", pane.theme.syntax.keyword),
+                    ("server", pane.theme.syntax.string),
+                    ("p class", pane.theme.syntax.tag),
+                    ("class", pane.theme.syntax.attribute),
+                    ("const", pane.theme.syntax.keyword),
+                    ("client:", pane.theme.syntax.string),
+                    (":suffix", pane.theme.syntax.string),
+                ] {
+                    let Some(offset) = styled.text.find(token) else {
+                        continue;
+                    };
+                    let actual = styled
+                        .highlights
+                        .iter()
+                        .find(|(range, _)| range.contains(&offset));
+                    assert_eq!(
+                        actual.and_then(|(_, style)| style.color),
+                        Some(color.into_color()),
+                        "{filename}: {mode:?} lost {token:?} in {:?}",
+                        styled.text
+                    );
+                    checked += 1;
+                }
+            }
+            assert_eq!(checked, if mode == DiffViewMode::Split { 16 } else { 10 });
+        });
+    }
+}
+
+fn razor_rendered_diff_rows(pane: &DiffRenderer) -> Option<Vec<&super::CachedDiffStyledText>> {
+    let mut styled = Vec::new();
+    match pane.diff_view {
+        DiffViewMode::Split => {
+            for (row_ix, row) in pane.file_diff_cache_rows.iter().enumerate() {
+                for (text, side) in [
+                    (&row.old, DiffTextRegion::SplitLeft),
+                    (&row.new, DiffTextRegion::SplitRight),
+                ] {
+                    if text.is_none() {
+                        continue;
+                    }
+                    let key = pane.file_diff_split_cache_key(row_ix, side)?;
+                    let epoch = pane.file_diff_split_style_cache_epoch(side);
+                    styled.push(pane.diff_text_segments_cache_get(key, epoch)?);
+                }
+            }
+        }
+        DiffViewMode::Inline => {
+            for (index, line) in pane.file_diff_inline_cache.iter().enumerate() {
+                let epoch = pane.file_diff_inline_style_cache_epoch(line);
+                styled.push(pane.diff_text_segments_cache_get(index, epoch)?);
+            }
+        }
+    }
+    (!styled.is_empty()).then_some(styled)
+}
 
 #[gpui::test]
 fn whole_patch_target_has_no_diff_rows_in_the_main_pane(cx: &mut gpui::TestAppContext) {

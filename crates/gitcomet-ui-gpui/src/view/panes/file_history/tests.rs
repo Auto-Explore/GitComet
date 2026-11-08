@@ -59,6 +59,7 @@ fn setup(cx: &mut gpui::TestAppContext) -> (Fixture, &mut gpui::VisualTestContex
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let state = Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),

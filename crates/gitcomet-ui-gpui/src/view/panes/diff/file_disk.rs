@@ -69,15 +69,20 @@ pub(in crate::view) struct FileDiskNotice {
 
 impl DiffRenderer {
     /// The working-tree file on screen: repo, repo-relative and absolute path.
+    /// A comparison against the working tree counts: its new side is the file.
     fn file_disk_target(&self) -> Option<(RepoId, PathBuf, PathBuf)> {
         if self.is_inline_submodule_diff_active() {
             return None;
         }
         let repo = self.active_repo()?;
-        let Some(DiffTarget::WorkingTree { path, .. }) =
-            self.bound_diff_state(repo).diff_target.as_ref()
-        else {
-            return None;
+        let path = match self.bound_diff_state(repo).diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. }
+            | DiffTarget::CommitRange {
+                to_commit_id: None,
+                path: Some(path),
+                ..
+            } => path,
+            _ => return None,
         };
         Some((repo.id, path.clone(), self.absolute_worktree_path(path)?))
     }

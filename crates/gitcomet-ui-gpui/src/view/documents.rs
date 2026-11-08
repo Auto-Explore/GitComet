@@ -62,9 +62,21 @@ pub(crate) struct DocumentsView {
     owner: DocumentOwner,
     buffers: BTreeMap<BufferId, Entity<StandaloneBuffer>>,
     active: Option<BufferId>,
+    focus: gpui::FocusHandle,
 }
 
 impl DocumentsView {
+    pub(in crate::view) fn focus_active(&self, window: &mut Window, cx: &mut App) {
+        let focus = self
+            .active
+            .and_then(|id| self.buffers.get(&id))
+            .map(|buffer| buffer.read(cx))
+            .filter(|buffer| buffer.has_text() && !buffer.shows_diagram())
+            .map(|buffer| buffer.input.read(cx).focus_handle())
+            .unwrap_or_else(|| self.focus.clone());
+        window.focus(&focus, cx);
+    }
+
     pub(crate) fn document_owner(&self) -> DocumentOwner {
         self.owner.clone()
     }
@@ -98,6 +110,7 @@ impl DocumentsView {
             owner,
             buffers: BTreeMap::new(),
             active: None,
+            focus: cx.focus_handle(),
         }
     }
 
@@ -297,7 +310,10 @@ impl DocumentsView {
 }
 
 impl Render for DocumentsView {
-    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.focus.is_focused(window) {
+            self.focus_active(window, cx);
+        }
         let theme = self.theme;
         let content = self
             .active
@@ -306,6 +322,7 @@ impl Render for DocumentsView {
             .cloned();
         div()
             .id("documents_canvas")
+            .track_focus(&self.focus)
             .debug_selector(|| "documents_canvas".into())
             .relative()
             .size_full()
@@ -377,6 +394,21 @@ struct StandaloneBuffer {
 }
 
 impl StandaloneBuffer {
+    fn has_text(&self) -> bool {
+        !self.image
+            && !self.loading()
+            && (self.error().is_none()
+                || self.version().is_some()
+                || self.dirty()
+                || self.saving().is_some())
+    }
+
+    fn shows_diagram(&self) -> bool {
+        gitcomet_diagrams::DiagramKind::for_path(&self.identity().0).is_some()
+            && self.preview_mode == RenderedPreviewMode::Rendered
+            && !self.editing
+    }
+
     fn identity(&self) -> DocumentIdentity {
         self.document.read().identity().clone()
     }
@@ -1411,14 +1443,7 @@ impl Render for StandaloneBuffer {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let _ = self.subscriptions.len();
         self.ensure_diagram_preview(cx);
-        // Text stays on screen through a failed save or a vanished file; only a
-        // read that never produced any shows the failure in its place.
-        let has_text = !self.image
-            && !self.loading()
-            && (self.error().is_none()
-                || self.version().is_some()
-                || self.dirty()
-                || self.saving().is_some());
+        let has_text = self.has_text();
         let notice = self
             .error()
             .clone()
@@ -1439,11 +1464,7 @@ impl Render for StandaloneBuffer {
                 theme,
                 ui_scale_percent,
             )
-        } else if has_text
-            && self.diagram_input.is_some()
-            && self.preview_mode == RenderedPreviewMode::Rendered
-            && !self.editing
-        {
+        } else if has_text && self.shows_diagram() {
             let input = self.diagram_input.clone().unwrap();
             super::rendered_preview::render(
                 "document_diagram",
@@ -1537,6 +1558,8 @@ impl GitCometView {
 
     fn show_documents_canvas(&mut self, cx: &mut gpui::Context<Self>) {
         self.documents_active = true;
+        // A document takes the main slot from an overlay too.
+        self.hide_active_canvas_overlay(cx);
         self.notify_bottom_status_bar(cx);
         cx.notify();
     }
@@ -1640,7 +1663,7 @@ impl GitCometView {
                             this.documents
                                 .update(cx, |docs, cx| docs.open(path, display, cx));
                             if display {
-                                this.documents_active = true;
+                                this.show_documents_canvas(cx);
                             }
                         }
                         Err(error) => this.push_toast(components::ToastKind::Error, error, cx),

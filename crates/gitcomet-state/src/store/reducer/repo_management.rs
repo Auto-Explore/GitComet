@@ -57,9 +57,7 @@ fn repo_switch_secondary_metadata_ready(
     git_log_settings: GitLogSettings,
 ) -> bool {
     matches!(repo_state.branches, Loadable::Ready(_))
-        && (!git_log_settings.show_history_tags
-            || !git_log_settings.auto_fetch_tags_on_repo_activation()
-            || matches!(repo_state.tags, Loadable::Ready(_)))
+        && (!git_log_settings.show_history_tags || matches!(repo_state.tags, Loadable::Ready(_)))
         && matches!(repo_state.remotes, Loadable::Ready(_))
         && matches!(repo_state.remote_branches, Loadable::Ready(_))
         && matches!(repo_state.stashes, Loadable::Ready(_))
@@ -143,6 +141,12 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 }
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
+    if repo_state
+        .loads_in_flight
+        .is_in_flight(LoadKind::UpstreamDivergence)
+    {
+        repo_state.incoming.mark_stale();
+    }
     repo_state.loads_in_flight.clear();
     // A dropped reply would otherwise leave a dialog waiting on it forever.
     for lookup in [
@@ -484,11 +488,17 @@ fn open_repo_with_mode(
             }
         };
         repo_state.history_state.history_scope = history_mode;
+        repo_state.history_state.hidden_refs = state.history_hidden_refs.clone();
         repo_state.history_state.history_author_filter = session_preferences
             .repo_history_author_filters
             .get(&workdir_key)
             .cloned()
             .flatten();
+        repo_state.history_state.history_focus = session_preferences
+            .repo_history_focus
+            .get(&workdir_key)
+            .cloned()
+            .unwrap_or_default();
         repo_state.last_active_at = Some(now);
         repo_state
     });
@@ -579,11 +589,17 @@ pub(super) fn restore_session(
         let mut repo_state = {
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
             repo_state.history_state.history_scope = history_mode;
+            repo_state.history_state.hidden_refs = state.history_hidden_refs.clone();
             repo_state.history_state.history_author_filter = session_preferences
                 .repo_history_author_filters
                 .get(&workdir_key)
                 .cloned()
                 .flatten();
+            repo_state.history_state.history_focus = session_preferences
+                .repo_history_focus
+                .get(&workdir_key)
+                .cloned()
+                .unwrap_or_default();
             repo_state
         };
         repo_state.set_open(Loadable::NotLoaded);
@@ -655,6 +671,20 @@ fn remove_repo(
         .is_some_and(|prompt| prompt.repo_id == repo_id)
     {
         state.branch_exists_prompt = None;
+    }
+    if state
+        .force_delete_branch_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.repo_id == repo_id)
+    {
+        state.force_delete_branch_prompt = None;
+    }
+    if state
+        .force_remove_worktree_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.repo_id == repo_id)
+    {
+        state.force_remove_worktree_prompt = None;
     }
     super::auth::discard_auth_prompt_for_repo(state, repo_id);
     let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
@@ -1346,6 +1376,8 @@ pub(super) fn repo_opened_ok(
     spec: RepoSpec,
     repo: Arc<dyn GitRepository>,
     preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
+    repository_mode: gitcomet_core::domain::RepositoryMode,
+    head_commit: Option<gitcomet_core::domain::CommitId>,
 ) -> Vec<Effect> {
     let Some(lifetime) = state
         .repos
@@ -1366,6 +1398,21 @@ pub(super) fn repo_opened_ok(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.common_dir = common_dir;
+        repo_state.repository_mode = Some(repository_mode);
+        repo_state.head_commit = head_commit;
+        if !matches!(
+            repo_state.bare_mode_conversion,
+            crate::model::BareModeConversionState::Failed(_)
+        ) {
+            repo_state.bare_mode_conversion = crate::model::BareModeConversionState::Idle;
+        }
+        if repo_state.is_bare() {
+            if let Some(source) = repo_state.live_file_source() {
+                super::effects::retarget_file_browser(repo_state, source);
+            } else {
+                repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            }
+        }
         if let Some(snapshot) = preferences {
             repo_state.history_state.history_scope = snapshot.preferences.history_mode;
             repo_state.file_browser.show_hidden = snapshot.preferences.show_hidden_files;
@@ -1411,12 +1458,8 @@ pub(super) fn repo_opened_ok(
             repo_state.set_selected_commit(None);
             repo_state.set_commit_details(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             repo_state.feedback_mut().last_error = None;
             // Reopening resets the whole repo view; saved back/forward snapshots

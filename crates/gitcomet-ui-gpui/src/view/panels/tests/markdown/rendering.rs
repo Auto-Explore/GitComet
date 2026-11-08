@@ -1309,19 +1309,17 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
         cx.debug_bounds("diff_view_toggle").is_some(),
         "markdown diff preview should keep the inline/split toggle"
     );
-    // Blame keeps its slot but greys out — the preview has no annotation
-    // gutter, so the click is dropped and only Text mode annotates.
-    let blame_bounds = cx
-        .debug_bounds("diff_annotate")
-        .expect("markdown diff preview should keep the blame toggle visible");
-    cx.simulate_click(blame_bounds.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
+    for selector in [
+        "diff_edit",
+        "diff_annotate",
+        "file_editor_cancel",
+        "file_editor_save",
+    ] {
         assert!(
-            !view.read(app).diff_renderer.read(app).annotate_enabled,
-            "clicking blame in the markdown preview should not enable annotations"
+            cx.debug_bounds(selector).is_none(),
+            "markdown diff preview must hide {selector}"
         );
-    });
+    }
 
     // Without the fallback installed the Alt keystrokes below reach nothing,
     // so the layout assertions would hold no matter how the guard is written.
@@ -1329,9 +1327,9 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
         crate::app::install_global_diff_shortcut_fallback_for_test(app);
     });
 
-    // Alt+I switches the preview to its merged inline list; Alt+W stays inert
-    // because the whitespace toggles only drive the diff-text rows.
-    cx.simulate_keystrokes("alt-i alt-w");
+    // Text-only actions stay inert even though their buttons are hidden.
+    // Alt+I still switches the preview to its merged inline list.
+    cx.simulate_keystrokes("alt-i alt-w alt-b alt-e");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -1341,6 +1339,8 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
         let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Inline);
         assert!(!pane.reveal_whitespace_chars);
+        assert!(!pane.annotate_enabled);
+        assert!(!pane.is_file_editor_active());
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1367,8 +1367,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
         );
     });
 
-    // Back in Text mode the same button annotates, so blame is greyed out by
-    // the preview rather than unavailable for markdown files.
+    // Text mode restores both controls, and Blame still annotates.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.diff_renderer.update(cx, |pane, cx| {
@@ -1382,6 +1381,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
         let _ = window.draw(app);
     });
 
+    assert!(cx.debug_bounds("diff_edit").is_some());
     let blame_bounds = cx
         .debug_bounds("diff_annotate")
         .expect("text mode should keep the blame toggle");
@@ -1393,6 +1393,61 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
             "clicking blame in markdown text mode should enable annotations"
         );
     });
+}
+
+#[gpui::test]
+fn markdown_file_preview_hides_edit_actions_until_text_mode(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(57),
+        "preview_toolbar",
+        "# Preview\n\nFile content.\n",
+    );
+
+    for mode in [
+        RenderedPreviewMode::Rendered,
+        RenderedPreviewMode::Source,
+        RenderedPreviewMode::Rendered,
+    ] {
+        let selector = match mode {
+            RenderedPreviewMode::Rendered => "markdown_diff_view_preview",
+            RenderedPreviewMode::Source => "markdown_diff_view_text",
+        };
+        let button = cx.debug_bounds(selector).expect("Preview/Text toggle");
+        cx.simulate_click(button.center(), gpui::Modifiers::default());
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert!(pane.diff_surface().file_preview);
+            assert_eq!(
+                pane.rendered_preview_modes
+                    .get(RenderedPreviewKind::Markdown),
+                mode
+            );
+        });
+        assert!(cx.debug_bounds("markdown_diff_view_toggle").is_some());
+        for selector in ["diff_edit", "diff_annotate"] {
+            assert_eq!(
+                cx.debug_bounds(selector).is_some(),
+                mode == RenderedPreviewMode::Source,
+                "{selector} in {mode:?}"
+            );
+        }
+        for selector in ["file_editor_cancel", "file_editor_save"] {
+            assert!(
+                cx.debug_bounds(selector).is_none(),
+                "{selector} outside editing"
+            );
+        }
+    }
+
+    fixture.cleanup();
 }
 
 #[gpui::test]

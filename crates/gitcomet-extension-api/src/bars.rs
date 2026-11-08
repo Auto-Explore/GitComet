@@ -26,6 +26,7 @@ impl BarItemLocation {
 pub enum BuiltinBarItem {
     Navigation,
     Worktree,
+    RepositoryMode,
     Tracking,
     HistoricalBrowse,
     OperationControls,
@@ -52,6 +53,7 @@ impl BuiltinBarItem {
         match self {
             Self::Navigation
             | Self::Worktree
+            | Self::RepositoryMode
             | Self::Tracking
             | Self::HistoricalBrowse
             | Self::OperationControls

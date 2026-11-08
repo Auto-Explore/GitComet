@@ -24,6 +24,11 @@ pub(in crate::view) enum RootRequest {
         id: String,
         repo: Option<RepoId>,
     },
+    RunRefMenuItem {
+        id: String,
+        repo_id: RepoId,
+        target: gitcomet_extension_api::RefMenuTarget,
+    },
     PerformCloseAction(TerminalShutdownAction),
     ShowRepositoryCanvas,
     OpenRepoPath(PathBuf),
@@ -39,6 +44,7 @@ pub(in crate::view) enum RootRequest {
     SetChangeTrackingView(ChangeTrackingView),
     SetCommitAmend(bool),
     SetCommitPushAfter(bool),
+    SetCommitSkipHooks(bool),
     OpenPopoverCentered(PopoverKind),
     OpenFileHistory {
         repo_id: RepoId,
@@ -58,11 +64,6 @@ pub(in crate::view) enum RootRequest {
     ResolveFilesystemUnsavedEdits {
         prompt_id: u64,
         choice: FilesystemUnsavedEditsChoice,
-    },
-    RegisterPendingWorktreeBranchRemoval {
-        repo_id: RepoId,
-        path: PathBuf,
-        branch: String,
     },
     SetActiveContextMenuInvoker(Option<SharedString>),
     MinimizeHookActivity {
@@ -146,6 +147,13 @@ impl GitCometView {
             RootRequest::RunExtensionCommand { id, repo } => {
                 self.run_extension_command_for(&id, repo, cx);
             }
+            RootRequest::RunRefMenuItem {
+                id,
+                repo_id,
+                target,
+            } => {
+                self.run_ref_menu_item(&id, repo_id, target, cx);
+            }
             RootRequest::ShowRepositoryCanvas => self.show_repository_canvas(cx),
             RootRequest::OpenRepoPath(path) => self.open_repo_path(path, cx),
             RootRequest::CloseRepos {
@@ -162,12 +170,10 @@ impl GitCometView {
             RootRequest::SetCommitPushAfter(enabled) => {
                 self.set_commit_push_after_enabled(enabled, cx)
             }
+            RootRequest::SetCommitSkipHooks(enabled) => {
+                self.set_commit_skip_hooks_enabled(enabled, cx)
+            }
             RootRequest::ReportError(report) => self.report_error(report, cx),
-            RootRequest::RegisterPendingWorktreeBranchRemoval {
-                repo_id,
-                path,
-                branch,
-            } => self.register_pending_worktree_branch_removal(repo_id, path, branch),
             RootRequest::SetActiveContextMenuInvoker(next) => {
                 self.set_active_context_menu_invoker(next, cx)
             }

@@ -24,7 +24,13 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     // The application requests its index after the bootstrap page. The index,
     // resumed pages and filtered views must all reuse the same topology.
     let index = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::FullReachable.into(),
+            None,
+            &Default::default(),
+            &cancel,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     assert_eq!(index.len(), 4_096);
@@ -40,7 +46,13 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     assert_eq!(&rows.commits[..20], first.commits.as_slice());
     assert_eq!(&rows.commits[20..], second.commits.as_slice());
     let filtered = repo
-        .build_history_index(HistoryMode::NoMerges, Some("You"), &cancel, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::NoMerges.into(),
+            Some("You"),
+            &Default::default(),
+            &cancel,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     assert_eq!(filtered.len(), index.len());
@@ -50,7 +62,13 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     // Same repository handle, new ref snapshot. Old indexed ranges stay valid.
     run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~100"]);
     let changed = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::FullReachable.into(),
+            None,
+            &Default::default(),
+            &cancel,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     assert_eq!(changed.len(), 3_996);
@@ -125,7 +143,13 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
         let _capture = capture();
         let cancel = CancellationToken::new();
         let index = repo
-            .build_history_index(HistoryMode::AllBranches, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::AllBranches.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         assert_eq!(count(Work::LogWalkObjectRead), 256);
@@ -192,7 +216,13 @@ fn indexed_history_honors_replacement_refs_like_git_and_bypasses_the_commit_grap
             "page rows must match git log"
         );
         let index = opened
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         let indexed = opened

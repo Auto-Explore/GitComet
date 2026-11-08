@@ -786,11 +786,12 @@ pub(super) fn range_files_loaded(
         }
     };
     repo_state.set_range_files(next);
+    let mut effects = super::util::replan_one_sided_change(inputs, repo_state);
 
     // The worktree moved again while this load was running; run one more so the
     // list ends up describing the final state rather than the state mid-flight.
     if !std::mem::take(&mut repo_state.history_state.range_files_refresh_queued) {
-        return Vec::new();
+        return effects;
     }
     let options = repo_state
         .history_state
@@ -798,13 +799,14 @@ pub(super) fn range_files_loaded(
         .as_ref()
         .map(|range| range.options)
         .unwrap_or_default();
-    vec![Effect::LoadRangeFiles {
+    effects.push(Effect::LoadRangeFiles {
         repo_id,
         from,
         to,
         options,
         request: repo_state.begin_range_files_load(),
-    }]
+    });
+    effects
 }
 
 pub(super) fn select_commit_and_load_details(
@@ -839,6 +841,15 @@ pub(super) fn select_worktree_uncommitted(
     repo_id: RepoId,
     path: PathBuf,
 ) -> Vec<Effect> {
+    if let Some(target_id) = state
+        .repos
+        .iter()
+        .find(|repo| repo.spec.workdir == path)
+        .map(|repo| repo.id)
+        && super::refuse_bare_worktree_action(state, target_id)
+    {
+        return Vec::new();
+    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -1515,6 +1526,15 @@ pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Ef
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return None;
     }
+    if repo_state.is_bare() && repo_state.file_browser.source == FileSource::WorkingDirectory {
+        let Some(source) = repo_state.live_file_source() else {
+            repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            repo_state.file_browser.stale = false;
+            repo_state.file_browser.bump_rev();
+            return None;
+        };
+        retarget_file_browser(repo_state, source);
+    }
     repo_state
         .loads_in_flight
         .request(LoadKind::FileBrowser)
@@ -1557,11 +1577,21 @@ pub(super) fn set_file_browser_source(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let browsing = matches!(source, FileSource::Commit(_));
+    let source = if repo_state.is_bare() && source == FileSource::WorkingDirectory {
+        let Some(source) = repo_state.live_file_source() else {
+            repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            repo_state.file_browser.stale = false;
+            repo_state.file_browser.bump_rev();
+            return Vec::new();
+        };
+        source
+    } else {
+        source
+    };
     // An explicit choice of browse point acknowledges the current selection:
     // following must not undo it until the selection next moves.
-    repo_state
-        .file_browser
-        .set_active(matches!(source, FileSource::Commit(_)));
+    repo_state.file_browser.set_active(browsing);
     repo_state.file_browser.followed_selection_rev =
         Some(repo_state.history_state.selected_commit_rev);
     if !retarget_file_browser(repo_state, source) {
@@ -1580,7 +1610,10 @@ pub(super) fn sync_file_browser_to_selection(
     follow: bool,
     sidebar_mode: SidebarMode,
 ) -> bool {
-    if !repo_state.file_browser.active || !follow || sidebar_mode != SidebarMode::Files {
+    if (!repo_state.file_browser.active && !repo_state.is_bare())
+        || !follow
+        || sidebar_mode != SidebarMode::Files
+    {
         return false;
     }
     let rev = repo_state.history_state.selected_commit_rev;
@@ -1593,7 +1626,10 @@ pub(super) fn sync_file_browser_to_selection(
         .selected_commit
         .clone()
         .map(FileSource::Commit)
-        .unwrap_or(FileSource::WorkingDirectory);
+        .or_else(|| repo_state.live_file_source());
+    let Some(want) = want else {
+        return false;
+    };
     retarget_file_browser(repo_state, want)
 }
 
@@ -1842,20 +1878,28 @@ pub(super) fn branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let branches = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_branches(branches);
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Branches);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let branches = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_branches(branches);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Branches) {
             effects.push(Effect::References(ReferenceEffect::LoadBranches {
                 repo_id,
             }));
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::LocalBranches,
+    ));
     effects
 }
 
@@ -1867,19 +1911,54 @@ pub(super) fn remotes_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let remotes = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Remotes);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            if let Ok(remotes) = &result {
+                effects.extend(forget_hidden_remotes_that_were_removed(repo_state, remotes));
             }
-        };
-        repo_state.set_remotes(remotes);
+            let remotes = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_remotes(remotes);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::Remotes,
+    ));
     effects
+}
+
+/// A remote added back under a removed one's name starts out shown. Only a
+/// remote the replaced listing held counts as removed, since another window
+/// may have added and hidden one this load predates; a Reload or a failed
+/// load starts the comparison over.
+fn forget_hidden_remotes_that_were_removed(repo: &RepoState, loaded: &[Remote]) -> Vec<Effect> {
+    let Loadable::Ready(previous) = &repo.remotes else {
+        return Vec::new();
+    };
+    let listed = |remotes: &[Remote], name: &str| remotes.iter().any(|remote| remote.name == name);
+    repo.history_hidden_remotes()
+        .iter()
+        .filter(|hidden| listed(previous, hidden) && !listed(loaded, hidden))
+        .filter_map(|gone| {
+            super::repository_preferences::update_effect(
+                repo,
+                crate::model::RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                    remote: gone.clone(),
+                    hidden: false,
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn remote_branches_loaded(
@@ -1890,6 +1969,9 @@ pub(super) fn remote_branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let background = repo_state
+            .loads_in_flight
+            .is_background(LoadKind::RemoteBranches);
         let refresh_pending = repo_state.loads_in_flight.finish(LoadKind::RemoteBranches);
         let remote_mutation_in_flight =
             repo_state.pull_in_flight > 0 || repo_state.push_in_flight > 0;
@@ -1907,15 +1989,22 @@ pub(super) fn remote_branches_loaded(
             return effects;
         }
 
-        let branches = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_remote_branches(branches);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let branches = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_remote_branches(branches);
+        }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::RemoteBranches,
+    ));
     effects
 }
 
@@ -1941,6 +2030,7 @@ pub(super) fn status_loaded(
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
         StatusLane::Staged.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -1967,6 +2057,7 @@ pub(super) fn worktree_status_loaded(
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -2184,6 +2275,7 @@ pub(super) fn staged_status_loaded(
             }
         }
         StatusLane::Staged.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -2258,8 +2350,8 @@ pub(super) fn head_branch_loaded(
                     if repo_state.detached_head_commit.is_none()
                         && repo_state
                             .history_state
-                            .history_scope
-                            .guarantees_head_visibility()
+                            .history_focus
+                            .head_is_first(repo_state.history_state.history_scope)
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state
@@ -2294,32 +2386,94 @@ pub(super) fn head_branch_loaded(
     effects
 }
 
+pub(super) fn head_tracking_loaded(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::domain::HeadTracking, Error>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let background = repo
+        .loads_in_flight
+        .is_background(LoadKind::UpstreamDivergence);
+    if let Some(effect) = finish_upstream_refresh(repo, repo_id) {
+        return vec![effect];
+    }
+    match result {
+        Ok(tracking) => {
+            let divergence = tracking.divergence();
+            let snapshot = crate::model::RepoIncomingSnapshot {
+                tracking,
+                checked_at: inputs.now(),
+            };
+            repo.incoming = if matches!(
+                repo.auto_fetch.status,
+                crate::model::AutoFetchStatus::Running
+                    | crate::model::AutoFetchStatus::Failed { .. }
+            ) || super::auto_fetch::skipped_upstream(repo, &snapshot.tracking)
+            {
+                crate::model::RepoIncomingState::Stale(snapshot)
+            } else {
+                crate::model::RepoIncomingState::Current(snapshot)
+            };
+            repo.set_upstream_divergence(Loadable::Ready(divergence));
+        }
+        Err(error) => {
+            repo.incoming.mark_stale();
+            apply_upstream_divergence_result(inputs, repo, background, Err(error));
+        }
+    }
+    Vec::new()
+}
+
 pub(super) fn upstream_divergence_loaded(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Option<UpstreamDivergence>, Error>,
 ) -> Vec<Effect> {
-    let mut effects = Vec::new();
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let value = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_upstream_divergence(value);
-        if repo_state
-            .loads_in_flight
-            .finish(LoadKind::UpstreamDivergence)
-        {
-            effects.push(Effect::References(
-                ReferenceEffect::LoadUpstreamDivergence { repo_id },
-            ));
-        }
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let background = repo
+        .loads_in_flight
+        .is_background(LoadKind::UpstreamDivergence);
+    if let Some(effect) = finish_upstream_refresh(repo, repo_id) {
+        return vec![effect];
     }
-    effects
+    repo.incoming = crate::model::RepoIncomingState::Unknown;
+    apply_upstream_divergence_result(inputs, repo, background, result);
+    Vec::new()
+}
+
+fn finish_upstream_refresh(repo: &mut crate::model::RepoState, repo_id: RepoId) -> Option<Effect> {
+    repo.loads_in_flight
+        .finish(LoadKind::UpstreamDivergence)
+        .then(|| {
+            repo.incoming.mark_stale();
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id })
+        })
+}
+
+fn apply_upstream_divergence_result(
+    inputs: &ReducerInputs,
+    repo: &mut crate::model::RepoState,
+    background: bool,
+    result: std::result::Result<Option<UpstreamDivergence>, Error>,
+) {
+    if super::auto_fetch::has_quiet_failure(inputs, repo, background, &result) {
+        return;
+    }
+    let value = match result {
+        Ok(value) => Loadable::Ready(value),
+        Err(error) => {
+            push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
+            Loadable::Error(error.to_string())
+        }
+    };
+    repo.set_upstream_divergence(value);
 }
 
 pub(super) fn tags_loaded(
@@ -2328,22 +2482,34 @@ pub(super) fn tags_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Tag>, Error>,
 ) -> Vec<Effect> {
+    let result = match result {
+        Err(error)
+            if matches!(
+                error.kind(),
+                gitcomet_core::error::ErrorKind::Unsupported(_)
+            ) =>
+        {
+            Ok(Vec::new())
+        }
+        result => result,
+    };
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let tags = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
-                    Loadable::Ready(Vec::new())
-                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
-                    Loadable::NotLoaded
-                } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Tags);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let tags = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                        Loadable::NotLoaded
+                    } else {
+                        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 }
-            }
-        };
-        repo_state.set_tags(tags);
+            };
+            repo_state.set_tags(tags);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Tags) {
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }
@@ -2740,6 +2906,7 @@ pub(super) fn commit_details_loaded(
             }
         };
         repo_state.set_commit_details(value);
+        let session_effects = super::diff_session::record_one_sided_sides(repo_state);
 
         // The selected commit is usually a log row, but a reveal or a link menu
         // can select one the loaded page does not contain.
@@ -2750,17 +2917,17 @@ pub(super) fn commit_details_loaded(
             [commit_id.clone()],
         );
 
+        let mut effects = session_effects;
         if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
             let next_plan = selected_diff_load_plan(inputs, repo_state, &target);
             if previous_plan != Some(next_plan) {
                 apply_selected_diff_load_plan_state(repo_state, next_plan);
                 repo_state.bump_diff_state_rev();
-                let mut effects = diff_reload_effects(inputs, repo_state, repo_id, target);
-                effects.extend(signature_effect);
-                return effects;
+                effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
             }
         }
-        return signature_effect.into_iter().collect();
+        effects.extend(signature_effect);
+        return effects;
     }
     Vec::new()
 }

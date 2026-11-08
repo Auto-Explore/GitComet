@@ -7,9 +7,15 @@ use gitcomet_core::services::{
 };
 
 fn index(repo: &dyn GitRepository, mode: HistoryMode, author: Option<&str>) -> HistoryIndexHandle {
-    repo.build_history_index(mode, author, &CancellationToken::new(), &mut |_| {})
-        .unwrap()
-        .unwrap()
+    repo.build_history_index(
+        &mode.into(),
+        author,
+        &Default::default(),
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+    .unwrap()
+    .unwrap()
 }
 
 fn fixture() -> tempfile::TempDir {
@@ -22,8 +28,9 @@ fn fixture() -> tempfile::TempDir {
 fn page_snapshot(repo: &dyn GitRepository) -> HistorySnapshot {
     match repo
         .read_history(
-            HistoryMode::AllBranches,
+            &HistoryMode::AllBranches.into(),
             None,
+            &Default::default(),
             &HistoryReadRequest::Page {
                 limit: 32,
                 cursor: None,

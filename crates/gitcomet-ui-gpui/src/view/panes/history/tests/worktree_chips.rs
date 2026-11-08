@@ -4,6 +4,7 @@ use gitcomet_core::domain::{Worktree, WorktreeDirtySummary};
 
 fn worktree(path: impl Into<PathBuf>, head: Option<&str>, branch: Option<&str>) -> Worktree {
     Worktree {
+        bare: false,
         path: path.into(),
         head: head.map(|head| CommitId(head.into())),
         branch: branch.map(str::to_owned),

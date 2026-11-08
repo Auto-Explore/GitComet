@@ -1,0 +1,150 @@
+==================
+Anonymous Code Blocks
+==================
+
+@{
+        public int test = 1;
+        private string test2 = "test";
+}
+---
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (modifier)
+      (variable_declaration
+        (predefined_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))
+    (local_declaration_statement
+      (modifier)
+      (variable_declaration
+        (predefined_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (string_literal_content)))))))
+
+==================
+Code Blocks
+==================
+
+@code{
+  // hello
+}
+---
+
+(compilation_unit
+  (razor_block
+    (comment)))
+
+==================
+Functions Blocks
+==================
+
+@functions{
+  // hello
+}
+---
+
+(compilation_unit
+  (razor_block
+    (comment)))
+
+==================
+Empty Anonymous Code Blocks
+==================
+
+@{
+  //Comment
+}
+---
+
+(compilation_unit
+  (razor_block
+    (comment)))
+
+==================
+Anonymous Code Blocks with Braces
+==================
+
+@{
+  if (true)
+  {
+    var test = 1;
+  }
+}
+---
+
+(compilation_unit
+  (razor_block
+    (if_statement
+      (boolean_literal)
+      (block
+        (local_declaration_statement
+          (variable_declaration
+            (implicit_type)
+            (variable_declarator
+              (identifier)
+              (integer_literal))))))))
+
+====
+Multiple Code Blocks
+====
+@{
+    var quote = "The future depends on what you do today. - Mahatma Gandhi";
+}
+
+<p>@quote</p>
+
+@{
+    quote = "Hate cannot drive out hate, only love can do that. - Martin Luther King, Jr.";
+}
+
+<p>@quote</p>
+----
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (string_literal_content))))))
+  (element
+    (razor_implicit_expression
+      (identifier)))
+  (razor_block
+    (expression_statement
+      (assignment_expression
+        (identifier)
+        (string_literal
+          (string_literal_content)))))
+  (element
+    (razor_implicit_expression
+      (identifier))))
+
+====
+Code Block with HTML
+====
+@{
+    var inCSharp = true;
+    <p>Now in HTML, was in C# @inCSharp</p>
+}
+----
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (boolean_literal))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (identifier)))))

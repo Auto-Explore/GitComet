@@ -129,12 +129,8 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.fetch_all(_prune)
     }
 
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
-        self.inner.pull(_mode, _prune)
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        self.inner.pull(_mode)
     }
 
     fn push(&self) -> Result<()> {
@@ -188,9 +184,15 @@ fn removing_an_open_worktree_cancels_its_running_loads() {
         assert!(!cancellation.is_cancelled(), "the load starts live");
 
         let command = if force {
-            RepoCommandKind::ForceRemoveWorktree { path: removed_path }
+            RepoCommandKind::ForceRemoveWorktree {
+                path: removed_path,
+                delete_branch: None,
+            }
         } else {
-            RepoCommandKind::RemoveWorktree { path: removed_path }
+            RepoCommandKind::RemoveWorktree {
+                path: removed_path,
+                delete_branch: None,
+            }
         };
         store.dispatch(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {

@@ -94,6 +94,7 @@ mod commit_details;
 mod commit_form;
 mod file_lists;
 mod list_layouts;
+mod one_sided_diffs;
 mod previews;
 mod section_layout;
 mod status_actions;

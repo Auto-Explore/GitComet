@@ -683,7 +683,7 @@ mod tests {
     fn failed_apply_with_an_unreadable_index_keeps_the_original_git_error() {
         let dir = tempfile::tempdir().unwrap();
         let git = gix::init(dir.path()).unwrap();
-        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync());
+        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync()).unwrap();
         std::fs::write(dir.path().join(".git/index"), b"invalid index").unwrap();
         let paths = vec![PathBuf::from("a.txt")];
         assert!(repo.conflicted_paths(&paths).is_err());

@@ -28,6 +28,77 @@ impl From<HistoryScopeSetting> for LogScope {
     }
 }
 
+/// The stored form of [`HistoryFocus`]. Spelled out here rather than derived on
+/// the domain type so the on-disk shape stays independent of the `Arc<str>`
+/// fields the walk uses.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum HistoryFocusSetting {
+    LocalBranch { name: String },
+    RemoteBranch { remote: String, branch: String },
+    Remote { name: String },
+}
+
+/// Reads the stored focus map, tolerating anything it does not recognise.
+///
+/// This field is a preference, but it shares a file with the list of open
+/// repositories: one value serde cannot parse makes the whole session file
+/// unreadable, and the user silently loses every open repository and every
+/// other setting with it. So an entry that will not parse is dropped and the
+/// rest of the file is kept. A single object rather than a list is accepted for
+/// the same reason — an earlier build stored focus as one ref.
+pub(super) fn deserialize_repo_history_focus<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<BTreeMap<String, Vec<HistoryFocusSetting>>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let restored = raw
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let targets = serde_json::from_value::<Vec<HistoryFocusSetting>>(value.clone())
+                .or_else(|_| {
+                    serde_json::from_value::<HistoryFocusSetting>(value).map(|one| vec![one])
+                })
+                .ok()?;
+            (!targets.is_empty()).then_some((key, targets))
+        })
+        .collect();
+    Ok(Some(restored))
+}
+
+impl From<&HistoryFocus> for HistoryFocusSetting {
+    fn from(value: &HistoryFocus) -> Self {
+        match value {
+            HistoryFocus::LocalBranch { name } => Self::LocalBranch {
+                name: name.to_string(),
+            },
+            HistoryFocus::RemoteBranch { remote, branch } => Self::RemoteBranch {
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+            },
+            HistoryFocus::Remote { name } => Self::Remote {
+                name: name.to_string(),
+            },
+        }
+    }
+}
+
+impl From<HistoryFocusSetting> for HistoryFocus {
+    fn from(value: HistoryFocusSetting) -> Self {
+        match value {
+            HistoryFocusSetting::LocalBranch { name } => Self::local_branch(name),
+            HistoryFocusSetting::RemoteBranch { remote, branch } => {
+                Self::remote_branch(remote, branch)
+            }
+            HistoryFocusSetting::Remote { name } => Self::remote(name),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum HistoryModeSetting {
@@ -253,6 +324,35 @@ pub fn persist_repo_history_scope_to_path(
             .insert(workdir_key, scope);
 
         SessionUpdate::Write
+    })
+}
+
+/// Persists the focused refs for `workdir`. An empty set clears the stored focus
+/// rather than writing an empty list, so a repository that is not focused leaves
+/// no entry behind.
+pub fn persist_repo_history_focus_to_path(
+    workdir: &Path,
+    focus: &HistoryFocusSet,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let stored = file.repo_history_focus.get_or_insert_with(BTreeMap::new);
+        let workdir_key = path_storage_key(workdir);
+        let setting: Vec<HistoryFocusSetting> =
+            focus.iter().map(HistoryFocusSetting::from).collect();
+        if setting.is_empty() {
+            if stored.remove(&workdir_key).is_none() {
+                return Ok(());
+            }
+        } else {
+            if stored.get(&workdir_key) == Some(&setting) {
+                return Ok(());
+            }
+            stored.insert(workdir_key, setting);
+        }
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        persist_to_path(session_file_path, &file)
     })
 }
 

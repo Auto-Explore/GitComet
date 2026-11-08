@@ -16,7 +16,7 @@ fn assert_auth_attempt_is_recoverable(state: &AppState) {
     assert!(feedback.last_error.is_none());
     let entry = feedback.command_log.last().expect("auth attempt logged");
     assert!(!entry.ok);
-    assert!(entry.handled_by_auth_prompt);
+    assert!(entry.handled_by_prompt);
 }
 
 fn assert_terminal_failure(state: &AppState) {
@@ -25,7 +25,7 @@ fn assert_terminal_failure(state: &AppState) {
     assert!(feedback.last_error.is_some());
     let entry = feedback.command_log.last().expect("failed attempt logged");
     assert!(!entry.ok);
-    assert!(!entry.handled_by_auth_prompt);
+    assert!(!entry.handled_by_prompt);
 }
 
 fn auth_error(message: &str) -> Error {
@@ -117,6 +117,7 @@ fn large_file_auth_retry_runs_with_the_submitted_credentials() {
         local_branch: Some("adjusted/main(unlocked)".into()),
         pre_head: None,
         post_head: None,
+        hooks: gitcomet_core::services::GitHooks::Run,
     };
     for (operation, expected) in [
         (
@@ -198,6 +199,7 @@ fn safe_push_auth_retry_preserves_credentials_when_annex_takeover_is_queued() {
                 local_branch: Some("adjusted/main(unlocked)".into()),
                 pre_head: None,
                 post_head: None,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         },
     });
@@ -411,6 +413,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
         message: "ship it".to_string(),
         amend: false,
         push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Run,
     });
 
     reduce(
@@ -436,6 +439,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
             message: "ship it".to_string(),
             amend: false,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         }
     );
 }
@@ -471,6 +475,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         message: "fixup".to_string(),
         amend: true,
         push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Skip,
     });
 
     reduce(
@@ -496,6 +501,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
             message: "fixup".to_string(),
             amend: true,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Skip,
         }
     );
 }
@@ -511,6 +517,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
         local_branch: Some("main".to_string()),
         pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        hooks: gitcomet_core::services::GitHooks::Run,
     };
 
     reduce(
@@ -731,6 +738,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             message: "first".to_string(),
             amend: false,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
     });
     let commit_effects = reduce(
@@ -748,6 +756,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         [Effect::Commit {
             repo_id: RepoId(1),
             message,
+            hooks: gitcomet_core::services::GitHooks::Run,
             ..
         }] if message == "first"
     ));
@@ -762,6 +771,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             message: "first".to_string(),
             amend: false,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         })
     );
 
@@ -776,6 +786,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             message: "second".to_string(),
             amend: true,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Skip,
         },
     });
     let amend_effects = reduce(
@@ -788,14 +799,18 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             secret: "passphrase".to_string(),
         },
     );
-    assert!(matches!(
-        amend_effects.as_slice(),
-        [Effect::CommitAmend {
-            repo_id: RepoId(1),
-            message,
-            ..
-        }] if message == "second"
-    ));
+    assert!(
+        matches!(
+            amend_effects.as_slice(),
+            [Effect::CommitAmend {
+                repo_id: RepoId(1),
+                message,
+                hooks: gitcomet_core::services::GitHooks::Skip,
+                ..
+            }] if message == "second"
+        ),
+        "the replay keeps skipping hooks"
+    );
     let amend_auth = amend_effects[0]
         .git_auth()
         .expect("amend auth should be present");
@@ -807,6 +822,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             message: "second".to_string(),
             amend: true,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Skip,
         })
     );
 }
@@ -824,6 +840,7 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
         local_branch: Some("main".to_string()),
         pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        hooks: gitcomet_core::services::GitHooks::Run,
     };
 
     state.auth_prompt = Some(AuthPromptState {
@@ -1157,6 +1174,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     let push_after_commit_effects = replay_case(RepoCommandKind::PushAfterCommit {
         target: push_after_commit_target.clone(),
         set_upstream: true,
+        hooks: gitcomet_core::services::GitHooks::Run,
     });
     assert!(matches!(
         push_after_commit_effects.as_slice(),

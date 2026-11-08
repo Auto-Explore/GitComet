@@ -63,6 +63,7 @@ fn two_sessions_load_retarget_and_close_without_touching_each_other_or_history()
             lifetime,
             view: a,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let first_a = session_effect(&open_a).clone();
@@ -91,6 +92,7 @@ fn two_sessions_load_retarget_and_close_without_touching_each_other_or_history()
             lifetime,
             view: b,
             target: worktree("b.rs"),
+            request: None,
         }),
     );
     let first_b = session_effect(&open_b).clone();
@@ -105,6 +107,7 @@ fn two_sessions_load_retarget_and_close_without_touching_each_other_or_history()
             lifetime,
             view: a,
             target: worktree("c.rs"),
+            request: None,
         }),
     );
     let second_a = session_effect(&retarget).clone();
@@ -167,6 +170,7 @@ fn replies_from_a_previous_repository_lifetime_are_dropped() {
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let work = session_effect(&effects).clone();
@@ -201,6 +205,7 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
             lifetime,
             view: live,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     reduce(
@@ -212,6 +217,7 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
             lifetime,
             view: pinned,
             target: DiffTarget::commit(CommitId("abc".into()), PathBuf::from("a.rs")),
+            request: None,
         }),
     );
 
@@ -421,6 +427,7 @@ fn watcher_edits_inside_a_submodule_reload_its_gitlink_session() {
             lifetime,
             view,
             target: worktree("vendor/sub"),
+            request: None,
         }),
     );
     for (path, queued) in [
@@ -461,6 +468,7 @@ fn watcher_edits_do_not_cancel_a_session_load_or_reload_unrelated_files() {
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let load = session_effect(&effects).clone();
@@ -553,6 +561,7 @@ fn a_cancelled_session_load_keeps_its_content_until_the_repository_is_active_aga
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let load = session_effect(&effects).clone();
@@ -697,6 +706,7 @@ fn requested_blame_is_loaded_again_after_reload_and_encoding_change() {
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     reduce(
@@ -752,6 +762,7 @@ fn session_commands_from_a_closed_repository_cannot_reach_its_replacement() {
             lifetime,
             view,
             target: worktree("new.rs"),
+            request: None,
         }),
     );
     reduce(
@@ -773,6 +784,7 @@ fn session_commands_from_a_closed_repository_cannot_reach_its_replacement() {
             lifetime,
             view: orphan,
             target: worktree("orphan.rs"),
+            request: None,
         },
         DiffSessionMsg::OpenChanges {
             repo_id,
@@ -785,6 +797,7 @@ fn session_commands_from_a_closed_repository_cannot_reach_its_replacement() {
             lifetime,
             view,
             target: worktree("old.rs"),
+            request: None,
         },
         DiffSessionMsg::OpenChanges {
             repo_id,
@@ -950,6 +963,7 @@ fn known_worktree_paths_include_rename_sources_and_leave_staged_and_pinned_targe
                 lifetime,
                 view,
                 target,
+                request: None,
             }),
         );
     }
@@ -1003,6 +1017,7 @@ fn session_encoding_is_part_of_its_diff_state_and_does_not_change_history() {
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let value = TextOverride {
@@ -1041,6 +1056,7 @@ fn session_encoding_is_part_of_its_diff_state_and_does_not_change_history() {
             lifetime,
             view,
             target: worktree("b.rs"),
+            request: None,
         }),
     );
     let session = &state.repos[0].diff_sessions[&view];
@@ -1062,6 +1078,7 @@ fn clearing_a_session_cancels_work_and_reload_cannot_reopen_it() {
             lifetime,
             view,
             target: worktree("a.rs"),
+            request: None,
         }),
     );
     let first = session_effect(&work).clone();
@@ -1103,6 +1120,46 @@ fn clearing_a_session_cancels_work_and_reload_cannot_reopen_it() {
 }
 
 #[test]
+fn a_session_keeps_its_panes_last_open_request_through_clear_and_renderer_opens() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let mut open = |state: &mut AppState, target, request| {
+        reduce(
+            &mut repos,
+            &ids,
+            state,
+            Msg::DiffSession(DiffSessionMsg::Open {
+                repo_id,
+                lifetime,
+                view,
+                target,
+                request,
+            }),
+        );
+        state.repos[0].diff_sessions[&view].open_request
+    };
+    assert_eq!(open(&mut state, worktree("a.rs"), Some(1)), Some(1));
+    assert_eq!(open(&mut state, worktree("a.rs"), Some(2)), Some(2));
+    assert_eq!(
+        open(&mut state, worktree("b.rs"), None),
+        Some(2),
+        "the renderer's open is not the pane's"
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Clear {
+            repo_id,
+            lifetime,
+            view,
+        }),
+    );
+    assert_eq!(state.repos[0].diff_sessions[&view].open_request, Some(2));
+}
+
+#[test]
 fn session_editor_restores_its_previous_commit_without_changing_history() {
     let (mut repos, ids, mut state, repo_id) = setup();
     let lifetime = state.repos[0].lifetime();
@@ -1117,6 +1174,7 @@ fn session_editor_restores_its_previous_commit_without_changing_history() {
             lifetime,
             view,
             target: original.clone(),
+            request: None,
         }),
     );
     reduce(
@@ -1190,6 +1248,7 @@ fn linked_worktree_sessions_reload_on_their_own_worktree_and_leave_history_alone
                 lifetime,
                 view,
                 target,
+                request: None,
             }),
         )
     };
@@ -1282,5 +1341,104 @@ fn linked_worktree_sessions_reload_on_their_own_worktree_and_leave_history_alone
             state.repos[0].navigation.main_history.entries.len(),
         ),
         history_before
+    );
+}
+
+/// A session's added or deleted file has one side, as the selected diff's does,
+/// and it follows the status that lands after it opened.
+#[test]
+fn a_session_records_the_one_side_its_change_has() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let status = |kind| {
+        Ok(gitcomet_core::domain::RepoStatus {
+            staged: Arc::default(),
+            unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: PathBuf::from("a.rs"),
+                kind,
+                conflict: None,
+            }]),
+        })
+    };
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id,
+            result: status(gitcomet_core::domain::FileStatusKind::Untracked),
+        }),
+    );
+    let opened = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("a.rs"),
+            request: None,
+        }),
+    );
+    let new_side = Some(gitcomet_core::domain::DiffPreviewTextSide::New);
+    let side = |state: &AppState| {
+        state.repos[0].diff_sessions[&view]
+            .diff_state
+            .one_sided_side
+    };
+    let reads = |effects: &[Effect]| match &session_effect(effects).work {
+        DiffSessionWork::Content {
+            preview_text_side, ..
+        } => *preview_text_side,
+        other => panic!("not a content load: {other:?}"),
+    };
+    assert_eq!(side(&state), new_side);
+    assert_eq!(
+        reads(&opened),
+        new_side,
+        "the first load reads the one side"
+    );
+
+    let file = gitcomet_core::domain::DiffPreviewTextFile {
+        path: PathBuf::from("/tmp/sessions/a.rs"),
+        side: gitcomet_core::domain::DiffPreviewTextSide::New,
+        large_file: None,
+    };
+    let generation = session_effect(&opened).generation;
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Loaded {
+            repo_id,
+            view,
+            lifetime,
+            generation,
+            content: DiffSessionContent::PreviewText(Ok(Some(file.clone()))),
+        }),
+    );
+    assert!(matches!(
+        &state.repos[0].diff_sessions[&view].diff_state.diff_preview_text_file,
+        Loadable::Ready(Some(loaded)) if **loaded == file
+    ));
+
+    let landed = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id,
+            result: status(gitcomet_core::domain::FileStatusKind::Modified),
+        }),
+    );
+    assert_eq!(side(&state), None);
+    let reloaded = landed
+        .iter()
+        .any(|effect| matches!(effect, Effect::DiffSession(work) if work.view == view));
+    assert!(
+        reloaded || state.repos[0].diff_sessions[&view].refresh_queued,
+        "a side change reloads the session: {landed:?}"
     );
 }

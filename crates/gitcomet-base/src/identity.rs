@@ -5,7 +5,8 @@
 //! other caller reads [`current`]; without an installed identity the process is
 //! GitComet. Behavior such as history filtering belongs in the options of the
 //! service it changes; the identity only carries the product's defaults for
-//! them (see [`ProductIdentity::hidden_ref_prefixes`]).
+//! them (see [`ProductIdentity::hidden_ref_prefixes`] and
+//! [`ProductIdentity::history_ref_presets`]).
 
 use std::borrow::Cow;
 use std::fmt;
@@ -29,8 +30,142 @@ pub struct ProductIdentity {
     update_source: UpdateSource,
     branding: ProductBranding,
     hidden_ref_prefixes: &'static [&'static str],
+    history_ref_presets: &'static [HistoryRefPreset],
     overrides: StaticOverrides,
 }
+
+/// A namespace of tool or bookkeeping refs the user can hide from the
+/// all-branches Git log with one switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryRefPreset {
+    /// Stable key in saved settings; never reuse one for another namespace.
+    pub id: &'static str,
+    pub label: &'static str,
+    pub prefixes: &'static [&'static str],
+    /// The switch's tooltip: what writes these refs, then why to hide them.
+    pub description: &'static str,
+    pub hidden_by_default: bool,
+}
+
+impl HistoryRefPreset {
+    pub const T3_CODE: Self = Self::hidden(
+        "t3-code",
+        "T3 Code checkpoints",
+        &["refs/t3"],
+        "Snapshots of the working tree T3 Code saves on every agent turn.\n\
+         Each is an unconnected commit, and each new one rebuilds the history index.",
+    );
+    pub const CLAUDE_CODE: Self = Self::hidden(
+        "claude-code",
+        "Claude Code checkpoints",
+        &["refs/claude"],
+        "Work-in-progress commits Claude Code saves when it hits a rate limit.\n\
+         Agent scratch state, and each new one rebuilds the history index.",
+    );
+    pub const JUJUTSU: Self = Self::hidden(
+        "jujutsu",
+        "Jujutsu kept commits",
+        &["refs/jj/keep"],
+        "Refs Jujutsu adds in a colocated repository so Git keeps its commits.\n\
+         Internal to jj, including rewritten changes; they show up as stray heads.",
+    );
+    pub const MAGIT_WIP: Self = Self::hidden(
+        "magit-wip",
+        "Magit WIP snapshots",
+        &["refs/wip"],
+        "Automatic snapshots of the index and working tree from Magit's wip modes.\n\
+         One commit per save, which buries the real history.",
+    );
+    pub const PREFETCH: Self = Self::hidden(
+        "git-prefetch",
+        "Background prefetch (git maintenance)",
+        &["refs/prefetch"],
+        "Copies of remote branches that git maintenance fetches in the background.\n\
+         They repeat your remote-tracking branches.",
+    );
+    pub const FILTER_BRANCH: Self = Self::hidden(
+        "filter-branch-backups",
+        "filter-branch backups",
+        &["refs/original"],
+        "Backups git filter-branch keeps of every branch it rewrote.\n\
+         They show the old history again beside the rewritten one.",
+    );
+    pub const NOTES: Self = Self::hidden(
+        "git-notes",
+        "Git notes",
+        &["refs/notes"],
+        "Notes attached to commits, stored as a commit history of their own.\n\
+         Those commits are bookkeeping, not changes to your code.",
+    );
+    pub const GITHUB_PULL_REQUESTS: Self = Self::hidden(
+        "github-pull-requests",
+        "GitHub pull requests",
+        &["refs/pull"],
+        "GitHub pull request heads and test merges, when fetched into this clone.\n\
+         Every pull request ever opened, closed ones included: thousands of tips on busy repositories.",
+    );
+    pub const GERRIT_CHANGES: Self = Self::hidden(
+        "gerrit-changes",
+        "Gerrit changes",
+        &["refs/changes"],
+        "One ref per Gerrit patch set, when fetched into this clone.\n\
+         Many near-duplicate tips for every change under review.",
+    );
+
+    /// Every product's presets unless it chooses its own.
+    pub const DEFAULTS: &'static [Self] = &[
+        Self::T3_CODE,
+        Self::CLAUDE_CODE,
+        Self::JUJUTSU,
+        Self::MAGIT_WIP,
+        Self::PREFETCH,
+        Self::FILTER_BRANCH,
+        Self::NOTES,
+        Self::GITHUB_PULL_REQUESTS,
+        Self::GERRIT_CHANGES,
+    ];
+
+    pub const fn hidden(
+        id: &'static str,
+        label: &'static str,
+        prefixes: &'static [&'static str],
+        description: &'static str,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            prefixes,
+            description,
+            hidden_by_default: true,
+        }
+    }
+
+    pub const fn shown_by_default(mut self) -> Self {
+        self.hidden_by_default = false;
+        self
+    }
+}
+
+/// GitComet's presets: the defaults, plus the refs the Pro edition writes into
+/// repositories both editions open.
+const GITCOMET_HISTORY_REF_PRESETS: &[HistoryRefPreset] = &[
+    HistoryRefPreset::T3_CODE,
+    HistoryRefPreset::CLAUDE_CODE,
+    HistoryRefPreset::hidden(
+        "gitcomet-pro",
+        "GitComet Pro review refs",
+        &["refs/gitcomet-pro"],
+        "Pull request and review refs the Pro edition fetches into repositories it opens.\n\
+         They serve Pro's review views and are not branches of yours.",
+    ),
+    HistoryRefPreset::JUJUTSU,
+    HistoryRefPreset::MAGIT_WIP,
+    HistoryRefPreset::PREFETCH,
+    HistoryRefPreset::FILTER_BRANCH,
+    HistoryRefPreset::NOTES,
+    HistoryRefPreset::GITHUB_PULL_REQUESTS,
+    HistoryRefPreset::GERRIT_CHANGES,
+];
 
 // Static overrides make const builders usable on both borrowed and runtime
 // identities without dropping owned strings during constant evaluation.
@@ -345,7 +480,8 @@ impl ProductIdentity {
                 repo: Cow::Borrowed("GitComet"),
             },
             branding: ProductBranding::new().with_tagline("Fastest Open Source Git GUI"),
-            hidden_ref_prefixes: &["refs/pull/", "refs/changes/", "refs/notes/"],
+            hidden_ref_prefixes: &[],
+            history_ref_presets: GITCOMET_HISTORY_REF_PRESETS,
             overrides: StaticOverrides::EMPTY,
         }
     }
@@ -382,6 +518,7 @@ impl ProductIdentity {
             update_source: UpdateSource::Disabled,
             branding: ProductBranding::new(),
             hidden_ref_prefixes: &[],
+            history_ref_presets: HistoryRefPreset::DEFAULTS,
             overrides: StaticOverrides::EMPTY,
         }
     }
@@ -448,6 +585,7 @@ impl ProductIdentity {
                 update_source: UpdateSource::Disabled,
                 branding: ProductBranding::new(),
                 hidden_ref_prefixes: &[],
+                history_ref_presets: HistoryRefPreset::DEFAULTS,
                 overrides: StaticOverrides::EMPTY,
             },
         }
@@ -458,14 +596,25 @@ impl ProductIdentity {
         self.overrides.display_name.unwrap_or(&self.display_name)
     }
 
-    /// Reference namespaces omitted from an all-branches History walk.
+    /// Reference namespaces always omitted from an all-branches History walk,
+    /// whatever the user's settings.
     pub fn hidden_ref_prefixes(&self) -> &'static [&'static str] {
         self.hidden_ref_prefixes
     }
 
-    /// Sets the product's default History reference filter.
+    /// Sets the product's fixed History reference filter.
     pub const fn with_hidden_ref_prefixes(mut self, prefixes: &'static [&'static str]) -> Self {
         self.hidden_ref_prefixes = prefixes;
+        self
+    }
+
+    /// The hideable namespaces Settings offers, with their default state.
+    pub fn history_ref_presets(&self) -> &'static [HistoryRefPreset] {
+        self.history_ref_presets
+    }
+
+    pub const fn with_history_ref_presets(mut self, presets: &'static [HistoryRefPreset]) -> Self {
+        self.history_ref_presets = presets;
         self
     }
 
@@ -580,9 +729,15 @@ impl ProductIdentityBuilder {
         self
     }
 
-    /// Reference namespaces History's all-branches walk leaves out by default.
+    /// Reference namespaces History's all-branches walk always leaves out.
     pub fn hidden_ref_prefixes(mut self, prefixes: &'static [&'static str]) -> Self {
         self.identity.hidden_ref_prefixes = prefixes;
+        self
+    }
+
+    /// The hideable namespaces Settings offers.
+    pub fn history_ref_presets(mut self, presets: &'static [HistoryRefPreset]) -> Self {
+        self.identity.history_ref_presets = presets;
         self
     }
 
@@ -807,6 +962,58 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(identity.hidden_ref_prefixes(), ["refs/review/"]);
+    }
+
+    #[test]
+    fn history_ref_presets_default_per_product_and_can_be_replaced() {
+        const REVIEW: &[HistoryRefPreset] =
+            &[
+                HistoryRefPreset::hidden("review", "Review", &["refs/review"], "Review refs.")
+                    .shown_by_default(),
+            ];
+        let neutral = ProductIdentity::builder("X", "x").build().unwrap();
+        assert_eq!(neutral.history_ref_presets(), HistoryRefPreset::DEFAULTS);
+        let replaced = ProductIdentity::builder("X", "x")
+            .history_ref_presets(REVIEW)
+            .build()
+            .unwrap();
+        assert_eq!(replaced.history_ref_presets(), REVIEW);
+        assert!(!REVIEW[0].hidden_by_default);
+
+        let gitcomet = ProductIdentity::gitcomet();
+        assert!(
+            gitcomet.hidden_ref_prefixes().is_empty(),
+            "GitComet hides nothing the user cannot show"
+        );
+        let ids: Vec<&str> = gitcomet
+            .history_ref_presets()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        assert!(ids.contains(&"gitcomet-pro"), "{ids:?}");
+        for preset in HistoryRefPreset::DEFAULTS {
+            assert!(ids.contains(&preset.id), "{} missing", preset.id);
+        }
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "preset ids are unique: {ids:?}");
+        assert!(
+            gitcomet
+                .history_ref_presets()
+                .iter()
+                .all(|preset| preset.hidden_by_default
+                    && preset.prefixes.iter().all(|p| p.starts_with("refs/"))),
+        );
+        for preset in gitcomet.history_ref_presets() {
+            let lines: Vec<&str> = preset.description.lines().collect();
+            assert_eq!(lines.len(), 2, "{}: what, then why to hide", preset.id);
+            assert!(
+                lines.iter().all(|line| !line.trim().is_empty()),
+                "{}",
+                preset.id
+            );
+        }
     }
 
     #[test]

@@ -150,7 +150,7 @@ fn nested_submodule_lfs_cache_is_excluded() {
 #[test]
 fn ignored_gitignore_does_not_reload_policy() {
     let dir = unique_temp_dir("gitcomet-ignored-config");
-    let workdir = dir.path();
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
     init_repo_for_ignore_tests(workdir);
     fs::write(workdir.join(".gitignore"), "node_modules/\n").unwrap();
     fs::create_dir_all(workdir.join("node_modules/package")).unwrap();
@@ -550,7 +550,7 @@ fn access_events_do_not_trigger_refresh_loops() {
 #[test]
 fn gitignore_rules_match_git_semantics_for_nested_negation_and_anchoring() {
     let dir = unique_temp_dir("gitcomet-monitor-test");
-    let workdir = dir.path().join("repo");
+    let workdir = normalized(&dir.path().canonicalize().unwrap()).join("repo");
     init_repo_for_ignore_tests(&workdir);
     let git_dir = resolve_git_dir(&workdir);
 
@@ -603,7 +603,7 @@ fn gitignore_rules_match_git_semantics_for_nested_negation_and_anchoring() {
 #[test]
 fn tracked_paths_are_not_treated_as_ignored() {
     let dir = unique_temp_dir("gitcomet-monitor-test");
-    let workdir = dir.path().join("repo");
+    let workdir = normalized(&dir.path().canonicalize().unwrap()).join("repo");
     init_repo_for_ignore_tests(&workdir);
     let git_dir = resolve_git_dir(&workdir);
 

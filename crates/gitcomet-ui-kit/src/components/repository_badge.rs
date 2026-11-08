@@ -1,12 +1,13 @@
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{Div, FontWeight, SharedString, TextRun, div, point, px};
+use gpui::{Div, FontWeight, Pixels, SharedString, TextRun, Window, div, point, px};
 use palette::IntoColor;
 
 pub const REPOSITORY_BADGE_SIZE_PX: f32 = 18.0;
 const REPOSITORY_BADGE_FONT_SIZE_PX: f32 = 8.5;
 const REPOSITORY_BADGE_RADIUS_PX: f32 = 4.0;
+const REPOSITORY_BEHIND_PADDING_X_PX: f32 = 3.0;
 
 /// Prefer word/camel-case boundaries (`GitComet`, `git-comet` -> `GC`), then
 /// fill from the remaining letters so a single-word name still gets two
@@ -93,33 +94,99 @@ pub fn repository_initials_box(
             if theme.is_dark { 0.16 } else { 0.11 },
         )
     };
-    let size = scale.px(REPOSITORY_BADGE_SIZE_PX);
+    repository_mark_box(
+        scale,
+        initials,
+        foreground,
+        background,
+        scale.px(REPOSITORY_BADGE_SIZE_PX),
+    )
+}
+
+/// Width of [`repository_behind_box`] for `text`: the mark's square, widened
+/// only when the count needs more room.
+pub fn repository_behind_box_width(
+    text: &SharedString,
+    scale: impl Into<UiScale>,
+    window: &mut Window,
+) -> Pixels {
+    let scale = scale.into();
+    let run = mark_text_run(window, text.len(), gpui::Hsla::default());
+    let text_width = window
+        .text_system()
+        .shape_line(
+            text.clone(),
+            scale.px(REPOSITORY_BADGE_FONT_SIZE_PX),
+            &[run],
+        )
+        .width
+        .ceil();
+    (text_width + scale.px(REPOSITORY_BEHIND_PADDING_X_PX) * 2.0)
+        .max(scale.px(REPOSITORY_BADGE_SIZE_PX))
+}
+
+/// Incoming-commit count drawn in the repository mark's place. Stale counts
+/// fall back to the neutral mark palette so only current counts warn.
+pub fn repository_behind_box(
+    theme: AppTheme,
+    scale: impl Into<UiScale>,
+    text: SharedString,
+    width: Pixels,
+    stale: bool,
+) -> Div {
+    let (foreground, background) = if stale {
+        let ink = theme.colors.foreground.primary;
+        (
+            with_alpha(ink, if theme.is_dark { 0.72 } else { 0.62 }),
+            with_alpha(ink, if theme.is_dark { 0.16 } else { 0.11 }),
+        )
+    } else {
+        let warning = theme.colors.status.warning.foreground;
+        (
+            warning,
+            with_alpha(warning, if theme.is_dark { 0.18 } else { 0.12 }),
+        )
+    };
+    repository_mark_box(scale.into(), text, foreground, background, width)
+}
+
+fn mark_text_run(window: &Window, len: usize, color: gpui::Hsla) -> TextRun {
+    let mut font = window.text_style().font();
+    font.weight = FontWeight::SEMIBOLD;
+    TextRun {
+        len,
+        font,
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+        letter_spacing: None,
+    }
+}
+
+fn repository_mark_box(
+    scale: UiScale,
+    text: SharedString,
+    foreground: gpui::Rgba,
+    background: gpui::Rgba,
+    width: Pixels,
+) -> Div {
     let font_size = scale.px(REPOSITORY_BADGE_FONT_SIZE_PX);
 
     div()
         .flex_none()
-        .size(size)
+        .w(width)
+        .h(scale.px(REPOSITORY_BADGE_SIZE_PX))
         .rounded(scale.px(REPOSITORY_BADGE_RADIUS_PX))
         .bg(background)
         .child(
             gpui::canvas(
                 |_bounds, _window, _cx| {},
                 move |bounds, (), window, cx| {
-                    let mut font = window.text_style().font();
-                    font.weight = FontWeight::SEMIBOLD;
-                    let run = TextRun {
-                        len: initials.len(),
-                        font,
-                        color: foreground.into_color(),
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                        letter_spacing: None,
-                    };
-                    let shaped =
-                        window
-                            .text_system()
-                            .shape_line(initials.clone(), font_size, &[run]);
+                    let run = mark_text_run(window, text.len(), foreground.into_color());
+                    let shaped = window
+                        .text_system()
+                        .shape_line(text.clone(), font_size, &[run]);
                     let cap_height = shaped
                         .paint_fragments
                         .first()

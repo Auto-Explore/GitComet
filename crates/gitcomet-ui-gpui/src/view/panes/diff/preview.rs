@@ -115,8 +115,8 @@ const NON_UTF8_TEXT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const BINARY_PREVIEW_MESSAGE: &str = "File looks binary; text preview is not supported.";
 
 #[inline]
-fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool) -> u8 {
-    preview_line_flags_from_bools(ascii_only, has_tabs)
+fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool, trailing_cr: bool) -> u8 {
+    preview_line_flags_from_bools(ascii_only, has_tabs, trailing_cr)
 }
 
 #[inline]
@@ -219,6 +219,7 @@ fn index_text_lines(text: &str) -> (Vec<usize>, Vec<u8>) {
         line_flags.push(packed_preview_line_flags(
             line.is_ascii(),
             memchr::memchr(b'\t', line).is_some(),
+            line.ends_with(b"\r"),
         ));
         start = newline + 1;
         line_starts.push(start);
@@ -227,6 +228,7 @@ fn index_text_lines(text: &str) -> (Vec<usize>, Vec<u8>) {
     line_flags.push(packed_preview_line_flags(
         last.is_ascii(),
         memchr::memchr(b'\t', last).is_some(),
+        last.ends_with(b"\r"),
     ));
     (line_starts, line_flags)
 }
@@ -264,6 +266,7 @@ fn index_worktree_preview_reader(
     let mut source_len = 0usize;
     let mut line_ascii_only = true;
     let mut line_has_tabs = false;
+    let mut line_ends_with_cr = false;
     let mut source_bytes = (source_len_hint <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
         .then(|| Vec::with_capacity(source_len_hint.min(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES)));
 
@@ -298,11 +301,16 @@ fn index_worktree_preview_reader(
 
         for &byte in chunk {
             if byte == b'\n' {
-                line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+                line_flags.push(packed_preview_line_flags(
+                    line_ascii_only,
+                    line_has_tabs,
+                    line_ends_with_cr,
+                ));
                 source_len = source_len.saturating_add(1);
                 line_starts.push(source_len);
                 line_ascii_only = true;
                 line_has_tabs = false;
+                line_ends_with_cr = false;
                 continue;
             }
 
@@ -312,6 +320,7 @@ fn index_worktree_preview_reader(
             if byte == b'\t' {
                 line_has_tabs = true;
             }
+            line_ends_with_cr = byte == b'\r';
             source_len = source_len.saturating_add(1);
         }
     }
@@ -324,7 +333,11 @@ fn index_worktree_preview_reader(
 
     if format.format.is_plain_utf8() && sniff.utf8_valid {
         if source_len > 0 {
-            line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+            line_flags.push(packed_preview_line_flags(
+                line_ascii_only,
+                line_has_tabs,
+                line_ends_with_cr,
+            ));
         }
         let source_text = source_bytes
             .map(String::from_utf8)
@@ -738,12 +751,12 @@ impl DiffRenderer {
         self.diff_surface().file_preview_target
     }
 
-    /// Whether this content view should be drawn as a picture rather than as
-    /// text.
+    /// Whether a whole-file view — opened content, or an added, untracked or
+    /// deleted file — should be drawn as a picture rather than as text.
     ///
     /// Images always are; an SVG only while its toggle says Rendered, because
     /// Code is exactly the request to read (and edit) its source.
-    pub(in crate::view) fn content_preview_is_picture(&self, path: &std::path::Path) -> bool {
+    pub(in crate::view) fn preview_is_picture(&self, path: &std::path::Path) -> bool {
         if !crate::view::should_bypass_text_file_preview_for_path(path)
             && !self.selected_content_is_image()
         {
@@ -1177,12 +1190,15 @@ impl DiffRenderer {
                 .get(line_ix)
                 .copied()
                 .unwrap_or_default();
-            return Some(gitcomet_core::file_diff::FileDiffLineText::file_slice(
-                source_path,
-                range,
-                preview_line_is_ascii_without_loading(flags),
-                preview_line_has_tabs_without_loading(flags),
-            ));
+            return Some(
+                gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    source_path,
+                    range,
+                    preview_line_is_ascii_without_loading(flags),
+                    preview_line_has_tabs_without_loading(flags),
+                )
+                .with_known_trailing_cr(preview_line_has_trailing_cr(flags)),
+            );
         }
 
         Some(worktree_preview_materialized_line_raw_text(
@@ -1889,97 +1905,49 @@ impl DiffRenderer {
         })
     }
 
+    /// The only side an added, untracked or deleted file has, as the state
+    /// layer classified it; the diff shows it alone instead of beside an
+    /// empty one.
+    pub(in crate::view) fn one_sided_change_side(
+        &self,
+    ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+        let repo = self.active_repo()?;
+        self.bound_diff_state(repo).one_sided_side
+    }
+
+    /// The selected file's path in the workdir when its change has only `side`.
+    fn one_sided_change_abs_path(
+        &self,
+        side: gitcomet_core::domain::DiffPreviewTextSide,
+    ) -> Option<std::path::PathBuf> {
+        if self.one_sided_change_side()? != side {
+            return None;
+        }
+        let repo = self.active_repo()?;
+        let workdir = self.input.workdir()?;
+        let path = match self.bound_diff_state(repo).diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => path,
+            DiffTarget::CommitRange { path, .. } => path.as_ref()?,
+        };
+        Some(workdir.join(path))
+    }
+
+    /// An added file: it has only a new side, so it previews as a whole file.
+    /// An untracked one is read from disk instead.
     pub(in super::super::super) fn added_file_preview_abs_path(
         &self,
     ) -> Option<std::path::PathBuf> {
-        let repo = self.active_repo()?;
-        let workdir = self.input.workdir()?.to_path_buf();
-        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
-
-        match target {
-            DiffTarget::WorkingTree { path, area, .. } => {
-                if *area != DiffArea::Staged {
-                    return None;
-                }
-                let is_added = self
-                    .input
-                    .status_entry_for_path(DiffArea::Staged, path.as_path())
-                    .is_some_and(|entry| entry.kind == FileStatusKind::Added);
-                if !is_added {
-                    return None;
-                }
-                Some(if path.is_absolute() {
-                    path.clone()
-                } else {
-                    workdir.join(path)
-                })
-            }
-            DiffTarget::Commit {
-                commit_id, path, ..
-            } => {
-                let details = match &repo.history_state.commit_details {
-                    Loadable::Ready(d) => d,
-                    _ => return None,
-                };
-                if &details.id != commit_id {
-                    return None;
-                }
-                let is_added = details
-                    .files
-                    .iter()
-                    .any(|f| f.kind == FileStatusKind::Added && &f.path == path);
-                if !is_added {
-                    return None;
-                }
-                Some(workdir.join(path))
-            }
-            _ => None,
+        if self.untracked_worktree_preview_path().is_some() {
+            return None;
         }
+        self.one_sided_change_abs_path(gitcomet_core::domain::DiffPreviewTextSide::New)
     }
 
+    /// A deleted file: it has only an old side, so it previews as a whole file.
     pub(in super::super::super) fn deleted_file_preview_abs_path(
         &self,
     ) -> Option<std::path::PathBuf> {
-        let repo = self.active_repo()?;
-        let workdir = self.input.workdir()?.to_path_buf();
-        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
-
-        match target {
-            DiffTarget::WorkingTree { path, area, .. } => {
-                let is_deleted = self
-                    .input
-                    .status_entry_for_path(*area, path.as_path())
-                    .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
-                if !is_deleted {
-                    return None;
-                }
-                Some(if path.is_absolute() {
-                    path.clone()
-                } else {
-                    workdir.join(path)
-                })
-            }
-            DiffTarget::Commit {
-                commit_id, path, ..
-            } => {
-                let details = match &repo.history_state.commit_details {
-                    Loadable::Ready(d) => d,
-                    _ => return None,
-                };
-                if &details.id != commit_id {
-                    return None;
-                }
-                let is_deleted = details
-                    .files
-                    .iter()
-                    .any(|f| f.kind == FileStatusKind::Deleted && &f.path == path);
-                if !is_deleted {
-                    return None;
-                }
-                Some(workdir.join(path))
-            }
-            _ => None,
-        }
+        self.one_sided_change_abs_path(gitcomet_core::domain::DiffPreviewTextSide::Old)
     }
 
     /// Display path for a file opened via the file browser's "open content"
@@ -2286,6 +2254,32 @@ mod tests {
     use crate::perf_alloc::measure_allocations;
 
     use super::*;
+
+    #[test]
+    fn crlf_preview_indexes_keep_tail_metadata_across_scan_chunks() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let text = format!(
+            "{}\r\nlf\ninterior\rcr\nfinal\r",
+            "x".repeat(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES - 1)
+        );
+        std::fs::write(file.path(), &text).unwrap();
+        let request = TextDecodeRequest {
+            kind: gitcomet_core::text_format::SideKind::Worktree,
+            attributes: Arc::default(),
+            encoding: None,
+        };
+        let indexed = index_worktree_preview_file(file.path(), &request).unwrap();
+        let (_, memory_flags) = index_text_lines(&text);
+        for flags in [indexed.line_flags.as_ref(), memory_flags.as_slice()] {
+            assert_eq!(
+                flags
+                    .iter()
+                    .map(|&f| preview_line_has_trailing_cr(f))
+                    .collect::<Vec<_>>(),
+                [true, false, false, true]
+            );
+        }
+    }
 
     #[test]
     fn review_binary_preview_stops_before_indexing_the_file() {

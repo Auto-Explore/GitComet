@@ -27,14 +27,16 @@ mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod file_list_folder;
 mod file_list_layout;
+mod focus;
 mod history_branch_filter;
 mod history_refs;
 mod large_file;
 mod local_file_link;
 mod mergetool_settings;
 mod previous_commit_messages;
-mod pull;
+pub(super) mod pull;
 mod push;
+mod ref_menu;
 mod reflog_entry;
 mod remote;
 mod remote_web_picker;
@@ -152,12 +154,7 @@ pub(super) fn push_copy_path_entries(
 
 fn active_branch_tracking_upstream(host: &PopoverHost) -> Option<&Upstream> {
     let repo = host.active_repo()?;
-    let head = repo.head_branch.ready()?;
-    repo.branches
-        .ready()?
-        .iter()
-        .find(|branch| branch.name == *head)
-        .and_then(|branch| branch.upstream.as_ref())
+    head_branch_upstream(&repo.head_branch, &repo.branches)
 }
 
 fn action_menu_title(base: &'static str, upstream: Option<&Upstream>) -> SharedString {
@@ -579,7 +576,11 @@ impl PopoverHost {
         kind: &PopoverKind,
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
-        match kind {
+        let model = match kind {
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::RepositoryModeMenu,
+            } => Some(bare_mode::menu(self, *repo_id)),
             PopoverKind::Hosted { id, menu: true } => self
                 .extension_dialog
                 .as_ref()
@@ -596,9 +597,11 @@ impl PopoverHost {
                 Some(previous_commit_messages::model(self, *repo_id))
             }
             PopoverKind::RepoTabMenu { repo_id } => Some(repo_tab::model(self, *repo_id)),
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                Some(history_refs::model(self, *repo_id, commit_id))
-            }
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs,
+            } => Some(history_refs::model(self, *repo_id, commit_id, refs)),
             PopoverKind::ReflogEntryMenu {
                 repo_id,
                 target,
@@ -821,6 +824,7 @@ impl PopoverHost {
                 Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
+                context_actions,
                 repo_id,
                 area,
                 path,
@@ -832,6 +836,7 @@ impl PopoverHost {
                 copy_text,
                 copy_target,
             } => Some(diff_editor::model(
+                context_actions,
                 *repo_id,
                 *area,
                 path,
@@ -933,7 +938,8 @@ impl PopoverHost {
                 context,
             } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
-        }
+        }?;
+        Some(self.gate_bare_menu(model))
     }
 
     /// What an "Add to .gitignore" action on `path` would cover, or `None` when

@@ -84,6 +84,7 @@ fn status(paths: &[&str]) -> RepoStatus {
 
 fn worktree() -> Worktree {
     Worktree {
+        bare: false,
         path: PathBuf::from("/wt/side"),
         head: Some(CommitId("abc123".into())),
         branch: Some("side".into()),

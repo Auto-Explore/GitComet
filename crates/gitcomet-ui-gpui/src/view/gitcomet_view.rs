@@ -1,3 +1,4 @@
+use super::repository_views::MainSlot;
 use super::*;
 
 impl GitCometView {
@@ -195,6 +196,12 @@ impl GitCometView {
         });
         command_palette::PaletteContext {
             has_active_repo: repo.is_some(),
+            is_bare: repo.is_some_and(RepoState::is_bare),
+            pull_unavailable: repo
+                .and_then(|repo| pull_unavailable_reason(repo, &self.state.large_file_settings)),
+            push_unavailable: repo.and_then(|repo| {
+                push_request(repo, &self.state.large_file_settings).unavailable_reason()
+            }),
             external_editor: self.effective_external_editor().is_some(),
             merging: repo.is_some_and(merge_in_progress),
             sequencer: repo.is_some_and(|repo| {
@@ -443,25 +450,6 @@ impl GitCometView {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
             });
         });
-    }
-
-    pub(in crate::view) fn register_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        branch: String,
-    ) {
-        self.pending_worktree_branch_removals
-            .insert((repo_id, path), branch);
-    }
-
-    pub(super) fn take_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: &std::path::Path,
-    ) -> Option<String> {
-        self.pending_worktree_branch_removals
-            .remove(&(repo_id, path.to_path_buf()))
     }
 
     #[cfg(test)]
@@ -924,6 +912,8 @@ impl GitCometView {
                 return;
             }
             crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
+            #[cfg(target_os = "macos")]
+            cx.defer(crate::app::refresh_macos_app_menus);
             crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
             if !this.has_repo_tabs() {
                 // Another window may have opened or closed repositories.
@@ -1200,6 +1190,7 @@ impl GitCometView {
             window_gated: false,
             extension_window,
             repository_view_focus: cx.focus_handle(),
+            canvas_overlay_focus: cx.focus_handle(),
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
             sidebar_tabs: Self::sidebar_tab_router(cx),
@@ -1300,8 +1291,9 @@ impl GitCometView {
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
-            sidebar_header_minimum: px(0.0),
-            sidebar_window_size_request: None,
+            sidebar_header_minimum: Default::default(),
+            details_header_minimum: Default::default(),
+            pane_window_size_request: None,
             _sidebar_header_subscription: sidebar_header_subscription,
             details_width: initial_details_width,
             sidebar_render_width: initial_sidebar_render_width,
@@ -1328,7 +1320,6 @@ impl GitCometView {
             pending_hook_activity_open: None,
             minimized_hook_activity_chains: FxHashSet::default(),
             minimized_hook_activity_repos: FxHashSet::default(),
-            pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
@@ -1340,6 +1331,8 @@ impl GitCometView {
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
             auth_prompt_focus_return: None,
+            annex_remote_rejected: None,
+            annex_remote_later: Default::default(),
             active_context_menu_invoker: None,
         };
 
@@ -1881,6 +1874,11 @@ impl GitCometView {
         self.state.active_repo
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn active_repository_is_bare(&self) -> bool {
+        self.active_repo().is_some_and(RepoState::is_bare)
+    }
+
     pub(super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|repo| repo.id == repo_id)
@@ -2309,10 +2307,36 @@ impl GitCometView {
             .filter(|url| !url.is_empty())
     }
 
+    pub(super) fn can_report_startup_crash(&self, cx: &App) -> bool {
+        self.startup_crash_report_issue_url().is_some()
+            || (self.extension_window.is_some()
+                && super::extension_host::registry(cx)
+                    .is_some_and(|registry| registry.crash_report_action().is_some()))
+    }
+
     /// The "Report Issue" button's whole body, so the button stays a one-liner
     /// and tests can drive the real sequence through
     /// [`Self::report_startup_crash_report_with`].
     pub(super) fn report_startup_crash_report(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.startup_crash_report.is_none() {
+            return;
+        }
+        if let Some(action) = super::extension_host::registry(cx)
+            .and_then(|registry| registry.crash_report_action().cloned())
+        {
+            if let Some(host) = self
+                .extension_window
+                .as_ref()
+                .map(|extension| extension.host())
+            {
+                let window = self.window_handle;
+                // Release this view's borrow before the extension opens a dialog.
+                cx.defer(move |cx| {
+                    let _ = window.update(cx, |_, window, cx| action(host, window, cx));
+                });
+            }
+            return;
+        }
         self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
     }
 
@@ -2356,26 +2380,23 @@ impl GitCometView {
     }
 
     /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,
-    /// unless an extension's repository view is selected. Then it is the
-    /// hosted diff pane inside that view the user is engaged with, and with
-    /// none there the keys do nothing, rather than move History's hidden
-    /// selection.
+    /// unless an extension's canvas overlay covers it or an extension's
+    /// repository view is selected. Then it is the hosted diff pane inside
+    /// that overlay or view the user is engaged with, and with none there the
+    /// keys do nothing, rather than move History's hidden selection.
     pub(super) fn diff_shortcut_target(
         &self,
         window: &Window,
         cx: &App,
     ) -> Option<Entity<DiffRenderer>> {
-        let extension_view_selected = self
-            .repository_views
-            .as_ref()
-            .zip(self.active_repo())
-            .is_some_and(|(router, repo)| router.selected(repo).is_some());
-        if !extension_view_selected || self.documents_active {
-            return Some(self.diff_renderer.clone());
-        }
+        let scope = match self.main_slot() {
+            MainSlot::Document | MainSlot::History => return Some(self.diff_renderer.clone()),
+            MainSlot::Overlay(_) => &self.canvas_overlay_focus,
+            MainSlot::View(_) => &self.repository_view_focus,
+        };
         self.extension_window
             .as_ref()?
-            .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+            .diff_pane_for_keys(scope, window, cx)
     }
 
     pub(super) fn defer_search_match_navigation(
@@ -2493,6 +2514,17 @@ impl GitCometView {
     pub(super) fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
         if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
             return;
+        }
+        // Over a canvas overlay, Back uncovers the view behind and Forward
+        // waits: neither moves a view the user cannot see.
+        match self.main_slot() {
+            MainSlot::Overlay(_) => {
+                if !forward {
+                    self.hide_active_canvas_overlay(cx);
+                }
+                return;
+            }
+            MainSlot::Document | MainSlot::View(_) | MainSlot::History => {}
         }
         if self.route_extension_navigation(forward, cx) {
             return;

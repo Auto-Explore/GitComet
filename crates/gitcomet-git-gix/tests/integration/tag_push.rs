@@ -258,12 +258,13 @@ fn stale_requests_and_cancelled_previews_never_push() {
 #[cfg(unix)]
 #[test]
 fn preview_skips_hooks_and_signing_but_real_push_runs_hooks() {
-    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
     fixture.tags();
-    let hook = fixture.local.join(".git/hooks/pre-push");
-    fs::write(&hook, "#!/bin/sh\necho ran > hook-ran\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    gitcomet_core::test_support::script::install_hook(
+        &fixture.local,
+        "pre-push",
+        "#!/bin/sh\necho ran > hook-ran\nexit 1\n",
+    );
     git(&fixture.local, &["config", "push.gpgSign", "true"]);
     let repo = GixBackend.open(&fixture.local).unwrap();
     let request = fixture.request(TagPushMode::All);

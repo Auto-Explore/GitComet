@@ -479,3 +479,55 @@ fn shared_snapshots_update_sidebar_menus_and_every_file_list(cx: &mut gpui::Test
         });
     });
 }
+
+#[gpui::test]
+fn hiding_a_remote_from_history_marks_its_sidebar_header(cx: &mut gpui::TestAppContext) {
+    use gitcomet_state::model::RepositoryPreferenceUpdate;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let state = long_list_tests::branch_fixture(1);
+    let repo_id = state.repos[0].id;
+    store.replace_snapshot_for_test(state);
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let marker = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| test_support::sync_store_snapshot(view, cx));
+        });
+        test_support::redraw(cx);
+        let rows = cx.update(|_, app| {
+            view.read(app)
+                .sidebar_pane
+                .clone()
+                .update(app, |pane, _| pane.branch_sidebar_presentation_cached())
+                .expect("sidebar rows")
+                .rows
+        });
+        let origin = rows
+            .iter()
+            .position(|row| {
+                matches!(row, BranchSidebarRow::RemoteHeader { name, .. } if name.as_ref() == "origin")
+            })
+            .expect("origin's header");
+        cx.debug_bounds(format!("sidebar_remote_hidden_in_history_{origin}").leak())
+    };
+    assert!(marker(cx).is_none(), "a shown remote has no marker");
+
+    store.dispatch(Msg::UpdateRepositoryPreference {
+        repo_id,
+        update: RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+            remote: "origin".into(),
+            hidden: true,
+        },
+    });
+    wait_for_preferences(&store, |prefs| {
+        prefs.history_hidden_remotes.contains("origin")
+    });
+    let marker = marker(cx).expect("the hidden remote's header shows it");
+    cx.simulate_mouse_move(marker.center(), None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).as_deref(),
+        Some("Hidden from the history graph (right-click to show it again)")
+    );
+}

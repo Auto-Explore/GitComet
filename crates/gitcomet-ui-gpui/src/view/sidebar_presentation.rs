@@ -98,6 +98,7 @@ impl SidebarPresentationCache {
 
 struct OpenWorktreeSource {
     path: PathBuf,
+    repository_mode: Option<gitcomet_core::domain::RepositoryMode>,
     head: Loadable<String>,
     detached: Option<CommitId>,
 }
@@ -125,6 +126,7 @@ impl WorktreeBadgeCache {
                 .zip(open_repos)
                 .all(|(cached, current)| {
                     cached.path == current.spec.workdir
+                        && cached.repository_mode == current.repository_mode
                         && cached.head == current.head_branch
                         && cached.detached == current.detached_head_commit
                 })
@@ -153,6 +155,7 @@ fn worktree_badges_cached(
             .iter()
             .map(|repo| OpenWorktreeSource {
                 path: repo.spec.workdir.clone(),
+                repository_mode: repo.repository_mode,
                 head: repo.head_branch.clone(),
                 detached: repo.detached_head_commit.clone(),
             })
@@ -831,6 +834,7 @@ mod tests {
     fn filtered_rows_and_worktree_badges_reuse_data_until_their_sources_change() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/feature"),
             head: None,
             branch: Some("feature/old".into()),
@@ -953,6 +957,7 @@ mod tests {
     fn build_sidebar_presentation_reloads_worktree_row_branch_after_worktree_refresh() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature/old".to_string()),
@@ -985,6 +990,7 @@ mod tests {
 
         state.repos[0].worktrees =
             Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: PathBuf::from("/tmp/repo-feature"),
                 head: None,
                 branch: Some("feature/new".to_string()),
@@ -1008,12 +1014,14 @@ mod tests {
     fn worktree_badge_cache_follows_a_repositorys_workdir_moving() {
         let worktrees = Arc::new(vec![
             gitcomet_core::domain::Worktree {
+                bare: false,
                 path: PathBuf::from("/tmp/repo"),
                 head: None,
                 branch: Some("main".to_string()),
                 detached: false,
             },
             gitcomet_core::domain::Worktree {
+                bare: false,
                 path: PathBuf::from("/tmp/repo-feature"),
                 head: None,
                 branch: Some("feature".to_string()),
@@ -1075,6 +1083,7 @@ mod tests {
     fn worktree_badge_index_returns_none_for_unknown_branch() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1092,6 +1101,7 @@ mod tests {
     fn worktree_badge_index_returns_path_for_listed_worktree() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1111,6 +1121,7 @@ mod tests {
     fn worktree_badge_index_active_path_returns_none_when_no_open_repo_matches() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1127,6 +1138,7 @@ mod tests {
     fn worktree_badge_index_active_path_returns_when_open_repo_matches_workdir() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature/listed".to_string()),
@@ -1143,6 +1155,32 @@ mod tests {
         assert_eq!(
             index.active_path("feature/listed"),
             Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+    }
+
+    #[test]
+    fn bare_mode_changes_invalidate_cached_active_checkout_badges() {
+        let mut repo = repo_state(RepoId(1), "/tmp/bare-badge-cache");
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+        repo.head_branch = Loadable::Ready("main".into());
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
+            path: repo.spec.workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        }]));
+        let mut cache = None;
+        assert!(
+            worktree_badges_cached(&mut cache, &repo, &[repo.clone()])
+                .active_path("main")
+                .is_some()
+        );
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+        assert!(
+            worktree_badges_cached(&mut cache, &repo, &[repo.clone()])
+                .active_path("main")
+                .is_none()
         );
     }
 
@@ -1183,6 +1221,7 @@ mod tests {
     fn build_sidebar_presentation_includes_worktree_badges_when_worktrees_loaded() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1211,6 +1250,7 @@ mod tests {
     fn build_sidebar_presentation_clears_worktree_badges_when_worktrees_become_error() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1245,6 +1285,7 @@ mod tests {
     fn build_sidebar_presentation_updates_worktree_badges_after_worktree_change() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature/old".to_string()),
@@ -1269,6 +1310,7 @@ mod tests {
 
         state.repos[0].worktrees =
             Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: PathBuf::from("/tmp/repo-feature"),
                 head: None,
                 branch: Some("feature/new".to_string()),
@@ -1297,6 +1339,7 @@ mod tests {
     fn build_sidebar_presentation_removes_badge_when_worktree_becomes_detached() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
@@ -1318,6 +1361,7 @@ mod tests {
 
         state.repos[0].worktrees =
             Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: PathBuf::from("/tmp/repo-feature"),
                 head: None,
                 branch: None,

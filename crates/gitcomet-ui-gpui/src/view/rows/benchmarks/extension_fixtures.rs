@@ -85,6 +85,7 @@ impl ExtensionFrameFixture {
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         let lifetime = repo.lifetime();
         let state = Arc::new(AppState {
             git_runtime: gitcomet_core::process::GitRuntimeState {
@@ -379,6 +380,7 @@ impl EmptyExtensionFrameFixture {
             },
         );
         repository.open = Loadable::Ready(());
+        repository.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repository.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: (0..commits)
                 .map(|index| Commit {

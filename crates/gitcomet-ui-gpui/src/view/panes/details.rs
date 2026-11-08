@@ -6,6 +6,30 @@ use gitcomet_core::history_find::HistoryFindQuery;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
+/// A commit message being edited in the commit details. Kept only while that
+/// commit stays the one shown.
+pub(in super::super) struct CommitRewordDraft {
+    pub(in super::super) repo_id: RepoId,
+    pub(in super::super) commit_id: CommitId,
+    /// The commit's message when editing began.
+    pub(in super::super) original: String,
+    /// Whether the input holds a message "Update commit" would accept, so the
+    /// pane repaints only when that flips rather than on every keystroke.
+    pub(in super::super) submittable: bool,
+    /// The message a first submit asked to confirm, for a published commit.
+    pub(in super::super) confirming: Option<String>,
+    /// Set from dispatch until the reword and any retry of it are over, so
+    /// it is submitted once.
+    pub(in super::super) submitting: Option<CommitRewordSubmission>,
+    /// A paused update can be continued after its authentication prompt closes.
+    pub(in super::super) retained_request: Option<gitcomet_state::model::RewordRequestId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in super::super) struct CommitRewordSubmission {
+    pub(in super::super) request_id: gitcomet_state::model::RewordRequestId,
+}
+
 /// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
 /// repo, worktree-dirty revision, and the worktree's own path.
 /// One status section's display order, keyed by the projection it was built for.
@@ -54,7 +78,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) timezone: crate::view::date_time::Timezone,
     pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
-    _commit_message_input_subscription: gpui::Subscription,
+    _commit_reword_input_subscription: gpui::Subscription,
     _history_find_subscription: gpui::Subscription,
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
@@ -93,6 +117,10 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
+    /// The editable message while [`Self::commit_reword`] is set.
+    pub(in super::super) commit_reword_input: Entity<components::TextInput>,
+    pub(in super::super) commit_reword_scroll: ScrollHandle,
+    pub(in super::super) commit_reword: Option<CommitRewordDraft>,
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
@@ -102,14 +130,14 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
+    /// `--no-verify` for the commit and the push after it.
+    pub(in super::super) commit_skip_hooks_enabled: bool,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
     /// prepared message is applied once and never re-applied.
     applied_commit_suggestions: rustc_hash::FxHashMap<RepoId, (u64, Option<String>)>,
-    pub(in super::super) commit_message_user_edited: bool,
-    pub(in super::super) commit_message_last_text: SharedString,
-    pub(in super::super) commit_message_programmatic_change: bool,
+    pub(in super::super) extension_commit_items: Vec<AnyView>,
 
     pub(in super::super) status_multi_selection: FxHashMap<RepoId, StatusMultiSelection>,
     pub(in super::super) status_multi_selection_last_status: FxHashMap<RepoId, (u64, u64)>,
@@ -276,11 +304,11 @@ impl DetailsPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
-
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.repository_mode.hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
             // Counts arrive after the list is drawn; without these the pane
             // never repaints for them.
@@ -294,12 +322,21 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
+            repo.reword.revision.hash(&mut hasher);
             let history = &repo.history_state;
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
             if Self::shows_comparison(repo) {
                 repo.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
+            }
+            // An older commit's place in that history, and HEAD's, decide
+            // whether its message can be edited and whether it is published.
+            if history.selected_commit.is_some() {
+                repo.log_rev.hash(&mut hasher);
+                history.indexed.rev.hash(&mut hasher);
+                repo.detached_head_commit.hash(&mut hasher);
+                repo.upstream_divergence_rev.hash(&mut hasher);
             }
             history.commit_details_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
@@ -388,7 +425,11 @@ impl DetailsPaneView {
                 window,
                 cx,
             );
-            input.set_vertical_scroll_handle(Some(commit_message_scroll.clone()));
+            input.set_scrollable(
+                commit_message_scroll.clone(),
+                crate::view::panels::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX,
+                cx,
+            );
             input
         });
 
@@ -403,6 +444,40 @@ impl DetailsPaneView {
             // every line of a long message when a commit is selected.
             input.set_vertical_scroll_handle(Some(commit_scroll.clone()));
             input
+        });
+        let commit_reword_scroll = ScrollHandle::new();
+        let commit_reword_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Enter commit message".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(commit_reword_scroll.clone()));
+            input
+        });
+        let commit_reword_subscription = cx.observe(&commit_reword_input, |this, input, cx| {
+            let Some(draft) = this.commit_reword.as_mut() else {
+                return;
+            };
+            let text = input.read(cx).text();
+            let submittable = crate::view::panels::commit_reword_submittable(&draft.original, text);
+            // Editing the message withdraws a pending confirmation.
+            let confirm_withdrawn = draft
+                .confirming
+                .as_deref()
+                .is_some_and(|confirmed| confirmed != text);
+            if confirm_withdrawn {
+                draft.confirming = None;
+            }
+            if draft.submittable != submittable || confirm_withdrawn {
+                draft.submittable = submittable;
+                cx.notify();
+            }
         });
         let commit_details_message_link_menu = cx.new(|_cx| {
             components::CommitLinkMenu::new(
@@ -451,19 +526,6 @@ impl DetailsPaneView {
             )
         });
 
-        let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
-            let next: SharedString = input.read(cx).text().to_string().into();
-            if this.commit_message_programmatic_change {
-                this.commit_message_programmatic_change = false;
-                this.commit_message_last_text = next;
-                return;
-            }
-
-            if this.commit_message_last_text != next {
-                this.commit_message_last_text = next;
-                this.commit_message_user_edited = true;
-            }
-        });
         let history_find_query = history_view.read(cx).history_find_query().cloned();
         let history_find_subscription = cx.observe(&history_view, |this, history, cx| {
             let query = history.read(cx).history_find_query();
@@ -483,7 +545,7 @@ impl DetailsPaneView {
             timezone,
             show_timezone,
             _ui_model_subscription: subscription,
-            _commit_message_input_subscription: commit_message_subscription,
+            _commit_reword_input_subscription: commit_reword_subscription,
             _history_find_subscription: history_find_subscription,
             history_find_query,
             root_view,
@@ -518,6 +580,9 @@ impl DetailsPaneView {
             commit_scroll,
             commit_message_input,
             commit_details_message_input,
+            commit_reword_input,
+            commit_reword_scroll,
+            commit_reword: None,
             commit_details_message_link_menu,
             commit_details_sha_link_menu,
             commit_details_sha_input,
@@ -527,12 +592,11 @@ impl DetailsPaneView {
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
+            commit_skip_hooks_enabled: false,
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
-            commit_message_user_edited: false,
-            commit_message_last_text: SharedString::default(),
-            commit_message_programmatic_change: false,
+            extension_commit_items: Vec::new(),
             status_multi_selection: FxHashMap::default(),
             status_multi_selection_last_status: FxHashMap::default(),
             file_list_selection: FxHashMap::default(),
@@ -779,6 +843,19 @@ impl DetailsPaneView {
         });
     }
 
+    /// Toggle hook skipping from the commit box; the root view keeps the
+    /// popover host in step.
+    pub(in super::super) fn toggle_commit_skip_hooks(&mut self, cx: &mut gpui::Context<Self>) {
+        let enabled = !self.commit_skip_hooks_enabled;
+        self.set_commit_skip_hooks_enabled(enabled, cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_commit_skip_hooks_enabled(enabled, cx)
+            });
+        });
+    }
+
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
         self.commit_message_input.read(cx).text().trim().is_empty()
     }
@@ -796,13 +873,50 @@ impl DetailsPaneView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = false;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
         self.commit_message_input
             .update(cx, |input, cx| input.set_text(message, cx));
         self.commit_message_scroll
             .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    /// An extension's message for the repository `repo_id` held at `lifetime`:
+    /// in the box while that repository is on screen, otherwise as the draft
+    /// it shows when selected. Focus stays where it is. A repository that has
+    /// closed since the request gets nothing.
+    pub(in super::super) fn set_extension_commit_message(
+        &mut self,
+        repo_id: RepoId,
+        lifetime: u64,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self
+            .state
+            .repos
+            .iter()
+            .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+        {
+            return;
+        }
+        if self.active_repo_id() == Some(repo_id) {
+            self.set_commit_message_programmatically(message, cx);
+            cx.notify();
+            return;
+        }
+        if message.is_empty() {
+            self.commit_message_drafts.remove(&repo_id);
+        } else {
+            self.commit_message_drafts.insert(repo_id, message.into());
+        }
+    }
+
+    pub(in super::super) fn set_extension_commit_items(
+        &mut self,
+        items: Vec<AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_commit_items = items;
+        cx.notify();
     }
 
     fn prefill_commit_message_for_amend(&mut self, cx: &mut gpui::Context<Self>) {
@@ -846,19 +960,26 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_skip_hooks_enabled == enabled {
+            return;
+        }
+
+        self.commit_skip_hooks_enabled = enabled;
+        cx.notify();
+    }
+
     pub(in super::super) fn set_commit_message_from_history(
         &mut self,
         message: String,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = true;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
-        self.commit_message_input
-            .update(cx, |input, cx| input.set_text(message, cx));
-        self.commit_message_scroll
-            .set_offset(point(px(0.0), px(0.0)));
+        self.set_commit_message_programmatically(message, cx);
         let focus = self
             .commit_message_input
             .read_with(cx, |input, _| input.focus_handle());
@@ -2457,6 +2578,7 @@ impl DetailsPaneView {
         });
 
         self.state = next;
+        self.advance_commit_reword_submission(cx);
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
 
@@ -2552,8 +2674,6 @@ impl DetailsPaneView {
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.staged_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2561,11 +2681,7 @@ impl DetailsPaneView {
                 .and_then(|repo_id| self.commit_message_drafts.get(&repo_id).cloned())
                 .unwrap_or_default();
             restored_commit_message = Some(restore.clone());
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
-            self.commit_message_last_text = restore;
+            self.set_commit_message_programmatically(restore.to_string(), cx);
         } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
@@ -2596,13 +2712,7 @@ impl DetailsPaneView {
             && apply_merge_message
             && let Some(message) = next_merge_message
         {
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
-            self.commit_message_last_text = message.clone().into();
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(message, cx));
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
+            self.set_commit_message_programmatically(message, cx);
         }
 
         self.apply_pending_amend_prefill(cx);
@@ -2909,6 +3019,18 @@ impl DetailsPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             let handle = root.diff_renderer.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+    }
+
+    pub(in super::super) fn focus_history_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            let history = root.main_pane.read(cx).history_view.clone();
+            let handle = history.read(cx).history_panel_focus_handle.clone();
             window.focus(&handle, cx);
         });
     }

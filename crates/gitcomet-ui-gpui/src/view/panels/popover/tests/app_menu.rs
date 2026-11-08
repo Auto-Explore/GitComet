@@ -263,6 +263,7 @@ fn app_menu_view_with(
                 },
             );
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.remotes = remotes;
             let state = Arc::new(AppState {
                 repos: vec![repo],

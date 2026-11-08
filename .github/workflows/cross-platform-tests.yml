@@ -115,7 +115,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || matrix.name == 'macos15-x64' && 90 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64') && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -205,8 +205,13 @@ jobs:
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
         run: python3 scripts/ci/run.py doc --context workspace
-      # The workspace enables the UI's default features and runs its complete
-      # suite. Only the headless app needs a separate feature context for smoke.
+      - name: Compile and inventory GUI application tests
+        run: python3 scripts/ci/run.py compile --context app-gui
+      - name: Execute GUI application tests
+        shell: bash
+        run: python3 scripts/ci/run.py test --context app-gui --schedule "$CI_TEST_SCHEDULE"
+      - name: GUI application doctests
+        run: python3 scripts/ci/run.py doc --context app-gui
       - name: Compile Linux display-selection app context
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
@@ -247,7 +252,7 @@ jobs:
     steps:
       - name: Install native dependencies
         run: |
-          dnf -y install bash clang curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+          dnf -y install bash clang curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config procps-ng tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
           pkg-config --libs --cflags fontconfig
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
@@ -269,6 +274,8 @@ jobs:
           # `annex pull`/`push`. Its integration tests fail rather than skip here.
           git annex version | head -1
           echo "GITCOMET_REQUIRE_GIT_ANNEX=1" >> "$GITHUB_ENV"
+          # Fetch-cancellation fixtures read process groups with ps.
+          ps -o pgid= -p "$$"
           # The container runs as root over a checkout the runner user owns;
           # checkout's own safe.directory entry does not outlive its step.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"

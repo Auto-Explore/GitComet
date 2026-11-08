@@ -288,7 +288,7 @@ impl GixRepo {
 
         let nested_workdir = repo_workdir_for_submodule_trust(&repo).join(path);
         let nested_status_repo =
-            GixRepo::new(nested_workdir.clone(), nested_repo.clone().into_sync());
+            GixRepo::new(nested_workdir.clone(), nested_repo.clone().into_sync())?;
         let nested_status = nested_status_repo.status_impl()?;
         if !nested_status.staged.is_empty() || !nested_status.unstaged.is_empty() {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -448,9 +448,13 @@ fn nested_failure_prunes_subtree(kind: &ErrorKind) -> bool {
         ErrorKind::Backend(_)
         | ErrorKind::Unsupported(_)
         | ErrorKind::NotARepository
+        | ErrorKind::BareUnsupported
+        | ErrorKind::BareConversionRefused(_)
         | ErrorKind::Io(_)
         | ErrorKind::Git(_) => true,
-        ErrorKind::Cancelled => false,
+        ErrorKind::Cancelled
+        | ErrorKind::RepositoryChanged
+        | ErrorKind::BareConversionRecovery { .. } => false,
     }
 }
 
@@ -1014,7 +1018,7 @@ fn submodule_live_inner_changes(
     let nested_status_repo = GixRepo::new(
         nested_workdir.to_path_buf(),
         nested_repo.clone().into_sync(),
-    );
+    )?;
     let RepoStatus { staged, unstaged } =
         nested_status_repo.status_cancellable_impl(cancellation)?;
     let staged_counts = git_numstat_counts(nested_workdir, true, cancellation)?;
@@ -1539,27 +1543,22 @@ fn remove_local_submodule_config_section_if_present(
             "submodule logical name is not valid UTF-8",
         )));
     };
-    let section = format!("submodule.{logical_name}");
-
-    let mut cmd = git_workdir_cmd_for(workdir);
-    cmd.arg("config")
-        .arg("--local")
-        .arg("--remove-section")
-        .arg(&section);
-    let output = cmd.output().map_err(Error::from)?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-    if stderr.contains("no such section") {
-        return Ok(());
-    }
-
-    Err(Error::new(ErrorKind::Backend(format!(
-        "git config --local --remove-section {section} failed: {}",
-        stderr.trim()
-    ))))
+    // Freshly: `submodule deinit` usually removed the section just before.
+    // Edited through gix: `git config --remove-section` cannot match a name
+    // such as `[z]`, and its refusal is translated prose.
+    let repo =
+        crate::open::open_worktree_repo_with_options(workdir, gix::open::Options::isolated())
+            .map_err(|e| crate::open::map_open_error(e, "gix open submodule config", workdir))?;
+    super::porcelain::edit_local_config_strict(&repo, |config| {
+        let mut removed = false;
+        while config
+            .remove_section("submodule", Some(logical_name.into()))
+            .is_some()
+        {
+            removed = true;
+        }
+        Ok(removed)
+    })
 }
 
 /// Refuse a submodule name that could leave `.git/modules/` once joined onto
@@ -1830,7 +1829,12 @@ fn git_config_get_bool_global_with_retry(trust_root: &Path, key: &str) -> Result
 fn git_config_set_bool_global_with_retry(trust_root: &Path, key: &str) -> Result<()> {
     retry_git_config_contention(|| {
         let mut cmd = git_workdir_cmd_for(trust_root);
-        cmd.arg("config").arg("--global").arg(key).arg("true");
+        // Contention is recognized by Git's English text.
+        cmd.env("LC_ALL", "C")
+            .arg("config")
+            .arg("--global")
+            .arg(key)
+            .arg("true");
         run_git_simple(cmd, &format!("git config --global {key} true"))
     })
 }
@@ -1905,7 +1909,9 @@ fn submodule_file_transport_consent_key(trust_root: &Path, source_path: &Path) -
 
 fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<bool>> {
     let mut cmd = git_workdir_cmd_for(trust_root);
-    cmd.arg("config")
+    // Contention is recognized by Git's English text.
+    cmd.env("LC_ALL", "C")
+        .arg("config")
         .arg("--global")
         .arg("--type=bool")
         .arg("--get")

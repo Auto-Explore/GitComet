@@ -156,14 +156,43 @@ pub(in crate::view) struct IndexedViewState {
     plan_key: Option<(usize, u64, bool)>,
 }
 
+pub(super) struct RetainedTab {
+    state: IndexedViewState,
+    viewport: Option<super::scroll::LogicalViewport>,
+}
+
+impl IndexedViewState {
+    fn repo_id(&self) -> Option<RepoId> {
+        self.presentation
+            .as_ref()
+            .map(|shown| shown.key.repo_id)
+            .or_else(|| {
+                self.pending
+                    .as_ref()
+                    .map(|pending| pending.presentation.key.repo_id)
+            })
+            .or_else(|| self.building.as_ref().map(|(key, _)| key.repo_id))
+    }
+
+    fn cancel_pending_presentation(&mut self) {
+        if let Some((_, token)) = self.building.take() {
+            token.cancel();
+        }
+        self.pending = None;
+    }
+
+    fn cancel_pending_work(&mut self) {
+        self.cancel_pending_presentation();
+        if let Some((_, token)) = self.window_building.take() {
+            token.cancel();
+        }
+        self.requested_blocks = None;
+    }
+}
+
 impl Drop for IndexedViewState {
     fn drop(&mut self) {
-        if let Some((_, cancel)) = &self.building {
-            cancel.cancel();
-        }
-        if let Some((_, cancel)) = &self.window_building {
-            cancel.cancel();
-        }
+        self.cancel_pending_work();
     }
 }
 
@@ -235,26 +264,72 @@ impl HistoryView {
             history_scope: repo.history_state.history_scope,
             log_source: Arc::as_ptr(index) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
+            history_focus: repo.history_state.history_focus.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
             branches_rev: repo.branches_rev,
-            remote_branches_rev: repo.remote_branches_rev,
+            remote_branches: HistoryRemoteBranchesKey::of(repo),
             stashes_rev: repo.stashes_rev,
         }
     }
 
     pub(super) fn ensure_indexed_history(&mut self, cx: &mut gpui::Context<Self>) {
+        self.retained_indexed_tabs
+            .retain(|id, _| self.state.repos.iter().any(|repo| repo.id == *id));
         let Some(repo) = self.active_repo() else {
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
             return;
         };
         let repo_id = repo.id;
+        if let Some(previous_id) = self.indexed.repo_id().filter(|id| *id != repo_id) {
+            self.update_history_row_hover(None, None, cx);
+            let mut state = std::mem::take(&mut self.indexed);
+            state.cancel_pending_work();
+            let viewport = self.scroll_interaction.borrow_mut().logical.take();
+            if state.presentation.is_some()
+                && self.state.repos.iter().any(|repo| repo.id == previous_id)
+            {
+                self.retained_indexed_tabs
+                    .insert(previous_id, RetainedTab { state, viewport });
+            }
+        }
+        if self.indexed.presentation.is_none()
+            && let Some(retained) = self.retained_indexed_tabs.remove(&repo_id)
+            && self.active_repo().is_some_and(|repo| {
+                repo.history_state
+                    .indexed
+                    .index
+                    .as_ref()
+                    .is_some_and(|index| {
+                        Some(&index.snapshot) == repo.history_state.log_snapshot.as_ref()
+                            && retained
+                                .state
+                                .presentation
+                                .as_ref()
+                                .is_some_and(|shown| shown.key == self.index_key(repo, index))
+                    })
+            })
+        {
+            self.update_history_row_hover(None, None, cx);
+            self.indexed = retained.state;
+            self.scroll_interaction.borrow_mut().logical = retained.viewport;
+        }
+        if self
+            .history_cache
+            .as_ref()
+            .is_some_and(|cache| cache.base.request.repo_id != repo_id)
+        {
+            self.history_cache = None;
+            self.history_cache_inflight = None;
+        }
+        let repo = self.active_repo().unwrap();
         if self.indexed.presentation.as_ref().is_some_and(|shown| {
             shown.key.repo_id != repo_id
                 || shown.key.history_scope != repo.history_state.history_scope
                 || shown.key.history_author_filter != repo.history_state.history_author_filter
+                || shown.key.history_focus != repo.history_state.history_focus
         }) {
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
@@ -276,6 +351,11 @@ impl HistoryView {
             .filter(|index| Some(&index.snapshot) == repo.history_state.log_snapshot.as_ref())
             .cloned()
         else {
+            if self.indexed.presentation.is_some() {
+                self.indexed.cancel_pending_presentation();
+            } else {
+                self.indexed.cancel_pending_work();
+            }
             return;
         };
         let key = self.index_key(repo, &index);
@@ -301,10 +381,7 @@ impl HistoryView {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
         };
-        let remotes = match &repo.remote_branches {
-            Loadable::Ready(rows) => rows.clone(),
-            _ => Arc::new(Vec::new()),
-        };
+        let remotes = repo.history_remote_branches();
         let stashes = match &repo.stashes {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
@@ -319,9 +396,10 @@ impl HistoryView {
                 .as_ref()
                 .map(|id| id.as_ref().to_owned())
                 .or_else(|| {
-                    index
-                        .mode
-                        .guarantees_head_visibility()
+                    // Row 0 is HEAD only when the walk was seeded from HEAD.
+                    repo.history_state
+                        .history_focus
+                        .head_is_first(index.mode)
                         .then(|| index.commit_id(0))
                         .flatten()
                         .map(|id| id.as_ref().to_owned())
@@ -337,6 +415,7 @@ impl HistoryView {
         }
         let previous = self.indexed.presentation.clone();
         let cancellation = CancellationToken::new();
+        let completion_cancellation = cancellation.clone();
         self.indexed.building = Some((key.clone(), cancellation.clone()));
         cx.spawn(async move |view, cx| {
             let task_key = key.clone();
@@ -394,6 +473,9 @@ impl HistoryView {
                     })
                 })
                 .await;
+            if completion_cancellation.is_cancelled() {
+                return;
+            }
             let _ = view.update(cx, |this, cx| {
                 if this
                     .indexed
@@ -911,6 +993,7 @@ impl HistoryView {
             token.cancel();
         }
         let cancellation = CancellationToken::new();
+        let completion_cancellation = cancellation.clone();
         self.indexed.window_building = Some((key.clone(), cancellation.clone()));
         cx.spawn(async move |view, cx| {
             let task_key = key.clone();
@@ -1119,7 +1202,7 @@ impl HistoryView {
                                 .as_ref()
                                 .map(|head| CommitId(head.clone().into())),
                             branches_rev: shown.key.branches_rev,
-                            remote_branches_rev: shown.key.remote_branches_rev,
+                            remote_branches: shown.key.remote_branches.clone(),
                             tags_rev: task_key.tags_rev,
                         },
                         row_vms: (start..end)
@@ -1153,6 +1236,9 @@ impl HistoryView {
                     })
                 })
                 .await;
+            if completion_cancellation.is_cancelled() {
+                return;
+            }
             let _ = view.update(cx, |this, cx| {
                 if this
                     .indexed
@@ -1614,11 +1700,15 @@ mod cache_regressions {
             history_scope: LogScope::AllBranches,
             log_source: 0,
             history_author_filter: None,
+            history_focus: Default::default(),
             head_branch_rev: 1,
             detached_head_commit: None,
             head_branch_target: Some(head.clone()),
             branches_rev: 1,
-            remote_branches_rev: 1,
+            remote_branches: HistoryRemoteBranchesKey {
+                rev: 1,
+                hidden: Default::default(),
+            },
             stashes_rev: 1,
         };
         let presentation = Presentation {
@@ -1662,5 +1752,131 @@ mod cache_regressions {
             .unwrap();
         assert!(Arc::ptr_eq(&before.rows, &after.rows));
         assert_eq!(history_perf::count(Work::DecorationBuild), 2);
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::super::tests::{install_index, refresh};
+    use super::*;
+
+    fn finish_background_before_publication(cx: &gpui::VisualTestContext) {
+        while cx.dispatcher.scheduler().pending_task_counts().1 == 0 {
+            assert!(
+                cx.dispatcher.tick(false),
+                "history computation must be queued"
+            );
+        }
+        while cx.dispatcher.tick(true) {}
+    }
+
+    #[gpui::test]
+    fn cancelled_graph_completion_preserves_a_same_key_replacement(cx: &mut gpui::TestAppContext) {
+        let (index, commits) = refresh::indexed_fixture(500);
+        let (view, cx, mut state, store) = refresh::mount(
+            cx,
+            Arc::new(LogPage {
+                commits: commits[..200].to_vec(),
+                next_cursor: None,
+            }),
+        );
+        install_index(&mut state, index);
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+        cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                history.state = Arc::new(state);
+                history.ensure_indexed_history(cx);
+            })
+        });
+        finish_background_before_publication(cx);
+        cx.update(|_, app| {
+            history.update(app, |history, _| {
+                let (key, cancelled) = history.indexed.building.as_ref().unwrap().clone();
+                cancelled.cancel();
+                history.indexed.building = Some((key, CancellationToken::new()));
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let history = history.read(app);
+            assert!(
+                history.indexed.building.is_some(),
+                "cancelled completion must not clear its replacement"
+            );
+            assert!(
+                history.indexed.pending.is_none(),
+                "cancelled graph must not be published"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn cancelled_window_completion_preserves_a_same_key_replacement(cx: &mut gpui::TestAppContext) {
+        let (index, commits) = refresh::indexed_fixture(500);
+        let (view, cx, mut state, store) = refresh::mount(
+            cx,
+            Arc::new(LogPage {
+                commits: commits[..200].to_vec(),
+                next_cursor: None,
+            }),
+        );
+        install_index(&mut state, index);
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+        cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                history.state = Arc::new(state);
+                history.ensure_indexed_history(cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| history.update(app, |history, cx| history.apply_indexed_history(cx)));
+        cx.run_until_parked();
+        let shown = cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                history.apply_indexed_history(cx);
+                let shown = history
+                    .indexed
+                    .window
+                    .clone()
+                    .expect("initial indexed window");
+                {
+                    let mut scroll = history.scroll_interaction.borrow_mut();
+                    let logical = scroll.logical.as_mut().unwrap();
+                    logical.set_position(300.0 * logical.height);
+                }
+                history.prepare_indexed_window(cx);
+                shown
+            })
+        });
+        finish_background_before_publication(cx);
+        cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                let (key, cancelled) = history.indexed.window_building.as_ref().unwrap().clone();
+                let mut state = (*history.state).clone();
+                state.repos[0].history_state.log_snapshot = None;
+                history.state = Arc::new(state);
+                history.ensure_indexed_history(cx);
+                assert!(
+                    !cancelled.is_cancelled(),
+                    "waiting for a new index must keep the displayed window's work"
+                );
+                cancelled.cancel();
+                history.indexed.window_building = Some((key, CancellationToken::new()));
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let history = history.read(app);
+            assert!(
+                history.indexed.window_building.is_some(),
+                "cancelled completion must not clear its replacement"
+            );
+            assert!(
+                Rc::ptr_eq(&shown, history.indexed.window.as_ref().unwrap()),
+                "cancelled window must not replace the displayed window"
+            );
+        });
     }
 }

@@ -40,7 +40,11 @@ pub(in crate::store) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathB
             "feature",
         ],
     );
-    (dir, repo, canonicalize_or_original(worktree))
+    (
+        dir,
+        canonicalize_or_original(repo),
+        canonicalize_or_original(worktree),
+    )
 }
 
 pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {
@@ -350,6 +354,7 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
         lifetime,
         view: pane,
         target: source.target_for(&files[0], None),
+        request: None,
     }));
     wait_until("the linked file's diff", || {
         state(&store)

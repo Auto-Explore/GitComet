@@ -93,6 +93,7 @@ tree-sitter-python = { workspace = true }
 tree-sitter-qmljs = { workspace = true }
 tree-sitter-r = { workspace = true }
 tree-sitter-racket = { workspace = true }
+tree-sitter-razor-modern = { workspace = true }
 tree-sitter-regex = { workspace = true }
 tree-sitter-ron = { workspace = true }
 tree-sitter-ruby = { workspace = true }

@@ -113,6 +113,7 @@ fn draw_details<'a>(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-range-compare"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -411,6 +412,7 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -518,6 +520,7 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-sort"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
@@ -612,6 +615,7 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-nav"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));

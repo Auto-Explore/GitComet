@@ -230,8 +230,8 @@ impl SettingsWindowView {
 
     pub(super) fn toggle_row(
         &self,
-        id: &'static str,
-        label: &'static str,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
@@ -240,8 +240,8 @@ impl SettingsWindowView {
 
     pub(super) fn disabled_toggle_row(
         &self,
-        id: &'static str,
-        label: &'static str,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
@@ -251,11 +251,27 @@ impl SettingsWindowView {
     pub(super) fn info_row(
         &self,
         id: impl Into<SharedString>,
-        label: &'static str,
+        label: impl Into<SharedString>,
         value: impl IntoElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         components::settings_info_row(id, label, value, theme)
+    }
+
+    /// Why the field above it rejected its value.
+    pub(super) fn field_error(
+        &self,
+        id: &'static str,
+        message: impl Into<SharedString>,
+        theme: AppTheme,
+    ) -> gpui::Div {
+        div()
+            .debug_selector(move || id.to_string())
+            .px_2()
+            .pb_1()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.status.danger.foreground)
+            .child(message.into())
     }
 
     /// Environment rows hold read-only fields so their values can be selected.

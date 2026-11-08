@@ -1,0 +1,350 @@
+==============================================
+Implicit expression with member call and index
+==============================================
+<p>@Model.Items.Count() @ViewData["Title"] @this.HostEnvironment.EnvironmentName</p>
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (invocation_expression
+        (member_access_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (identifier))
+        (argument_list)))
+    (razor_implicit_expression
+      (element_access_expression
+        (identifier)
+        (bracketed_argument_list
+          (argument
+            (string_literal
+              (string_literal_content))))))
+    (razor_implicit_expression
+      (member_access_expression
+        (member_access_expression
+          (identifier))
+        (identifier)))))
+
+===========================================
+Implicit expression followed by punctuation
+===========================================
+<p>@item.Schema.@item.Name and @Model.Count.</p>
+<p>Total: @Model.Total, (@Model.Percent%)</p>
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text))
+  (element
+    (html_text)
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)))
+
+=============================================
+Implicit expression before an entity and text
+=============================================
+<a asp-page="/Run">@item.LinkText &rarr;</a>
+<p>@Model.Active of @Model.Total worker(s) checked in.</p>
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text))
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text)))
+
+============================================
+Implicit expression inline after a hash sign
+============================================
+<p>Sync request #@TempData["QueuedJob"] was queued.</p>
+
+---
+
+(compilation_unit
+  (element
+    (html_text)
+    (razor_implicit_expression
+      (element_access_expression
+        (identifier)
+        (bracketed_argument_list
+          (argument
+            (string_literal
+              (string_literal_content))))))
+    (html_text)))
+
+=======================================
+Implicit expression with a generic call
+=======================================
+<p>@GenericMethod<int>()</p>
+<p>@Html.Partial<Item>(model)</p>
+
+---
+
+(compilation_unit
+  (ERROR
+    (razor_implicit_expression (identifier))
+    (element (html_text))
+    (razor_implicit_expression
+      (member_access_expression (identifier) (identifier)))
+    (element (html_text))))
+
+====================
+Await expression
+====================
+<div>@await Html.PartialAsync("_Footer")</div>
+<div>@RenderBody()</div>
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (await_expression
+        (invocation_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (argument_list
+            (argument
+              (string_literal
+                (string_literal_content))))))))
+  (element
+    (razor_implicit_expression
+      (invocation_expression
+        (identifier)
+        (argument_list)))))
+
+========================================================
+Explicit expression with a conditional and interpolation
+========================================================
+<p>Now: @(Model.Ready ? "-" : $"{Model.Done} / {Model.Failed}").</p>
+
+---
+
+(compilation_unit
+  (element
+    (html_text)
+    (razor_explicit_expression
+      (parenthesized_expression
+        (conditional_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (string_literal
+            (string_literal_content))
+          (interpolated_string_expression
+            (interpolation_start)
+            (interpolation
+              (interpolation_brace)
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (interpolation_brace))
+            (string_content)
+            (interpolation
+              (interpolation_brace)
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (interpolation_brace))))))
+    (html_text)))
+
+=================================
+Explicit expressions next to text
+=================================
+<p>Age@(joe.Age) and @(a + b)</p>
+<p>Remove @(registered.Schema).@(registered.Name) now</p>
+
+---
+
+(compilation_unit
+  (element
+    (html_text)
+    (razor_explicit_expression
+      (parenthesized_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (html_text)
+    (razor_explicit_expression
+      (parenthesized_expression
+        (binary_expression
+          (identifier)
+          (identifier)))))
+  (element
+    (html_text)
+    (razor_explicit_expression
+      (parenthesized_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (html_text)
+    (razor_explicit_expression
+      (parenthesized_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (html_text)))
+
+=============================================
+Expressions in double-quoted attribute values
+=============================================
+<tr class="@(status.NeedsAttention ? "attention" : null)">
+    <td class="badge badge--@status.BadgeVariant">@status.BadgeText</td>
+</tr>
+
+---
+
+(compilation_unit
+  (element
+    (razor_explicit_expression
+      (parenthesized_expression
+        (conditional_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (string_literal
+            (string_literal_content))
+          (null_literal))))
+    (element
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier)))
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+==========================================================
+Expressions in single-quoted and unquoted attribute values
+==========================================================
+<a href='/items/@item.Id'>Open</a>
+<input value=@item.Id />
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text))
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))))
+
+===========================================
+Expression inside an attribute value string
+===========================================
+<form onsubmit="return confirm('Remove @(registered.Schema).@(registered.Name) from the registry?');">
+</form>
+
+---
+
+(compilation_unit
+  (element
+    (razor_explicit_expression
+      (parenthesized_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))
+    (razor_explicit_expression
+      (parenthesized_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+========================================
+Conditional attribute from an expression
+========================================
+<input type="checkbox" @(Model.On ? "checked" : "") />
+
+---
+
+(compilation_unit
+  (element
+    (razor_explicit_expression
+      (parenthesized_expression
+        (conditional_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (string_literal
+            (string_literal_content))
+          (string_literal))))))
+
+========================
+Email addresses are text
+========================
+<p>Contact user@example.com or admin@corp.example.org today.</p>
+<a href="mailto:help@example.com">Mail</a>
+
+---
+
+(compilation_unit
+  (element
+    (html_text))
+  (element
+    (html_text)))
+
+====================
+Escaped at sign
+====================
+<p>Follow us @@example</p>
+@@page
+
+---
+
+(compilation_unit
+  (element
+    (html_text)
+    (razor_escape
+      (escaped_at))
+    (html_text))
+  (razor_escape
+    (escaped_at))
+  (html_text))

@@ -11,7 +11,9 @@ use gitcomet_core::signing_tools::{
     DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
     SigningToolsState,
 };
-use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
+use gitcomet_state::model::{
+    AutoFetchInterval, AutoFetchSettings, DefaultTagType, GitLogTagFetchMode,
+};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
@@ -27,6 +29,7 @@ const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
 const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
+const AUTO_FETCH_INTERVAL_INPUT_WIDTH_PX: f32 = 80.0;
 
 fn settings_window_title() -> String {
     format!("Settings: {}", crate::view::product_name())
@@ -332,7 +335,7 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
-    GitLogTagFetch,
+    GitLogHiddenRefs,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
     WorkspaceTheme,
@@ -364,7 +367,7 @@ impl SettingsSection {
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
-            | Self::GitLogTagFetch => SettingsCategory::GitLog,
+            | Self::GitLogHiddenRefs => SettingsCategory::GitLog,
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -513,14 +516,18 @@ impl SettingsCategory {
             Self::GitLog => {
                 "git log default history mode history columns relative dates show tags graph gradient fade glow \
                  author sha files tab follows selected commit browse repository file browsing start exit \
-                 verify commit signatures verification signing key trust"
+                 verify commit signatures verification signing key trust hidden refs namespaces \
+                 checkpoints pull requests notes agent tools"
             }
-            Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
+            Self::Remotes => {
+                "remotes remote fetch pull prune deleted branches automatically automatic fetch auto fetch background interval minutes ghost \
+                 automatically fetch tags remote tags"
+            }
             Self::LargeFiles => {
                 "large files git lfs git-annex annex synced branches adjusted branch pull push \
                  sync content"
             }
-            Self::Tags => "tags automatically fetch tags",
+            Self::Tags => "tags default tag type lightweight annotated",
             Self::Maintenance => {
                 "maintenance recommend repository gc garbage collection repack pack packs \
                  loose objects optimize optimise housekeeping"
@@ -682,7 +689,17 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    auto_fetch: AutoFetchSettings,
+    auto_fetch_interval_input: Entity<components::TextInput>,
+    auto_fetch_interval_error: Option<&'static str>,
+    _auto_fetch_interval_subscriptions: Vec<gpui::Subscription>,
     large_file_settings: gitcomet_state::model::LargeFileSettings,
+    hidden_ref_settings: gitcomet_state::model::HiddenRefSettings,
+    /// The product's always-hidden floor, as repositories open with it.
+    fixed_hidden_refs: gitcomet_core::services::HistoryRefFilter,
+    hidden_ref_prefix_input: Entity<components::TextInput>,
+    hidden_ref_prefix_error: Option<gitcomet_state::model::HiddenRefPrefixError>,
+    _hidden_ref_prefix_subscriptions: Vec<gpui::Subscription>,
     recommend_repo_maintenance: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
@@ -1023,10 +1040,16 @@ fn history_columns_settings_label(
     }
 }
 
-fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
-    match mode {
-        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
-        GitLogTagFetchMode::Disabled => "Disabled",
+fn hidden_refs_summary(
+    settings: &gitcomet_state::model::HiddenRefSettings,
+    presets: &[gitcomet_core::identity::HistoryRefPreset],
+    fixed: &gitcomet_core::services::HistoryRefFilter,
+) -> SharedString {
+    match settings.hidden_count(presets, fixed) {
+        0 if !settings.enabled => "Off".into(),
+        0 => "None".into(),
+        1 => "1 namespace".into(),
+        count => format!("{count} namespaces").into(),
     }
 }
 
@@ -1111,7 +1134,9 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let auto_fetch = ui_preferences.remotes.auto_fetch;
         let large_file_settings = ui_preferences.large_files;
+        let hidden_ref_settings = ui_preferences.history.hidden_ref_settings.clone();
         let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
@@ -1373,6 +1398,57 @@ impl SettingsWindowView {
             })
             .collect();
 
+        let auto_fetch_interval_input = cx.new(|cx| {
+            let mut input =
+                components::TextInput::new(components::TextInputOptions::default(), window, cx);
+            input.set_submit_on_enter(true);
+            input.set_text(auto_fetch.interval.minutes().to_string(), cx);
+            input
+        });
+        let interval_focus = auto_fetch_interval_input.read(cx).focus_handle();
+        let hidden_ref_prefix_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "refs/review".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_submit_on_enter(true);
+            input
+        });
+        // Enter adds the rule and Escape drops the draft; typing never applies
+        // anything, since each change restarts every all-branches walk.
+        let hidden_ref_prefix_subscriptions =
+            vec![cx.observe(&hidden_ref_prefix_input, |this, input, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.add_hidden_ref_prefix(cx);
+                } else if escape {
+                    this.clear_hidden_ref_prefix_input(cx);
+                }
+            })];
+        let auto_fetch_interval_subscriptions = vec![
+            cx.observe(&auto_fetch_interval_input, |this, input, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.commit_auto_fetch_interval(cx);
+                } else if escape {
+                    this.reset_auto_fetch_interval_input(cx);
+                }
+            }),
+            cx.on_blur(&interval_focus, window, |_this, window, cx| {
+                cx.defer_in(window, |this, _window, cx| {
+                    this.commit_auto_fetch_interval(cx);
+                });
+            }),
+        ];
+
         let selected_workspace = crate::workspaces::active_workspace_id(cx).or_else(|| {
             crate::workspaces::workspaces(cx)
                 .first()
@@ -1470,7 +1546,19 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            auto_fetch,
+            auto_fetch_interval_input,
+            auto_fetch_interval_error: None,
+            _auto_fetch_interval_subscriptions: auto_fetch_interval_subscriptions,
             large_file_settings,
+            hidden_ref_settings,
+            fixed_hidden_refs: gitcomet_core::services::RepositoryOptions::for_identity(
+                gitcomet_core::identity::current(),
+            )
+            .history_ref_filter,
+            hidden_ref_prefix_input,
+            hidden_ref_prefix_error: None,
+            _hidden_ref_prefix_subscriptions: hidden_ref_prefix_subscriptions,
             recommend_repo_maintenance,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,

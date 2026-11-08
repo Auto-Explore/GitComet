@@ -75,6 +75,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
     let vendored: &[(&str, &str, tree_sitter::Language)] = &[
         ("asm", "tree-sitter-asm", tree_sitter_asm::LANGUAGE.into()),
         (
+            "razor",
+            "tree-sitter-razor-modern",
+            tree_sitter_razor_modern::LANGUAGE.into(),
+        ),
+        (
             "c-sharp",
             "tree-sitter-c-sharp",
             tree_sitter_c_sharp::LANGUAGE.into(),
@@ -298,6 +303,7 @@ fn vendored_grammars_keep_the_small_state_retune() {
     // TS_SMALL_STATE_THRESHOLD=128)
     const RETUNED: &[(&str, usize)] = &[
         ("tree-sitter-c-sharp", 2156),
+        ("tree-sitter-razor-modern", 2818),
         ("tree-sitter-coffee", 42),
         ("tree-sitter-cpp", 845),
         ("tree-sitter-fsharp/fsharp", 2264),

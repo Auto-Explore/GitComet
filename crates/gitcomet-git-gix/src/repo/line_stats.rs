@@ -380,23 +380,13 @@ fn staged_line_stats(
         Some(head_oid) => super::status::tree_id_for_commit(repo, &head_oid)?,
         None => repo.empty_tree().id().detach(),
     };
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let mut scratch = CommitStatsScratch::default();
 
-    let result = repo.tree_index_status(
+    let result = super::status::tree_index_changes(
+        repo,
         &head_tree_id,
-        &index,
-        None,
-        // Without an on-disk index there can be no staged rename. Avoid
-        // gix's diff-cache fallback to its files-only HEAD reader.
-        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
-            gix::status::tree_index::TrackRenames::Disabled
-        } else {
-            gix::status::tree_index::TrackRenames::AsConfigured
-        },
-        |change, _, _| {
+        "gix tree/index line stats",
+        |change| {
             use gix::diff::index::ChangeRef;
             cancellation.check_cancelled().or_error()?;
             let (location, old_id, new_id) = match change {
@@ -435,11 +425,7 @@ fn staged_line_stats(
     );
     // The walk wraps callback errors; preserve cancellation as its own error kind.
     cancellation.check_cancelled()?;
-    result.map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "gix tree/index line stats: {e}"
-        )))
-    })?;
+    result?;
 
     Ok(out)
 }

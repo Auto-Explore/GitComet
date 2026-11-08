@@ -1,0 +1,27 @@
+flowchart LR
+    LocalDB[(Database File)]
+    User[User]
+    Forseti((Forseti Client))
+    Baldr((Baldr API))
+    ServerDB[(Server Database)]
+
+    Forseti --> |1. Prompt to authorise sync| User
+    Forseti --> |2. Check connectivity & compatibility| Baldr
+    Baldr --> |3. Fetch stored elements for OPAQUE| ServerDB
+    Baldr --> |4. Sends challenge| Forseti
+    User --> |5. Enter master password and confirm sync| Forseti
+    Ke1((GenerateKE1 Function))
+    Forseti --> |6. Password| Ke1
+    Ke1 --> |7. Ke1| Forseti
+    Forseti --> |8. Ke1| Baldr
+    Ke2((GenerateKE2 Function))
+    Baldr --> |9. self_identity, self_private_key, self_public_key, client_record, credential_identifier, oprf_seed, ke1| Ke2
+    Ke2 --> |10. Ke2| Baldr
+    Baldr --> |11. Ke2| Forseti
+    Ke3((GenerateKE3 Function))
+    Forseti --> |12. self_identity, server_identity, ke2| Ke3
+    Ke3 --> |13. Ke3, session_key, export_key| Forseti
+    Forseti --> |14. Ke3| Baldr
+    ServerFinish((ServerFinish Function))
+    Baldr --> |15. Ke3| ServerFinish
+    ServerFinish --> |16. session_key| Baldr

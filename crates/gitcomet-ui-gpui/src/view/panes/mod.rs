@@ -7,7 +7,8 @@ mod reflog;
 mod sidebar;
 
 pub(super) use details::{
-    ComparisonCardCache, ComparisonOrderCache, DetailsPaneInit, DetailsPaneView,
+    CommitRewordDraft, CommitRewordSubmission, ComparisonCardCache, ComparisonOrderCache,
+    DetailsPaneInit, DetailsPaneView,
 };
 pub(crate) use diff::DiffRenderer;
 pub(in crate::view) use diff::DiffRendererInit;

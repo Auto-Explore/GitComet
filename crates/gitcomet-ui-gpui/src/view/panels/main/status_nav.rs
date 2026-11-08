@@ -378,30 +378,15 @@ pub(super) fn diff_file_position_for_repo(
         DiffTarget::Commit {
             commit_id, path, ..
         } => {
-            let Loadable::Ready(details) = &repo.history_state.commit_details else {
-                return None;
-            };
-            if &details.id != commit_id {
-                return None;
-            }
-            let (index, count) =
-                file_position_in_list(&details.files, file_list_source_indices, path)?;
+            let files = repo.history_state.listed_files(diff_target)?;
+            let (index, count) = file_position_in_list(files, file_list_source_indices, path)?;
             let short: String = commit_id.0.chars().take(7).collect();
             (index, count, format!("Files in commit {short}").into())
         }
         DiffTarget::CommitRange {
-            from_commit_id,
-            to_commit_id,
-            path: Some(path),
-            ..
+            path: Some(path), ..
         } => {
-            let range = repo.history_state.range_selection.as_ref()?;
-            if range.diff_from() != from_commit_id || &range.to != to_commit_id {
-                return None;
-            }
-            let Loadable::Ready(files) = &repo.history_state.range_files else {
-                return None;
-            };
+            let files = repo.history_state.listed_files(diff_target)?;
             let (index, count) = file_position_in_list(files, file_list_source_indices, path)?;
             (index, count, "Files in comparison".into())
         }
@@ -511,14 +496,9 @@ pub(super) fn adjacent_diff_file_target_for_repo(
         DiffTarget::Commit {
             commit_id, path, ..
         } => {
-            let Loadable::Ready(details) = &repo.history_state.commit_details else {
-                return None;
-            };
-            if &details.id != commit_id {
-                return None;
-            }
+            let files = repo.history_state.listed_files(diff_target)?;
             let (target_ix, file) =
-                adjacent_file_in_list(&details.files, file_list_source_indices, path, delta)?;
+                adjacent_file_in_list(files, file_list_source_indices, path, delta)?;
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -534,13 +514,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             ..
         } => {
             // The file list on screen must be this comparison's.
-            let range = repo.history_state.range_selection.as_ref()?;
-            if range.diff_from() != from_commit_id || &range.to != to_commit_id {
-                return None;
-            }
-            let Loadable::Ready(files) = &repo.history_state.range_files else {
-                return None;
-            };
+            let files = repo.history_state.listed_files(diff_target)?;
             let (target_ix, file) =
                 adjacent_file_in_list(files, file_list_source_indices, path, delta)?;
             Some(AdjacentDiffFileTarget::Range {

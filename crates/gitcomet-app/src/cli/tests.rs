@@ -1613,6 +1613,116 @@ fn clap_parses_path_argument() {
 }
 
 #[test]
+fn clap_parses_foreground_flag() {
+    let parsed = parse_launch(
+        vec!["gitcomet".into(), "--foreground".into()],
+        DEFAULT_ABOUT,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed.outcome,
+        CliOutcome::Run(AppMode::Browser { path: None })
+    ));
+    assert!(parsed.foreground);
+}
+
+#[test]
+fn clap_parses_foreground_flag_alongside_path() {
+    let parsed = parse_launch(
+        ["gitcomet", "--foreground", "/some/repo"]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        DEFAULT_ABOUT,
+    )
+    .unwrap();
+    let CliOutcome::Run(AppMode::Browser { path }) = parsed.outcome else {
+        panic!("expected browser mode");
+    };
+    assert_eq!(path.as_deref(), Some(std::path::Path::new("/some/repo")));
+    assert!(parsed.foreground);
+}
+
+#[test]
+fn foreground_flag_keeps_the_public_browser_mode_shape() {
+    let env = TestEnv::new();
+    let mode = parse_mode_for_test(
+        vec![
+            OsString::from("gitcomet"),
+            OsString::from("--foreground"),
+            OsString::from("/some/repo"),
+        ],
+        &env,
+    )
+    .expect("parse browser mode with foreground flag");
+
+    match mode {
+        AppMode::Browser { path } => {
+            assert_eq!(path.as_deref(), Some(std::path::Path::new("/some/repo")));
+        }
+        other => panic!("expected Browser mode, got: {other:?}"),
+    }
+}
+
+#[test]
+fn browser_launch_does_not_set_the_foreground_flag_by_default() {
+    let parsed = parse_launch(vec![OsString::from("gitcomet")], DEFAULT_ABOUT)
+        .expect("parse browser mode without flags");
+    assert!(!parsed.foreground);
+    assert!(matches!(
+        parsed.outcome,
+        CliOutcome::Run(AppMode::Browser { path: None })
+    ));
+}
+
+#[test]
+fn foreground_environment_parses_boolean_values() {
+    assert_eq!(
+        foreground_requested(false, None).unwrap(),
+        cfg!(debug_assertions)
+    );
+    for value in ["", "  "] {
+        assert_eq!(
+            foreground_requested(false, Some(value.into())).unwrap(),
+            cfg!(debug_assertions),
+            "{value:?}"
+        );
+    }
+    for value in ["0", "false", " FALSE "] {
+        assert!(
+            !foreground_requested(false, Some(value.into())).unwrap(),
+            "{value}"
+        );
+    }
+    for value in ["1", "true", " TRUE "] {
+        assert!(
+            foreground_requested(false, Some(value.into())).unwrap(),
+            "{value}"
+        );
+    }
+    assert!(foreground_requested(false, Some("typo".into())).is_err());
+    assert!(foreground_requested(true, Some("typo".into())).unwrap());
+    assert!(foreground_requested(true, Some("0".into())).unwrap());
+}
+
+#[test]
+fn foreground_after_argument_separator_is_a_repository_path() {
+    let parsed = parse_launch(
+        ["gitcomet", "--", "--foreground"]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        DEFAULT_ABOUT,
+    )
+    .unwrap();
+    assert!(!parsed.foreground);
+    let CliOutcome::Run(AppMode::Browser { path }) = parsed.outcome else {
+        panic!("expected browser mode");
+    };
+    assert_eq!(path.unwrap(), PathBuf::from("--foreground"));
+}
+
+#[test]
 fn compat_parses_positional_difftool_invocation() {
     let dir = tempfile::tempdir().unwrap();
     let local = tmp_file(&dir, "left.txt", "left\n");

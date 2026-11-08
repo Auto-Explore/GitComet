@@ -1,26 +1,38 @@
 use super::*;
+use gitcomet_core::error::WorktreeRemovalBlocker;
+use gitcomet_state::model::ForceRemoveWorktreePrompt;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
-    path: std::path::PathBuf,
-    branch: Option<String>,
+    prompt: ForceRemoveWorktreePrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let remove_branch = branch.clone();
-    let header: SharedString = if branch.is_some() {
+    let ForceRemoveWorktreePrompt {
+        repo_id,
+        path,
+        delete_branch,
+        blocker,
+        ..
+    } = prompt;
+    let header: SharedString = if delete_branch.is_some() {
         "Delete worktree and branch anyway?".into()
     } else {
         "Delete worktree anyway?".into()
     };
-    let description: SharedString = match branch.as_ref() {
+    let reason = match blocker {
+        WorktreeRemovalBlocker::Changes => "This worktree has modified or untracked files.",
+        WorktreeRemovalBlocker::Submodules => {
+            "This worktree has initialized submodules, so Git removes it only when forced. Uncommitted changes and any submodule commits that exist only in this worktree are lost."
+        }
+    };
+    let description: SharedString = match delete_branch.as_ref() {
         Some(branch) => format!(
-            "This worktree has modified or untracked files. {} will force-remove it, then delete the local branch '{branch}'.",
+            "{reason} {} will force-remove it, then delete the local branch '{branch}'.",
             crate::view::product_name()
         )
         .into(),
-        None => "This worktree has modified or untracked files.".into(),
+        None => reason.into(),
     };
 
     ConfirmDialog::new(header, DIALOG_460_WIDTH)
@@ -41,23 +53,12 @@ pub(super) fn panel(
             components::Button::new("force_remove_worktree_go", "Delete anyway")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
-                    if let Some(branch) = remove_branch.clone() {
-                        let root_view = this.root_view.clone();
-                        let _ = root_view.request(
-                            RootRequest::RegisterPendingWorktreeBranchRemoval {
-                                repo_id,
-                                path: path.clone(),
-                                branch,
-                            },
-                            None,
-                            cx,
-                        );
-                    }
                     this.store.dispatch(Msg::ForceRemoveWorktree {
                         repo_id,
                         path: path.clone(),
+                        delete_branch: delete_branch.clone(),
                     });
-                    this.close_popover(cx);
+                    this.close_resolved_popover(cx);
                 }),
             cx,
         )

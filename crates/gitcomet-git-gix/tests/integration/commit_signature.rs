@@ -580,13 +580,6 @@ fn verification_forces_utf8_despite_log_output_encoding() {
 }
 
 #[cfg(unix)]
-fn write_program(path: &Path, contents: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::write(path, contents).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-#[cfg(unix)]
 #[test]
 fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
     if !ssh_signing_available() {
@@ -599,7 +592,7 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
     // A small payload races the exiting verifier; a huge one always loses.
     let huge = commit_with_huge_message(&fixture.repo, "huge.txt");
     let signing_only = dir.path().join("signing-only");
-    write_program(
+    gitcomet_core::test_support::script::write_executable(
         &signing_only,
         "#!/bin/sh\necho 'This helper only supports signing' >&2\nexit 1\n",
     );
@@ -657,7 +650,7 @@ fn a_verifier_that_kills_git_costs_only_that_commits_badge() {
     // Verifies trusted keys, but abandons `check-novalidate` unread, so git
     // dies of SIGPIPE partway through the batch.
     let verifier = dir.path().join("no-check-novalidate");
-    write_program(
+    gitcomet_core::test_support::script::write_executable(
         &verifier,
         "#!/bin/sh\n[ \"$2\" = check-novalidate ] && exit 1\nexec ssh-keygen \"$@\"\n",
     );
@@ -727,7 +720,7 @@ fn signature_verification_runs_in_bounded_batches() {
         .collect();
     let calls = dir.path().join("verify-calls");
     let verifier = dir.path().join("counting-verifier");
-    write_program(
+    gitcomet_core::test_support::script::write_executable(
         &verifier,
         &format!(
             "#!/bin/sh\n[ \"$2\" = verify ] && echo $PPID >> '{}'\nexec ssh-keygen \"$@\"\n",
@@ -780,7 +773,7 @@ fn cancellation_stops_a_running_signature_verifier() {
     trust_signatures(&fixture);
     let id = commit(&fixture.repo, "signed.txt", true);
     let verifier = dir.path().join("blocked-verifier");
-    write_program(
+    gitcomet_core::test_support::script::write_executable(
         &verifier,
         "#!/bin/sh\ntouch verifier-started\nexec sleep 60\n",
     );
@@ -831,7 +824,7 @@ fn a_format_without_a_verifier_is_skipped_without_running_one() {
     trust_signatures(&fixture);
     let id = commit(&fixture.repo, "signed.txt", true);
     let verifier = dir.path().join("recording-verifier");
-    write_program(
+    gitcomet_core::test_support::script::write_executable(
         &verifier,
         "#!/bin/sh\ntouch verifier-ran\nexec ssh-keygen \"$@\"\n",
     );

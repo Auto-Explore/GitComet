@@ -113,6 +113,13 @@ Compatibility note:
 | --- | --- | --- | --- |
 | Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
 
+### Commit message editor
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Update commit | `Cmd-Enter` | `Ctrl-Enter` | While editing a commit's message in Commit details, and only when Update commit is enabled. For a commit already on the upstream, the first press asks to confirm. |
+| Cancel editing | `Escape` | `Escape` | Discards the edited message. |
+
 ## History view shortcuts
 
 These shortcuts apply while the commit history list is showing.

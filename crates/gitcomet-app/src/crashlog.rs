@@ -500,7 +500,10 @@ fn record_session_failure_in_dir_with_diagnostics(
 
 pub fn take_startup_report() -> Option<StartupCrashReport> {
     let dir = crash_dir()?;
-    take_startup_report_from_crash_dir_with_process_check(&dir, process_is_running)
+    take_startup_report_from_crash_dir_with_process_check(
+        &dir,
+        crate::process_liveness::process_is_running,
+    )
 }
 
 #[cfg(test)]
@@ -648,17 +651,6 @@ fn stale_abnormal_exit_logs(
             })
         })
         .collect()
-}
-
-fn process_is_running(pid: u32) -> bool {
-    let pid = sysinfo::Pid::from_u32(pid);
-    let mut system = sysinfo::System::new();
-    system.refresh_processes_specifics(
-        sysinfo::ProcessesToUpdate::Some(&[pid]),
-        true,
-        sysinfo::ProcessRefreshKind::nothing(),
-    );
-    system.process(pid).is_some()
 }
 
 fn read_abnormal_exit_log(

@@ -189,9 +189,24 @@ pub(super) fn new_log_paged_walk(
     let filter = log_paged_walk_filter(repo, shallow);
     let walk_cancellation = LogWalkCancellation::new(cancellation);
 
-    // The topo walk reports all parents in first-parent mode and cannot cross a
-    // shallow boundary whose missing parents are resolved during its setup.
-    let walk = if mode == HistoryMode::FirstParent || shallow.is_shallow() {
+    // One first-parent chain is already in walk order, and gix's queue walks
+    // it cheaply. From several tips that queue goes breadth-first and can put
+    // a focused ancestor above the commits leading down to it, so those walks
+    // take the topo walk along first parents instead. The topo walk cannot
+    // cross a shallow boundary whose missing parents are resolved during its
+    // setup; there, first-parent walks collect their chains up front and other
+    // modes fall back to commit-date order.
+    let first_parent = mode == HistoryMode::FirstParent;
+    let walk = if first_parent && tips.len() <= 1 {
+        new_commit_time_walk(repo, &tips, parents, filter)?
+    } else if first_parent && shallow.is_shallow() {
+        super::LogPagedWalk::FirstParentChains(FirstParentChains::new(
+            repo,
+            &tips,
+            shallow,
+            cancellation,
+        )?)
+    } else if shallow.is_shallow() {
         new_commit_time_walk(repo, &tips, parents, filter)?
     } else {
         if let Some(cancellation) = cancellation {
@@ -208,7 +223,9 @@ pub(super) fn new_log_paged_walk(
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        let built = if commit_graph.is_none() {
+        // The cached topology follows every parent, so it serves only walks
+        // that do.
+        let built = if commit_graph.is_none() && !first_parent {
             TopologyWalk::new(repo, &tips, &walk_cancellation, topology_cache)
                 .map(super::LogPagedWalk::CachedDateOrder)
         } else {
@@ -223,7 +240,13 @@ pub(super) fn new_log_paged_walk(
                 .parents(parents)
                 .with_commit_graph(commit_graph)
                 .build()
-                .map(super::LogPagedWalk::DateOrder)
+                .map(|walk| {
+                    if first_parent {
+                        super::LogPagedWalk::FirstParentDateOrder(walk)
+                    } else {
+                        super::LogPagedWalk::DateOrder(walk)
+                    }
+                })
         };
         match built {
             Ok(walk) => {
@@ -237,8 +260,17 @@ pub(super) fn new_log_paged_walk(
                 if let Some(cancellation) = cancellation {
                     cancellation.check_cancelled()?;
                 }
-                let filter = log_paged_walk_filter(repo, shallow);
-                new_commit_time_walk(repo, &tips, parents, filter)?
+                if first_parent {
+                    super::LogPagedWalk::FirstParentChains(FirstParentChains::new(
+                        repo,
+                        &tips,
+                        shallow,
+                        cancellation,
+                    )?)
+                } else {
+                    let filter = log_paged_walk_filter(repo, shallow);
+                    new_commit_time_walk(repo, &tips, parents, filter)?
+                }
             }
             Err(error) => {
                 if let Some(cancellation) = cancellation {
@@ -256,6 +288,102 @@ pub(super) fn new_log_paged_walk(
         walk,
         cancellation: walk_cancellation,
     })
+}
+
+/// A first-parent walk from several tips that puts every commit after all of
+/// its children, for when gix's topo walk cannot be built.
+///
+/// Each tip's chain is collected up front by a single-tip walk, which already
+/// stops at a shallow boundary, until it meets a commit an earlier chain holds.
+/// Together the chains form a tree: a commit is ready once every child of it in
+/// the tree has come out, and ready commits come out newest first.
+pub(crate) struct FirstParentChains {
+    infos: FxHashMap<gix::ObjectId, gix::traverse::commit::Info>,
+    times: FxHashMap<gix::ObjectId, gix::date::SecondsSinceUnixEpoch>,
+    /// Children not yet emitted, for commits that have any.
+    children: FxHashMap<gix::ObjectId, usize>,
+    ready: std::collections::BinaryHeap<(gix::date::SecondsSinceUnixEpoch, gix::ObjectId)>,
+}
+
+impl FirstParentChains {
+    pub(crate) fn new(
+        repo: &gix::ThreadSafeRepository,
+        tips: &[gix::ObjectId],
+        shallow: &super::ShallowSnapshot,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self> {
+        let objects = log_paged_walk_handle(repo);
+        let mut buf = Vec::new();
+        let mut infos = FxHashMap::default();
+        let mut times = FxHashMap::default();
+        for tip in tips {
+            let chain = new_commit_time_walk(
+                repo,
+                std::slice::from_ref(tip),
+                gix::traverse::commit::Parents::First,
+                log_paged_walk_filter(repo, shallow),
+            )?;
+            for info in chain {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check_cancelled()?;
+                }
+                let info =
+                    info.map_err(|error| crate::repo::object_store::gix_error("gix walk", error))?;
+                if infos.contains_key(&info.id) {
+                    break;
+                }
+                // The queue walk leaves `commit_time` unset in first-parent mode.
+                let time = objects
+                    .find_commit(&info.id, &mut buf)
+                    .map_err(|error| {
+                        crate::repo::object_store::gix_error("gix commit object", error)
+                    })?
+                    .committer()
+                    .map(|signature| signature.seconds())
+                    .unwrap_or(0);
+                times.insert(info.id, time);
+                infos.insert(info.id, info);
+            }
+        }
+        let mut children: FxHashMap<gix::ObjectId, usize> = FxHashMap::default();
+        for info in infos.values() {
+            if let Some(parent) = info.parent_ids.first()
+                && infos.contains_key(parent)
+            {
+                *children.entry(*parent).or_default() += 1;
+            }
+        }
+        let ready = infos
+            .keys()
+            .filter(|id| !children.contains_key(*id))
+            .map(|id| (times[id], *id))
+            .collect();
+        Ok(Self {
+            infos,
+            times,
+            children,
+            ready,
+        })
+    }
+}
+
+impl Iterator for FirstParentChains {
+    type Item = gix::traverse::commit::Info;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (_, id) = self.ready.pop()?;
+        let info = self.infos.remove(&id)?;
+        if let Some(parent) = info.parent_ids.first()
+            && let Some(pending) = self.children.get_mut(parent)
+        {
+            *pending -= 1;
+            if *pending == 0 {
+                self.children.remove(parent);
+                self.ready.push((self.times[parent], *parent));
+            }
+        }
+        Some(info)
+    }
 }
 
 pub(crate) fn topo_build_error_is_missing_object(error: &gix::Error) -> bool {

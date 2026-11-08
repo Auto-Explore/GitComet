@@ -138,7 +138,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
     cx.update(|_window, app| {
         diff_renderer.update(app, |pane, _cx| {
             assert!(
-                pane.content_preview_is_picture(&absolute),
+                pane.preview_is_picture(&absolute),
                 "rendered is the default for an SVG, and rendered means the picture"
             );
             pane.rendered_preview_modes.set(
@@ -146,7 +146,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
                 crate::view::RenderedPreviewMode::Source,
             );
             assert!(
-                !pane.content_preview_is_picture(&absolute),
+                !pane.preview_is_picture(&absolute),
                 "asking for Code is asking for the source, which is text"
             );
         });

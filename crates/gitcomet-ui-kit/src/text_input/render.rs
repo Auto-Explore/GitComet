@@ -52,11 +52,16 @@ impl Render for TextInput {
                 "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()})
         });
         self.sync_theme(cx);
+        // Before the heights below read the row counts.
+        self.measure_edited_wrap_rows(window, cx);
         let style = self.style;
         let focus = self.focus_handle.clone();
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        let internal_scroll = self
+            .scroll_max_height
+            .zip(self.interaction.vertical_scroll_handle.clone());
         let display_width = (self.display_text && !multiline).then(|| {
             let style = window.text_style();
             let text: SharedString = self.text().to_owned().into();
@@ -192,6 +197,39 @@ impl Render for TextInput {
             text_surface = text_surface.w_full().min_w(px(0.0)).overflow_hidden();
         }
         let text_surface = text_surface.child(TextElement { input: cx.entity() });
+        let text_content = if let Some((max_height, scroll)) = internal_scroll.as_ref() {
+            let border = if chromeless { px(0.0) } else { px(2.0) };
+            let surface = div()
+                .id(ElementId::from(("text_input_scroll", entity_id)))
+                .w_full()
+                .min_w(px(0.0))
+                // The viewport fills the field's min_lines height, not just the text.
+                .when(multiline && self.min_lines > 0, |d| {
+                    let line_height = self.effective_line_height(window);
+                    d.min_h(line_height * self.min_lines as f32 + pad_y * 2.0 - border)
+                })
+                .max_h((scaled_px(*max_height) - border).max(px(0.0)))
+                .pr(crate::Scrollbar::gutter(crate::ScrollbarAxis::Vertical))
+                .overflow_hidden()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(text_surface);
+            div()
+                .relative()
+                .w_full()
+                .min_w(px(0.0))
+                .child(crate::restrict_scroll_to_vertical_axis(surface))
+                .child(
+                    crate::Scrollbar::new(
+                        ElementId::from(("text_input_scrollbar", entity_id)),
+                        scroll.clone(),
+                    )
+                    .render(style.menu_theme),
+                )
+                .into_any_element()
+        } else {
+            text_surface.into_any_element()
+        };
 
         // `track_focus` alone leaves the element stateless, and gpui only
         // repaints on mouse-move for elements carrying an id — without one the
@@ -302,7 +340,12 @@ impl Render for TextInput {
                         ),
                 )
             })
-            .child(text_surface);
+            .when(internal_scroll.is_some(), |d| {
+                d.relative()
+                    .overflow_hidden()
+                    .debug_selector(|| "scrollable_text_input_field".to_owned())
+            })
+            .child(text_content);
 
         if !chromeless {
             input = input
@@ -337,20 +380,25 @@ impl Render for TextInput {
             // remains document-sized. That preserves the scroll container's
             // vertical content extent for long files, and lets presses in the
             // remainder below a short file bubble into the same handlers.
-            .when_some(multiline_document_height, |d, document_height| {
-                d.h_full()
-                    .min_h(document_height)
-                    .cursor(CursorStyle::IBeam)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_move(cx.listener(Self::on_mouse_move))
-                    .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
-                    .when(!self.interaction.suppress_right_click, |input| {
-                        input
-                            .on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
-                    })
-            })
+            .when_some(
+                multiline_document_height.filter(|_| internal_scroll.is_none()),
+                |d, document_height| {
+                    d.h_full()
+                        .min_h(document_height)
+                        .cursor(CursorStyle::IBeam)
+                        .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                        .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                        .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                        .on_mouse_move(cx.listener(Self::on_mouse_move))
+                        .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+                        .when(!self.interaction.suppress_right_click, |input| {
+                            input.on_pointer_click(
+                                MouseButton::Right,
+                                cx.listener(Self::on_right_click),
+                            )
+                        })
+                },
+            )
             .child(input);
 
         if let Some(state) = self.interaction.context_menu {

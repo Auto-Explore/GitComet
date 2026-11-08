@@ -2,6 +2,102 @@
 
 use super::*;
 
+#[gpui::test]
+fn crlf_full_inline_diff_drag_selection(cx: &mut gpui::TestAppContext) {
+    crlf_diff_drag_selection(cx, DiffContentMode::Full, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn crlf_full_split_diff_drag_selection(cx: &mut gpui::TestAppContext) {
+    crlf_diff_drag_selection(cx, DiffContentMode::Full, DiffViewMode::Split);
+}
+
+#[gpui::test]
+fn crlf_collapsed_inline_diff_drag_selection(cx: &mut gpui::TestAppContext) {
+    crlf_diff_drag_selection(cx, DiffContentMode::Collapsed, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn crlf_collapsed_split_diff_drag_selection(cx: &mut gpui::TestAppContext) {
+    crlf_diff_drag_selection(cx, DiffContentMode::Collapsed, DiffViewMode::Split);
+}
+
+fn crlf_diff_drag_selection(
+    cx: &mut gpui::TestAppContext,
+    content: DiffContentMode,
+    mode: DiffViewMode,
+) {
+    use super::super::crlf_selection::{
+        assert_selection_is_painted, copied_selection, drag_between_alpha_and_gamma,
+    };
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.set_diff_view_mode(mode, cx);
+            view.set_diff_content_mode(content, cx);
+        })
+    });
+    // Keep both drag endpoints in the collapsed view's context window.
+    // Blank rows and mixed endings are covered by the preview regression.
+    let old = "alpha\r\nbeta old\r\ngamma\r\n";
+    let new = "alpha\r\nbeta new\r\ngamma\r\n";
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(9902),
+        "crlf_selection",
+        PathBuf::from("selection.razor"),
+        concat!(
+            "diff --git a/selection.razor b/selection.razor\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/selection.razor\n+++ b/selection.razor\n",
+            "@@ -1,3 +1,3 @@\n alpha\r\n-beta old\r\n+beta new\r\n gamma\r\n",
+        )
+        .into(),
+        old.into(),
+        new.into(),
+    );
+    for wrap in [false, true] {
+        cx.update(|_window, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.set_diff_word_wrap(wrap, cx);
+                    pane.set_diff_reveal_whitespace_chars(false, cx);
+                })
+        });
+        let regions: &[DiffTextRegion] = match mode {
+            DiffViewMode::Inline => &[DiffTextRegion::Inline],
+            DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
+        };
+        for &region in regions {
+            for reverse in [false, true] {
+                let copied = drag_between_alpha_and_gamma(cx, &view, region, reverse);
+                assert!(copied.contains("beta"));
+                assert!(copied.starts_with("lpha"));
+                assert!(copied.ends_with("gam"));
+                for reveal in [true, false] {
+                    cx.update(|_window, app| {
+                        view.read(app)
+                            .diff_renderer
+                            .clone()
+                            .update(app, |pane, cx| {
+                                pane.set_diff_reveal_whitespace_chars(reveal, cx)
+                            })
+                    });
+                    assert_selection_is_painted(cx, &view, region);
+                    assert_eq!(copied_selection(cx, &view), copied);
+                }
+            }
+        }
+    }
+}
+
 /// Clicking a delimiter in the split file diff lights it and its partner.
 ///
 /// The projection has to route through the *side's* real document: a diff

@@ -83,6 +83,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let Some(snapshot) = repo.history_state.log_snapshot.clone() else {
                 return Vec::new();
             };
+            let walk = repo.history_walk();
             let history = &mut repo.history_state.indexed;
             if history.requested.as_ref() == Some(&snapshot) && history.epoch == repo.load_epoch {
                 return Vec::new();
@@ -112,8 +113,9 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 return vec![Effect::IndexedHistory(Work::Build {
                     repo_id,
                     seq: history.seq,
-                    mode: repo.history_state.history_scope,
+                    walk,
                     author: repo.history_state.history_author_filter.clone(),
+                    focus: repo.history_state.history_focus.clone(),
                     cancellation: history.cancellation.clone(),
                 })];
             }
@@ -151,8 +153,16 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     history.rev = history.rev.wrapping_add(1);
                     history.status_rev = history.status_rev.wrapping_add(1);
                     let reveal = repo.history_state.reveal_target.clone();
+                    let reword_target = repo
+                        .history_state
+                        .selected_commit
+                        .as_ref()
+                        .filter(|id| repo.reword.retains_selected_commit(id))
+                        .cloned();
                     let survives = |id: &gitcomet_core::domain::CommitId| {
-                        reveal.as_ref() == Some(id) || index.position(id.as_ref()).is_some()
+                        reveal.as_ref() == Some(id)
+                            || reword_target.as_ref() == Some(id)
+                            || index.position(id.as_ref()).is_some()
                     };
                     let mut selection = repo.history_state.multi_selection.clone();
                     if selection.commits.iter().any(|id| !survives(id)) {

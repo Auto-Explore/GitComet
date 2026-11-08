@@ -4,9 +4,9 @@ use crate::view::branch_sidebar;
 /// Context menu for a `/`-prefix group row in the branch tree (`feat/`).
 ///
 /// The branch tree's answer to the file explorer's folder menu: tree controls
-/// for the group itself, plus the two operations that only make sense on a
-/// whole folder of branches — seeding a new branch inside it, and clearing it
-/// out.
+/// for the group itself, focusing the history on the whole folder, plus the two
+/// operations that only make sense on a whole folder of branches — seeding a new
+/// branch inside it, and clearing it out.
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
@@ -95,6 +95,54 @@ pub(super) fn model(
         });
     }
 
+    // Focus sits with the other view-shaping entries, above the actions that
+    // change the repository. A partly focused group offers both directions.
+    let focus_state = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| {
+            branch_sidebar::group_focus_state(repo, &this.branch_search, section, remote, path)
+        })
+        .unwrap_or_default();
+    if focus_state.members > 0 {
+        items.push(ContextMenuItem::Separator);
+        for (label, icon, focused, offered) in [
+            (
+                "Focus group",
+                "icons/eye.svg",
+                true,
+                focus_state.focused < focus_state.members,
+            ),
+            (
+                "Stop focusing group",
+                "icons/eye_off.svg",
+                false,
+                focus_state.focused > 0,
+            ),
+        ] {
+            if !offered {
+                continue;
+            }
+            items.push(ContextMenuItem::Entry {
+                label: label.into(),
+                icon: Some(icon.into()),
+                shortcut: None,
+                disabled: false,
+                // Resolved on activation, like the delete below: the member list
+                // is only needed once, not on every repaint of the open menu.
+                action: Box::new(ContextMenuAction::SetBranchGroupFocus {
+                    repo_id,
+                    section,
+                    remote: remote.map(ToOwned::to_owned),
+                    path: path.to_owned(),
+                    focused,
+                }),
+            });
+        }
+    }
+
     // A remote group holds remote-tracking refs, which cannot be created
     // locally — so this is a local-only offer.
     if section == BranchSection::Local {
@@ -152,74 +200,26 @@ fn branch_count_label(count: usize) -> String {
     )
 }
 
-/// Visits the branches the group row is actually showing.
-///
-/// Prefix matching is against `"{path}/"` rather than the bare `path`, so a
-/// sibling group whose name merely starts with the same characters
-/// (`features/` against `feat/`) is never counted as a member. A branch named
-/// exactly `path` is a member too: with both `feat` and `feat/a` present the
-/// tree renders the `feat/` group header and then `feat` itself as a row
-/// *inside* it, so a prefix-only test would skip a branch the user can see in
-/// the folder.
-///
-/// The sidebar's branch filter is applied here too. The tree filters branch
-/// names *before* building the group tree, so a filtered `feat/` row lists only
-/// its matching members — and a menu counting all 47 while one is on screen
-/// would offer to delete 46 branches the user cannot see.
-///
-/// Names are passed without the remote prefix, matching how the tree stores
-/// them and what `git push --delete` expects. Borrowed rather than cloned so
-/// the per-repaint callers can count without allocating.
+/// The members the group row is showing; see
+/// [`branch_sidebar::for_each_group_member`].
 fn for_each_member(
     this: &PopoverHost,
     repo_id: RepoId,
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-    mut visit: impl FnMut(&str),
+    visit: impl FnMut(&str),
 ) {
-    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
-        return;
-    };
-    let needle = format!("{path}/");
-    let search = &this.branch_search;
-
-    match section {
-        BranchSection::Local => {
-            let Loadable::Ready(branches) = &repo.branches else {
-                return;
-            };
-            for branch in branches.iter() {
-                if is_group_member(&branch.name, path, &needle) && search.matches_ref(&branch.name)
-                {
-                    visit(&branch.name);
-                }
-            }
-        }
-        BranchSection::Remote => {
-            let Some(remote) = remote else {
-                return;
-            };
-            let Loadable::Ready(branches) = &repo.remote_branches else {
-                return;
-            };
-            for branch in branches.iter() {
-                if branch.remote == remote
-                    && is_group_member(&branch.name, path, &needle)
-                    && search.matches_remote(remote, &branch.name)
-                {
-                    visit(&branch.name);
-                }
-            }
-        }
+    if let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) {
+        branch_sidebar::for_each_group_member(
+            repo,
+            &this.branch_search,
+            section,
+            remote,
+            path,
+            visit,
+        );
     }
-}
-
-/// Whether `name` is one of the rows the `path` group renders: anything beneath
-/// it, plus the branch named exactly `path`, which the tree draws as the group's
-/// own first child.
-fn is_group_member(name: &str, path: &str, needle: &str) -> bool {
-    name == path || name.starts_with(needle)
 }
 
 /// Whether a member is one the batch delete may touch.
@@ -272,6 +272,24 @@ pub(super) fn deletable_branches(
         }
     });
     names
+}
+
+/// The members the focus entries act on, resolved once when one is activated.
+pub(super) fn focus_targets(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    section: BranchSection,
+    remote: Option<&str>,
+    path: &str,
+) -> Vec<gitcomet_core::domain::HistoryFocus> {
+    this.state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| {
+            branch_sidebar::group_focus_targets(repo, &this.branch_search, section, remote, path)
+        })
+        .unwrap_or_default()
 }
 
 fn current_branch_name(this: &PopoverHost, repo_id: RepoId) -> Option<&str> {

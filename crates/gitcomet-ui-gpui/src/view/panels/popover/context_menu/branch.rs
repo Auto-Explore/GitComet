@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::domain::Upstream;
+use gitcomet_extension_api::RefMenuTarget;
 
 pub(super) fn model(
     this: &PopoverHost,
@@ -206,6 +207,31 @@ pub(super) fn model(
             });
         }
     }
+    items.extend(super::ref_menu::entries(
+        this,
+        repo_id,
+        match target {
+            BranchMenuTarget::Local { name } => RefMenuTarget::LocalBranch { name: name.clone() },
+            BranchMenuTarget::Remote { remote, branch } => RefMenuTarget::RemoteBranch {
+                remote: remote.clone(),
+                branch: branch.clone(),
+            },
+        },
+    ));
+    // Focus sits with the other view-shaping entries, above the actions that
+    // change the repository.
+    items.push(super::focus::entry(
+        this,
+        repo_id,
+        match target {
+            BranchMenuTarget::Local { name } => {
+                gitcomet_core::domain::HistoryFocus::local_branch(name)
+            }
+            BranchMenuTarget::Remote { remote, branch } => {
+                gitcomet_core::domain::HistoryFocus::remote_branch(remote, branch)
+            }
+        },
+    ));
     items.push(ContextMenuItem::Entry {
         label: "Copy branch name".into(),
         icon: Some("icons/copy.svg".into()),
@@ -502,6 +528,7 @@ mod tests {
 
     fn worktree(path: &str, branch: &str) -> Worktree {
         Worktree {
+            bare: false,
             path: PathBuf::from(path),
             head: None,
             branch: Some(branch.to_string()),
