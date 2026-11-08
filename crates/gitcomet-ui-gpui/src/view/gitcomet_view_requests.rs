@@ -14,6 +14,13 @@ use std::path::PathBuf;
 
 /// A request from a popover to the root view of its window.
 pub(in crate::view) enum RootRequest {
+    /// A layout command from a menu outside the root.
+    Dock(super::dock::DockCommand),
+    /// Open the layout menu of a panel or a section at a point.
+    OpenDockMenu {
+        target: super::dock::DockMenuTarget,
+        position: gpui::Point<gpui::Pixels>,
+    },
     PromptOpenRepo,
     PromptInitRepo,
     LocateOpenFileInExplorer,
@@ -129,6 +136,12 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         match request {
+            RootRequest::Dock(command) => self.run_dock_command(command, window, cx),
+            RootRequest::OpenDockMenu { target, position } => {
+                if let Some(window) = window {
+                    self.open_dock_menu(target, position, window, cx);
+                }
+            }
             RootRequest::LocateOpenFileInExplorer => self.locate_open_file_in_explorer(cx),
             RootRequest::OpenInExternalEditor(path) => {
                 self.open_path_in_external_code_editor(path, cx)

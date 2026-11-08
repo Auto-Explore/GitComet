@@ -476,6 +476,7 @@ impl SidebarPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let branches_mode = self.sidebar_mode() == SidebarMode::Branches;
         if self.sticky_context.as_ref().is_some_and(|context| {
             context
                 .click_guard
@@ -557,7 +558,7 @@ impl SidebarPaneView {
         if let Some(mut animation) = self.sidebar_scroll_animation.take() {
             let current = -f32::from(self.branches_scroll.0.borrow().base_handle.offset().y);
             let valid = self.state.active_repo == Some(animation.repo_id)
-                && self.state.sidebar_mode == SidebarMode::Branches
+                && branches_mode
                 && bounds == animation.bounds
                 && row_height == animation.row_height
                 && (current - animation.last_offset).abs() <= 0.5;

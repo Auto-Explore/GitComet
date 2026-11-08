@@ -71,6 +71,8 @@ pub(crate) struct PreparedWindowBootstrap {
     pub(super) persisted_workspace_active_repository: Option<std::path::PathBuf>,
     pub(super) initial_window_placement: Option<session::PortableWindowPlacement>,
     pub(super) workspace_theme_key: Option<String>,
+    /// The saved workspace's dock layout; `None` builds one from the session.
+    pub(super) dock_layout: Option<session::DockLayout>,
     pub(super) entry_denials: Vec<SharedString>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) startup_repo_open_failure_revision: u64,
@@ -160,6 +162,10 @@ impl PreparedWindowBootstrap {
                 .as_ref()
                 .map(|cfg| cfg.repo_path.clone())
         });
+        let dock_layout = match &workspace {
+            WorkspaceBootstrap::Saved(workspace) => Some(workspace.layout.dock_layout()),
+            _ => None,
+        };
         let (
             workspace_id,
             persisted_workspace_repo_paths,
@@ -361,6 +367,7 @@ impl PreparedWindowBootstrap {
             persisted_workspace_active_repository,
             initial_window_placement,
             workspace_theme_key,
+            dock_layout,
             entry_denials,
             startup_repo_bootstrap_pending,
             startup_repo_open_failure_revision: initial_store_state.repo_open_failure_revision,

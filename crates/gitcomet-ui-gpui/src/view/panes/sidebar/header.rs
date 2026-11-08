@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 const HEADER_PAD_X_PX: f32 = 4.0;
 const HEADER_GAP_PX: f32 = 2.0;
@@ -34,13 +35,14 @@ impl SidebarPaneView {
         let contributed = self
             .extension_tabs
             .as_ref()
+            .filter(|_| self.dock.extension_tabs)
             .and_then(SidebarExtensionTabs::showing);
         let active = if self.file_history_shown(cx) {
             SidebarTabTarget::History
         } else if let Some(index) = contributed {
             SidebarTabTarget::Extension(index)
         } else {
-            match self.state.sidebar_mode {
+            match self.sidebar_mode() {
                 SidebarMode::Branches => SidebarTabTarget::Branches,
                 SidebarMode::Files => SidebarTabTarget::Files,
             }
@@ -71,27 +73,33 @@ impl SidebarPaneView {
                     .tooltip(tooltip, Vec::new()),
             ));
         };
-        if self
-            .extension_tabs
-            .as_ref()
-            .is_none_or(|tabs| tabs.host_tabs)
+        let dock_tabs = self.dock.tabs;
+        if !self.dock.extension_tabs
+            || self
+                .extension_tabs
+                .as_ref()
+                .is_none_or(|tabs| tabs.host_tabs)
         {
-            add(
-                SidebarTabTarget::Branches,
-                "sidebar_tab_branches".into(),
-                "Branches".into(),
-                "icons/git_branch.svg".into(),
-                "Branches".into(),
-            );
-            add(
-                SidebarTabTarget::Files,
-                "sidebar_tab_files".into(),
-                "Files".into(),
-                "icons/folder.svg".into(),
-                "Files".into(),
-            );
+            if dock_tabs.branches {
+                add(
+                    SidebarTabTarget::Branches,
+                    "sidebar_tab_branches".into(),
+                    "Branches".into(),
+                    "icons/git_branch.svg".into(),
+                    "Branches".into(),
+                );
+            }
+            if dock_tabs.files {
+                add(
+                    SidebarTabTarget::Files,
+                    "sidebar_tab_files".into(),
+                    "Files".into(),
+                    "icons/folder.svg".into(),
+                    "Files".into(),
+                );
+            }
         }
-        if self.file_history_visible(cx) {
+        if dock_tabs.history && self.file_history_visible(cx) {
             let title = self
                 .file_history_pane
                 .read(cx)
@@ -107,7 +115,12 @@ impl SidebarPaneView {
                 title.into(),
             );
         }
-        for (index, title, icon) in self.extension_tabs.iter().flat_map(|tabs| &tabs.tabs) {
+        for (index, title, icon) in self
+            .extension_tabs
+            .iter()
+            .filter(|_| self.dock.extension_tabs)
+            .flat_map(|tabs| &tabs.tabs)
+        {
             add(
                 SidebarTabTarget::Extension(*index),
                 format!("sidebar_tab_extension_{index}").into(),
@@ -320,9 +333,42 @@ impl SidebarPaneView {
                         .debug_selector(|| "sidebar_locate_open_file".to_string()),
                 )
             });
+        let shown_panel = self.shown_dock_panel(cx);
+        let theme_for_drag = theme;
         components::navigation_tab_strip(bg, ui_scale)
             .id("sidebar_header")
             .debug_selector(|| "sidebar_header".to_string())
+            // The strip stands for the tab it shows: right-click opens that
+            // panel's layout menu, dragging moves it to another dock.
+            .when_some(shown_panel, |strip, panel| {
+                let title: SharedString = crate::view::dock::builtin_panel_title(panel)
+                    .unwrap_or_default()
+                    .into();
+                let panel = gitcomet_state::session::PanelId::from(panel);
+                let drag = crate::view::dock::DockPanelDrag {
+                    panel: panel.clone(),
+                    title,
+                };
+                strip
+                    .on_drag(drag, move |drag, _offset, _window, cx| {
+                        cx.new(|_| crate::view::dock::DockDragPreview {
+                            title: drag.title.clone(),
+                            theme: theme_for_drag,
+                        })
+                    })
+                    .on_pointer_click(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_dock_menu(
+                                crate::view::dock::DockMenuTarget::Panel(panel.clone()),
+                                e.position,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+            })
             .min_w(px(0.0))
             .flex_none()
             .border_b_1()

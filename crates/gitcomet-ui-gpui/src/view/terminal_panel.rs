@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 mod tests;
 
-const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
+pub(in crate::view) const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 
 /// Which surviving terminal receives focus after a stable-sequence close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1151,7 +1151,13 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height)
+                .map(|d| {
+                    if self.bottom_panel_fill {
+                        d.flex_1().size_full()
+                    } else {
+                        d.h(self.terminal_panel_height)
+                    }
+                })
                 .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
                 .bg(terminal_default_background(theme))
                 // A focus ring along the top edge reinforces that the terminal is
@@ -1492,6 +1498,15 @@ impl GitCometView {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
                     crate::text_selection_owner::preserve(cx);
+                    // Double-click puts the bottom dock back to its default height.
+                    if e.click_count == 2 {
+                        this.run_dock_command(
+                            super::dock::DockCommand::ResetDockSize(super::dock::DockSide::Bottom),
+                            None,
+                            cx,
+                        );
+                        return;
+                    }
                     this.terminal_panel_resize = Some(TerminalPanelResizeState {
                         start_y: e.position.y,
                         start_height: this.terminal_panel_height,

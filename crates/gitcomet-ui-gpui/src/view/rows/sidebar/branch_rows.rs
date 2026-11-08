@@ -7,6 +7,7 @@ mod annex;
 mod branch;
 mod headers;
 mod items;
+mod tags;
 
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
@@ -416,203 +417,273 @@ impl SidebarPaneView {
             })
             // One method per row kind keeps each kind's builder temporaries in
             // its own stack frame (opt-level 0 gives every temporary a slot).
-            .map(|(row, slot)| match row {
-                BranchSidebarRow::ContributionHeader {
-                    section,
-                    title,
-                    collapsed,
-                    ..
-                } => this.contributed_header(section, title, collapsed, cx),
-                BranchSidebarRow::ContributionItem { section, row, .. } => {
-                    this.contributed_row(section, row, cx)
+            .map(|(row, slot)| {
+                let dock_section = (!ctx.is_collapsed_popover)
+                    .then(|| dock_section_of(&row))
+                    .flatten();
+                let ix = slot.ix;
+                let element = Self::sidebar_row_element(this, &ctx, row, slot, cx);
+                match dock_section {
+                    Some(section) => Self::dock_section_header(this, section, ix, element, cx),
+                    None => element,
                 }
-                BranchSidebarRow::SectionHeader {
-                    section,
-                    top_border: _,
-                    collapsed,
-                    collapse_key,
-                } => Self::sidebar_section_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    section,
-                    collapsed,
-                    collapse_key,
-                    cx,
-                ),
-                // A full slot: uniform_list sizes every row from item 0.
-                BranchSidebarRow::SectionSpacer => div()
-                    .id(("branch_section_spacer", slot.ix))
-                    .h(ctx.row_height())
-                    .w_full()
-                    .into_any_element(),
-                BranchSidebarRow::StashHeader {
-                    top_border: _,
-                    collapsed,
-                    collapse_key,
-                } => Self::sidebar_stash_header_row(this, &ctx, slot, collapsed, collapse_key, cx),
-                BranchSidebarRow::StashPlaceholder { message } => {
-                    ctx.placeholder_row("stash_placeholder", slot.ix, message)
-                }
-                BranchSidebarRow::StashItem {
-                    index,
-                    message,
-                    tooltip,
-                    ..
-                } => Self::sidebar_stash_item_row(this, &ctx, slot, index, message, tooltip, cx),
-                BranchSidebarRow::Placeholder {
-                    section: _,
-                    message,
-                } => ctx.placeholder_row("branch_placeholder", slot.ix, message),
-                BranchSidebarRow::WorktreesHeader {
-                    top_border: _,
-                    collapsed,
-                    collapse_key,
-                } => Self::sidebar_worktrees_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    collapsed,
-                    collapse_key,
-                    cx,
-                ),
-                BranchSidebarRow::WorktreePlaceholder { message } => {
-                    ctx.placeholder_row("worktree_placeholder", slot.ix, message)
-                }
-                BranchSidebarRow::WorktreeItem {
-                    path,
-                    branch,
-                    detached,
-                    is_active,
-                } => Self::sidebar_worktree_item_row(
-                    this, &ctx, slot, path, branch, detached, is_active, cx,
-                ),
-                BranchSidebarRow::SubmodulesHeader {
-                    top_border: _,
-                    collapsed,
-                    collapse_key,
-                } => Self::sidebar_submodules_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    collapsed,
-                    collapse_key,
-                    cx,
-                ),
-                BranchSidebarRow::AnnexHeader {
-                    collapsed,
-                    collapse_key,
-                    summary,
-                } => Self::sidebar_annex_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    collapsed,
-                    collapse_key,
-                    summary,
-                    cx,
-                ),
-                BranchSidebarRow::AnnexPlaceholder {
-                    message,
-                    can_init,
-                    can_restage,
-                } => Self::sidebar_annex_placeholder_row(
-                    &ctx,
-                    slot,
-                    message,
-                    can_init,
-                    can_restage,
-                    cx,
-                ),
-                BranchSidebarRow::AnnexRepositoryItem {
-                    uuid,
-                    name,
-                    detail,
-                    here,
-                    untrusted,
-                } => Self::sidebar_annex_repository_row(
-                    this, &ctx, slot, uuid, name, detail, here, untrusted, cx,
-                ),
-                BranchSidebarRow::SubmodulePlaceholder { message, can_load } => {
-                    Self::sidebar_submodule_placeholder_row(&ctx, slot.ix, message, can_load, cx)
-                }
-                BranchSidebarRow::SubmoduleItem {
-                    path,
-                    status,
-                    recorded_head,
-                    checked_out_head,
-                } => Self::sidebar_submodule_item_row(
-                    this,
-                    &ctx,
-                    slot,
-                    path,
-                    status,
-                    recorded_head,
-                    checked_out_head,
-                    cx,
-                ),
-                BranchSidebarRow::RemoteHeader {
-                    name,
-                    collapsed,
-                    collapse_key,
-                    hidden_in_history,
-                } => Self::sidebar_remote_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    name,
-                    collapsed,
-                    collapse_key,
-                    hidden_in_history,
-                    cx,
-                ),
-                BranchSidebarRow::GroupHeader {
-                    label,
-                    path,
-                    remote,
-                    section,
-                    depth,
-                    collapsed,
-                    collapse_key,
-                } => Self::sidebar_group_header_row(
-                    this,
-                    &ctx,
-                    slot,
-                    label,
-                    path,
-                    remote,
-                    section,
-                    depth,
-                    collapsed,
-                    collapse_key,
-                    cx,
-                ),
-                BranchSidebarRow::Branch {
-                    name,
-                    target,
-                    section,
-                    depth,
-                    muted,
-                    divergence_ahead,
-                    divergence_behind,
-                    is_head,
-                    is_upstream,
-                } => Self::sidebar_branch_row(
-                    this,
-                    &ctx,
-                    slot,
-                    name,
-                    target,
-                    section,
-                    depth,
-                    muted,
-                    divergence_ahead,
-                    divergence_behind,
-                    is_head,
-                    is_upstream,
-                    cx,
-                ),
             })
             .collect()
     }
+
+    fn sidebar_row_element(
+        this: &Self,
+        ctx: &SidebarRowContext,
+        row: BranchSidebarRow,
+        slot: SidebarRowSlot,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        match row {
+            BranchSidebarRow::ContributionHeader {
+                section,
+                title,
+                collapsed,
+                ..
+            } => this.contributed_header(section, title, collapsed, cx),
+            BranchSidebarRow::ContributionItem { section, row, .. } => {
+                this.contributed_row(section, row, cx)
+            }
+            BranchSidebarRow::SectionHeader {
+                section,
+                top_border: _,
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_section_header_row(
+                this,
+                ctx,
+                slot,
+                section,
+                collapsed,
+                collapse_key,
+                cx,
+            ),
+            // A full slot: uniform_list sizes every row from item 0.
+            BranchSidebarRow::SectionSpacer => div()
+                .id(("branch_section_spacer", slot.ix))
+                .h(ctx.row_height())
+                .w_full()
+                .into_any_element(),
+            BranchSidebarRow::StashHeader {
+                top_border: _,
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_stash_header_row(this, ctx, slot, collapsed, collapse_key, cx),
+            BranchSidebarRow::StashPlaceholder { message } => {
+                ctx.placeholder_row("stash_placeholder", slot.ix, message)
+            }
+            BranchSidebarRow::TagsHeader {
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_tags_header_row(this, ctx, slot, collapsed, collapse_key, cx),
+            BranchSidebarRow::TagPlaceholder { message } => {
+                ctx.placeholder_row("tag_placeholder", slot.ix, message)
+            }
+            BranchSidebarRow::TagItem { name, target } => {
+                Self::sidebar_tag_item_row(this, ctx, slot, name, target, cx)
+            }
+            BranchSidebarRow::StashItem {
+                index,
+                message,
+                tooltip,
+                ..
+            } => Self::sidebar_stash_item_row(this, ctx, slot, index, message, tooltip, cx),
+            BranchSidebarRow::Placeholder {
+                section: _,
+                message,
+            } => ctx.placeholder_row("branch_placeholder", slot.ix, message),
+            BranchSidebarRow::WorktreesHeader {
+                top_border: _,
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_worktrees_header_row(this, ctx, slot, collapsed, collapse_key, cx),
+            BranchSidebarRow::WorktreePlaceholder { message } => {
+                ctx.placeholder_row("worktree_placeholder", slot.ix, message)
+            }
+            BranchSidebarRow::WorktreeItem {
+                path,
+                branch,
+                detached,
+                is_active,
+            } => Self::sidebar_worktree_item_row(
+                this, ctx, slot, path, branch, detached, is_active, cx,
+            ),
+            BranchSidebarRow::SubmodulesHeader {
+                top_border: _,
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_submodules_header_row(this, ctx, slot, collapsed, collapse_key, cx),
+            BranchSidebarRow::AnnexHeader {
+                collapsed,
+                collapse_key,
+                summary,
+            } => Self::sidebar_annex_header_row(
+                this,
+                ctx,
+                slot,
+                collapsed,
+                collapse_key,
+                summary,
+                cx,
+            ),
+            BranchSidebarRow::AnnexPlaceholder {
+                message,
+                can_init,
+                can_restage,
+            } => Self::sidebar_annex_placeholder_row(ctx, slot, message, can_init, can_restage, cx),
+            BranchSidebarRow::AnnexRepositoryItem {
+                uuid,
+                name,
+                detail,
+                here,
+                untrusted,
+            } => Self::sidebar_annex_repository_row(
+                this, ctx, slot, uuid, name, detail, here, untrusted, cx,
+            ),
+            BranchSidebarRow::SubmodulePlaceholder { message, can_load } => {
+                Self::sidebar_submodule_placeholder_row(ctx, slot.ix, message, can_load, cx)
+            }
+            BranchSidebarRow::SubmoduleItem {
+                path,
+                status,
+                recorded_head,
+                checked_out_head,
+            } => Self::sidebar_submodule_item_row(
+                this,
+                ctx,
+                slot,
+                path,
+                status,
+                recorded_head,
+                checked_out_head,
+                cx,
+            ),
+            BranchSidebarRow::RemoteHeader {
+                name,
+                collapsed,
+                collapse_key,
+                hidden_in_history,
+            } => Self::sidebar_remote_header_row(
+                this,
+                ctx,
+                slot,
+                name,
+                collapsed,
+                collapse_key,
+                hidden_in_history,
+                cx,
+            ),
+            BranchSidebarRow::GroupHeader {
+                label,
+                path,
+                remote,
+                section,
+                depth,
+                collapsed,
+                collapse_key,
+            } => Self::sidebar_group_header_row(
+                this,
+                ctx,
+                slot,
+                label,
+                path,
+                remote,
+                section,
+                depth,
+                collapsed,
+                collapse_key,
+                cx,
+            ),
+            BranchSidebarRow::Branch {
+                name,
+                target,
+                section,
+                depth,
+                muted,
+                divergence_ahead,
+                divergence_behind,
+                is_head,
+                is_upstream,
+            } => Self::sidebar_branch_row(
+                this,
+                ctx,
+                slot,
+                name,
+                target,
+                section,
+                depth,
+                muted,
+                divergence_ahead,
+                divergence_behind,
+                is_head,
+                is_upstream,
+                cx,
+            ),
+        }
+    }
+
+    /// A top-level section header: drag it to another panel, or right-click
+    /// it for its layout menu (when the header has no menu of its own).
+    fn dock_section_header(
+        this: &Self,
+        section: &'static str,
+        ix: usize,
+        element: AnyElement,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = this.theme;
+        let section_id = gitcomet_state::session::SectionId::from(section);
+        let drag = crate::view::dock::DockSectionDrag {
+            title: section_id.title().to_owned().into(),
+            section: section_id.clone(),
+        };
+        div()
+            .id(("dock_section_header", ix))
+            .w_full()
+            .child(element)
+            .on_drag(drag, move |drag, _offset, _window, cx| {
+                cx.new(|_| crate::view::dock::DockDragPreview {
+                    title: drag.title.clone(),
+                    theme,
+                })
+            })
+            .on_pointer_click(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_dock_menu(
+                        crate::view::dock::DockMenuTarget::Section(section_id.clone()),
+                        e.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .into_any_element()
+    }
+}
+
+/// The layout section a top-level header row stands for.
+fn dock_section_of(row: &BranchSidebarRow) -> Option<&'static str> {
+    use gitcomet_state::session::section_ids;
+    Some(match row {
+        BranchSidebarRow::SectionHeader {
+            section: BranchSection::Local,
+            ..
+        } => section_ids::LOCAL_BRANCHES,
+        BranchSidebarRow::SectionHeader {
+            section: BranchSection::Remote,
+            ..
+        } => section_ids::REMOTE_BRANCHES,
+        BranchSidebarRow::StashHeader { .. } => section_ids::STASHES,
+        BranchSidebarRow::TagsHeader { .. } => section_ids::TAGS,
+        BranchSidebarRow::WorktreesHeader { .. } => section_ids::WORKTREES,
+        BranchSidebarRow::SubmodulesHeader { .. } => section_ids::SUBMODULES,
+        BranchSidebarRow::AnnexHeader { .. } => section_ids::ANNEX,
+        _ => return None,
+    })
 }

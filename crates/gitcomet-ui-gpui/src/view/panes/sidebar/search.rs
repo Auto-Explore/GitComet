@@ -105,7 +105,7 @@ impl SidebarPaneView {
         }
         let files = self
             .collapsed_popover_section
-            .map_or(self.state.sidebar_mode == SidebarMode::Files, |section| {
+            .map_or(self.sidebar_mode() == SidebarMode::Files, |section| {
                 section == CollapsedSidebarSection::Files
             });
         let open = if files {

@@ -20,6 +20,11 @@ impl GitCometView {
     ) {
         match Command::from_id(command_id) {
             Some(command) => self.execute_builtin_command(command, window, cx),
+            None if command_id.starts_with("layout:") => {
+                if let Some(command) = super::dock::DockCommand::from_palette_id(command_id) {
+                    self.run_dock_command(command, window, cx);
+                }
+            }
             None => {
                 if self.shell_action_allowed(super::shell_policy::ShellAction::Application)
                     && let Some(id) = super::extension_host::command_id_from_palette(command_id)

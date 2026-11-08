@@ -2,6 +2,7 @@
 //! actions and resize handles, and the commit box.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 /// One status section's numbers, as its header and body read them.
 #[derive(Clone, Copy)]
@@ -94,6 +95,10 @@ impl DetailsPaneView {
             )
             .debug_selector(|| "bare_mode_status".to_owned())
             .into_any_element();
+        }
+        if !self.change_sections_are_default() {
+            let sections = self.change_sections.clone();
+            return self.render_change_sections(&sections, cx);
         }
         let v = self.status_view_inputs(cx);
         let status_sections = self.status_sections_column(&v, cx);
@@ -486,12 +491,17 @@ impl DetailsPaneView {
             .flex_col()
             .min_h(px(STATUS_SECTION_MIN_HEIGHT_PX))
             .overflow_hidden()
-            .child(status_section_header(
+            .child(self.dock_movable_header(
                 v,
                 names.header_id,
-                title,
-                v.state(names.section).count > 0,
-                actions,
+                status_section_header(
+                    v,
+                    names.header_id,
+                    title,
+                    v.state(names.section).count > 0,
+                    actions,
+                ),
+                cx,
             ))
             .child(
                 div()
@@ -1073,6 +1083,147 @@ impl DetailsPaneView {
                 cx,
             ))
             .child(staged_section)
+    }
+}
+
+impl DetailsPaneView {
+    /// Whether this pane draws today's change sections in today's order, so
+    /// the resizable two-way split above applies.
+    fn change_sections_are_default(&self) -> bool {
+        self.change_sections.as_slice() == gitcomet_state::session::DEFAULT_CHANGES_SECTIONS
+    }
+
+    /// The change sections the dock layout lists, top to bottom, as a stack
+    /// of equal shares. Used by this pane when its sections were rearranged
+    /// and by panels a change section was moved into.
+    pub(in crate::view) fn render_change_sections(
+        &mut self,
+        sections: &[&'static str],
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        use gitcomet_state::session::section_ids;
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            return components::empty_state(
+                self.theme,
+                "No working tree in bare mode",
+                "Staging needs a working tree.",
+            )
+            .into_any_element();
+        }
+        let v = self.status_view_inputs(cx);
+        if v.repo_id.is_none() {
+            return components::empty_state(v.theme, "Changes", "No repository selected.")
+                .into_any_element();
+        }
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .size_full()
+            .min_h(px(0.0))
+            .overflow_hidden();
+        let mut lists = 0usize;
+        for section in sections {
+            let list = match *section {
+                section_ids::UNSTAGED if v.split_change_tracking => {
+                    Some(self.split_unstaged_status_section(&v, cx))
+                }
+                section_ids::UNSTAGED => Some(self.combined_unstaged_status_section(&v, cx)),
+                // Combined tracking lists untracked files under Unstaged.
+                section_ids::UNTRACKED if v.split_change_tracking => {
+                    Some(self.untracked_status_section(&v, cx))
+                }
+                section_ids::STAGED => Some(self.staged_status_section(&v, cx)),
+                section_ids::COMMIT_MESSAGE => {
+                    column =
+                        column.child(div().flex_none().px_2().py_2().child(self.commit_box(cx)));
+                    None
+                }
+                _ => None,
+            };
+            if let Some(list) = list {
+                let mut list = list.min_h(px(STATUS_SECTION_MIN_HEIGHT_PX));
+                list.style().flex_grow = Some(1.0);
+                list.style().flex_shrink = Some(1.0);
+                list.style().flex_basis = Some(relative(0.0).into());
+                if lists > 0 {
+                    list = list.border_t_1().border_color(v.theme.colors.stroke.subtle);
+                }
+                lists += 1;
+                column = column.child(list);
+            }
+        }
+        if lists == 0 && !sections.contains(&section_ids::COMMIT_MESSAGE) {
+            return components::empty_state(
+                v.theme,
+                "Changes",
+                "Its sections are shown elsewhere. Use Restore Changes Panel to bring them back.",
+            )
+            .into_any_element();
+        }
+        if lists == 0 {
+            column = column.justify_end();
+        }
+        column.into_any_element()
+    }
+}
+
+impl DetailsPaneView {
+    /// A change section's header: drag it to another panel, or right-click
+    /// it for its layout menu.
+    fn dock_movable_header(
+        &self,
+        v: &StatusViewInputs,
+        header_id: &'static str,
+        header: AnyElement,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
+        use gitcomet_state::session::{SectionId, section_ids};
+        let section = match header_id {
+            "untracked_header" => section_ids::UNTRACKED,
+            "staged_header" => section_ids::STAGED,
+            _ => section_ids::UNSTAGED,
+        };
+        let section = SectionId::from(section);
+        let theme = v.theme;
+        let drag = crate::view::dock::DockSectionDrag {
+            title: section.title().to_owned().into(),
+            section: section.clone(),
+        };
+        div()
+            .id(SharedString::from(format!("dock_change_{header_id}")))
+            .w_full()
+            .child(header)
+            .on_drag(drag, move |drag, _offset, _window, cx| {
+                cx.new(|_| crate::view::dock::DockDragPreview {
+                    title: drag.title.clone(),
+                    theme,
+                })
+            })
+            .on_pointer_click(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    let root = this.root_view.clone();
+                    let handle = window.window_handle();
+                    let target = crate::view::dock::DockMenuTarget::Section(section.clone());
+                    let position = e.position;
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            crate::view::gitcomet_view_requests::RootRequests::request(
+                                &root,
+                                crate::view::gitcomet_view_requests::RootRequest::OpenDockMenu {
+                                    target,
+                                    position,
+                                },
+                                Some(window),
+                                cx,
+                            )
+                        });
+                    });
+                }),
+            )
+            .into_any_element()
     }
 }
 

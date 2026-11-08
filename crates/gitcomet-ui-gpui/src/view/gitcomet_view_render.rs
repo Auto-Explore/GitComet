@@ -605,6 +605,7 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 }),
             )
+            .map(|root| self.register_dock_actions(root, cx))
             .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
                 // The availability gate lives in `toggle_reveal_commit`, which
                 // the app-level handler reaches too. Claiming the action either
@@ -914,6 +915,19 @@ impl GitCometView {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
                     crate::text_selection_owner::preserve(cx);
+                    // Double-click puts the dock back to its default width.
+                    if e.click_count == 2 {
+                        let side = match handle {
+                            PaneResizeHandle::Sidebar => super::dock::DockSide::Left,
+                            PaneResizeHandle::Details => super::dock::DockSide::Right,
+                        };
+                        this.run_dock_command(
+                            super::dock::DockCommand::ResetDockSize(side),
+                            None,
+                            cx,
+                        );
+                        return;
+                    }
                     match handle {
                         PaneResizeHandle::Sidebar => {
                             this.sidebar_width_anim_seq =

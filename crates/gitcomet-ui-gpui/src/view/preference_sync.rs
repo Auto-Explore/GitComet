@@ -728,11 +728,18 @@ impl GitCometView {
     /// reachable from the menu, the palette and a shortcut, so the tree it acts
     /// on may not even be visible.
     pub(crate) fn locate_open_file_in_explorer(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.sidebar_collapsed {
-            self.set_sidebar_collapsed(false, cx);
+        // Files may live in another dock, or in a window of its own: reveal
+        // the file there, and leave the other docks as they are.
+        let panel = super::dock::PanelId::from(super::dock::panel_ids::FILES);
+        if let Some(popped) = self.dock_popped_out.get(&panel) {
+            let _ = popped.window.update(cx, |_, window, _| window.activate());
+        } else {
+            self.update_dock_layout(|layout| layout.show_panel(&panel), cx);
         }
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.locate_open_file(cx));
+        let pane = self
+            .dock_sidebar_pane_for(super::dock::panel_ids::FILES, cx)
+            .unwrap_or_else(|| self.sidebar_pane.clone());
+        pane.update(cx, |pane, cx| pane.locate_open_file(cx));
         cx.notify();
     }
 

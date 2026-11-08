@@ -76,6 +76,10 @@ impl CommitMenuRefs {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    /// A layout command from a panel's or a section's menu.
+    Dock(crate::view::dock::DockCommand),
+    /// Opens a section's layout menu from the menu its header has of its own.
+    OpenDockMenu(crate::view::dock::DockMenuTarget),
     PreviewDisableBareMode {
         repo_id: RepoId,
     },

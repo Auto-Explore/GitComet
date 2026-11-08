@@ -106,9 +106,27 @@ impl GitCometView {
     ///
     /// With only the terminal open this returns exactly what
     /// `render_terminal_panel` would have returned on its own.
-    pub(super) fn render_bottom_panel(
+    /// The bottom panel limited to the tabs `allowed` admits. With `fill` it
+    /// takes the height its parent gives it (a side dock) instead of its own.
+    pub(in crate::view) fn render_bottom_panel_filtered(
         &mut self,
         theme: AppTheme,
+        allowed: &dyn Fn(BottomPanelTab) -> bool,
+        fill: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        self.bottom_panel_fill = fill;
+        let element = self.render_bottom_panel_inner(theme, allowed, fill, window, cx);
+        self.bottom_panel_fill = false;
+        element
+    }
+
+    fn render_bottom_panel_inner(
+        &mut self,
+        theme: AppTheme,
+        allowed: &dyn Fn(BottomPanelTab) -> bool,
+        fill: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
@@ -116,7 +134,7 @@ impl GitCometView {
         let providers = self.bottom_panel_providers.clone();
         let tabs: Vec<BottomPanelTab> = providers
             .iter()
-            .filter(|provider| provider.is_open(self, repo_id, cx))
+            .filter(|provider| allowed(provider.tab()) && provider.is_open(self, repo_id, cx))
             .map(|provider| provider.tab())
             .collect();
         let content_for = |this: &mut Self,
@@ -141,7 +159,13 @@ impl GitCometView {
                 div()
                     .flex()
                     .flex_col()
-                    .h(self.terminal_panel_height)
+                    .map(|d| {
+                        if fill {
+                            d.flex_1().size_full()
+                        } else {
+                            d.h(self.terminal_panel_height)
+                        }
+                    })
                     .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX))
                     .child(content)
                     .into_any(),
@@ -164,7 +188,13 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height + tab_bar_height)
+                .map(|d| {
+                    if fill {
+                        d.flex_1().size_full()
+                    } else {
+                        d.h(self.terminal_panel_height + tab_bar_height)
+                    }
+                })
                 .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
                 .child(
