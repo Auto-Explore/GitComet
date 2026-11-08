@@ -66,6 +66,7 @@ pub(super) fn has_unfinished_operation(repo: &RepoState) -> bool {
         || repo.local_actions_in_flight > 0
         || repo.sequencer_actions_in_flight > 0
         || repo.commit_in_flight > 0
+        || repo.push_preflights_in_flight > 0
         || repo.submodule_add_in_flight.is_some()
         || repo.maintenance.running
         || repo.bare_mode_conversion.is_busy()

@@ -56,7 +56,9 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             })
             .expect("commit schedules its safety check");
         assert_eq!(state.repos[0].commit_in_flight, 0);
-        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 1);
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert!(!state.repos[0].history_rewrite_busy());
         assert!(repos.begin_descriptor_recovery(std::time::SystemTime::now()));
         park(&mut state, &mut repos);
         assert!(
@@ -89,7 +91,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
                 result: Ok(decision),
             }),
         );
-        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 0);
         assert_eq!(state.repos[0].push_in_flight, 1);
         assert!(effects.iter().any(|effect| matches!(effect,
             Effect::RepoCommand(RepoCommandEffect::PushAfterCommit { repo_id, set_upstream: actual, .. })
@@ -143,7 +145,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
                 context: context.clone(),
             },
         );
-        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 1);
         for path in [
             "/tmp/preflight-other-1",
             "/tmp/preflight-other-2",
@@ -159,7 +161,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
                     "fatal: could not read Password for 'https://alice@example.com': terminal prompts disabled".into(),
                 ))),
             }));
-        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 0);
         let generation = state
             .auth_prompt
             .as_ref()
@@ -181,7 +183,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
             },
         );
         assert!(state.auth_prompt.is_none());
-        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 1);
         park(&mut state, &mut repos);
         assert!(
             repos.has_repository(&id),
@@ -206,7 +208,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
                 result,
             }),
         );
-        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].push_preflights_in_flight, 0);
         assert!(state.auth_prompt.is_none());
         assert_eq!(state.repos[0].push_in_flight, 0);
         park(&mut state, &mut repos);

@@ -98,6 +98,7 @@ pub struct RepoState {
     /// wait for these alone, so a merge tool cannot lock them out.
     pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
+    pub(crate) push_preflights_in_flight: u32,
     /// The shared git directory (the main `.git` of a linked worktree), set
     /// once the repository opens; tabs of one repository share maintenance.
     pub common_dir: Option<Arc<std::path::Path>>,
@@ -378,6 +379,7 @@ impl RepoState {
             local_actions_in_flight: 0,
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
+            push_preflights_in_flight: 0,
             common_dir: None,
             shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
