@@ -15,6 +15,62 @@ fn open_repo(repo_id: RepoId, workdir: &str) -> RepoState {
 }
 
 #[gpui::test]
+fn commit_prompt_field_aligns_with_its_footer_and_scrolls_inside_the_border(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let repo_id = RepoId(1);
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        repos: vec![open_repo(repo_id, "/tmp/commit-prompt-field-layout")],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    }));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (input, scroll) = cx.update(|window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.update(app, |host, cx| {
+            host.open_popover_centered(PopoverKind::CommitPrompt { repo_id }, window, cx);
+            (
+                host.commit_prompt_message_input.clone(),
+                host.commit_prompt_message_scroll.clone(),
+            )
+        })
+    });
+    for percent in [100, 150] {
+        cx.update(|_, app| crate::ui_scale::set_default(app, percent));
+        for message in [
+            "A commit message".to_owned(),
+            "A commit message\n".repeat(50),
+        ] {
+            cx.update(|_, app| input.update(app, |input, cx| input.set_text(message.clone(), cx)));
+            for _ in 0..4 {
+                crate::test_support::refresh_and_draw(cx);
+            }
+            let field = cx.debug_bounds("scrollable_text_input_field").unwrap();
+            let submit = cx.debug_bounds("commit_prompt_submit").unwrap();
+            let rule = cx.debug_bounds("commit_prompt_rule").unwrap();
+            assert!(
+                ((field.top() - rule.bottom()) - (submit.top() - field.bottom())).abs()
+                    <= gpui::px(1.0),
+                "the field must have equal spacing above and below"
+            );
+            assert!(
+                (field.right() - submit.right()).abs() <= gpui::px(1.0),
+                "the field border must fill the same width as the footer"
+            );
+            assert!(field.size.height <= gpui::px(200.0 * percent as f32 / 100.0) + gpui::px(1.0));
+            assert_eq!(
+                scroll.max_offset().y > gpui::px(0.0),
+                message.contains('\n')
+            );
+            let viewport = scroll.bounds();
+            assert!(viewport.left() >= field.left() && viewport.right() <= field.right());
+        }
+    }
+}
+
+#[gpui::test]
 fn clean_repo_disables_commit_prompt_submission(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let repo_id = RepoId(1);

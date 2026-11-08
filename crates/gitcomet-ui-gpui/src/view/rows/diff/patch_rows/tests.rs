@@ -64,18 +64,6 @@ fn collapsed_hunk_reveal_buttons_track_the_editor_row_and_cap_out() {
     }
 }
 
-fn collapsed_hunk(has_removals: bool, has_additions: bool) -> CollapsedDiffHunk {
-    CollapsedDiffHunk {
-        src_ix: 0,
-        base_row_start: 0,
-        base_row_end_exclusive: 1,
-        has_additions,
-        has_removals,
-        reveal_up_lines: 0,
-        reveal_down_lines: 0,
-    }
-}
-
 #[test]
 fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
     for (key, _) in crate::theme::bundled_theme_keys() {
@@ -147,7 +135,8 @@ fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
         assert_ne!(add_focus, neutral_focus);
         assert_ne!(remove_focus, neutral_focus);
 
-        let collapsed_focus = focused_collapsed_hunk_bg(theme, None);
+        let (collapsed_focus, _) = collapsed_hunk_header_colors(theme, true);
+        let collapsed_focus = collapsed_focus.expect("a focused separator paints the wash");
         let expected_collapsed_focus = with_alpha(
             theme.colors.accent.foreground,
             if theme.is_dark { 0.22 } else { 0.16 },
@@ -157,19 +146,6 @@ fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
         assert_ne!(collapsed_focus, remove_focus);
         assert_ne!(collapsed_focus, neutral_focus);
         assert_ne!(collapsed_focus, text_selection_bg);
-        assert_eq!(
-            focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(false, true))),
-            collapsed_focus
-        );
-        assert_eq!(
-            focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, false))),
-            collapsed_focus
-        );
-        assert_eq!(
-            focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, true))),
-            collapsed_focus
-        );
-        assert_eq!(focused_collapsed_hunk_bg(theme, None), collapsed_focus);
     }
 }
 
@@ -188,149 +164,16 @@ fn collapsed_hunk_headers_use_uniform_diff_row_height() {
 }
 
 #[test]
-fn collapsed_inline_hunk_headers_use_neutral_colors() {
-    for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-        let neutral = collapsed_hunk_header_bg(theme);
-
+fn collapsed_hunk_headers_paint_no_fill_unless_focused() {
+    for (key, _) in crate::theme::bundled_theme_keys() {
+        let theme = AppTheme::from_key(&key).expect("bundled theme should load");
         assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, false)),
-                CollapsedDiffExpansionKind::Up,
-            ),
-            neutral
+            collapsed_hunk_header_colors(theme, false),
+            (None, theme.colors.foreground.placeholder),
+            "{key}"
         );
-        assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(false, true)),
-                CollapsedDiffExpansionKind::Up,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                CollapsedDiffExpansionKind::Up,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                CollapsedDiffExpansionKind::Both,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                CollapsedDiffExpansionKind::Short,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                CollapsedDiffExpansionKind::Down,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_bg(theme, None, CollapsedDiffExpansionKind::Up),
-            neutral
-        );
-        assert_eq!(
-            collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, false))),
-            theme.colors.foreground.secondary
-        );
-        assert_eq!(
-            collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(false, true))),
-            theme.colors.foreground.secondary
-        );
-        assert_eq!(
-            collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, true))),
-            theme.colors.foreground.secondary
-        );
-        assert_eq!(
-            collapsed_inline_hunk_fg(theme, None),
-            theme.colors.foreground.secondary
-        );
-    }
-}
-
-#[test]
-fn collapsed_split_hunk_headers_use_neutral_colors_for_both_sides() {
-    for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-        let neutral = collapsed_hunk_header_bg(theme);
-
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, false)),
-                PatchSplitColumn::Left,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, false)),
-                PatchSplitColumn::Right,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(false, true)),
-                PatchSplitColumn::Left,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(false, true)),
-                PatchSplitColumn::Right,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                PatchSplitColumn::Left,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(
-                theme,
-                Some(collapsed_hunk(true, true)),
-                PatchSplitColumn::Right,
-            ),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Left),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Right),
-            neutral
-        );
-        assert_eq!(
-            collapsed_split_hunk_fg(theme, PatchSplitColumn::Left),
-            theme.colors.foreground.secondary
-        );
-        assert_eq!(
-            collapsed_split_hunk_fg(theme, PatchSplitColumn::Right),
-            theme.colors.foreground.secondary
-        );
+        let (focused_bg, focused_fg) = collapsed_hunk_header_colors(theme, true);
+        assert!(focused_bg.is_some(), "{key}");
+        assert_eq!(focused_fg, theme.colors.foreground.secondary, "{key}");
     }
 }
