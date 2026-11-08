@@ -1,6 +1,7 @@
 use super::*;
 use gitcomet_extension_api::{DiffLayout, DiffLineRange, DiffSelectionAction};
 
+#[cfg(target_os = "linux")]
 #[path = "hosted_context_capture.rs"]
 mod capture;
 
