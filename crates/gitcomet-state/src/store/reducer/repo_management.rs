@@ -383,6 +383,23 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
     repos.retire(&repo.id);
 }
 
+/// The resumed refresh reloads what parking released. A streamed log is
+/// accepted only while the log is loading.
+fn mark_parked_reads_loading(repo: &mut RepoState) {
+    if matches!(repo.log, Loadable::NotLoaded) {
+        repo.set_log(Loadable::Loading);
+    }
+    if matches!(repo.status, Loadable::NotLoaded) {
+        repo.set_status(Loadable::Loading);
+    }
+    if matches!(repo.branches, Loadable::NotLoaded) {
+        repo.set_branches(Loadable::Loading);
+    }
+    if matches!(repo.remote_branches, Loadable::NotLoaded) {
+        repo.set_remote_branches(Loadable::Loading);
+    }
+}
+
 /// A read failure may discard idle resources and reopen once. The shared
 /// cooldown also covers the retry's replies, so persistent EMFILE reaches the
 /// existing error UI rather than recursively starting more refreshes.
@@ -1558,6 +1575,9 @@ pub(super) fn repo_opened_ok(
         if !should_refresh_worktrees || resuming {
             clear_cancelled_repo_loading(repo_state);
             repo_state.feedback_mut().last_error = None;
+            if resuming {
+                mark_parked_reads_loading(repo_state);
+            }
         } else {
             repo_state.set_head_branch(Loadable::Loading);
             repo_state.set_detached_head_commit(None);

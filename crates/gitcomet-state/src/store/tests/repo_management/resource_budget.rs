@@ -1116,3 +1116,57 @@ fn background_hosted_use_keeps_the_budget_warm_without_skipping_the_switch_refre
         "a tab last viewed an hour ago refreshes its remotes, tags and stashes"
     );
 }
+
+#[test]
+fn a_resumed_history_walk_streams_into_a_loading_log() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/resumed-log");
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    open_repo_ready(&mut repos, &ids, &mut state, "/tmp/resumed-log-active");
+    park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: id },
+    );
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoOpenedOk {
+            repo_id: id,
+            spec: RepoSpec {
+                workdir: "/tmp/resumed-log".into(),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/resumed-log")),
+            preferences: None,
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+        }),
+    );
+    let seq = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadLog { seq, .. } => Some(*seq),
+            _ => None,
+        })
+        .expect("the resume walks history");
+    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].status.is_loading());
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::LogChunkLoaded {
+            repo_id: id,
+            seq,
+            commits: Vec::new(),
+            scanned: 42,
+        }),
+    );
+    assert_eq!(state.repos[0].history_state.log_scan_progress, Some(42));
+}
