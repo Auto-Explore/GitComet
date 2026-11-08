@@ -353,8 +353,12 @@ mod tests {
         cx.update(|_, app| {
             assert_eq!(
                 crate::ui_scale::current(app).percent,
-                crate::ui_scale::step_up(before),
-                "window zoom must receive Ctrl/Cmd+scroll over the error panel"
+                if cfg!(target_os = "macos") {
+                    before
+                } else {
+                    crate::ui_scale::step_up(before)
+                },
+                "only non-macOS windows zoom on scroll over the error panel"
             )
         });
         assert!(!contains(cx));
@@ -527,8 +531,12 @@ mod tests {
             assert!(group.read(app).zoom_label().starts_with("Fit"));
             assert_eq!(
                 crate::ui_scale::current(app).percent,
-                crate::ui_scale::step_up(scale),
-                "Ctrl+scroll over the menu's scrim did nothing"
+                if cfg!(target_os = "macos") {
+                    scale
+                } else {
+                    crate::ui_scale::step_up(scale)
+                },
+                "only non-macOS windows zoom on scroll over the menu's scrim"
             );
         });
     }

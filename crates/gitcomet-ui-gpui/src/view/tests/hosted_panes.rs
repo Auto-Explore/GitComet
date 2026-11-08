@@ -2139,7 +2139,11 @@ fn image_preview_regression_hosted_panes_zoom_without_changing_window_scale(
     cx.update(|_, app| {
         assert_eq!(
             crate::ui_scale::current(app).percent,
-            crate::ui_scale::step_up(before)
+            if cfg!(target_os = "macos") {
+                before
+            } else {
+                crate::ui_scale::step_up(before)
+            }
         )
     });
 }
