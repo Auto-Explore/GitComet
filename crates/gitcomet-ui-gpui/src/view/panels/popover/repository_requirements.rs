@@ -387,6 +387,7 @@ impl PopoverHost {
             | ContextMenuAction::SetMergetoolThreeWayView { .. }
             | ContextMenuAction::CopyText { .. }
             | ContextMenuAction::CopyLinkAddress { .. }
+            | ContextMenuAction::CopyCommitSha { .. }
             | ContextMenuAction::LoadRemoteMarkdownImage { .. }
             | ContextMenuAction::OpenWebUrl { .. }
             | ContextMenuAction::CopyDiffSelection { .. }

@@ -656,6 +656,10 @@ pub(in crate::view) enum ContextMenuAction {
     CopyLinkAddress {
         url: String,
     },
+    /// Copy a commit's full SHA, and say so: menus show it shortened or not at all.
+    CopyCommitSha {
+        commit_id: CommitId,
+    },
     /// Approve one repository-controlled remote image in the current Markdown
     /// preview. The pane re-checks that Ask mode is still active when invoked.
     LoadRemoteMarkdownImage {

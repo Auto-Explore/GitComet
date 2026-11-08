@@ -297,14 +297,39 @@ impl GitCometView {
         let (Some(repo_id), Some(target)) = (self.active_repo_id(), target) else {
             return;
         };
+        self.reveal_commit_in_history(repo_id, target, cx);
+    }
+
+    /// Selects the commit and scrolls the history to its row, widening the log
+    /// to all branches when the current scope does not reach it.
+    pub(super) fn reveal_commit_in_history(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
         self.main_pane.update(cx, |main, cx| {
             main.reveal_history_commit(
                 repo_id,
-                target,
+                commit_id,
                 Some(gitcomet_core::domain::LogScope::AllBranches),
                 cx,
             );
         });
+    }
+
+    /// Copies the full SHA and says so, since nothing on screen changes.
+    pub(super) fn copy_commit_sha(&mut self, commit_id: CommitId, cx: &mut gpui::Context<Self>) {
+        let message = format!(
+            "Commit {} copied to clipboard",
+            crate::view::caches::short_commit_sha(commit_id.as_ref())
+        );
+        crate::clipboard::write_text(
+            cx,
+            commit_id.as_ref().to_owned(),
+            crate::clipboard::CopySource::CommitSha,
+        );
+        self.push_toast(components::ToastKind::Success, message, cx);
     }
 
     pub(crate) fn toggle_reveal_commit(

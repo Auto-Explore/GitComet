@@ -856,6 +856,19 @@ impl DetailsPaneView {
         });
     }
 
+    /// Deferred: a click can arrive while the root is mid-update.
+    pub(in super::super) fn request_root(
+        &self,
+        request: crate::view::gitcomet_view_requests::RootRequest,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use crate::view::gitcomet_view_requests::RootRequests as _;
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.request(request, None, cx);
+        });
+    }
+
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
         self.commit_message_input.read(cx).text().trim().is_empty()
     }

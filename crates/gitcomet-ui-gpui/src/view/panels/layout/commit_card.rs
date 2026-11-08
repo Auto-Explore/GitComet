@@ -3,10 +3,54 @@
 
 use super::*;
 use crate::theme::with_alpha;
+use crate::view::gitcomet_view_requests::RootRequest;
 use gitcomet_core::domain::CommitDetails;
+use std::cell::Cell;
+use std::rc::Rc;
 
-const SHORT_SHA_LEN: usize = 8;
 const MAX_REF_PILLS: usize = 4;
+const SHA_CHIP_HEIGHT_PX: f32 = 22.0;
+
+/// The card's two SHA chips. A click copies the commit's own SHA but reveals
+/// the parent; both chevrons open the same commit menu.
+#[derive(Clone, Copy)]
+enum ShaChip {
+    /// Washed when the history find query matched the SHA.
+    Commit { find_matched: bool },
+    /// Inert while the card still shows the previous selection.
+    Parent { current: bool },
+}
+
+impl ShaChip {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "commit_card_sha",
+            Self::Parent { .. } => "commit_card_parent",
+        }
+    }
+
+    fn menu_id(self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "commit_card_sha_menu",
+            Self::Parent { .. } => "commit_card_parent_menu",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "Copy commit SHA",
+            Self::Parent { .. } => "Go to parent commit",
+        }
+    }
+
+    fn washed(self) -> bool {
+        matches!(self, Self::Commit { find_matched: true })
+    }
+
+    fn enabled(self) -> bool {
+        !matches!(self, Self::Parent { current: false })
+    }
+}
 
 enum RefPillKind {
     Local,
@@ -19,10 +63,6 @@ struct RefPill {
     kind: RefPillKind,
     /// The checked-out branch, tinted like the sidebar's HEAD row.
     is_head: bool,
-}
-
-fn short_sha(sha: &str) -> &str {
-    sha.get(..SHORT_SHA_LEN).unwrap_or(sha)
 }
 
 impl DetailsPaneView {
@@ -74,37 +114,147 @@ impl DetailsPaneView {
         pills
     }
 
-    fn commit_card_chip(
+    /// A short SHA whose body runs the chip's click and whose chevron opens
+    /// the commit menu under the whole chip.
+    fn commit_card_sha_chip(
         &self,
-        id: &'static str,
-        text: String,
-        tooltip: &'static str,
-        wash: bool,
-    ) -> gpui::Stateful<Div> {
+        chip: ShaChip,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
         let theme = self.theme;
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
+        let enabled = chip.enabled();
+        let ui_scale = self.ui_scale();
+        let menu_id = chip.menu_id();
+        let menu_open = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|invoker| invoker.as_ref() == menu_id);
+        let chip_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+
+        let body = div()
+            .id(chip.id())
+            .debug_selector(move || chip.id().to_string())
             .flex()
-            .flex_none()
             .items_center()
             .gap_1()
             .px_2()
-            .h(px(22.0))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .border_color(theme.colors.stroke.default)
-            .bg(if wash {
-                with_alpha(theme.colors.accent.foreground, 0.18)
-            } else {
-                theme.colors.surface.raised
+            .h_full()
+            .control_interaction(
+                components::InteractionStyle::new(theme),
+                components::InteractionState::default().disabled(!enabled),
+            )
+            .child(crate::view::caches::short_commit_sha(commit_id.as_ref()).to_owned())
+            .when(matches!(chip, ShaChip::Commit { .. }), |d| {
+                d.child(svg_icon(
+                    "icons/copy.svg",
+                    theme.colors.foreground.secondary,
+                    ui_scale.px(12.0),
+                ))
             })
-            .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.primary)
-            .cursor_pointer()
-            .child(text)
-            .gitcomet_tooltip(theme, tooltip.into())
+            .on_activate(
+                !enabled,
+                components::ControlActivation::Action,
+                cx.listener({
+                    let commit_id = commit_id.clone();
+                    move |this, e: &ClickEvent, _w, cx| {
+                        if e.standard_click() {
+                            this.activate_sha_chip(chip, repo_id, commit_id.clone(), cx);
+                        }
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, chip.tooltip().into());
+
+        let menu = div()
+            .id(menu_id)
+            .debug_selector(move || menu_id.to_string())
+            .flex()
+            .items_center()
+            .justify_center()
+            .px_1()
+            .h_full()
+            .control_interaction(
+                components::InteractionStyle::new(theme),
+                components::InteractionState::default().open(menu_open),
+            )
+            .child(svg_icon(
+                "icons/chevron_down.svg",
+                if menu_open {
+                    theme.colors.accent.foreground
+                } else {
+                    theme.colors.foreground.secondary
+                },
+                ui_scale.px(12.0),
+            ))
+            .on_activate(
+                false,
+                components::ControlActivation::Action,
+                cx.listener({
+                    let chip_bounds = Rc::clone(&chip_bounds);
+                    move |this, e: &ClickEvent, window, cx| {
+                        let Some(bounds) = chip_bounds.get().filter(|_| e.standard_click()) else {
+                            return;
+                        };
+                        this.open_popover_for_bounds(
+                            PopoverKind::CommitShaLinkMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                allow_navigate: true,
+                            }
+                            .invoked_by(menu_id.into()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, "Commit actions".into());
+
+        div()
+            .flex_none()
+            .on_children_prepainted(move |children, _window, _cx| {
+                chip_bounds.set(children.first().copied());
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(SHA_CHIP_HEIGHT_PX))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.stroke.default)
+                    .bg(if chip.washed() {
+                        with_alpha(theme.colors.accent.foreground, 0.18)
+                    } else {
+                        theme.colors.surface.raised
+                    })
+                    .overflow_hidden()
+                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.primary)
+                    .child(body)
+                    .child(div().w(px(1.0)).h_full().bg(theme.colors.stroke.default))
+                    .child(menu),
+            )
+    }
+
+    fn activate_sha_chip(
+        &mut self,
+        chip: ShaChip,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.request_root(
+            match chip {
+                ShaChip::Commit { .. } => RootRequest::CopyCommitSha(commit_id),
+                ShaChip::Parent { .. } => RootRequest::RevealCommit { repo_id, commit_id },
+            },
+            cx,
+        );
     }
 
     /// A ref drawn like a sidebar branch row: the same icon, label size and
@@ -156,7 +306,6 @@ impl DetailsPaneView {
     ) -> Stateful<Div> {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let full_sha = details.id.as_ref().to_string();
         let parent = details.parent_ids.first().cloned();
         let date = self.commit_details_date_display(details);
         let relative = (details.authored_at_unix != 0).then(|| {
@@ -179,32 +328,14 @@ impl DetailsPaneView {
             .collect();
         crate::text_runs::sanitize_highlights(&display_name, &mut name_highlights);
 
-        let copy_sha = full_sha.clone();
-        let sha_chip = self
-            .commit_card_chip(
-                "commit_card_sha",
-                short_sha(&full_sha).to_string(),
-                "Copy commit SHA",
-                sha_matched,
-            )
-            .child(svg_icon(
-                "icons/copy.svg",
-                theme.colors.foreground.secondary,
-                ui_scale.px(12.0),
-            ))
-            .on_activate(
-                false,
-                components::ControlActivation::Action,
-                cx.listener(move |_this, e: &ClickEvent, _w, cx| {
-                    if e.standard_click() {
-                        crate::clipboard::write_text(
-                            cx,
-                            copy_sha.clone(),
-                            crate::clipboard::CopySource::CommitSha,
-                        );
-                    }
-                }),
-            );
+        let sha_chip = self.commit_card_sha_chip(
+            ShaChip::Commit {
+                find_matched: sha_matched,
+            },
+            repo_id,
+            details.id.clone(),
+            cx,
+        );
 
         let top = div()
             .flex()
@@ -261,31 +392,12 @@ impl DetailsPaneView {
                     .child("Parent"),
             );
         bottom = match parent {
-            Some(parent) => {
-                let parent_sha = parent.as_ref().to_string();
-                let chip = self
-                    .commit_card_chip(
-                        "commit_card_parent",
-                        short_sha(&parent_sha).to_string(),
-                        "Go to parent commit",
-                        false,
-                    )
-                    .on_activate(
-                        !current,
-                        components::ControlActivation::Action,
-                        cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if e.standard_click() {
-                                this.store.dispatch(Msg::SelectCommit {
-                                    request_id: None,
-                                    repo_id,
-                                    commit_id: parent.clone(),
-                                });
-                                cx.notify();
-                            }
-                        }),
-                    );
-                bottom.child(chip)
-            }
+            Some(parent) => bottom.child(self.commit_card_sha_chip(
+                ShaChip::Parent { current },
+                repo_id,
+                parent,
+                cx,
+            )),
             None => bottom.child(
                 div()
                     .text_size(theme.ui_text(12.0))

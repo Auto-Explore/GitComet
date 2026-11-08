@@ -1330,6 +1330,12 @@ impl PopoverHost {
                     cx,
                 );
             }
+            ContextMenuAction::CopyCommitSha { commit_id } => {
+                window.activate();
+                let _ = self
+                    .root_view
+                    .request(RootRequest::CopyCommitSha(commit_id), None, cx);
+            }
             ContextMenuAction::LoadRemoteMarkdownImage { url } => {
                 if let Some(view) = self.markdown_image_approval.clone() {
                     view.approve_image(url, cx);

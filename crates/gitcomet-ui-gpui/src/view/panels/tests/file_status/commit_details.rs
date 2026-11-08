@@ -1132,10 +1132,10 @@ fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
     });
 }
 
+/// The parent can sit far below the selected commit; following it must
+/// scroll the history to its row, not just select it off screen.
 #[gpui::test]
-fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
-    cx: &mut gpui::TestAppContext,
-) {
+fn commit_card_parent_click_selects_and_scrolls_to_the_parent(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1152,23 +1152,18 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            let commit = |id: String, summary: String| gitcomet_core::domain::Commit {
+                id: gitcomet_core::domain::CommitId(id.into()),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: summary.into(),
+                author: "Alice".into(),
+                time: std::time::SystemTime::UNIX_EPOCH,
+            };
+            let mut commits = vec![commit(current_sha.into(), "current".into())];
+            commits.extend((0..158).map(|ix| commit(format!("{ix:040x}"), format!("filler {ix}"))));
+            commits.push(commit(parent_sha.into(), "parent".into()));
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
-                commits: vec![
-                    gitcomet_core::domain::Commit {
-                        id: gitcomet_core::domain::CommitId(current_sha.into()),
-                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-                        summary: "current".into(),
-                        author: "Alice".into(),
-                        time: std::time::SystemTime::UNIX_EPOCH,
-                    },
-                    gitcomet_core::domain::Commit {
-                        id: gitcomet_core::domain::CommitId(parent_sha.into()),
-                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-                        summary: "parent".into(),
-                        author: "Alice".into(),
-                        time: std::time::SystemTime::UNIX_EPOCH,
-                    },
-                ],
+                commits,
                 next_cursor: None,
             }));
             repo.log_rev = 1;
@@ -1221,6 +1216,122 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let expected = gitcomet_core::domain::CommitId(parent_sha.into());
         assert_eq!(selected, Some(&expected));
     });
+    draw_and_drain_test_window(cx);
+    let offset_y = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y
+    });
+    assert!(
+        offset_y < px(-0.5),
+        "the history must scroll down to the parent's row, offset {offset_y:?}"
+    );
+}
+
+/// A window showing one commit with a parent, for the card's SHA chips.
+fn commit_card_chip_fixture(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<crate::view::GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(41);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-card-chips"));
+            repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into()));
+            repo.history_state.commit_details =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into()),
+                    message: "subject".into(),
+                    author_name: "Alice".into(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![gitcomet_core::domain::CommitId(CHIP_PARENT_SHA.into())],
+                    files: vec![],
+                }));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    (view, cx)
+}
+
+const CHIP_COMMIT_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const CHIP_PARENT_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+#[gpui::test]
+fn commit_card_sha_click_copies_the_full_sha_and_says_so(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let sha_bounds = cx
+        .debug_bounds("commit_card_sha")
+        .expect("expected the SHA chip in the commit card");
+    simulate_counted_click(cx, sha_bounds.center(), 1);
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("0123456789abcdef0123456789abcdef01234567".to_string())
+    );
+    let toasts = cx.update(|_window, app| {
+        let view = view.read(app);
+        view.toast_host.read(app).toasts_for_tests(app)
+    });
+    assert_eq!(
+        toasts,
+        vec![(
+            components::ToastKind::Success,
+            "Commit 01234567 copied to clipboard".to_string()
+        )]
+    );
+}
+
+#[gpui::test]
+fn commit_card_chevrons_open_the_commit_menu_for_their_sha(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    for (menu, sha) in [
+        ("commit_card_sha_menu", CHIP_COMMIT_SHA),
+        ("commit_card_parent_menu", CHIP_PARENT_SHA),
+    ] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+        assert_eq!(
+            kind,
+            Some(PopoverKind::CommitShaLinkMenu {
+                repo_id: gitcomet_state::model::RepoId(41),
+                commit_id: gitcomet_core::domain::CommitId(sha.into()),
+                allow_navigate: true,
+            }),
+            "{menu}"
+        );
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        draw_and_drain_test_window(cx);
+    }
 }
 
 #[gpui::test]
