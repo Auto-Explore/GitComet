@@ -350,6 +350,12 @@ impl RepoState {
         self.backend_parked
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_backend_parked_for_test(&mut self, parked: bool) {
+        self.backend_parked = parked;
+    }
+
     /// An open that reattaches a parked tab, as opposed to its first open.
     pub(crate) fn resumes_parked_backend(&self) -> bool {
         self.backend_parked && self.repository_mode.is_some()

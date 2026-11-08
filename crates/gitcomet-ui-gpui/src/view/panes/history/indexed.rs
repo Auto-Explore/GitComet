@@ -157,7 +157,7 @@ pub(in crate::view) struct IndexedViewState {
 }
 
 pub(super) struct RetainedTab {
-    pub(super) state: IndexedViewState,
+    state: IndexedViewState,
     viewport: Option<super::scroll::LogicalViewport>,
 }
 

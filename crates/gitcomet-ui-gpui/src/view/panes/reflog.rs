@@ -1440,9 +1440,6 @@ mod view_tests {
         drop(subscription);
     }
 
-    /// `reload_repo` drops the reflog back to `NotLoaded` on every repo reload;
-    /// with the panel open that used to leave it on "Loading…" forever, because
-    /// the only load dispatch was on open.
     #[gpui::test]
     fn an_open_reflog_waits_for_the_repository_to_finish_reopening(cx: &mut gpui::TestAppContext) {
         let (pane, repo_id, cx) = open_pane(cx, reflog_entries(4));
@@ -1463,6 +1460,26 @@ mod view_tests {
         });
     }
 
+    #[gpui::test]
+    fn a_parked_repository_drops_its_reflog_rows_until_it_reopens(cx: &mut gpui::TestAppContext) {
+        let (pane, repo_id, cx) = open_pane(cx, reflog_entries(4));
+        pane.update(cx, |pane, cx| {
+            assert!(pane.sync_rows(repo_id) > 0);
+            let mut state = (*pane.state).clone();
+            state.repos[0].set_backend_parked_for_test(true);
+            state.repos[0].reflog = Loadable::NotLoaded;
+            pane.apply_state_snapshot(Arc::new(state.clone()), cx);
+            assert!(pane.panels[&repo_id].rows.is_empty());
+            assert!(pane.request_missing_reflogs().is_empty());
+            state.repos[0].set_backend_parked_for_test(false);
+            pane.apply_state_snapshot(Arc::new(state), cx);
+            assert_eq!(pane.request_missing_reflogs(), vec![repo_id]);
+        });
+    }
+
+    /// `reload_repo` drops the reflog back to `NotLoaded` on every repo reload;
+    /// with the panel open that used to leave it on "Loading…" forever, because
+    /// the only load dispatch was on open.
     #[gpui::test]
     fn a_reflog_cleared_under_an_open_panel_is_requested_again(cx: &mut gpui::TestAppContext) {
         let (pane, repo_id, cx) = open_pane(cx, reflog_entries(4));
