@@ -393,6 +393,11 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
     repo.set_reflog(Loadable::NotLoaded);
     repo.set_ref_metadata(Loadable::NotLoaded);
     repos.retire(&repo.id);
+    repo_load_trace::trace!(
+        "park_repository repo_id={:?} load_epoch={}",
+        repo.id,
+        repo.load_epoch
+    );
 }
 
 /// The resumed refresh reloads what parking released. A streamed log is
@@ -445,6 +450,12 @@ pub(super) fn recover_descriptor_exhaustion(
         park_repository(repo, repos);
     }
     repo.descriptor_retry_epoch = Some(repo.load_epoch);
+    repo_load_trace::trace!(
+        "descriptor_recovery repo_id={:?} active={} load_epoch={}",
+        repo_id,
+        active,
+        repo.load_epoch
+    );
     if !active {
         if repo.open.is_loading() {
             repo.set_open(Loadable::NotLoaded);
@@ -1543,6 +1554,7 @@ pub(super) fn repo_opened_ok(
         .iter()
         .any(|repo| repo.id == repo_id && repo.resumes_parked_backend());
     if resuming {
+        repo_load_trace::trace!("repo_opened_ok resuming_parked repo_id={:?}", repo_id);
         super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let git_log_settings = state.git_log_settings;
