@@ -549,6 +549,78 @@ fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppCon
     );
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn macos_ui_scale_uses_command_keys_instead_of_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(708);
+    let commit_id = CommitId("8877665544332211".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_macos_keyboard_scale",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        window.activate();
+    });
+    focus_detached_window_focus(cx);
+    draw_and_drain_test_window(cx);
+
+    let position = point(px(320.0), px(240.0));
+    let assert_scroll_keeps_scale = |cx: &mut gpui::VisualTestContext, percent| {
+        for (control, platform) in [(false, false), (true, false), (false, true), (true, true)] {
+            for delta in [
+                ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+                ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+                ScrollDelta::Lines(point(0.0, 1.0)),
+                ScrollDelta::Lines(point(0.0, -1.0)),
+            ] {
+                cx.simulate_event(ScrollWheelEvent {
+                    position,
+                    delta,
+                    modifiers: Modifiers {
+                        control,
+                        platform,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                draw_and_drain_test_window(cx);
+                assert_eq!(
+                    cx.update(|_window, app| view.read(app).ui_scale_percent),
+                    percent,
+                    "scrolling must preserve macOS window scale (Control={control}, Command={platform})"
+                );
+            }
+        }
+    };
+    assert_scroll_keeps_scale(cx, 100);
+    for (keystroke, percent) in [
+        ("cmd-+", 110),
+        ("cmd-=", 125),
+        ("cmd--", 110),
+        ("cmd-0", 100),
+    ] {
+        cx.simulate_keystrokes(keystroke);
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            cx.update(|_window, app| view.read(app).ui_scale_percent),
+            percent,
+            "{keystroke} must scale the macOS window"
+        );
+        if percent == 125 {
+            assert_scroll_keeps_scale(cx, percent);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 #[gpui::test]
 fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -606,6 +678,7 @@ fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
 
 /// A trackpad sends Ctrl/Cmd+scroll as many small pixel deltas; stepping on
 /// each one ran a single gesture through every zoom preset.
+#[cfg(not(target_os = "macos"))]
 #[gpui::test]
 fn ui_scale_smooth_ctrl_scroll_steps_once_per_40_px(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

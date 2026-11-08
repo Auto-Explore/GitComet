@@ -612,11 +612,9 @@ pub(super) fn reduce_prepared(
     {
         return Vec::new();
     }
-    let reconcile = !matches!(
-        msg,
-        Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
-    );
-    let push = is_view_navigation(&msg);
+    let navigation = view_navigation(&msg);
+    let reconcile = navigation.is_none_or(|(_, kind)| kind.reconciles());
+    let push = navigation.is_some_and(|(_, kind)| kind.pushes());
     let selection_request = match &msg {
         Msg::SelectCommit {
             repo_id,
@@ -650,7 +648,16 @@ pub(super) fn reduce_prepared(
         reconcile_active_nav_history(state, false);
     }
 
+    let canvas_request = navigation.and_then(|(repo_id, kind)| {
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+        kind.requests_canvas(&repo.navigation).then_some(repo_id)
+    });
     let mut effects = reduce_inner(inputs, repos, id_alloc, state, msg);
+    if let Some(repo) =
+        canvas_request.and_then(|repo_id| state.repos.iter_mut().find(|repo| repo.id == repo_id))
+    {
+        repo.navigation.canvas_requests = repo.navigation.canvas_requests.wrapping_add(1);
+    }
     track_sequencer_effects(state, &effects);
     effects::follow_history_selection(state, &mut effects);
 
@@ -786,38 +793,100 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     }
 }
 
-/// Whether `msg` is a user-initiated navigation that should create a new global
-/// back/forward step (as opposed to a background change folded into the current
-/// step). `GlobalNav*` replays are handled separately and never reach here as a
-/// "push".
-fn is_view_navigation(msg: &Msg) -> bool {
-    matches!(
-        msg,
-        Msg::SelectDiff { .. }
-            | Msg::SelectConflictDiff { .. }
-            | Msg::SelectCommit { .. }
-            // Selecting a linked-worktree row is a destination like any other
-            // history selection; it just is not a commit.
-            | Msg::SelectWorktreeUncommitted { .. }
-            | Msg::CompareCommitRange { .. }
-            | Msg::CompareWithOptions { .. }
-            | Msg::CompareWithMarked { .. }
-            | Msg::CompareWithWorkingTree { .. }
-            | Msg::OpenFileContent { .. }
-            | Msg::OpenFileEditor { .. }
-            // Leaving the editor is a destination of its own, so Back returns to
-            // the editor rather than skipping past it to whatever preceded it.
-            | Msg::ExitDiffEditMode { .. }
-            | Msg::OpenFileAtCommit { .. }
-            | Msg::ShowFileChangesAtCommit { .. }
-            | Msg::BrowseRepositoryAtCommit { .. }
-            // A reveal moves the main view when its reference resolves, not
-            // when it is asked for.
-            | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { .. })
-            | Msg::ResetBrowseToLive { .. }
-            | Msg::OpenInlineSubmoduleDiff { .. }
-            | Msg::SelectInlineSubmoduleDiff { .. }
-    )
+/// A back/forward history the user steps through.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NavHistory {
+    /// The global history across the main view.
+    Main,
+    /// The file viewer's own history of versions, kept apart so it does not
+    /// pollute the global one.
+    Viewer,
+}
+
+/// How a message moves its repository's main view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ViewNavigation {
+    /// The user goes to a view: a new global back/forward step, and a request
+    /// for the repository's canvas.
+    Step,
+    /// The user asks for the canvas, and the selection folds into the current
+    /// step.
+    Request,
+    /// The user's Back or Forward through a history.
+    Replay(NavHistory, crate::model::ViewNavDir),
+    /// A view asked for earlier arrives: its step, but the ask already
+    /// counted.
+    Resolved,
+}
+
+impl ViewNavigation {
+    fn pushes(self) -> bool {
+        matches!(self, Self::Step | Self::Resolved)
+    }
+
+    /// Replaying the global history moves its cursor, so it is not synced to
+    /// the view around the step.
+    fn reconciles(self) -> bool {
+        !matches!(self, Self::Replay(NavHistory::Main, _))
+    }
+
+    /// Back and Forward ask only when their history has a step that way;
+    /// read before the step is taken.
+    fn requests_canvas(self, navigation: &crate::model::RepoNavigationState) -> bool {
+        match self {
+            Self::Step | Self::Request => true,
+            Self::Replay(NavHistory::Main, dir) => navigation.main_history.peek_step(dir).is_some(),
+            Self::Replay(NavHistory::Viewer, dir) => {
+                navigation.view_history.peek_step(dir).is_some()
+            }
+            Self::Resolved => false,
+        }
+    }
+}
+
+/// How `msg` moves which repository's main view, as opposed to a background
+/// change folded into the current step.
+fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
+    use crate::model::ViewNavDir::{Back, Forward};
+    let navigation = match msg {
+        Msg::SelectDiff { repo_id, .. }
+        | Msg::SelectConflictDiff { repo_id, .. }
+        | Msg::SelectCommit { repo_id, .. }
+        // Selecting a linked-worktree row is a destination like any other
+        // history selection; it just is not a commit.
+        | Msg::SelectWorktreeUncommitted { repo_id, .. }
+        | Msg::CompareCommitRange { repo_id, .. }
+        | Msg::CompareWithOptions { repo_id, .. }
+        | Msg::CompareWithMarked { repo_id, .. }
+        | Msg::CompareWithWorkingTree { repo_id, .. }
+        | Msg::OpenFileContent { repo_id, .. }
+        | Msg::OpenFileEditor { repo_id, .. }
+        // Leaving the editor is a destination of its own, so Back returns to
+        // the editor rather than skipping past it to whatever preceded it.
+        | Msg::ExitDiffEditMode { repo_id, .. }
+        | Msg::OpenFileAtCommit { repo_id, .. }
+        | Msg::ShowFileChangesAtCommit { repo_id, .. }
+        | Msg::BrowseRepositoryAtCommit { repo_id, .. }
+        | Msg::ResetBrowseToLive { repo_id, .. }
+        | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
+        | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => (*repo_id, ViewNavigation::Step),
+        Msg::GlobalNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Back)),
+        Msg::GlobalNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Forward)),
+        Msg::ViewerNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Back)),
+        Msg::ViewerNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Forward)),
+        Msg::SelectCommitMulti { repo_id, .. }
+        | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
+            repo_id, ..
+        })
+        | Msg::RevealCommit { repo_id, .. } => (*repo_id, ViewNavigation::Request),
+        // A reveal moves the main view when its reference resolves, not when
+        // it is asked for; a stale or failed answer moves nothing.
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { repo_id, .. }) => {
+            (*repo_id, ViewNavigation::Resolved)
+        }
+        _ => return None,
+    };
+    Some(navigation)
 }
 
 /// Sync the active repo's global navigation history against the current
@@ -1905,12 +1974,14 @@ fn reduce_inner(
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit(state, repo_id, message, push_after_commit),
+            hooks,
+        } => auth::commit(state, repo_id, message, push_after_commit, hooks),
         Msg::CommitAmend {
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit_amend(state, repo_id, message, push_after_commit),
+            hooks,
+        } => auth::commit_amend(state, repo_id, message, push_after_commit, hooks),
         Msg::SafePushAfterCommit { repo_id, context } => {
             match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,
@@ -1990,11 +2061,17 @@ fn reduce_inner(
             repo_id,
             target,
             set_upstream,
+            hooks,
         } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
-            None => {
-                actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
-            }
+            None => actions_emit_effects::push_after_commit(
+                repos,
+                state,
+                repo_id,
+                target,
+                set_upstream,
+                hooks,
+            ),
         },
         Msg::ForcePush { repo_id } => {
             match annex_adjusted_refusal(inputs, state, repo_id, "Force push") {

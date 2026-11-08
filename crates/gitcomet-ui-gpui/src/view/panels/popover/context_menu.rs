@@ -36,6 +36,7 @@ mod mergetool_settings;
 mod previous_commit_messages;
 pub(super) mod pull;
 mod push;
+mod ref_menu;
 mod reflog_entry;
 mod remote;
 mod remote_web_picker;
@@ -823,6 +824,7 @@ impl PopoverHost {
                 Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
+                context_actions,
                 repo_id,
                 area,
                 path,
@@ -834,6 +836,7 @@ impl PopoverHost {
                 copy_text,
                 copy_target,
             } => Some(diff_editor::model(
+                context_actions,
                 *repo_id,
                 *area,
                 path,

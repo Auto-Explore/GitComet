@@ -18,8 +18,8 @@ use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolver
 use gitcomet_core::domain::{DiffTarget, FileConflictKind, Upstream};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CheckoutRemoteBranchMode, CommandOutput, InteractiveRebaseEntry, PullMode, RemoteUrlKind,
-    ResetMode, SafePushAfterCommitTarget, WorktreeCheckout,
+    CheckoutRemoteBranchMode, CommandOutput, GitHooks, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -331,20 +331,22 @@ pub(super) fn append_gitignore_patterns(repo_id: RepoId, patterns: Vec<String>) 
     )]
 }
 
-pub(super) fn commit(repo_id: RepoId, message: String) -> Vec<Effect> {
+pub(super) fn commit(repo_id: RepoId, message: String, hooks: GitHooks) -> Vec<Effect> {
     vec![Effect::Commit {
         repo_id,
         message,
         identity: None,
+        hooks,
         auth: None,
     }]
 }
 
-pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
+pub(super) fn commit_amend(repo_id: RepoId, message: String, hooks: GitHooks) -> Vec<Effect> {
     vec![Effect::CommitAmend {
         repo_id,
         message,
         identity: None,
+        hooks,
         auth: None,
     }]
 }
@@ -629,8 +631,9 @@ pub(super) fn push_after_commit(
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
     set_upstream: bool,
+    hooks: GitHooks,
 ) -> Vec<Effect> {
-    push_after_commit_with_auth(repos, state, repo_id, target, set_upstream, None)
+    push_after_commit_with_auth(repos, state, repo_id, target, set_upstream, hooks, None)
 }
 
 fn push_after_commit_with_auth(
@@ -639,6 +642,7 @@ fn push_after_commit_with_auth(
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
     set_upstream: bool,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
@@ -646,6 +650,7 @@ fn push_after_commit_with_auth(
         repo_id,
         target,
         set_upstream,
+        hooks,
         auth,
     })]
 }
@@ -1156,6 +1161,7 @@ pub(super) fn safe_push_after_commit_finished(
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
     handled_by_prompt: bool,
@@ -1165,13 +1171,13 @@ pub(super) fn safe_push_after_commit_finished(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending.force_push_lease = None;
             }
-            push_after_commit_with_auth(repos, state, repo_id, target, false, auth)
+            push_after_commit_with_auth(repos, state, repo_id, target, false, hooks, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending.force_push_lease = None;
             }
-            push_after_commit_with_auth(repos, state, repo_id, target, true, auth)
+            push_after_commit_with_auth(repos, state, repo_id, target, true, hooks, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Blocked { summary, lease }) => {
             let git_log_settings = state.git_log_settings;

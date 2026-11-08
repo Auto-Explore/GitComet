@@ -9,6 +9,7 @@ mod editing_history;
 mod focus_events;
 mod highlighting;
 mod layout;
+mod scrolling;
 mod selection_ime;
 
 fn multiline_input(

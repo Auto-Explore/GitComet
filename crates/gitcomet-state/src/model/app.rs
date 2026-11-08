@@ -309,6 +309,7 @@ pub enum AuthRetryOperation {
         message: String,
         amend: bool,
         push_after_commit: bool,
+        hooks: gitcomet_core::services::GitHooks,
     },
     Clone {
         url: String,

@@ -14,6 +14,7 @@ fn structural_context_menu_opens_without_installed_extensions(cx: &mut gpui::Tes
                 pane.open_structural_menu(
                     Vec::new(),
                     Some("selected text".into()),
+                    Vec::new(),
                     point(px(100.0), px(100.0)),
                     window,
                     cx,

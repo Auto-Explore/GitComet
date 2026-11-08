@@ -1,6 +1,28 @@
 use super::preference_change::PreferenceChange;
 use super::*;
 
+/// A side panel header's minimum width. Shaping the tab labels is the cost,
+/// so the width is measured again only when the kit's measure changes.
+#[derive(Default)]
+pub(in crate::view) struct HeaderMinimum {
+    measure: Option<components::PanelHeaderMeasure>,
+    width: Pixels,
+}
+
+impl HeaderMinimum {
+    /// Whether the width changed; `None` is a pane without a header.
+    fn update(&mut self, measure: Option<components::PanelHeaderMeasure>, window: &Window) -> bool {
+        if self.measure == measure {
+            return false;
+        }
+        let width = measure
+            .as_ref()
+            .map_or(px(0.0), |measure| measure.minimum_width(window));
+        self.measure = measure;
+        std::mem::replace(&mut self.width, width) != width
+    }
+}
+
 impl GitCometView {
     pub(in crate::view) fn set_diff_engine(
         &mut self,
@@ -102,58 +124,70 @@ impl GitCometView {
         self.scaled_px(PANE_COLLAPSED_PX)
     }
 
+    /// The room a side pane takes: its collapsed strip, or `width` and its
+    /// resize handle.
+    pub(super) fn pane_footprint(&self, collapsed: bool, width: Pixels) -> Pixels {
+        if collapsed {
+            self.pane_collapsed_width()
+        } else {
+            width + self.pane_resize_handle_width()
+        }
+    }
+
     pub(super) fn main_min_width(&self) -> Pixels {
         self.scaled_px(MAIN_MIN_PX)
     }
 
     pub(super) fn sidebar_min_width(&self) -> Pixels {
         self.scaled_px(SIDEBAR_MIN_PX)
-            .max(self.sidebar_header_minimum)
+            .max(self.sidebar_header_minimum.width)
     }
 
-    pub(super) fn sync_sidebar_header_layout(
+    pub(super) fn sync_panel_header_layout(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let scale = self.ui_scale();
         let theme = self.theme;
-        let minimum = self.sidebar_pane.update(cx, |pane, cx| {
-            pane.header_minimum_width(theme, scale, window, cx)
+        let sidebar = self
+            .sidebar_pane
+            .update(cx, |pane, cx| pane.header_measure(theme, scale, window, cx));
+        let details = self.details_listing().map(|listing| {
+            Self::details_header(&listing, cx)
+                .0
+                .measure(theme, scale, window)
         });
-        if self.sidebar_header_minimum != minimum {
-            self.sidebar_header_minimum = minimum;
+        let sidebar_changed = self.sidebar_header_minimum.update(Some(sidebar), window);
+        let details_changed = self.details_header_minimum.update(details, window);
+        if sidebar_changed || details_changed {
             self.pane_resize = None;
         }
-        if self.sidebar_collapsed || !renders_full_chrome(self.view_mode) {
-            self.sidebar_window_size_request = None;
+        if !renders_full_chrome(self.view_mode) {
+            self.pane_window_size_request = None;
             return;
         }
-        let details = if self.details_collapsed {
-            self.pane_collapsed_width()
-        } else {
-            self.details_min_width()
-        };
         let base_minimum = crate::app::main_window_min_size_for_percent(self.ui_scale_percent);
         let current = window.viewport_size();
-        let divider_allowance =
-            self.pane_resize_handle_width() * if self.details_collapsed { 1.0 } else { 2.0 };
         let required = gpui::size(
             base_minimum.width.max(
-                self.sidebar_min_width() + self.main_min_width() + details + divider_allowance,
+                self.pane_footprint(self.sidebar_collapsed, self.sidebar_min_width())
+                    + self.main_min_width()
+                    + self.pane_footprint(self.details_collapsed, self.details_min_width()),
             ),
             current.height,
         );
         if current.width >= required.width {
-            self.sidebar_window_size_request = None;
-        } else if self.sidebar_window_size_request != Some((required, current)) {
-            self.sidebar_window_size_request = Some((required, current));
+            self.pane_window_size_request = None;
+        } else if self.pane_window_size_request != Some((required, current)) {
+            self.pane_window_size_request = Some((required, current));
             crate::app::ensure_window_respects_min_size(window, required);
         }
     }
 
     pub(super) fn details_min_width(&self) -> Pixels {
         self.scaled_px(DETAILS_MIN_PX)
+            .max(self.details_header_minimum.width)
     }
 
     pub(super) fn pane_resize_handle_width(&self) -> Pixels {
@@ -444,6 +478,22 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
         self.popover_host
             .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
+        cx.notify();
+    }
+
+    /// Lasts while the window is open and is never saved: a forgotten skip
+    /// would silently bypass every hook from then on.
+    pub(in crate::view) fn set_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_commit_skip_hooks_enabled(enabled, cx)
+        });
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_commit_skip_hooks_enabled(enabled, cx)
+        });
         cx.notify();
     }
 
@@ -1127,5 +1177,59 @@ impl GitCometView {
                 self.accept_large_file_tools_publication(publication, cx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Blank;
+
+    impl gpui::Render for Blank {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn measure(window: &Window, cx: &mut App) -> components::PanelHeaderMeasure {
+        components::PanelHeader::new("header", cx)
+            .tab("tab", "History", None, true, "History")
+            .measure(
+                AppTheme::gitcomet_dark(),
+                ui_scale::UiScale::from_percent(100),
+                window,
+            )
+    }
+
+    /// A header is measured again only when its measure changes, as it does
+    /// in a new UI font. Test glyphs measure alike in every font, so a stale
+    /// width stands in for one measured in the old font.
+    #[gpui::test]
+    fn a_header_minimum_is_measured_again_only_when_its_measure_changes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_view, cx) = cx.add_window_view(|_, _| Blank);
+        cx.update(|window, app| {
+            let mut minimum = HeaderMinimum::default();
+            assert!(minimum.update(Some(measure(window, app)), window));
+            let measured = minimum.width;
+            assert!(measured > px(0.0));
+            minimum.width = px(1.0);
+            assert!(!minimum.update(Some(measure(window, app)), window));
+            assert_eq!(minimum.width, px(1.0), "the same measure keeps the width");
+
+            let fonts = crate::font_preferences::current(app);
+            crate::font_preferences::set_current(
+                app,
+                fonts.ui_font_family,
+                fonts.editor_font_family,
+                !fonts.use_font_ligatures,
+            );
+            assert!(minimum.update(Some(measure(window, app)), window));
+            assert_eq!(minimum.width, measured);
+            assert!(minimum.update(None, window), "a pane without a header");
+            assert_eq!(minimum.width, px(0.0));
+        });
     }
 }

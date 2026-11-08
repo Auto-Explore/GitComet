@@ -1,26 +1,27 @@
 //! The example's extension: marking repositories reviewed.
 //!
-//! It registers one of every contribution through the public API only:
+//! It registers most kinds of contribution, through the public API only:
 //! repository views (one of them hosting diff panes and a file list, see
-//! [`crate::changes`]), a bottom panel, a details tab, a sidebar section and
-//! sidebar rows, a history annotator, a status item, the edition strip and
-//! title-bar brand, a settings page, commands with a key binding and menu
-//! entries, an asset, a window gate, a repository-entry gate, a close guard,
-//! and a hosted dialog. Review counts are per window and saved in that
+//! [`crate::changes`]), a bottom panel, a canvas overlay, a details tab, a
+//! sidebar section and sidebar rows, a history annotator, a status item, the
+//! edition strip and title-bar brand, a settings page, commands with a key
+//! binding and menu entries, a branch and commit menu entry, an asset, a window gate, a repository-entry
+//! gate, a close guard, and a hosted dialog. Review counts are per window and saved in that
 //! window's workspace, so they survive a restart.
 
 use crate::review_counter::ReviewCounter;
 use gitcomet_core::domain::Commit;
 use gitcomet_core::identity::WindowKind;
 use gitcomet_extension_api::{
-    BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseRequest, CloseScope,
-    CommandContext, CommandDescriptor, DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension,
-    ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction,
-    HostedMenuItem, MenuLocation, NotificationKind, Registrar, RepositoryEntryRequest,
-    RepositoryViewContext, RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext,
-    SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor,
-    SidebarSectionRows, SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor,
-    WindowHost,
+    BottomPanelDescriptor, CanvasOverlayDescriptor, CanvasOverlayVisibility, ChromeDescriptor,
+    CloseDecision, CloseRequest, CloseScope, CommandContext, CommandDescriptor,
+    DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension, ExtensionId, GateDecision,
+    HistoryAnnotator, HistoryRowAnnotation, HostedAction, HostedMenuItem, MenuLocation,
+    NotificationKind, RefMenuContext, RefMenuItemDescriptor, RefMenuTarget, Registrar,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, RowGlyph, RowMark,
+    SettingsPageContext, SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow,
+    SidebarSectionDescriptor, SidebarSectionRows, SlotSignal, StatusItemDescriptor,
+    WindowExtension, WindowGateDescriptor, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -50,6 +51,9 @@ const FLAG_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 
 /// The bottom panel listing this repository's reviews.
 pub const REVIEW_LOG_PANEL: &str = "review-log";
+
+/// The overlay showing this repository's count over its main canvas.
+pub const REVIEW_OVERLAY: &str = "review-overlay";
 
 /// Where the settings page's documentation link goes.
 pub const DOCS_URL: &str = "https://example.com/comet-example/docs";
@@ -91,6 +95,10 @@ pub struct Reviews {
     counts: HashMap<WindowId, BTreeMap<PathBuf, u64>>,
     /// Ask before closing a repository nobody has reviewed yet.
     pub confirm_close_unreviewed: bool,
+    /// Every change to the review overlay, oldest first.
+    overlay_changes: Vec<(PathBuf, CanvasOverlayVisibility)>,
+    /// Every branch or commit marked from its menu, oldest first.
+    reviewed_refs: Vec<(PathBuf, RefMenuTarget)>,
 }
 
 impl Reviews {
@@ -111,6 +119,14 @@ impl Reviews {
     /// Windows the model still tracks; closed ones are dropped.
     pub fn windows(&self) -> usize {
         self.counts.len()
+    }
+
+    pub fn overlay_changes(&self) -> &[(PathBuf, CanvasOverlayVisibility)] {
+        &self.overlay_changes
+    }
+
+    pub fn reviewed_refs(&self) -> &[(PathBuf, RefMenuTarget)] {
+        &self.reviewed_refs
     }
 }
 
@@ -155,6 +171,20 @@ pub fn mark_reviewed(window: &WindowHost, workdir: &Path, cx: &mut App) {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let _ = window.notify(format!("Marked {name} reviewed"), cx);
+}
+
+/// The branch and commit menus' entry: remembers what it was opened on.
+fn mark_ref_reviewed(context: RefMenuContext, _window: &mut Window, cx: &mut App) {
+    let workdir = context.repository.workdir().to_path_buf();
+    reviews(cx).update(cx, |reviews, cx| {
+        reviews
+            .reviewed_refs
+            .push((workdir, context.target.clone()));
+        cx.notify();
+    });
+    let _ = context
+        .window
+        .notify(format!("Marked {} reviewed", context.target.revision()), cx);
 }
 
 /// The repository view: the count, and a button to add one.
@@ -320,6 +350,36 @@ fn toggle_review_log(context: CommandContext, _window: &mut Window, cx: &mut App
     } else {
         context.window.open_bottom_panel(repository, &panel, cx)
     };
+}
+
+fn toggle_review_overlay(context: CommandContext, _window: &mut Window, cx: &mut App) {
+    let Some(repository) = &context.repository else {
+        return;
+    };
+    let overlay = extension_id()
+        .contribution(REVIEW_OVERLAY)
+        .expect("the overlay id is valid");
+    let _ = if context
+        .window
+        .is_canvas_overlay_shown(repository, &overlay, cx)
+    {
+        context.window.hide_canvas_overlay(repository, &overlay, cx)
+    } else {
+        context.window.show_canvas_overlay(repository, &overlay, cx)
+    };
+}
+
+fn overlay_changed(
+    context: RepositoryViewContext,
+    visibility: CanvasOverlayVisibility,
+    cx: &mut App,
+) {
+    reviews(cx).update(cx, |reviews, cx| {
+        reviews
+            .overlay_changes
+            .push((context.repository.workdir().to_path_buf(), visibility));
+        cx.notify();
+    });
 }
 
 /// The status item: reviews in this window, out of its open repositories.
@@ -707,6 +767,14 @@ impl Extension for ReviewExtension {
                     cx.new(|cx| ReviewLog::new(context, cx)).into()
                 }),
             )
+            .canvas_overlay(
+                REVIEW_OVERLAY,
+                CanvasOverlayDescriptor::new(|context, _window, cx| {
+                    cx.new(|cx| ReviewCount::new(context, "example_review_overlay", cx))
+                        .into()
+                })
+                .on_visibility(overlay_changed),
+            )
             .details_tab(
                 "review-details",
                 DetailsTabDescriptor::new("Review", |context, _window, cx| {
@@ -761,9 +829,20 @@ impl Extension for ReviewExtension {
                     .with_keywords("review log panel")
                     .requiring_repository(),
             )
+            .command(
+                "toggle-review-overlay",
+                CommandDescriptor::new("Toggle Review Overlay", "Review", toggle_review_overlay)
+                    .with_keywords("review overlay canvas")
+                    .requiring_repository(),
+            )
             .key_binding("secondary-alt-r", "mark-reviewed", None)
             .menu_item(MenuLocation::Application, "show-summary")
             .menu_item(MenuLocation::RepositoryTab, "mark-reviewed")
+            .ref_menu_item(
+                "mark-ref-reviewed",
+                RefMenuItemDescriptor::new("Mark reviewed here", mark_ref_reviewed)
+                    .with_icon(ICON_PATH),
+            )
             .asset("icons/review.svg", ICON_SVG)
             .asset("icons/flag.svg", FLAG_SVG)
             .repository_entry_gate("deny-marker", Rc::new(gate))
@@ -835,13 +914,15 @@ mod tests {
         assert_eq!(registry.repository_views().len(), 2);
         assert_eq!(registry.status_items().len(), 1);
         assert_eq!(registry.settings_pages().len(), 1);
-        assert_eq!(registry.commands().len(), 3);
+        assert_eq!(registry.commands().len(), 4);
         assert_eq!(registry.bottom_panels().len(), 1);
+        assert_eq!(registry.canvas_overlays().len(), 1);
         assert_eq!(registry.details_tabs().len(), 1);
         assert_eq!(registry.sidebar_sections().len(), 1);
         assert_eq!(registry.key_bindings().len(), 1);
         assert_eq!(registry.menu_items(MenuLocation::Application).count(), 1);
         assert_eq!(registry.menu_items(MenuLocation::RepositoryTab).count(), 1);
+        assert_eq!(registry.ref_menu_items().len(), 1);
         assert_eq!(registry.asset(ICON_PATH), Some(ICON_SVG));
         assert_eq!(registry.entry_gates().len(), 1);
         assert_eq!(registry.close_guards().len(), 1);

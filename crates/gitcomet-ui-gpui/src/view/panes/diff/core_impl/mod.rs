@@ -12,6 +12,8 @@ use std::time::Instant;
 mod engine;
 mod init;
 
+pub(in crate::view) use diff_wrap::LineNumberCells;
+pub(in crate::view) use engine::EngineNotice;
 pub(in crate::view) use init::DiffRendererInit;
 
 /// Resolve the file path and blame source for a diff target, or `None` for
@@ -455,6 +457,7 @@ impl DiffRenderer {
 
     pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
         self.diff_horizontal_scroll.reset();
+        self.forget_hosted_line_end_text();
         // A reveal names a row in the view it was armed over. That view is gone,
         // so the request must go with it rather than fire against whatever row
         // now holds that index.
@@ -473,6 +476,7 @@ impl DiffRenderer {
         column: DiffHorizontalScrollColumn,
     ) -> Pixels {
         self.diff_horizontal_scroll.content_widths[column.index()]
+            .max(self.hosted_line_end_rows_width(column))
     }
 
     pub(in crate::view) fn diff_horizontal_layout_min_width(
@@ -498,6 +502,30 @@ impl DiffRenderer {
         {
             cx.notify();
         }
+    }
+
+    /// Notes the list on `diff_scroll` as it is built this frame, with
+    /// `rows` rows.
+    pub(in crate::view) fn note_diff_list_built(
+        &mut self,
+        rows: usize,
+        window: &Window,
+        cx: &mut App,
+    ) {
+        let built = helpers::state::DiffListBuilt {
+            rows,
+            row_height: self
+                .theme
+                .editor_row_height(crate::ui_scale::UiScale::current(cx).percent()),
+            scale_factor: window.scale_factor(),
+        };
+        if self.hosted_decor.is_some()
+            && (self.diff_list_built.row_height != built.row_height
+                || self.diff_list_built.scale_factor != built.scale_factor)
+        {
+            window.on_next_frame(|window, _| window.refresh());
+        }
+        self.diff_list_built = built;
     }
 
     pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(
@@ -1911,6 +1939,8 @@ impl DiffRenderer {
         );
     }
 
+    /// Shows `target` loading until the next input: a hosted pane sets it
+    /// and feeds input only once its store answered the open.
     pub(in crate::view) fn set_pending_target(
         &mut self,
         target: DiffTarget,
@@ -1932,16 +1962,7 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let fingerprint = Self::notify_fingerprint_for(&next);
-        let resolved_pending = self.pending_target.as_ref().is_some_and(|pending| {
-            next.diff()
-                .and_then(|diff| diff.diff_target.as_ref())
-                .is_some_and(|target| {
-                    target == pending && target.old_file_path() == pending.old_file_path()
-                })
-        });
-        if resolved_pending {
-            self.pending_target = None;
-        }
+        let resolved_pending = self.pending_target.take().is_some();
         if fingerprint == self.notify_fingerprint && !resolved_pending {
             let next_repositories: &[RepoState] = if self.hosted_decor.is_some() {
                 next.repository().map_or(&[], std::slice::from_ref)
@@ -2570,3 +2591,21 @@ use scroll_sync::*;
 
 #[cfg(test)]
 mod tests;
+
+/// How far apart a uniform list of `rows` rows laid them out when it last
+/// did: the row it measured, which gpui snaps to device pixels. None before
+/// it has laid any out.
+pub(in crate::view) fn list_row_pitch(
+    handle: &UniformListScrollHandle,
+    rows: usize,
+) -> Option<Pixels> {
+    let size = handle.0.borrow().last_item_size?;
+    (rows > 0).then(|| size.contents.height / rows as f32)
+}
+
+/// `length` as gpui lays it out at `scale_factor`: in whole device pixels,
+/// halves toward zero, as its `round_to_device_pixel` does.
+pub(in crate::view) fn device_snapped(length: Pixels, scale_factor: f32) -> Pixels {
+    let device = f32::from(length) * scale_factor;
+    px((device.abs() - 0.5).ceil().copysign(device) / scale_factor)
+}

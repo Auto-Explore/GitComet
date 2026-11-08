@@ -28,6 +28,10 @@ fn command(label: &'static str) -> CommandDescriptor {
     }
 }
 
+fn commit_box_item() -> CommitBoxItemDescriptor {
+    CommitBoxItemDescriptor::new(|_, _, _| unreachable!("registration builds no views"))
+}
+
 fn build(fixtures: Vec<Fixture>) -> Result<Registry, Vec<RegistrationError>> {
     let extensions: Vec<Box<dyn Extension>> = fixtures
         .into_iter()
@@ -46,18 +50,26 @@ fn contributions_keep_registration_order_across_extensions() {
                     .command("second", command("Second"))
                     .key_binding("secondary-shift-f", "first", None)
                     .menu_item(MenuLocation::Application, "second")
-                    .asset("icons/a.svg", b"<svg/>");
+                    .asset("icons/a.svg", b"<svg/>")
+                    .commit_box_item("write", commit_box_item());
             },
         },
         Fixture {
             id: "com.example.b",
             register: |r| {
                 r.command("first", command("B First"))
-                    .repository_entry_gate("gate", Rc::new(|_, _| GateDecision::Allow));
+                    .repository_entry_gate("gate", Rc::new(|_, _| GateDecision::Allow))
+                    .commit_box_item("write", commit_box_item());
             },
         },
     ])
     .expect("valid registrations");
+    let items: Vec<String> = registry
+        .commit_box_items()
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(items, ["com.example.a/write", "com.example.b/write"]);
     let labels: Vec<&str> = registry
         .commands()
         .iter()
@@ -88,7 +100,9 @@ fn duplicates_unknown_commands_and_bad_names_are_rejected_before_install() {
                     .asset("a.svg", b"")
                     .asset("a.svg", b"")
                     .asset("../escape.svg", b"")
-                    .command("Bad Name", command("Bad"));
+                    .command("Bad Name", command("Bad"))
+                    .commit_box_item("write", commit_box_item())
+                    .commit_box_item("write", commit_box_item());
             },
         },
         Fixture {
@@ -102,6 +116,7 @@ fn duplicates_unknown_commands_and_bad_names_are_rejected_before_install() {
     for expected in [
         "registered twice",
         "command com.example.a/run is declared twice",
+        "commit box item com.example.a/write is declared twice",
         "unknown command com.example.a/missing",
         "does not parse",
         "asset extensions/com.example.a/a.svg is declared twice",
@@ -277,4 +292,165 @@ fn bar_placement_conflicts_are_rejected_with_the_declaring_extension() {
             },
         ]
     );
+}
+
+fn canvas_overlay() -> CanvasOverlayDescriptor {
+    CanvasOverlayDescriptor::new(|_, _: &mut Window, _: &mut App| {
+        unreachable!("registration never builds a view")
+    })
+}
+
+#[test]
+fn canvas_overlays_keep_order_and_reject_duplicates() {
+    let registry = build(vec![
+        Fixture {
+            id: "com.example.a",
+            register: |r| {
+                r.canvas_overlay("first", canvas_overlay())
+                    .canvas_overlay("second", canvas_overlay());
+            },
+        },
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.canvas_overlay("first", canvas_overlay());
+            },
+        },
+    ])
+    .expect("valid registrations");
+    let ids: Vec<String> = registry
+        .canvas_overlays()
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "com.example.a/first",
+            "com.example.a/second",
+            "com.example.b/first"
+        ]
+    );
+
+    let errors = build(vec![Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.canvas_overlay("first", canvas_overlay())
+                .canvas_overlay("first", canvas_overlay());
+        },
+    }])
+    .err()
+    .expect("a duplicate overlay");
+    let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("canvas overlay com.example.a/first is declared twice")),
+        "{messages:#?}"
+    );
+}
+
+#[test]
+fn crash_report_action_has_one_owner() {
+    let provider = || Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.crash_report_action("report", Rc::new(|_, _, _| {}));
+        },
+    };
+    assert!(
+        build(vec![provider()])
+            .ok()
+            .unwrap()
+            .crash_report_action()
+            .is_some()
+    );
+    assert!(Registry::default().crash_report_action().is_none());
+    let errors = build(vec![
+        provider(),
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.crash_report_action("report", Rc::new(|_, _, _| {}));
+            },
+        },
+    ])
+    .err()
+    .expect("competing report actions must be refused");
+    assert!(errors.iter().any(|error| {
+        error
+            .message
+            .contains("crash_report_action has more than one provider")
+    }));
+}
+
+fn ref_menu_item(label: &'static str) -> crate::RefMenuItemDescriptor {
+    crate::RefMenuItemDescriptor::new(label, |_, _, _| {})
+}
+
+#[test]
+fn ref_menu_items_keep_registration_order_and_refuse_duplicates() {
+    let registry = build(vec![
+        Fixture {
+            id: "com.example.a",
+            register: |r| {
+                r.ref_menu_item("review", ref_menu_item("Review"));
+            },
+        },
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.ref_menu_item("review", ref_menu_item("Review").with_icon("icons/b.svg"));
+            },
+        },
+    ])
+    .expect("valid registrations");
+    let items: Vec<(String, &str, Option<&str>)> = registry
+        .ref_menu_items()
+        .iter()
+        .map(|(id, item)| (id.to_string(), item.label.as_ref(), item.icon.as_deref()))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("com.example.a/review".to_string(), "Review", None),
+            (
+                "com.example.b/review".to_string(),
+                "Review",
+                Some("icons/b.svg")
+            ),
+        ]
+    );
+
+    let errors = build(vec![Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.ref_menu_item("review", ref_menu_item("Review"))
+                .ref_menu_item("review", ref_menu_item("Review again"));
+        },
+    }])
+    .err()
+    .expect("a duplicate entry");
+    assert_eq!(
+        errors[0].to_string(),
+        "com.example.a: ref menu item com.example.a/review is declared twice"
+    );
+}
+
+#[test]
+fn ref_menu_targets_name_a_revision_git_resolves() {
+    use crate::RefMenuTarget;
+    let local = RefMenuTarget::LocalBranch {
+        name: "feature/x".into(),
+    };
+    let remote = RefMenuTarget::RemoteBranch {
+        remote: "origin".into(),
+        branch: "main".into(),
+    };
+    let commit = RefMenuTarget::Commit {
+        id: gitcomet_core::domain::CommitId("0123456789abcdef".into()),
+    };
+    assert_eq!(local.revision(), "feature/x");
+    assert_eq!(remote.revision(), "origin/main");
+    assert_eq!(commit.revision(), "0123456789abcdef");
 }

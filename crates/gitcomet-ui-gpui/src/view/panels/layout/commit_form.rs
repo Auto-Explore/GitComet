@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::view::pending_commit::PendingCommit;
+use gitcomet_core::services::GitHooks;
 
 pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
@@ -9,6 +10,65 @@ pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
 
 pub(super) fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
+}
+
+/// The commit options a submit carries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct CommitOptions {
+    pub(super) amend: bool,
+    pub(super) push_after: bool,
+    pub(super) skip_hooks: bool,
+}
+
+impl CommitOptions {
+    pub(super) fn msg(self, repo_id: RepoId, message: String) -> Msg {
+        let hooks = GitHooks::from_skip(self.skip_hooks);
+        if self.amend {
+            Msg::CommitAmend {
+                repo_id,
+                message,
+                push_after_commit: self.push_after,
+                hooks,
+            }
+        } else {
+            Msg::Commit {
+                repo_id,
+                message,
+                push_after_commit: self.push_after,
+                hooks,
+            }
+        }
+    }
+
+    /// The commit button's label and tooltip. Skipped hooks show on the button
+    /// itself, since the choice outlasts the commit it was made for.
+    pub(super) fn button_text(self) -> (&'static str, &'static str) {
+        match (self.amend, self.push_after, self.skip_hooks) {
+            (false, false, false) => ("Commit", "Commit staged changes"),
+            (false, true, false) => ("Commit changes and Push", "Commit staged changes and push"),
+            (true, false, false) => ("Amend Previous Commit", "Amend the previous commit"),
+            (true, true, false) => (
+                "Amend and Push Safely",
+                "Amend the previous commit; published amends require explicit force push with lease",
+            ),
+            (false, false, true) => (
+                "Commit without Hooks",
+                "Commit staged changes without running the pre-commit and commit-msg hooks",
+            ),
+            (false, true, true) => (
+                "Commit without Hooks and Push",
+                "Commit staged changes and push without running the pre-commit, commit-msg and pre-push hooks",
+            ),
+            (true, false, true) => (
+                "Amend without Hooks",
+                "Amend the previous commit without running the pre-commit and commit-msg hooks",
+            ),
+            (true, true, true) => (
+                "Amend without Hooks and Push Safely",
+                "Amend the previous commit without running the pre-commit, commit-msg and pre-push hooks; published amends require explicit force push with lease",
+            ),
+        }
+    }
 }
 
 impl DetailsPaneView {
@@ -59,7 +119,7 @@ impl DetailsPaneView {
         let message = self
             .commit_message_input
             .read_with(cx, |input, _| input.text().to_string());
-        let amend = self.commit_amend_enabled;
+        let options = self.commit_options();
         if !self.can_submit_commit(&message) {
             return false;
         }
@@ -69,25 +129,22 @@ impl DetailsPaneView {
             PendingCommit::new(
                 &self.state,
                 repo_id,
-                amend,
+                options.amend,
                 message.trim().to_string().into(),
             ),
         );
-        if amend {
-            self.store.dispatch(Msg::CommitAmend {
-                repo_id,
-                message: message.trim().to_string(),
-                push_after_commit: self.commit_push_after_enabled,
-            });
-        } else {
-            self.store.dispatch(Msg::Commit {
-                repo_id,
-                message: message.trim().to_string(),
-                push_after_commit: self.commit_push_after_enabled,
-            });
-        }
+        self.store
+            .dispatch(options.msg(repo_id, message.trim().to_string()));
         cx.notify();
         true
+    }
+
+    pub(super) fn commit_options(&self) -> CommitOptions {
+        CommitOptions {
+            amend: self.commit_amend_enabled,
+            push_after: self.commit_push_after_enabled,
+            skip_hooks: self.commit_skip_hooks_enabled,
+        }
     }
 
     pub(in crate::view) fn handle_commit_submit_shortcut(
@@ -126,20 +183,7 @@ impl DetailsPaneView {
         let spinner = |id: (&'static str, u64)| {
             components::ButtonSlot::spinner(id, icon_color, scaled_px(14.0))
         };
-        let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
-            (false, false) => "Commit",
-            (false, true) => "Commit changes and Push",
-            (true, false) => "Amend Previous Commit",
-            (true, true) => "Amend and Push Safely",
-        };
-        let commit_tooltip = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
-            (false, false) => "Commit staged changes",
-            (false, true) => "Commit staged changes and push",
-            (true, false) => "Amend the previous commit",
-            (true, true) => {
-                "Amend the previous commit; published amends require explicit force push with lease"
-            }
-        };
+        let (commit_label, commit_tooltip) = self.commit_options().button_text();
         let commit_options_invoker: SharedString = "commit_options".into();
         let commit_options_active = self
             .active_context_menu_invoker
@@ -161,14 +205,11 @@ impl DetailsPaneView {
         } else {
             theme.colors.foreground.secondary
         };
-        let commit_message = components::ScrollContainer::vertical(
-            ("commit_message_scroll_surface", repo_key),
-            ("commit_message_scrollbar", repo_key),
-            self.commit_message_scroll.clone(),
-            scaled_px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
-        )
-        .container_id(("commit_message_container", repo_key))
-        .render(theme, self.commit_message_input.clone());
+        let commit_message = div()
+            .id(("commit_message_container", repo_key))
+            .w_full()
+            .min_w(px(0.0))
+            .child(self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key))
@@ -254,6 +295,7 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .children(self.extension_commit_items.iter().cloned())
                     .child(previous_messages_menu)
                     .child(commit),
             ),

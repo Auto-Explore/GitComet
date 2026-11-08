@@ -1,14 +1,19 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInset, DiffLineRange, DiffLineSide, DiffPaneOptions,
+    DiffAnnotations, DiffGlyph, DiffHostedView, DiffInset, DiffLineRange, DiffLineSide,
+    DiffPaneOptions, DiffPlacement,
 };
 use palette::IntoColor;
+
+/// The lane beside each row that draws its annotation or decoration.
+const GUTTER_LANE_WIDTH: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayRow {
     Document(usize),
     Inset { inset: usize, line: usize },
+    View { view: usize, row: usize },
 }
 
 #[derive(Default)]
@@ -16,24 +21,143 @@ pub(in crate::view) struct HostedDiffDecor {
     pub view_id: u64,
     pub options: DiffPaneOptions,
     pub annotations: Arc<DiffAnnotations>,
+    /// The most people one annotation names, which the rows make room for.
+    most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
+    projected_insets: Arc<[DiffInset]>,
+    pub(super) views: super::hosted_views::HostedViews,
+    pub(super) row_height: Pixels,
     pub file_cache: Option<Arc<diff_cache::SharedFileDiffCache>>,
-    key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
+    pub(super) key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
-    document: Vec<usize>,
+    /// Each document row's place in `display`.
+    pub(super) document: Vec<usize>,
+    /// Each file line's first and last document rows, by side.
+    pub(super) line_rows: FxHashMap<(DiffLineSide, u32), (usize, usize)>,
     markers: Arc<Vec<(f32, gpui::Hsla)>>,
     pub(super) search_document: std::cell::RefCell<Option<diff_search::SourceSearchDocument>>,
     #[cfg(test)]
     pub(in crate::view) marker_builds: usize,
 }
 
+impl HostedDiffDecor {
+    /// Whether rows other than the document's are listed: then the list's
+    /// rows are the projection's, not the document's.
+    fn projects(&self) -> bool {
+        !self.insets.is_empty() || !self.views.is_empty()
+    }
+}
+
 impl DiffRenderer {
+    /// The hosted decoration when the list's rows are its projection's.
+    fn hosted_projection(&self) -> Option<&HostedDiffDecor> {
+        self.hosted_decor.as_ref().filter(|decor| decor.projects())
+    }
+
+    /// Where row `row` of the view with entity `id` is in the list.
+    #[cfg(test)]
+    pub(in crate::view) fn hosted_view_row_index(
+        &mut self,
+        id: gpui::EntityId,
+        row: usize,
+    ) -> Option<usize> {
+        self.prepare_hosted_projection();
+        let decor = self.hosted_decor.as_ref()?;
+        let view = decor
+            .views
+            .views()
+            .iter()
+            .position(|view| view.view().entity_id() == id)?;
+        decor
+            .display
+            .iter()
+            .position(|item| *item == DisplayRow::View { view, row })
+    }
+
+    pub(in crate::view) fn hosted_context_actions(
+        &self,
+        visible: usize,
+        region: DiffTextRegion,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<gitcomet_extension_api::HostedAction> {
+        let Some(decor) = &self.hosted_decor else {
+            return Vec::new();
+        };
+        let (old, new) = self.hosted_line_numbers(visible);
+        let clicked = match region {
+            DiffTextRegion::SplitLeft => old.map(|line| (DiffLineSide::Old, line)),
+            DiffTextRegion::SplitRight => new.map(|line| (DiffLineSide::New, line)),
+            DiffTextRegion::Inline if self.inline_row_draws_old(visible) => {
+                old.map(|line| (DiffLineSide::Old, line))
+            }
+            DiffTextRegion::Inline => new
+                .map(|line| (DiffLineSide::New, line))
+                .or_else(|| old.map(|line| (DiffLineSide::Old, line))),
+        };
+        let Some((side, line)) = clicked else {
+            return Vec::new();
+        };
+        let range = self
+            .hosted_selection()
+            .filter(|range| range.contains(side, line))
+            .unwrap_or(DiffLineRange {
+                side,
+                start: line,
+                end: line,
+            });
+        let revision = (
+            self.rendered_patch_diff_rev(),
+            self.rendered_file_diff_rev(),
+        );
+        let target = self.rendered_diff_target().cloned();
+        decor
+            .options
+            .context_actions
+            .iter()
+            .map(|action| {
+                let pane = cx.weak_entity();
+                let run = action.run.clone();
+                let target = target.clone();
+                gitcomet_extension_api::HostedAction::new(action.label.clone(), move |cx| {
+                    let current = pane
+                        .update(cx, |pane, _| {
+                            (
+                                pane.rendered_patch_diff_rev(),
+                                pane.rendered_file_diff_rev(),
+                            ) == revision
+                                && pane.rendered_diff_target() == target.as_ref()
+                                && pane.hosted_decor.as_ref().is_some_and(|decor| {
+                                    decor
+                                        .options
+                                        .context_actions
+                                        .iter()
+                                        .any(|action| std::rc::Rc::ptr_eq(&action.run, &run))
+                                })
+                        })
+                        .unwrap_or(false);
+                    if current {
+                        run(range, cx);
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Whether the hosted rows are file-diff rows rather than patch rows.
     fn hosted_rows_are_file_rows(&self) -> bool {
         self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active()
     }
 
     pub(in crate::view) fn hosted_selected_text(&self, range: DiffLineRange) -> String {
+        self.hosted_range_text(range).0
+    }
+
+    pub(in crate::view) fn hosted_text_for_range(&self, range: DiffLineRange) -> Option<String> {
+        let (text, complete) = self.hosted_range_text(range);
+        complete.then_some(text)
+    }
+
+    fn hosted_range_text(&self, range: DiffLineRange) -> (String, bool) {
         let full = self.hosted_rows_are_file_rows();
         let count = if full {
             self.file_diff_inline_row_len()
@@ -41,6 +165,9 @@ impl DiffRenderer {
             self.patch_diff_row_len()
         };
         let mut text = String::new();
+        let mut first = true;
+        let mut next = u64::from(range.start);
+        let mut complete = true;
         for index in 0..count {
             let row = if full {
                 self.file_diff_inline_row(index)
@@ -54,10 +181,13 @@ impl DiffRenderer {
                 DiffLineSide::Old => row.old_line,
                 DiffLineSide::New => row.new_line,
             };
-            if line.is_some_and(|line| range.contains(range.side, line)) {
-                if !text.is_empty() {
+            if let Some(line) = line.filter(|line| range.contains(range.side, *line)) {
+                complete &= u64::from(line) == next;
+                next = u64::from(line) + 1;
+                if !first {
                     text.push('\n');
                 }
+                first = false;
                 // A one-row Difftastic pair draws one side; read the side asked for.
                 let side_text = full
                     .then_some(self.file_diff_inline_row_provider.as_ref())
@@ -70,7 +200,7 @@ impl DiffRenderer {
                 }
             }
         }
-        text
+        (text, complete && next == u64::from(range.end) + 1)
     }
 
     fn inline_row_draws_old(&self, visible: usize) -> bool {
@@ -170,7 +300,9 @@ impl DiffRenderer {
             let side = match a.region {
                 DiffTextRegion::SplitLeft => DiffLineSide::Old,
                 DiffTextRegion::Inline
-                    if self
+                    if self.inline_row_draws_old(
+                        self.diff_visual_ix_for_source_visible_ix(a.source_visible_ix),
+                    ) || self
                         .hosted_line_numbers(
                             self.diff_visual_ix_for_source_visible_ix(a.source_visible_ix),
                         )
@@ -191,7 +323,9 @@ impl DiffRenderer {
                 .diff_selection_range
                 .or_else(|| self.diff_selection_anchor.map(|i| (i, i)))?;
             let (old, new) = self.hosted_line_numbers(a);
-            let side = if new.is_none() && old.is_some() {
+            let side = if (new.is_none() && old.is_some())
+                || (self.diff_view == DiffViewMode::Inline && self.inline_row_draws_old(a))
+            {
                 DiffLineSide::Old
             } else {
                 DiffLineSide::New
@@ -217,17 +351,9 @@ impl DiffRenderer {
     pub(in crate::view) fn hosted_scroll_anchor(
         &self,
     ) -> Option<gitcomet_extension_api::DiffScrollAnchor> {
-        let display = self
-            .diff_scroll
-            .0
-            .borrow()
-            .base_handle
-            .logical_scroll_top()
-            .0;
+        let display = self.hosted_scroll_top(&self.diff_scroll);
         let document = self
-            .hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty())
+            .hosted_projection()
             .and_then(|d| d.display.get(display..))
             .and_then(|rows| {
                 rows.iter().find_map(|row| match row {
@@ -247,6 +373,19 @@ impl DiffRenderer {
                 line,
             })
         })
+    }
+
+    /// The list's row at the top of `handle`'s column.
+    fn hosted_scroll_top(&self, handle: &UniformListScrollHandle) -> usize {
+        let height = self
+            .hosted_decor
+            .as_ref()
+            .map_or(px(0.0), |decor| decor.row_height);
+        if height <= px(0.0) {
+            return 0;
+        }
+        let offset = handle.0.borrow().base_handle.offset().y;
+        (-offset / height).floor().max(0.0) as usize
     }
 
     pub(in crate::view) fn hosted_reveal_at(
@@ -280,6 +419,7 @@ impl DiffRenderer {
         options: DiffPaneOptions,
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
+        views: Arc<[DiffHostedView]>,
     ) {
         self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
@@ -290,8 +430,18 @@ impl DiffRenderer {
         let decor = self.hosted_decor.get_or_insert_with(Default::default);
         decor.view_id = view_id;
         decor.options = options;
+        if !Arc::ptr_eq(&decor.annotations, &annotations) {
+            decor.most_people = annotations
+                .iter()
+                .filter_map(|(_, _, annotation)| match &annotation.glyph {
+                    Some(DiffGlyph::People(people)) if !people.is_empty() => Some(people.len()),
+                    _ => None,
+                })
+                .max();
+        }
         decor.annotations = annotations;
         decor.insets = insets;
+        let reset = decor.views.set(views) || reset;
         if reset {
             decor.key = None;
         }
@@ -304,7 +454,11 @@ impl DiffRenderer {
         let Some(decor) = &self.hosted_decor else {
             return;
         };
-        if decor.insets.is_empty() && decor.annotations.is_empty() {
+        if decor.insets.is_empty()
+            && decor.views.is_empty()
+            && decor.annotations.is_empty()
+            && decor.display.is_empty()
+        {
             return;
         }
         let key = (
@@ -318,33 +472,93 @@ impl DiffRenderer {
         if decor.key == Some(key) {
             return;
         }
-        let mut after = FxHashMap::<usize, Vec<usize>>::default();
-        let mut anchors = FxHashMap::default();
+        let mut after = FxHashMap::<usize, Vec<DisplayRow>>::default();
+        // Each line's first and last rows: more than one when it wraps.
+        let mut anchors = FxHashMap::<(DiffLineSide, u32), (usize, usize)>::default();
         for row in 0..self.diff_visible_len() {
             let (old, new) = self.hosted_line_numbers(row);
             for (side, line) in [(DiffLineSide::Old, old), (DiffLineSide::New, new)] {
                 if let Some(line) = line {
-                    anchors.insert((side, line), row);
+                    anchors
+                        .entry((side, line))
+                        .and_modify(|(_, last)| *last = row)
+                        .or_insert((row, row));
                 }
             }
         }
         for (ix, inset) in decor.insets.iter().enumerate() {
-            if let Some(row) = anchors.get(&(inset.side, inset.line)) {
-                after.entry(*row).or_default().push(ix);
+            if let Some((_, row)) = anchors.get(&(inset.side, inset.line)) {
+                after.entry(*row).or_default().extend(
+                    (0..inset.lines.len()).map(|line| DisplayRow::Inset { inset: ix, line }),
+                );
+            }
+        }
+        // After the line's insets; the other views take no rows.
+        for (ix, view) in decor.views.views().iter().enumerate() {
+            match view.placement() {
+                DiffPlacement::Block => {
+                    if let Some((_, row)) = anchors.get(&(view.anchor().side, view.anchor().line)) {
+                        after.entry(*row).or_default().extend(
+                            (0..decor.views.rows(view))
+                                .map(|row| DisplayRow::View { view: ix, row }),
+                        );
+                    }
+                }
+                DiffPlacement::EndOfLine | DiffPlacement::Over { .. } => {}
             }
         }
         let len = self.diff_visible_len();
+        let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
+            let top = self.hosted_scroll_top(handle);
+            let anchor = decor
+                .display
+                .get(top)
+                .copied()
+                .and_then(|anchor| match anchor {
+                    DisplayRow::View { view, row } => {
+                        let view = decor.views.reprojected(view)?;
+                        Some(DisplayRow::View { view, row })
+                    }
+                    DisplayRow::Inset { inset, line } => {
+                        let previous = decor.projected_insets.get(inset)?;
+                        let inset = decor.insets.iter().position(|inset| {
+                            inset.side == previous.side
+                                && inset.line == previous.line
+                                && inset.lines == previous.lines
+                        })?;
+                        Some(DisplayRow::Inset { inset, line })
+                    }
+                    anchor => Some(anchor),
+                });
+            let following = decor.display.get(top..).and_then(|rows| {
+                rows.iter().find_map(|row| match row {
+                    DisplayRow::Document(index) => Some(*index),
+                    _ => None,
+                })
+            });
+            (handle.clone(), top, anchor, following)
+        });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
+        decor.views.project();
+        decor.projected_insets = decor.insets.clone();
         decor.document.clear();
         for row in 0..len {
             decor.document.push(decor.display.len());
             decor.display.push(DisplayRow::Document(row));
-            for inset in after.remove(&row).unwrap_or_default() {
-                decor.display.extend(
-                    (0..decor.insets[inset].lines.len())
-                        .map(|line| DisplayRow::Inset { inset, line }),
-                );
+            decor.display.extend(after.remove(&row).unwrap_or_default());
+        }
+        for (handle, top, anchor, following) in saved {
+            let restored = anchor
+                .and_then(|anchor| decor.display.iter().position(|row| *row == anchor))
+                .or_else(|| following.and_then(|row| decor.document.get(row).copied()));
+            if let Some(restored) = restored.filter(|restored| *restored != top) {
+                let scroll = handle.0.borrow();
+                if scroll.deferred_scroll_to_item.is_none() {
+                    let mut offset = scroll.base_handle.offset();
+                    offset.y += decor.row_height * (top as f32 - restored as f32);
+                    scroll.base_handle.set_offset(offset);
+                }
             }
         }
         #[cfg(test)]
@@ -356,7 +570,7 @@ impl DiffRenderer {
                 .annotations
                 .iter()
                 .filter_map(|(side, line, mark)| {
-                    let document = *anchors.get(&(side, line))?;
+                    let (_, document) = *anchors.get(&(side, line))?;
                     let display = *decor.document.get(document)?;
                     Some((
                         display as f32 / decor.display.len().max(1) as f32,
@@ -365,7 +579,19 @@ impl DiffRenderer {
                 })
                 .collect(),
         );
+        decor.line_rows = anchors;
         decor.key = Some(key);
+    }
+
+    /// The column a hosted pane's rows start past, wide enough for its
+    /// largest group of people; zero in a pane that names none.
+    pub(in crate::view) fn hosted_people_column_width(&self, scale: ui_scale::UiScale) -> Pixels {
+        self.hosted_decor
+            .as_ref()
+            .and_then(|decor| decor.most_people)
+            .map_or(px(0.0), |most| {
+                super::hosted_people::people_column_width(scale, most)
+            })
     }
 
     pub(in crate::view) fn hosted_markers(&mut self) -> Arc<Vec<(f32, gpui::Hsla)>> {
@@ -379,16 +605,12 @@ impl DiffRenderer {
 
     pub(in crate::view) fn diff_list_len(&mut self) -> usize {
         self.prepare_hosted_projection();
-        self.hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty())
+        self.hosted_projection()
             .map_or_else(|| self.diff_visible_len(), |d| d.display.len())
     }
 
     pub(in crate::view) fn diff_list_index(&self, document: usize) -> usize {
-        self.hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty())
+        self.hosted_projection()
             .and_then(|d| d.document.get(document))
             .copied()
             .unwrap_or(document)
@@ -433,6 +655,7 @@ impl DiffRenderer {
         if this.hosted_decor.is_none() {
             return render(this, range, window, cx);
         }
+        this.forget_hosted_line_ends(side);
         let pane_id = this.hosted_decor.as_ref().unwrap().view_id;
         let original_theme = this.theme;
         let style = this.hosted_decor.as_ref().unwrap().options.style;
@@ -449,9 +672,7 @@ impl DiffRenderer {
             .clone()
             .filter_map(|display| {
                 match this
-                    .hosted_decor
-                    .as_ref()
-                    .filter(|d| !d.insets.is_empty())
+                    .hosted_projection()
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display))
@@ -477,25 +698,28 @@ impl DiffRenderer {
             start = end;
         }
         this.theme = original_theme;
+        let first = range.start;
         range
             .map(|display| {
                 let row = this
-                    .hosted_decor
-                    .as_ref()
-                    .filter(|d| !d.insets.is_empty())
+                    .hosted_projection()
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display));
                 match row {
+                    DisplayRow::View { view, row } => {
+                        this.render_hosted_view_row(view, row, side, display == first, cx)
+                    }
                     DisplayRow::Inset { inset, line } => {
                         use crate::kit::interaction::ControlInteractionExt as _;
-                        let inset = &this.hosted_decor.as_ref().unwrap().insets[inset];
+                        let decor = this.hosted_decor.as_ref().unwrap();
+                        let inset = &decor.insets[inset];
                         let own_side = side.is_none_or(|side| side == inset.side);
                         let action = inset.on_click.clone().filter(|_| own_side);
                         div()
                             .id(("hosted_inset", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
-                            .h(this.theme.editor_row_height(ui_scale::current(cx).percent))
+                            .h(decor.row_height)
                             .w_full()
                             .overflow_hidden()
                             .bg(this.theme.colors.surface.raised)
@@ -522,6 +746,8 @@ impl DiffRenderer {
                     DisplayRow::Document(row) => {
                         use crate::kit::interaction::ControlInteractionExt as _;
                         // The row's own canvas takes its clicks.
+                        let (old, new) = this.hosted_line_numbers(row);
+                        let line_end = this.render_hosted_line_end(row, side, (old, new), cx);
                         let element = div()
                             .id(("hosted_row", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
@@ -531,7 +757,17 @@ impl DiffRenderer {
                                     .unwrap_or_else(|| div().into_any_element()),
                             )
                             .into_any_element();
-                        let (old, new) = this.hosted_line_numbers(row);
+                        // After the row, so its canvas finds where the text
+                        // ends before the views there are placed; beside it,
+                        // so their ids do not follow the row's place.
+                        let element = match line_end {
+                            Some(line_end) => div()
+                                .relative()
+                                .child(element)
+                                .child(line_end)
+                                .into_any_element(),
+                            None => element,
+                        };
                         let anchor = match side {
                             Some(DiffLineSide::Old) => old.map(|n| (DiffLineSide::Old, n)),
                             Some(DiffLineSide::New) => new.map(|n| (DiffLineSide::New, n)),
@@ -539,8 +775,11 @@ impl DiffRenderer {
                                 .map(|n| (DiffLineSide::New, n))
                                 .or_else(|| old.map(|n| (DiffLineSide::Old, n))),
                         };
+                        let scale = ui_scale::UiScale::current(cx);
+                        let column = this.hosted_people_column_width(scale);
+                        let lane_width = scale.px(GUTTER_LANE_WIDTH);
                         let Some((side, line)) = anchor else {
-                            return element;
+                            return row_with_lane(element, None, column, lane_width);
                         };
                         let decor = this.hosted_decor.as_ref().unwrap();
                         let mark = decor
@@ -553,54 +792,148 @@ impl DiffRenderer {
                             && annotation.is_none()
                             && decor.options.on_gutter_click.is_none()
                         {
-                            return element;
+                            return row_with_lane(element, None, column, lane_width);
                         }
                         // The lane draws the annotation, so a click there is on it.
                         let on_annotation =
                             annotation.and(decor.options.on_annotation_click.clone());
-                        let color = annotation
-                            .map(|a| a.color)
-                            .or_else(|| mark.as_ref().and_then(|m| m.tint));
-                        let label = mark
+                        // The annotation's people or glyph in its colour, or its
+                        // colour filling the lane; with none, the decoration's
+                        // tint and gutter text. The annotation's label is the
+                        // tooltip.
+                        let (fill, glyph, people) = match annotation {
+                            Some(a) => match &a.glyph {
+                                Some(DiffGlyph::Row(glyph)) => {
+                                    (None, Some((glyph.clone(), a.color)), None)
+                                }
+                                Some(DiffGlyph::People(people)) => {
+                                    (None, None, Some((people.clone(), a.color)))
+                                }
+                                // A glyph kind added later draws nothing until
+                                // it is handled here.
+                                Some(_) => (None, None, None),
+                                None => (Some(a.color), None, None),
+                            },
+                            None => (mark.as_ref().and_then(|m| m.tint), None, None),
+                        };
+                        let text = mark
                             .as_ref()
                             .and_then(|m| m.gutter.clone())
-                            .or_else(|| annotation.and_then(|a| a.label.clone()));
+                            .filter(|_| glyph.is_none() && people.is_none());
+                        let tooltip = annotation.and_then(|a| a.label.clone());
+                        let theme = this.theme;
                         let action = on_annotation
                             .or_else(|| decor.options.on_gutter_click.clone())
                             .filter(|_| decor.options.policy.line_action);
 
-                        div()
-                            .relative()
-                            .child(element)
-                            .child(
-                                div()
-                                    .id(("hosted_gutter", display))
-                                    .debug_selector(move || {
-                                        format!("hosted_diff_{pane_id}_gutter_{display}")
-                                    })
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(12.0))
-                                    .when_some(color, |lane, color| lane.bg(color))
-                                    .when_some(label, |lane, label| lane.child(label))
-                                    .when_some(action, |lane, action| {
-                                        lane.cursor_pointer().on_activate(
-                                            false,
-                                            crate::kit::interaction::ControlActivation::Action,
-                                            move |_, _, cx| {
-                                                cx.stop_propagation();
-                                                let action = action.clone();
-                                                cx.defer(move |cx| action(side, line, cx));
-                                            },
-                                        )
-                                    }),
-                            )
-                            .into_any_element()
+                        let lane = div()
+                            .id(("hosted_gutter", display))
+                            .debug_selector(move || {
+                                format!("hosted_diff_{pane_id}_gutter_{display}")
+                            })
+                            // Beside a people column, a colour keeps to the
+                            // lane's width at its start.
+                            .when_some(fill, |lane, color| {
+                                if column > px(0.0) {
+                                    lane.relative().child(
+                                        div()
+                                            .debug_selector(move || {
+                                                format!(
+                                                    "hosted_diff_{pane_id}_gutter_fill_{display}"
+                                                )
+                                            })
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(lane_width)
+                                            .bg(color),
+                                    )
+                                } else {
+                                    lane.bg(color)
+                                }
+                            })
+                            .when_some(text, |lane, text| lane.child(text))
+                            .when_some(glyph, |lane, (glyph, color)| {
+                                lane.flex().items_center().justify_center().child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("hosted_diff_{pane_id}_gutter_glyph_{display}")
+                                        })
+                                        .flex()
+                                        .text_size(theme.ui_text(10.0))
+                                        .child(crate::view::hosted::row_glyph(
+                                            &glyph, color, lane_width,
+                                        )),
+                                )
+                            })
+                            .when_some(people, |lane, (people, color)| {
+                                // From the column's padding, so the circles line
+                                // up from row to row.
+                                lane.flex()
+                                    .items_center()
+                                    .pl(super::hosted_people::people_column_padding(scale))
+                                    .child(
+                                        div()
+                                            .debug_selector(move || {
+                                                format!(
+                                                    "hosted_diff_{pane_id}_gutter_glyph_{display}"
+                                                )
+                                            })
+                                            .flex()
+                                            .child(super::hosted_people::people_glyph(
+                                                &people, color, scale, theme,
+                                            )),
+                                    )
+                            })
+                            .when_some(tooltip, |lane, tooltip| {
+                                lane.gitcomet_tooltip(theme, tooltip)
+                            })
+                            .when_some(action, |lane, action| {
+                                lane.cursor_pointer().on_activate(
+                                    false,
+                                    crate::kit::interaction::ControlActivation::Action,
+                                    move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        let action = action.clone();
+                                        cx.defer(move |cx| action(side, line, cx));
+                                    },
+                                )
+                            });
+                        row_with_lane(element, Some(lane), column, lane_width)
                     }
                 }
             })
             .collect()
     }
+}
+
+/// A row with its lane: in a column of its own before the row when the pane
+/// makes room for people, so the row starts past it; else over the start of
+/// the row's line numbers, where the row does not move.
+fn row_with_lane(
+    element: AnyElement,
+    lane: Option<gpui::Stateful<gpui::Div>>,
+    people_column: Pixels,
+    lane_width: Pixels,
+) -> AnyElement {
+    if people_column > px(0.0) {
+        let lane = match lane {
+            Some(lane) => lane.flex_none().w(people_column).into_any_element(),
+            None => div().flex_none().w(people_column).into_any_element(),
+        };
+        return div()
+            .flex()
+            .child(lane)
+            .child(div().flex_grow(1.0).child(element))
+            .into_any_element();
+    }
+    let Some(lane) = lane else {
+        return element;
+    };
+    div()
+        .relative()
+        .child(element)
+        .child(lane.absolute().left_0().top_0().bottom_0().w(lane_width))
+        .into_any_element()
 }

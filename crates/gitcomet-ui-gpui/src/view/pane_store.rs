@@ -215,6 +215,7 @@ impl PaneStore {
                 lifetime,
                 view,
                 target: in_session_worktree(target),
+                request: None,
             },
             Msg::ClearDiffSelection { repo_id: id }
                 if id == repo_id && self.policy.close_button =>
@@ -279,6 +280,7 @@ impl PaneStore {
                     lifetime,
                     view,
                     target,
+                    request: None,
                 }));
                 DiffSessionMsg::SetContentMode {
                     repo_id,

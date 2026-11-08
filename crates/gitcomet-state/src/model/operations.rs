@@ -212,6 +212,7 @@ pub struct PendingCommitRetry {
     pub message: String,
     pub amend: bool,
     pub push_after_commit: bool,
+    pub hooks: gitcomet_core::services::GitHooks,
 }
 
 #[derive(Clone, Debug)]
