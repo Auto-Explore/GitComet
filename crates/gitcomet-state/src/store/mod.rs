@@ -468,7 +468,7 @@ impl WorkerLoopContext<'_> {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
             let warm = warm_inactive_repos(
                 &state,
-                WARM_INACTIVE_REPO_MONITORS.min(repos.warm_repository_count()),
+                WARM_INACTIVE_REPO_MONITORS,
             );
             let watched = state
                 .repos
