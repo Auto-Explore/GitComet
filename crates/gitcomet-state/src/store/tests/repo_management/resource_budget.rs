@@ -26,6 +26,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
                 repo_id: id,
                 message: "message".into(),
                 push_after_commit: true,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         );
         assert_eq!(state.repos[0].commit_in_flight, 1);
@@ -111,6 +112,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
                 command: RepoCommandKind::PushAfterCommit {
                     target,
                     set_upstream,
+                    hooks: gitcomet_core::services::GitHooks::Run,
                 },
                 result: Ok(gitcomet_core::services::CommandOutput::default()),
             }),
@@ -135,6 +137,7 @@ fn safe_push_auth_retry_releases_preflight_on_all_terminal_outcomes() {
             local_branch: Some("main".into()),
             pre_head: None,
             post_head: None,
+            hooks: gitcomet_core::services::GitHooks::Run,
         };
         reduce(
             &mut repos,

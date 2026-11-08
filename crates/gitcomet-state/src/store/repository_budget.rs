@@ -438,6 +438,7 @@ mod tests {
                     local_branch: Some("main".into()),
                     pre_head: None,
                     post_head: None,
+                    hooks: gitcomet_core::services::GitHooks::Run,
                 },
             },
             AuthRetryOperation::Commit {
@@ -445,6 +446,7 @@ mod tests {
                 message: "message".into(),
                 amend: false,
                 push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         ] {
             for status in [

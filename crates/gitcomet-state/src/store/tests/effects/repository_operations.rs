@@ -546,6 +546,7 @@ fn safe_push_after_commit_without_backend_reports_completion() {
         local_branch: Some("main".into()),
         pre_head: None,
         post_head: None,
+        hooks: gitcomet_core::services::GitHooks::Run,
     };
     schedule_effect_for_test(
         &executor,
