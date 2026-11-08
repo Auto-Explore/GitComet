@@ -135,9 +135,10 @@ impl DiffRenderer {
             return;
         };
 
-        self.store.dispatch(match area {
+        let msg = match area {
             DiffArea::Unstaged => Msg::StageHunk { repo_id, patch },
             DiffArea::Staged => Msg::UnstageHunk { repo_id, patch },
-        });
+        };
+        self.dispatch_open_file_change(msg, cx);
     }
 }

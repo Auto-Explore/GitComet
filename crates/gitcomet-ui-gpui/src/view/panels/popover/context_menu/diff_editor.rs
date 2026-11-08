@@ -64,7 +64,9 @@ pub(super) fn model(
                     "Discard line".into()
                 },
                 icon: Some("icons/refresh.svg".into()),
-                shortcut: Some("D".into()),
+                // U, not D: discard must not sit beside S on the keyboard.
+                // Unstage is U too, but only in a staged diff.
+                shortcut: Some("U".into()),
                 disabled: discard_lines_patch.is_none(),
                 action: Box::new(ContextMenuAction::ApplyWorktreePatch {
                     repo_id,

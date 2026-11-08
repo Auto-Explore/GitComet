@@ -32,6 +32,7 @@ pub(in crate::view) enum PreferenceChange {
     DiffTabSize(u8),
     DiffShowLineNumbers(bool),
     AutoSaveFileEdits(bool),
+    OpenNextFileAfterLastChange(bool),
     RemoteMarkdownImagePolicy(RemoteMarkdownImagePolicy),
     RemoteUrlPolicy(RemoteUrlPolicy),
     CheckForUpdatesOnStartup(bool),

@@ -326,7 +326,7 @@ impl PaneStore {
                 store.dispatch(msg);
                 return;
             }
-            // "Discard line(s)" and its D key: the line engine's discard
+            // "Discard line(s)" and its U key: the line engine's discard
             // reverts the working tree, as the structural one above does.
             msg @ Msg::ApplyWorktreePatch { repo_id: id, .. }
                 if id == repo_id && self.policy.allow_edit && !linked =>

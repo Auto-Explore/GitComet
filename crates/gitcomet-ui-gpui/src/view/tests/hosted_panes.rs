@@ -2018,7 +2018,7 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
                 Some(stop),
                 "{key}, detached focus: {detached}"
             );
-            // Landing on a change block focuses its diff, for S, U and D.
+            // Landing on a change block focuses its diff, for S and U.
             assert!(cx.update(|window, app| {
                 renderer
                     .read(app)
@@ -4408,7 +4408,7 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                         Some(stop),
                         "{key}, {layout:?}, {content:?}, detached focus: {detached}",
                     );
-                    // Landing on a change block focuses its diff, for S, U and D.
+                    // Landing on a change block focuses its diff, for S and U.
                     assert!(cx.update(|window, app| {
                         pane.read(app).diff_panel_focus_handle.is_focused(window)
                     }));

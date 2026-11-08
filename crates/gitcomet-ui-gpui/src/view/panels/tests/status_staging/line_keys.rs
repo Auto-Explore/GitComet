@@ -1,4 +1,5 @@
-//! The diff editor menu shows S, U and D beside its line entries. Pressed with
+//! The diff editor menu shows S and U beside its line entries (U discards in
+//! an unstaged diff, unstages in a staged one). Pressed with
 //! the menu closed, those letters did nothing; against a real repository each
 //! must now move exactly the selected lines, and only from the diff itself.
 
@@ -56,6 +57,50 @@ enum Focus {
     StatusList,
     /// The commit message field: its own text input.
     CommitMessage,
+}
+
+/// Draws until the diff reloaded after S and the next block is outlined.
+fn wait_for_stage_advance(
+    cx: &mut gpui::VisualTestContext,
+    view: &View,
+    store: &AppStore,
+    case: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        wait_for(cx, view, store, case, |repo| {
+            !repo.diff_state.diff_reload_in_flight && repo.local_actions_in_flight == 0
+        });
+        let done = cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            pane.diff_stage_advance.is_none()
+                && (0..pane.diff_visible_len())
+                    .any(|row| pane.diff_focused_change_block_row(row).is_some())
+        });
+        if done {
+            return;
+        }
+        let debug = cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            format!(
+                "advance={:?} revs=({}, {}) caches=({}, {}) inflight={:?} lists_file={} focused={:?} anchor={:?}",
+                pane.diff_stage_advance,
+                pane.rendered_patch_diff_rev(),
+                pane.rendered_file_diff_rev(),
+                pane.diff_cache_rev,
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_inflight,
+                pane.lists_file_diff_rows(),
+                pane.diff_focused_change_block,
+                pane.diff_selection_anchor,
+            )
+        });
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{case}: S never outlined the next block after the reload: {debug}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 struct Pressed {
@@ -408,22 +453,30 @@ fn press_in(
             "{case}: the key must reach the diff, not a menu"
         );
     });
-    let before = store.snapshot().repos[0].ops_rev;
-
-    cx.simulate_keystrokes(key);
-    draw_and_drain_test_window(cx);
-    crate::view::test_support::drain_store_worker(&view, cx);
-    let acted = store.snapshot().repos[0].ops_rev != before;
-    if acted {
-        wait_for(cx, &view, &store, &case, |repo| {
-            repo.ops_rev >= before + 2 && repo.local_actions_in_flight == 0
-        });
-        let snapshot = store.snapshot();
-        assert!(
-            snapshot.repos[0].feedback.last_error.is_none(),
-            "{case}: {:?}",
-            snapshot.repos[0].feedback.last_error
-        );
+    // Space-separated keys press one at a time; each must act, and S must
+    // outline the next block once its reload lands, for the following key.
+    let mut acted = true;
+    for (press_ix, key) in key.split(' ').enumerate() {
+        if press_ix > 0 {
+            wait_for_stage_advance(cx, &view, &store, &case);
+        }
+        let before = store.snapshot().repos[0].ops_rev;
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        crate::view::test_support::drain_store_worker(&view, cx);
+        let key_acted = store.snapshot().repos[0].ops_rev != before;
+        acted &= key_acted;
+        if key_acted {
+            wait_for(cx, &view, &store, &case, |repo| {
+                repo.ops_rev >= before + 2 && repo.local_actions_in_flight == 0
+            });
+            let snapshot = store.snapshot();
+            assert!(
+                snapshot.repos[0].feedback.last_error.is_none(),
+                "{case}: {:?}",
+                snapshot.repos[0].feedback.last_error
+            );
+        }
     }
     let pressed = Pressed {
         acted,
@@ -479,7 +532,7 @@ fn s_stages_only_the_lines_the_text_selection_covers(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
-fn d_discards_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
+fn u_in_an_unstaged_diff_discards_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
     for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
         let pressed = press(
             cx,
@@ -487,9 +540,9 @@ fn d_discards_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
             mode,
             Select::Rows(&["-five", "+FIVE"]),
             Focus::DiffPanel,
-            "d",
+            "u",
         );
-        assert!(pressed.acted, "{mode:?}: D must discard the selected rows");
+        assert!(pressed.acted, "{mode:?}: U must discard the selected rows");
         assert_eq!(
             pressed.worktree, "one\nTWO\nthree\nfour\nfive\n",
             "{mode:?}: only the selected change is reverted in the file"
@@ -514,17 +567,31 @@ fn u_unstages_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
 }
 
 /// The letters are safe to press by accident: with only a caret, in the
-/// other area's diff, or from outside the diff, they leave Git alone.
+/// other area's diff, or from outside the diff, they leave Git alone. D, next
+/// to S, discards nothing.
 #[gpui::test]
 fn line_keys_need_a_selection_in_the_focused_diff(cx: &mut gpui::TestAppContext) {
     let rows = Select::Rows(&["-five", "+FIVE"]);
     let caret = Select::Caret("+FIVE");
     for (area, select, focus, key) in [
         (DiffArea::Unstaged, caret, Focus::DiffPanel, "s"),
-        (DiffArea::Unstaged, caret, Focus::DiffPanel, "d"),
-        (DiffArea::Unstaged, rows, Focus::DiffPanel, "u"),
+        (DiffArea::Unstaged, caret, Focus::DiffPanel, "u"),
+        (DiffArea::Unstaged, rows, Focus::DiffPanel, "d"),
+        (
+            DiffArea::Unstaged,
+            Select::Navigated(1),
+            Focus::DiffPanel,
+            "d",
+        ),
+        (
+            DiffArea::Unstaged,
+            Select::Navigated(0),
+            Focus::StatusList,
+            "d",
+        ),
         (DiffArea::Unstaged, rows, Focus::DiffPanel, "shift-s"),
-        (DiffArea::Unstaged, rows, Focus::Detached, "d"),
+        (DiffArea::Unstaged, rows, Focus::DiffPanel, "shift-u"),
+        (DiffArea::Unstaged, rows, Focus::Detached, "u"),
         (DiffArea::Staged, rows, Focus::DiffPanel, "s"),
         (DiffArea::Staged, rows, Focus::DiffPanel, "d"),
     ] {
@@ -544,16 +611,16 @@ fn line_keys_need_a_selection_in_the_focused_diff(cx: &mut gpui::TestAppContext)
 /// key pressed once the menu is closed must act on that row too: discarding
 /// the older text selection instead would revert lines the menu never showed.
 #[gpui::test]
-fn d_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui::TestAppContext) {
+fn u_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui::TestAppContext) {
     let pressed = press(
         cx,
         DiffArea::Unstaged,
         DiffViewMode::Inline,
         Select::TextThenRightClicks("+TWO", "+TWO", &["+FIVE"]),
         Focus::DiffPanel,
-        "d",
+        "u",
     );
-    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert!(pressed.acted, "U must discard the right-clicked row");
     assert!(
         pressed.worktree.contains("TWO") && !pressed.worktree.contains("FIVE"),
         "only the clicked line is reverted, not the text selected earlier: {:?}",
@@ -642,7 +709,7 @@ fn line_keys_act_on_collapsed_hunks(cx: &mut gpui::TestAppContext) {
         (
             DiffArea::Unstaged,
             Select::Rows(&["-five", "+FIVE"]),
-            "d",
+            "u",
             BASE,
             "one\nTWO\nthree\nfour\nfive\n",
         ),
@@ -669,7 +736,7 @@ fn line_keys_act_on_collapsed_hunks(cx: &mut gpui::TestAppContext) {
     }
 }
 
-/// F2/F3 outline a change block without selecting it. S, U and D act on
+/// F2/F3 outline a change block without selecting it. S and U act on
 /// that block, as nothing else is selected.
 #[gpui::test]
 fn line_keys_act_on_the_block_f3_outlined(cx: &mut gpui::TestAppContext) {
@@ -680,7 +747,7 @@ fn line_keys_act_on_the_block_f3_outlined(cx: &mut gpui::TestAppContext) {
             for (area, presses, key, index, worktree) in [
                 (DiffArea::Unstaged, 0, "s", two_only, EDITED),
                 (DiffArea::Unstaged, 1, "s", five_only, EDITED),
-                (DiffArea::Unstaged, 1, "d", BASE, two_only),
+                (DiffArea::Unstaged, 1, "u", BASE, two_only),
                 (DiffArea::Staged, 1, "u", two_only, EDITED),
             ] {
                 let case = format!("{content:?} {mode:?} {area:?} F3x{presses} {key}");
@@ -699,6 +766,31 @@ fn line_keys_act_on_the_block_f3_outlined(cx: &mut gpui::TestAppContext) {
                 );
                 assert_eq!(pressed.index, index, "{case}");
                 assert_eq!(pressed.worktree, worktree, "{case}");
+            }
+        }
+    }
+}
+
+/// S outlines the next block once its reload lands, so S S stages the
+/// whole file block by block, from the diff or from the file list.
+#[gpui::test]
+fn s_moves_the_outline_to_the_next_block(cx: &mut gpui::TestAppContext) {
+    for content in [DiffContentMode::Full, DiffContentMode::Collapsed] {
+        for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+            for focus in [Focus::DiffPanel, Focus::StatusList] {
+                let case = format!("{content:?} {mode:?} {focus:?}");
+                let pressed = press_in(
+                    cx,
+                    content,
+                    DiffArea::Unstaged,
+                    mode,
+                    Select::Navigated(0),
+                    focus,
+                    "s s",
+                );
+                assert!(pressed.acted, "{case}: both presses must stage");
+                assert_eq!(pressed.index, EDITED, "{case}: both blocks staged");
+                assert_eq!(pressed.worktree, EDITED, "{case}");
             }
         }
     }
@@ -737,7 +829,7 @@ fn f3_from_outside_the_diff_focuses_it_for_the_line_keys(cx: &mut gpui::TestAppC
 }
 
 /// Opening the diff outlines its first block while focus stays in the file
-/// list; S, U and D pressed there act on that block without F2/F3 first.
+/// list; S and U pressed there act on that block without F2/F3 first.
 #[gpui::test]
 fn line_keys_from_the_file_list_act_on_the_opened_block(cx: &mut gpui::TestAppContext) {
     let two_only = "one\nTWO\nthree\nfour\nfive\n";
@@ -747,7 +839,7 @@ fn line_keys_from_the_file_list_act_on_the_opened_block(cx: &mut gpui::TestAppCo
         (
             DiffArea::Unstaged,
             Focus::StatusList,
-            "d",
+            "u",
             BASE,
             "one\ntwo\nthree\nfour\nFIVE\n",
         ),

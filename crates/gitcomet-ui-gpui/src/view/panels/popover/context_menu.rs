@@ -1171,6 +1171,13 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    /// A Stage, Unstage or Discard from a menu or dialog, sent through the
+    /// diff so it can open the next file once the open one is left empty.
+    pub(super) fn dispatch_open_file_change(&self, msg: Msg, cx: &mut gpui::Context<Self>) {
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.dispatch_open_file_change(msg, cx));
+    }
+
     pub(super) fn discard_worktree_changes_confirmed(
         &mut self,
         repo_id: RepoId,
@@ -1220,8 +1227,7 @@ impl PopoverHost {
         };
 
         if paths.len() > 1 {
-            self.store
-                .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+            self.dispatch_open_file_change(Msg::DiscardWorktreeChangesPaths { repo_id, paths }, cx);
             return;
         }
 
@@ -1229,8 +1235,7 @@ impl PopoverHost {
             return;
         };
 
-        self.store
-            .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
+        self.dispatch_open_file_change(Msg::DiscardWorktreeChangesPath { repo_id, path }, cx);
     }
 
     pub(super) fn build_unified_patch_for_hunk_src_ix(

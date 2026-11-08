@@ -359,14 +359,17 @@ impl DiffRenderer {
             self.toast_stale_patch(cx);
             return;
         }
-        self.store.dispatch(Msg::ApplyPreparedDiffPatch {
-            repo_id: origin.repo_id,
-            lifetime: origin.lifetime,
-            view: origin.view,
-            file_rev: origin.file_rev,
-            generation: origin.generation,
-            prepared: Arc::new(prepared),
-        });
+        self.dispatch_open_file_change(
+            Msg::ApplyPreparedDiffPatch {
+                repo_id: origin.repo_id,
+                lifetime: origin.lifetime,
+                view: origin.view,
+                file_rev: origin.file_rev,
+                generation: origin.generation,
+                prepared: Arc::new(prepared),
+            },
+            cx,
+        );
     }
 
     fn toast_stale_patch(&self, cx: &mut gpui::Context<Self>) {

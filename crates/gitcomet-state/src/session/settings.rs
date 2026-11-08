@@ -47,6 +47,7 @@ pub struct UiSettings {
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
     pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
+    pub open_next_file_after_last_change: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
@@ -192,6 +193,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, allowed_remote_protocols);
         apply_setting!(settings, file, check_for_updates_on_startup);
         apply_setting!(settings, file, auto_save_file_edits);
+        apply_setting!(settings, file, open_next_file_after_last_change);
         apply_setting!(settings, file, diff_show_line_numbers);
         apply_setting!(settings, file, change_tracking_height);
         apply_setting!(settings, file, untracked_height);

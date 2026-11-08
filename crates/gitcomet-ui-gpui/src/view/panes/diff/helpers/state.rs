@@ -186,6 +186,41 @@ impl DiffChangeSides {
     }
 }
 
+/// Where S leaves the outline once the diff it staged from reloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffStageAdvance {
+    /// Change blocks wholly above the staged lines. Staging leaves them as
+    /// they were, so after the reload the block at this position is the next.
+    pub(in crate::view) blocks_above: usize,
+    /// `diff_rev` and `diff_file_rev` when S was pressed: the reload moves them.
+    pub(in crate::view) revs: (u64, u64),
+}
+
+/// What an armed Stage, Unstage or Discard does to the open file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum OpenFileChange {
+    /// Lines or hunks: the diff stays on the file.
+    Part,
+    /// The whole file: the reducer closes its diff.
+    WholeFile,
+}
+
+/// Armed by Stage, Unstage or Discard on the open working-tree file. Decided
+/// once that action finished: if the file has left its list, the diff opens
+/// `next`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct NextFileAdvance {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) path: std::path::PathBuf,
+    pub(in crate::view) area: DiffArea,
+    pub(in crate::view) change: OpenFileChange,
+    /// The file's neighbour in its list when the action ran.
+    pub(in crate::view) next: std::path::PathBuf,
+    pub(in crate::view) section: StatusSection,
+    /// `ops_rev` before the action began; its start and finish move it.
+    pub(in crate::view) ops_rev: u64,
+}
+
 /// The change block F2/F3 last landed on, for the accent bar and outline
 /// that mark it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -600,6 +635,10 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
     pub(in crate::view) diff_focused_change_block: Option<DiffFocusedChangeBlock>,
     pub(in crate::view) diff_editor_menu_column: Option<DiffEditorMenuColumn>,
+    /// Set by S: outline the next change block once the diff reloads.
+    pub(in crate::view) diff_stage_advance: Option<DiffStageAdvance>,
+    /// Set by Stage, Unstage or Discard: open the next file once this one has no changes left.
+    pub(in crate::view) next_file_advance: Option<NextFileAdvance>,
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,
@@ -920,6 +959,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_editor_provider_theme_epoch: u64,
     /// Mirrors the settings window's toggle; the pane never writes it back.
     pub(in crate::view) auto_save_file_edits: bool,
+    pub(in crate::view) open_next_file_after_last_change: bool,
 
     // Merge conflict resolver: input, layout, caches, resolved output.
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,

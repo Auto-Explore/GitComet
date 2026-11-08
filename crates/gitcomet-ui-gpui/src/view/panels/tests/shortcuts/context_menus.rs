@@ -985,7 +985,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &unstaged_status_model,
-        &[&sec("H"), &sec("S"), &sec("D"), &sec("Shift+C")],
+        &[&sec("H"), &sec("S"), &sec("U"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         unstaged_status_model,
@@ -1009,7 +1009,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        &sec("D"),
+        &sec("U"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1035,7 +1035,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &staged_status_model,
-        &[&sec("H"), &sec("U"), &sec("D"), &sec("Shift+C")],
+        &[&sec("H"), &sec("U"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         staged_status_model,
@@ -1057,15 +1057,12 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             path
         } if *rid == repo_id && *area == DiffArea::Staged && path == &staged_path
     );
-    assert_shortcut_action!(
-        staged_status_model,
-        &sec("D"),
-        ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-            repo_id: rid,
-            area,
-            path
-        } if *rid == repo_id && *area == DiffArea::Staged && path == &staged_path
-    );
+    // Ctrl/Cmd+U is Unstage here, so the staged menu offers no Discard.
+    assert!(!staged_status_model.items.iter().any(|item| matches!(
+        item,
+        ContextMenuItem::Entry { action, .. }
+            if matches!(**action, ContextMenuAction::DiscardWorktreeChangesSelectionOrPath { .. })
+    )));
     assert_shortcut_action!(
         staged_status_model,
         &sec("Shift+C"),
@@ -1085,7 +1082,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &conflicted_status_model,
-        &[&sec("H"), &sec("O"), &sec("T"), &sec("D"), &sec("Shift+C")],
+        &[&sec("H"), &sec("O"), &sec("T"), &sec("U"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         conflicted_status_model,
@@ -1126,7 +1123,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        &sec("D"),
+        &sec("U"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1155,7 +1152,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&conflict_menu_model, &[&sec("O"), &sec("T"), &sec("D")]);
+    assert_declared_shortcuts(&conflict_menu_model, &[&sec("O"), &sec("T"), &sec("U")]);
     assert_shortcut_action!(
         conflict_menu_model,
         &sec("O"),
@@ -1170,7 +1167,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflict_menu_model,
-        &sec("D"),
+        &sec("U"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath { area, path, .. }
             if *area == DiffArea::Unstaged && path == &conflicted_path
     );
@@ -1193,7 +1190,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&diff_editor_unstaged_model, &["S", "D", "C"]);
+    assert_declared_shortcuts(&diff_editor_unstaged_model, &["S", "U", "C"]);
     assert_shortcut_action!(
         diff_editor_unstaged_model,
         "S",
@@ -1205,7 +1202,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         diff_editor_unstaged_model,
-        "D",
+        "U",
         ContextMenuAction::ApplyWorktreePatch {
             repo_id: rid,
             patch,
@@ -1255,7 +1252,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     let diff_hunk_unstaged_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 })
     });
-    assert_declared_shortcuts(&diff_hunk_unstaged_model, &[&sec("S"), &sec("D")]);
+    assert_declared_shortcuts(&diff_hunk_unstaged_model, &[&sec("S"), &sec("U")]);
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
         &sec("S"),
@@ -1266,7 +1263,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
-        &sec("D"),
+        &sec("U"),
         ContextMenuAction::ApplyWorktreePatch {
             repo_id: rid,
             patch,

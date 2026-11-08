@@ -199,7 +199,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Previous / next file in the list the diff came from | `Up`, `Down` | `Up`, `Down` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. When the open file has left its list (its last change was staged or discarded), any of these opens the list's first file (`End` its last). Not in the conflict resolver; use `F1` / `F4` there. |
 | Previous / next page of files | `PageUp`, `PageDown` | `PageUp`, `PageDown` | One visible page of the file list. No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. When the open file has left its list (its last change was staged or discarded), any of these opens the list's first file (`End` its last). Not in the conflict resolver; use `F1` / `F4` there. |
 | First / last file | `Home`, `End` | `Home`, `End` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. When the open file has left its list (its last change was staged or discarded), any of these opens the list's first file (`End` its last). Not in the conflict resolver; use `F1` / `F4` there. |
-| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line and outlining the block, in Full, Collapsed, and whole-commit diffs alike. Pressed outside a text field, also moves keyboard focus into the diff, so `S`, `U` and `D` act on the outlined block. The conflict resolver moves by conflict instead. |
+| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line and outlining the block, in Full, Collapsed, and whole-commit diffs alike. Pressed outside a text field, also moves keyboard focus into the diff, so `S` and `U` act on the outlined block. The conflict resolver moves by conflict instead. |
 | Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Same unit as Previous change. With nothing selected, goes to the first change block. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Enter or leave the file editor | `Option-E` | `Alt-E` | Not while a text field has focus. Escape also leaves the editor. |
@@ -207,9 +207,10 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
 | Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
-| Stage the selected lines | `S` | `S` | Unstaged working-tree diff, while the diff has focus. No modifiers. Acts on the lines selected by dragging over text, by selecting rows, or by right-clicking a line: a right-click focuses the diff, and once its menu closes the keys act on the lines that menu did until the selection changes. With nothing selected it acts on the change block outlined by change navigation or by opening the diff; a mouse selection removes that outline. Pressed outside the diff (e.g. in the file list), but not in a text field, it acts only on that outlined block; the same holds for `U` and `D`. After a plain click (a caret only) it does nothing. The same as "Stage lines" in the diff's right-click menu. |
-| Unstage the selected lines | `U` | `U` | Staged diff, while the diff has focus. No modifiers. The same as "Unstage lines" in the right-click menu. |
-| Discard the selected lines | `D` | `D` | Unstaged working-tree diff, while the diff has focus. No modifiers. Reverts the selected lines, or the outlined change block, in the file without asking, as "Discard lines" in the right-click menu does. In the conflict resolver `D` picks Both instead. |
+| Discard the file's changes | `Cmd-U` | `Ctrl-U` | Unstaged working-tree diff or a focused unstaged file list, after a confirmation. In a staged diff or list the same chord unstages, so a menu shows one or the other, never both. `Cmd-D` / `Ctrl-D` no longer discards: it is next to `Cmd-S` / `Ctrl-S`. |
+| Stage the selected lines | `S` | `S` | Unstaged working-tree diff, while the diff has focus. No modifiers. Acts on the lines selected by dragging over text, by selecting rows, or by right-clicking a line: a right-click focuses the diff, and once its menu closes the keys act on the lines that menu did until the selection changes. With nothing selected it acts on the change block outlined by change navigation or by opening the diff; a mouse selection removes that outline. Pressed outside the diff (e.g. in the file list), but not in a text field, it acts only on that outlined block; the same holds for `U`. After a plain click (a caret only) it does nothing. Once the diff reloads, the next change block is outlined, so `S`, `S`, `S` stages a file block by block. The same as "Stage lines" in the diff's right-click menu. |
+| Unstage the selected lines | `U` | `U` | Staged diff, while the diff has focus. No modifiers. The same as "Unstage lines" in the right-click menu. In an unstaged diff the same key discards instead (next row). |
+| Discard the selected lines | `U` | `U` | Unstaged working-tree diff, while the diff has focus. No modifiers. Reverts the selected lines, or the outlined change block, in the file without asking, as "Discard lines" in the right-click menu does. `U` rather than `D`, so discard is not next to `S`; unstage shares the key but only applies in a staged diff. `D` does nothing in a diff (in the conflict resolver it picks Both). |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |
 | Pick conflict result `Base / Ours / Theirs / Both` | `A`, `B`, `C`, `D` | `A`, `B`, `C`, `D` | Conflict resolver only. |
@@ -226,6 +227,13 @@ selects the section's files. At the end of the section, advancement selects the
 previous file; when the section is empty, it clears the diff.
 `Up` / `Down`, `PageUp` / `PageDown` and `Home` / `End` step through the
 section's files and open each file in the diff. Keyboard focus stays in the list.
+
+When `S`, `U`, the gutter buttons, a diff menu or Discard leaves the open file
+with no changes in its list, the diff opens the next file in that list, or the
+previous one at the end. Settings → Change tracking → "Automatically open the
+next file when the current one has no changes left" turns this off; the diff
+then stays on the file, or closes if you discarded the whole file. `Space` and
+the Stage/Unstage button move to the next file either way.
 
 Preview-mode note:
 - [Markdown previews](markdown-previews.md) also support text selection, link menus, and keyboard-operated disclosures in embedded descriptions.

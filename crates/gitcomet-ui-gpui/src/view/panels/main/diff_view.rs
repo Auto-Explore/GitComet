@@ -2,7 +2,6 @@ use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::diff::diff_search::DiffSearchOptions;
-use crate::view::panes::diff::diff_text::DiffLineAction;
 use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
 use crate::view::panes::diff::{DiffBody, DiskSurface};
 use gpui::Focusable;
@@ -667,7 +666,9 @@ impl DiffRenderer {
                     self.rebuild_diff_cache(cx);
                     handled = true;
                 }
-                "d" if !mods.shift => {
+                // Ctrl/Cmd+U discards in an unstaged diff (unstage, above, is
+                // the staged diff's); Ctrl/Cmd+D no longer does, D being next to S.
+                "u" if area == DiffArea::Unstaged && !mods.shift => {
                     let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
                     self.open_popover_at(
                         PopoverKind::DiscardChangesConfirm {
@@ -922,15 +923,15 @@ impl DiffRenderer {
             handled = true;
         }
 
-        // The diff editor menu shows S, U and D beside its line entries; the
-        // bare letters stage, unstage and discard the selected lines with the
+        // The diff editor menu shows S and U beside its line entries; the
+        // bare letters stage, unstage or discard the selected lines with the
         // menu closed as well. Only while the diff itself holds focus, as it
         // does after a click, a drag or the menu: plain letters also arrive
         // through the window-wide fallback and bubble up from the panel's
         // text fields, and neither may discard lines selected here.
         if !handled
             && !conflict_resolver_active
-            && let Some(action) = DiffLineAction::from_keystroke(keystroke)
+            && let Some(action) = self.diff_line_action_for_key(keystroke)
             && self.diff_panel_focus_handle.is_focused(window)
         {
             handled = self.apply_diff_line_action(action, cx);

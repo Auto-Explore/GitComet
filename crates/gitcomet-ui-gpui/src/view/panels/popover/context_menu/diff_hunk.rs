@@ -70,17 +70,27 @@ pub(super) fn model(
         )
     });
 
-    items.push(ContextMenuItem::Entry {
-        label: "Discard hunk".into(),
-        icon: Some("icons/refresh.svg".into()),
-        shortcut: Some(secondary_shortcut("D").into()),
-        disabled: !is_unstaged || patch.is_none(),
-        action: Box::new(ContextMenuAction::ApplyWorktreePatch {
-            repo_id,
-            patch: patch.unwrap_or_default(),
-            reverse: true,
-        }),
-    });
+    // Not beside Unstage hunk: the two share Ctrl/Cmd+U.
+    let is_staged = matches!(
+        diff_target,
+        Some(DiffTarget::WorkingTree {
+            area: DiffArea::Staged,
+            ..
+        })
+    );
+    if !is_staged {
+        items.push(ContextMenuItem::Entry {
+            label: "Discard hunk".into(),
+            icon: Some("icons/refresh.svg".into()),
+            shortcut: Some(secondary_shortcut("U").into()),
+            disabled: !is_unstaged || patch.is_none(),
+            action: Box::new(ContextMenuAction::ApplyWorktreePatch {
+                repo_id,
+                patch: patch.unwrap_or_default(),
+                reverse: true,
+            }),
+        });
+    }
 
     ContextMenuModel::new(items)
 }

@@ -110,6 +110,8 @@ impl DiffRenderer {
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.diff_focused_change_block = None;
+        // Not the stage advance: the reload it waits for rebuilds the rows
+        // and clears the selection through here. A target change drops it.
         self.clear_diff_text_selection();
     }
 
@@ -961,6 +963,7 @@ impl DiffRenderer {
         self.diff_text_pending_syntax_click = None;
         self.diff_text_selecting = true;
         self.diff_focused_change_block = None;
+        self.diff_stage_advance = None;
         self.set_diff_text_span(pos, pos);
         self.diff_selection_anchor = None;
         self.diff_text_last_mouse_pos = position;
@@ -984,6 +987,7 @@ impl DiffRenderer {
         let pos = hit.pos;
         self.diff_text_selecting = true;
         self.diff_focused_change_block = None;
+        self.diff_stage_advance = None;
         self.set_diff_text_span(pos, pos);
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;

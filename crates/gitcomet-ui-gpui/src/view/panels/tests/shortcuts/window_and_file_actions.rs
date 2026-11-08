@@ -773,7 +773,7 @@ fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
+fn ctrl_u_in_an_unstaged_diff_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -798,19 +798,25 @@ fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     focus_diff_panel(cx, &view);
 
+    let is_discard_confirm = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            matches!(
+                host.popover_kind_for_tests(),
+                Some(PopoverKind::DiscardChangesConfirm { .. })
+            )
+        })
+    };
+    // Ctrl+D sits next to Ctrl+S, so it no longer discards.
     cx.simulate_keystrokes("ctrl-d");
     draw_and_drain_test_window(cx);
+    assert!(!is_discard_confirm(cx), "Ctrl+D must not discard");
 
-    let is_discard_confirm = cx.update(|_window, app| {
-        let host = view.read(app).popover_host.read(app);
-        matches!(
-            host.popover_kind_for_tests(),
-            Some(PopoverKind::DiscardChangesConfirm { .. })
-        )
-    });
+    cx.simulate_keystrokes("ctrl-u");
+    draw_and_drain_test_window(cx);
     assert!(
-        is_discard_confirm,
-        "expected Ctrl+D to open the DiscardChangesConfirm popover"
+        is_discard_confirm(cx),
+        "expected Ctrl+U to open the DiscardChangesConfirm popover"
     );
 }
 

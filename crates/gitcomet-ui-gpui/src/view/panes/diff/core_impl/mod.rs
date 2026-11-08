@@ -1919,6 +1919,7 @@ impl DiffRenderer {
         self.pending_target = Some(target);
         self.diff_surface_memo.borrow_mut().take();
         self.clear_diff_selection_state();
+        self.diff_stage_advance = None;
         self.diff_autoscroll_pending = true;
         self.ensure_file_diff_cache(cx);
         self.ensure_rendered_patch_diff_cache(cx);
@@ -1960,6 +1961,8 @@ impl DiffRenderer {
             if repositories_changed {
                 self.prune_orphaned_file_editor_stash(cx);
             }
+            // The status lanes and the action count are not in the fingerprint.
+            self.resolve_next_file_advance(cx);
             return false;
         }
         self.notify_fingerprint = fingerprint;
@@ -1984,6 +1987,7 @@ impl DiffRenderer {
         }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
+            self.diff_stage_advance = None;
             self.diff_autoscroll_pending = next_diff_target.is_some();
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
@@ -2016,6 +2020,7 @@ impl DiffRenderer {
         }
 
         self.ensure_rendered_patch_diff_cache(cx);
+        self.resolve_next_file_advance(cx);
 
         cx.notify();
         true

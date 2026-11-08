@@ -2373,7 +2373,7 @@ impl GitCometView {
             .diff_pane_for_keys(&self.repository_view_focus, window, cx)
     }
 
-    /// Bare S, U or D pressed outside the diff, e.g. in the file list that
+    /// Bare S or U pressed outside the diff, e.g. in the file list that
     /// opened it: acts on the change block the diff outlines, if shown.
     pub(crate) fn handle_outlined_change_line_key(
         &mut self,
@@ -2381,15 +2381,13 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(action) =
-            crate::view::panes::diff::diff_text::DiffLineAction::from_keystroke(keystroke)
-        else {
-            return false;
-        };
         if self.documents_active {
             return false;
         }
         self.diff_renderer.update(cx, |pane, cx| {
+            let Some(action) = pane.diff_line_action_for_key(keystroke) else {
+                return false;
+            };
             pane.apply_outlined_block_line_action(action, window, cx)
         })
     }

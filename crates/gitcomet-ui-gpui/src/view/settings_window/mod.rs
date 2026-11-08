@@ -505,7 +505,9 @@ impl SettingsCategory {
                  automatically check updates startup"
             }
             Self::Terminal => "terminal external terminal button opens status bar",
-            Self::ChangeTracking => "change tracking untracked files",
+            Self::ChangeTracking => {
+                "change tracking untracked files open next file automatically stage unstage discard last change"
+            }
             Self::Diff => {
                 "diff engine difftastic structural line by line mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
@@ -670,6 +672,7 @@ pub(crate) struct SettingsWindowView {
     diff_tab_size: u8,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
+    open_next_file_after_last_change: bool,
     remote_url_policy: RemoteUrlPolicy,
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
@@ -1114,6 +1117,8 @@ impl SettingsWindowView {
         let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let open_next_file_after_last_change =
+            ui_preferences.staging.open_next_file_after_last_change;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
@@ -1527,6 +1532,7 @@ impl SettingsWindowView {
             diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
+            open_next_file_after_last_change,
             remote_url_policy,
             remote_markdown_image_policy,
             check_for_updates_on_startup,

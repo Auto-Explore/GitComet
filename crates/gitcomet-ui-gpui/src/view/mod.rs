@@ -184,9 +184,9 @@ pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
     }
 }
 
-/// Bare S, U or D: stage, unstage or discard diff lines.
+/// Bare S or U: stage diff lines, or unstage / discard them.
 pub(crate) fn is_diff_line_key(keystroke: &gpui::Keystroke) -> bool {
-    panes::diff::diff_text::DiffLineAction::from_keystroke(keystroke).is_some()
+    panes::diff::diff_text::DiffLineAction::is_line_key(keystroke)
 }
 
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {

@@ -38,6 +38,7 @@ impl DiffRenderer {
         // lines the last right-click menu acted on.
         self.diff_focused_change_block = None;
         self.diff_editor_menu_column = None;
+        self.diff_stage_advance = None;
         if self.select_hosted_row(clicked_visible_ix, shift) {
             return;
         }
@@ -403,7 +404,7 @@ impl DiffRenderer {
     }
 
     /// Change navigation from outside the diff hands it keyboard focus once
-    /// it outlines a block, so S, U and D then act on that block.
+    /// it outlines a block, so S and U then act on that block.
     pub(in crate::view) fn focus_diff_after_navigation(
         &self,
         window: &mut gpui::Window,
@@ -461,6 +462,7 @@ impl DiffRenderer {
     }
 
     fn diff_jump(&mut self, entries: Vec<usize>, previous: bool) {
+        self.diff_stage_advance = None;
         if entries.is_empty() {
             return;
         }
@@ -484,6 +486,52 @@ impl DiffRenderer {
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         // Anchor only, like a line click: the block's bar and outline mark
         // where navigation is, so its first row gets no selection wash.
+        self.clear_diff_navigation_selection();
+        self.diff_selection_anchor = Some(target);
+        self.focus_change_block_at(target);
+    }
+
+    fn diff_content_revs(&self) -> (u64, u64) {
+        (
+            self.rendered_patch_diff_rev(),
+            self.rendered_file_diff_rev(),
+        )
+    }
+
+    /// S staged lines from `first_row` (a visual row) on: once the diff
+    /// reloads, outline the block that then sits where they were.
+    pub(in crate::view) fn arm_stage_advance(&mut self, first_row: usize) {
+        let blocks_above = self
+            .diff_change_blocks()
+            .into_iter()
+            .filter(|rows| self.diff_visual_ix_for_source_visible_ix(rows.end - 1) < first_row)
+            .count();
+        self.diff_stage_advance = Some(DiffStageAdvance {
+            blocks_above,
+            revs: self.diff_content_revs(),
+        });
+    }
+
+    /// Runs the advance S armed, once the reloaded diff's rows are built.
+    pub(in crate::view) fn maybe_advance_after_stage(&mut self) {
+        let Some(advance) = self.diff_stage_advance else {
+            return;
+        };
+        let revs = self.diff_content_revs();
+        let rows_built = self.diff_cache_rev == revs.0
+            && (!self.lists_file_diff_rows()
+                || (self.file_diff_cache_rev == revs.1 && self.file_diff_cache_inflight.is_none()));
+        if revs == advance.revs || self.diff_actions_busy() || !rows_built {
+            return;
+        }
+        self.diff_stage_advance = None;
+        let entries = self.diff_nav_entries();
+        // Past the last block, the one before it; none left, no outline.
+        let Some(&target) = entries.get(advance.blocks_above).or(entries.last()) else {
+            self.diff_focused_change_block = None;
+            return;
+        };
+        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.clear_diff_navigation_selection();
         self.diff_selection_anchor = Some(target);
         self.focus_change_block_at(target);

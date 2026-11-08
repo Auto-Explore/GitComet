@@ -35,7 +35,7 @@ pub(super) fn model(
             )
         });
 
-    let (is_conflicted, is_unstaged_conflicted, has_unstaged_for_path, is_staged_added) = this
+    let (is_conflicted, is_unstaged_conflicted) = this
         .state
         .repos
         .iter()
@@ -60,14 +60,9 @@ pub(super) fn model(
                     unstaged_kind,
                     Some(gitcomet_core::domain::FileStatusKind::Conflicted)
                 ),
-                unstaged_kind.is_some(),
-                matches!(
-                    staged_kind,
-                    Some(gitcomet_core::domain::FileStatusKind::Added)
-                ),
             )
         })
-        .unwrap_or((false, false, false, false));
+        .unwrap_or((false, false));
 
     let submodule_menu_state = this
         .state
@@ -97,8 +92,6 @@ pub(super) fn model(
             use_selection,
             selected_count,
             is_conflicted,
-            has_unstaged_for_path,
-            is_staged_added,
             submodule_menu_state,
         );
     }
@@ -108,13 +101,6 @@ pub(super) fn model(
     let can_add_to_gitignore = this
         .add_to_gitignore_target(repo_id, area, &path.to_path_buf(), cx)
         .is_some();
-
-    // Keep context menu opening fast. Validate precisely when the action runs
-    // instead. A conflict is discarded by keeping ours.
-    let can_discard_worktree_changes = match area {
-        DiffArea::Unstaged => true,
-        DiffArea::Staged => !is_conflicted && (has_unstaged_for_path || is_staged_added),
-    };
 
     let mut items = vec![ContextMenuItem::Header(
         path.file_name()
@@ -256,15 +242,17 @@ pub(super) fn model(
         };
     }
 
-    let show_discard_changes = !(is_conflicted && area == DiffArea::Staged);
-    if show_discard_changes {
+    // Unstaged lists only: Discard shares Ctrl/Cmd+U with the staged list's
+    // Unstage, so one menu never shows both. Validated when it runs; a
+    // conflict is discarded by keeping ours.
+    if area == DiffArea::Unstaged {
         items.push(discard_changes_entry(
             repo_id,
             area,
             path,
             use_selection,
             selected_count,
-            !can_discard_worktree_changes,
+            false,
         ));
     }
 
@@ -531,7 +519,7 @@ fn discard_changes_entry(
             "Discard changes".into()
         },
         icon: Some("icons/refresh.svg".into()),
-        shortcut: Some(secondary_shortcut("D").into()),
+        shortcut: Some(secondary_shortcut("U").into()),
         disabled,
         action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id,
@@ -550,8 +538,6 @@ fn submodule_status_model(
     use_selection: bool,
     selected_count: usize,
     is_conflicted: bool,
-    has_unstaged_for_path: bool,
-    is_staged_added: bool,
     submodule_menu_state: submodule::SubmoduleMenuState,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
@@ -659,30 +645,16 @@ fn submodule_status_model(
         }
     }
 
-    let can_discard_worktree_changes = if is_conflicted {
-        false
-    } else {
-        match area {
-            DiffArea::Unstaged => true,
-            DiffArea::Staged => has_unstaged_for_path || is_staged_added,
-        }
-    };
-    if !(is_conflicted && area == DiffArea::Staged) {
-        items.push(ContextMenuItem::Entry {
-            label: if use_selection {
-                format!("Discard ({selected_count})").into()
-            } else {
-                "Discard changes".into()
-            },
-            icon: Some("icons/refresh.svg".into()),
-            shortcut: Some(secondary_shortcut("D").into()),
-            disabled: !can_discard_worktree_changes,
-            action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-                repo_id,
-                area,
-                path: path.to_path_buf(),
-            }),
-        });
+    // Unstaged list only, as in the file menu: Ctrl/Cmd+U is Unstage there.
+    if area == DiffArea::Unstaged {
+        items.push(discard_changes_entry(
+            repo_id,
+            area,
+            path,
+            use_selection,
+            selected_count,
+            is_conflicted,
+        ));
     }
 
     items.push(ContextMenuItem::Separator);

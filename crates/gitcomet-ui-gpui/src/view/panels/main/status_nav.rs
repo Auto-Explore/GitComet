@@ -129,6 +129,10 @@ impl<'a> StatusNavigationContext<'a> {
         step_ix(self.current_ix, self.entries.len(), delta)
     }
 
+    pub(super) fn section(&self) -> StatusSection {
+        self.section
+    }
+
     pub(super) fn next_or_prev_path(&self) -> Option<std::path::PathBuf> {
         self.next_ix()
             .or_else(|| self.prev_ix())
@@ -833,19 +837,7 @@ impl DiffRenderer {
                 target_ix: _,
                 path,
                 is_conflicted,
-            } => {
-                self.clear_status_multi_selection(repo_id, cx);
-                self.scroll_status_section_to_path(section, &path, cx);
-                if is_conflicted {
-                    self.store
-                        .dispatch(Msg::SelectConflictDiff { repo_id, path });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::working_tree(path, area),
-                    });
-                }
-            }
+            } => self.open_status_file(repo_id, section, area, path, is_conflicted, cx),
             AdjacentDiffFileTarget::Commit {
                 commit_id,
                 target_ix,
@@ -861,6 +853,29 @@ impl DiffRenderer {
         }
 
         true
+    }
+
+    /// Opens a file of a status list, revealing its row.
+    pub(super) fn open_status_file(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+        area: DiffArea,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.clear_status_multi_selection(repo_id, cx);
+        self.scroll_status_section_to_path(section, &path, cx);
+        if is_conflicted {
+            self.store
+                .dispatch(Msg::SelectConflictDiff { repo_id, path });
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::working_tree(path, area),
+            });
+        }
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file(

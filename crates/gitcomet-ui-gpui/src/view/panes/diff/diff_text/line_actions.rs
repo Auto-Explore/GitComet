@@ -1,8 +1,10 @@
 //! Stage, unstage and discard the selected diff lines.
 //!
-//! The diff editor menu lists its line entries with a bare letter beside them
-//! (S, U, D). Those letters work with the menu closed too: they build the same
-//! patch from the same selection and apply it through the same messages.
+//! The diff editor menu lists its line entries with a bare letter beside them:
+//! S stages, U unstages in a staged diff and discards in an unstaged one, so
+//! discard sits away from S. The letters work with the menu closed too: they
+//! build the same patch from the same selection and apply it through the same
+//! messages.
 
 use super::{
     DiffArea, DiffEditorMenuColumn, DiffLineSelectionState, DiffRenderer, DiffTarget,
@@ -23,24 +25,33 @@ pub(in crate::view) enum DiffLineAction {
     Stage,
     /// "Unstage line(s)", U, in a staged diff.
     Unstage,
-    /// "Discard line(s)", D, in an unstaged diff.
+    /// "Discard line(s)", U, in an unstaged diff.
     Discard,
 }
 
 impl DiffLineAction {
-    /// The entry a key names. Only the bare letter, as the menu shows it:
-    /// Ctrl/Cmd+S and Ctrl/Cmd+D act on the whole file.
-    pub(in crate::view) fn from_keystroke(keystroke: &gpui::Keystroke) -> Option<Self> {
-        let mods = keystroke.modifiers;
-        if mods.control || mods.alt || mods.platform || mods.function || mods.shift {
+    /// The entry a key names in a diff of `area`. Only the bare letter, as the
+    /// menu shows it: Ctrl/Cmd+S and Ctrl/Cmd+D act on the whole file.
+    pub(in crate::view) fn from_keystroke(
+        keystroke: &gpui::Keystroke,
+        area: DiffArea,
+    ) -> Option<Self> {
+        if !Self::is_line_key(keystroke) {
             return None;
         }
-        match keystroke.key.as_str() {
-            "s" => Some(Self::Stage),
-            "u" => Some(Self::Unstage),
-            "d" => Some(Self::Discard),
+        match (keystroke.key.as_str(), area) {
+            ("s", _) => Some(Self::Stage),
+            ("u", DiffArea::Staged) => Some(Self::Unstage),
+            ("u", DiffArea::Unstaged) => Some(Self::Discard),
             _ => None,
         }
+    }
+
+    /// Bare S or U, whatever diff is open.
+    pub(in crate::view) fn is_line_key(keystroke: &gpui::Keystroke) -> bool {
+        let mods = keystroke.modifiers;
+        !(mods.control || mods.alt || mods.platform || mods.function || mods.shift)
+            && matches!(keystroke.key.as_str(), "s" | "u")
     }
 
     /// The side of the index whose diff lists this entry.
@@ -264,6 +275,17 @@ impl DiffRenderer {
         }
     }
 
+    /// The entry a key names in the open working-tree diff.
+    pub(in crate::view) fn diff_line_action_for_key(
+        &self,
+        keystroke: &gpui::Keystroke,
+    ) -> Option<DiffLineAction> {
+        let Some(DiffTarget::WorkingTree { area, .. }) = self.rendered_diff_target() else {
+            return None;
+        };
+        DiffLineAction::from_keystroke(keystroke, *area)
+    }
+
     /// Whether this view lists `action` in its diff editor menu at all.
     fn diff_line_action_available(&self, action: DiffLineAction) -> bool {
         let policy = &self.store.policy;
@@ -470,6 +492,11 @@ impl DiffRenderer {
             // While an earlier action applies, the rows still show the diff
             // before it: take the key, but build nothing from them.
             if !self.diff_actions_busy() {
+                if action == DiffLineAction::Stage
+                    && let Some((first_row, _)) = self.diff_line_action_rows()
+                {
+                    self.arm_stage_advance(first_row);
+                }
                 self.prepare_structural_patch(selection, action.operation(), cx);
             }
             return true;
@@ -487,7 +514,10 @@ impl DiffRenderer {
         let Some(patch) = self.diff_lines_patch_for_rows(action, rows) else {
             return false;
         };
-        self.store.dispatch(match action {
+        if action == DiffLineAction::Stage {
+            self.arm_stage_advance(rows.0);
+        }
+        let msg = match action {
             DiffLineAction::Stage => Msg::StageHunk { repo_id, patch },
             DiffLineAction::Unstage => Msg::UnstageHunk { repo_id, patch },
             DiffLineAction::Discard => Msg::ApplyWorktreePatch {
@@ -495,7 +525,8 @@ impl DiffRenderer {
                 patch,
                 reverse: true,
             },
-        });
+        };
+        self.dispatch_open_file_change(msg, cx);
         true
     }
 }

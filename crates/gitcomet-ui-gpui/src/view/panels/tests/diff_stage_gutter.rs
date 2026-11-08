@@ -345,7 +345,7 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
     );
 }
 
-/// The diff editor menu shows S, U and D beside its line entries, and those
+/// The diff editor menu shows S and U beside its line entries, and those
 /// letters apply the selected lines with the menu closed. The patch a key
 /// builds has to be the very one its menu entry applies.
 #[gpui::test]
@@ -417,10 +417,10 @@ fn line_keys_build_the_patch_their_menu_entries_apply(cx: &mut gpui::TestAppCont
             assert_eq!(line_key, &lines_patch, "{case}: S/U and the line entry");
             match area {
                 DiffArea::Unstaged => {
-                    assert!(discard.is_some(), "{case}: D has lines to discard");
+                    assert!(discard.is_some(), "{case}: U has lines to discard");
                     assert_eq!(
                         discard, discard_lines_patch,
-                        "{case}: D and the discard entry"
+                        "{case}: U and the discard entry"
                     );
                 }
                 DiffArea::Staged => {
