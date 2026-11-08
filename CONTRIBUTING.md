@@ -143,8 +143,10 @@ python3 scripts/ci/run.py test --context workspace
 python3 scripts/ci/run.py doc --context workspace
 ```
 
-Use `--context core`, `diagrams`, `state`, `backend`, `app`, or `ui` for a focused
-run. The `app` context disables GUI features. Run the same commands with
+Use `--context core`, `diagrams`, `state`, `backend`, `app`, `app-gui`, or `ui` for a focused
+run. The `app` context disables GUI features; `app-gui` covers browser startup,
+terminal detachment, and the browser-instance broker in the application crates.
+Run the same commands with
 `--context example` to check the downstream extension product in its separate
 feature context. Recompile a context after changing its code.
 
