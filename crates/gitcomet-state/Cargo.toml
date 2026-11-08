@@ -32,6 +32,9 @@ uuid = { workspace = true }
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gitcomet-git-gix = { workspace = true }
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 gitcomet-fs-watch = { workspace = true }
 

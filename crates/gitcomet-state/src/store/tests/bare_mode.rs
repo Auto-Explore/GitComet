@@ -1039,6 +1039,75 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
 }
 
 #[test]
+fn filesystem_mutations_resolve_only_the_cold_innermost_repository_and_preserve_guards() {
+    use gitcomet_core::filesystem::Operation;
+    for (bare, fail_open) in [(false, false), (true, false), (false, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonicalize_or_original(directory.path().to_path_buf());
+        run_git(&root, &["init", "-q", "-b", "main"]);
+        let nested = root.join("nested");
+        fs::create_dir(&nested).unwrap();
+        if bare {
+            run_git(&nested, &["init", "-q", "--bare"]);
+        } else {
+            run_git(&nested, &["init", "-q", "-b", "main"]);
+        }
+        let source = nested.join("payload.txt");
+        fs::write(&source, b"preserved").unwrap();
+        let (mut repos, _, mut state, repo_id) = fixture(RepositoryMode::WorkingTree);
+        let parent = gitcomet_git_gix::GixBackend.open(&root).unwrap();
+        state.repos[0].set_spec(parent.spec().clone());
+        repos.attach_repository_for_test(repo_id, parent);
+        let mut cold = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: nested.clone(),
+            },
+        );
+        cold.open = Loadable::Ready(());
+        cold.repository_mode = Some(if bare {
+            RepositoryMode::Bare
+        } else {
+            RepositoryMode::WorkingTree
+        });
+        cold.backend_parked = true;
+        state.repos.push(cold);
+        let backend: Arc<dyn GitBackend> = if fail_open {
+            Arc::new(FailingBackend)
+        } else {
+            Arc::new(gitcomet_git_gix::GixBackend)
+        };
+        let executor = executor::TaskExecutor::new(1);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        super::effects::schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &mut repos,
+            state,
+            sender,
+            Effect::Filesystem(gitcomet_core::filesystem::Request::new(Operation::Rename {
+                source: source.clone(),
+                name: "renamed.txt".into(),
+            })),
+        );
+        loop {
+            if let Msg::FilesystemFinished(result) =
+                receiver.recv_timeout(Duration::from_secs(10)).unwrap()
+            {
+                assert_eq!(result.succeeded(), !bare && !fail_open, "{result:?}");
+                break;
+            }
+        }
+        let (completed, acknowledged) = std::sync::mpsc::channel();
+        executor::FILESYSTEM_QUEUE.spawn(move || completed.send(()).unwrap());
+        acknowledged.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(source.exists(), bare || fail_open);
+        assert_eq!(nested.join("renamed.txt").exists(), !bare && !fail_open);
+    }
+}
+
+#[test]
 fn undo_in_another_window_checks_the_owned_repository_after_external_mode_change() {
     use gitcomet_core::filesystem::Operation;
     let directory = tempfile::tempdir().unwrap();

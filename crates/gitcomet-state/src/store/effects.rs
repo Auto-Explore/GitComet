@@ -5,6 +5,7 @@ mod conflict_load;
 mod control;
 mod diff_session;
 mod file_history;
+mod filesystem_targets;
 mod history_authors;
 mod history_find;
 mod indexed_history;
@@ -213,25 +214,28 @@ pub(super) fn schedule_effect(
                 .unwrap_or_else(|error| error.into_inner())
                 .repos
                 .iter()
-                .map(|repo| {
-                    (
-                        repo.spec.workdir.clone(),
-                        repos.repository(&repo.id).cloned(),
-                    )
+                .map(|repo| super::repository_registry::RepositoryTarget {
+                    root: repo.spec.workdir.clone(),
+                    repository: repos.repository(&repo.id).cloned(),
+                    parked: repo.is_backend_parked(),
                 })
                 .collect();
+            let backend = Arc::clone(backend);
             filesystem_executor.spawn(move || {
                 let mut repository_targets = super::repository_registry::repository_targets();
                 repository_targets.extend(local_targets);
                 let mutation_paths = msg_tx.filesystem.lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .mutation_paths(&request.operation);
+                // Open only affected cold roots, on this worker, before taking
+                // mutation gates or the filesystem lock. No write is replayed.
+                let resolved = mutation_paths.as_ref().map_err(|error| std::io::Error::new(error.kind(), error.to_string()))
+                    .and_then(|paths| filesystem_targets::resolve(&mut repository_targets, paths, backend.as_ref()));
                 let mut gates = std::collections::BTreeMap::new();
                 if let Ok(paths) = &mutation_paths {
                     for path in paths {
-                        let Some((_, Some(repository))) = repository_targets.iter()
-                            .filter(|(root, _)| path.starts_with(root))
-                            .max_by_key(|(root, _)| root.components().count()) else { continue; };
+                        let Some(repository) = filesystem_targets::target(&repository_targets, path)
+                            .and_then(|target| target.repository.as_ref()) else { continue; };
                         gates.entry(repository.common_dir().unwrap_or_else(|| repository.spec().workdir.clone()))
                             .or_insert_with(|| super::mutation_gate::for_repo(repository.as_ref()));
                     }
@@ -252,19 +256,18 @@ pub(super) fn schedule_effect(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .execute_checked(request, |paths| {
+                        resolved.as_ref().map_err(|error| std::io::Error::new(error.kind(), error.to_string()))?;
                         let expected_paths = mutation_paths.as_ref()
                             .map_err(|error| std::io::Error::new(error.kind(), error.to_string()))?;
                         if expected_paths.as_slice() != paths {
                             return Err(std::io::Error::other("The affected files changed while this operation was waiting. Try again."));
                         }
                         for path in paths {
-                            let Some((root, repository)) = repository_targets.iter()
-                                .filter(|(root, _)| path.starts_with(root))
-                                .max_by_key(|(root, _)| root.components().count()) else { continue; };
-                            if !checked_roots.insert(root) {
+                            let Some(target) = filesystem_targets::target(&repository_targets, path) else { continue; };
+                            if !checked_roots.insert(&target.root) {
                                 continue;
                             }
-                            let repository = repository.as_ref().ok_or_else(|| std::io::Error::other("Wait for this repository to finish opening before changing its files."))?;
+                            let repository = target.repository.as_ref().ok_or_else(|| std::io::Error::other("Wait for this repository to finish opening before changing its files."))?;
                             operation_leases.push(repository.acquire_operation_lease()
                                 .map_err(|error| std::io::Error::other(error.to_string()))?);
                             super::repository_requirement::check(repository.as_ref(), gitcomet_core::domain::RepositoryRequirement::WorkingTree)

@@ -11,7 +11,126 @@ use crate::model::RepoState;
 use gitcomet_core::domain::DiffTarget;
 use std::sync::Arc;
 
-pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
+pub(super) fn reduce(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    event: Event,
+) -> Vec<Effect> {
+    let explicit = match &event {
+        Event::Open {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        }
+        | Event::OpenEditor {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        }
+        | Event::ExitEditor {
+            repo_id,
+            lifetime,
+            view,
+        }
+        | Event::SetEncoding {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        }
+        | Event::SetTextOverride {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        }
+        | Event::SetContentMode {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        }
+        | Event::Reload {
+            repo_id,
+            lifetime,
+            view,
+        }
+        | Event::LoadBlame {
+            repo_id,
+            lifetime,
+            view,
+        } => Some((*repo_id, *lifetime, *view, false)),
+        Event::OpenChanges {
+            repo_id,
+            lifetime,
+            view,
+            ..
+        } => Some((*repo_id, *lifetime, *view, true)),
+        Event::Clear { .. }
+        | Event::Close { .. }
+        | Event::CloseChanges { .. }
+        | Event::Loaded { .. }
+        | Event::ChangesLoaded { .. } => None,
+    };
+    let mut effects = reduce_event(state, event);
+    // An initial/cold open has no backend yet. Keep the latest requested
+    // target, but do not turn the missing backend into a permanent read error.
+    effects.retain(|effect| {
+        let Effect::DiffSession(work) = effect else {
+            return true;
+        };
+        let Some(repo) = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == work.repo_id && repo.lifetime() == work.lifetime)
+        else {
+            return false;
+        };
+        if repos.has_repository(&repo.id)
+            || (!repo.backend_parked && matches!(repo.open, Loadable::Ready(())))
+        {
+            return true;
+        }
+        if matches!(work.work, DiffSessionWork::Changes { .. }) {
+            if let Some(list) = Arc::make_mut(&mut repo.change_lists).get_mut(&work.view)
+                && list.generation == work.generation
+            {
+                list.next_generation();
+                list.loading = false;
+                list.refresh_queued = true;
+            }
+        } else if let Some(session) = Arc::make_mut(&mut repo.diff_sessions).get_mut(&work.view)
+            && session.generation == work.generation
+        {
+            session.next_generation();
+            session.pending = Default::default();
+            session.refresh_queued = true;
+        }
+        false
+    });
+    if let Some((repo_id, lifetime, view, list)) = explicit
+        && let Some(repo) = state.repos.iter_mut().find(|repo| {
+            repo.id == repo_id
+                && repo.lifetime() == lifetime
+                && if list {
+                    repo.change_lists.contains_key(&view)
+                } else {
+                    repo.diff_sessions.contains_key(&view)
+                }
+        })
+    {
+        repo.last_active_at = Some(inputs.now());
+        if !repos.has_repository(&repo_id) {
+            super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
+        }
+    }
+    effects
+}
+
+fn reduce_event(state: &mut AppState, event: Event) -> Vec<Effect> {
     let requires_worktree = match &event {
         Event::Open {
             target:

@@ -153,6 +153,12 @@ impl AppLaunch {
             return exit_code::ERROR;
         }
 
+        if let Err(error) =
+            gitcomet_core::platform::resource_limits::ensure_file_descriptor_headroom()
+        {
+            eprintln!("Could not raise the process file descriptor limit: {error}");
+        }
+
         #[cfg(feature = "ui-gpui-runtime")]
         {
             let _stage = gitcomet_core::startup_trace::span("crashlog_install");

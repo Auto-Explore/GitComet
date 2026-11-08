@@ -110,6 +110,12 @@ pub struct RepoState {
     pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
+    /// The tab remains open, but its reloadable data and worker-owned backend
+    /// were released. Selecting it reattaches without creating a new lifetime.
+    pub(crate) backend_parked: bool,
+    /// The load generation already retried after descriptor exhaustion. A
+    /// slow failing reopen must not start another recovery after the cooldown.
+    pub(crate) descriptor_retry_epoch: Option<super::RepoLoadEpoch>,
     pub repository_mode: Option<RepositoryMode>,
     pub bare_mode_conversion: BareModeConversionState,
     pub head_commit: Option<CommitId>,
@@ -336,6 +342,11 @@ pub enum DiagnosticKind {
 }
 
 impl RepoState {
+    /// Reloadable backend resources were released while this tab stayed open.
+    pub fn is_backend_parked(&self) -> bool {
+        self.backend_parked
+    }
+
     /// The feedback logs for writing, copied first if a snapshot shares them.
     pub fn feedback_mut(&mut self) -> &mut RepoFeedbackState {
         Arc::make_mut(&mut self.feedback)
@@ -375,6 +386,8 @@ impl RepoState {
             refresh_read_failed: false,
             incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
+            backend_parked: false,
+            descriptor_retry_epoch: None,
             repository_mode: None,
             bare_mode_conversion: BareModeConversionState::Idle,
             head_commit: None,

@@ -76,12 +76,37 @@ impl Drop for RepositoryRuntime {
 #[derive(Default)]
 pub(super) struct RepositoryRuntimes {
     entries: FxHashMap<RepoId, RepositoryRuntime>,
+    descriptor_recovery_at: Option<std::time::Instant>,
     // Reducers retire entries under the state lock; the worker disposes them
     // after releasing that lock, before it schedules the returned effects.
     retired: Vec<RepositoryRuntime>,
+    retired_data: Vec<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl RepositoryRuntimes {
+    /// One recovery attempt per pressure episode, shared by all read replies
+    /// in this store. A refresh fan-out must not become a retry loop.
+    pub(super) fn begin_descriptor_recovery(&mut self, now: std::time::Instant) -> bool {
+        if self.descriptor_recovery_at.is_some_and(|previous| {
+            now.saturating_duration_since(previous) < std::time::Duration::from_secs(30)
+        }) {
+            return false;
+        }
+        self.descriptor_recovery_at = Some(now);
+        true
+    }
+
+    pub(super) fn warm_repository_count(&self) -> usize {
+        if self
+            .descriptor_recovery_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30))
+        {
+            0
+        } else {
+            super::repository_budget::WARM_INACTIVE_REPOSITORIES
+        }
+    }
+
     fn begin_opening(&mut self, repo_id: RepoId, lifetime: RepoLifetime) -> &mut RepositoryRuntime {
         if self
             .entries
@@ -218,6 +243,11 @@ impl RepositoryRuntimes {
 
     pub(super) fn release_retired(&mut self) {
         self.retired.clear();
+        self.retired_data.clear();
+    }
+
+    pub(super) fn defer_data_release(&mut self, data: impl std::any::Any + Send + Sync) {
+        self.retired_data.push(Box::new(data));
     }
 
     pub(super) fn clear(&mut self) {

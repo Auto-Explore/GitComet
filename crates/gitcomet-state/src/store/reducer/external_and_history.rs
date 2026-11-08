@@ -81,6 +81,16 @@ pub(super) fn reload_repo(
     let mut effects = Vec::new();
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let repo_state = &mut state.repos[repo_ix];
+    // Explicit background use must survive the budget pass until its read can
+    // start. A parked tab first needs a handle; its open completion refreshes it.
+    repo_state.last_active_at = Some(inputs.now());
+    if repo_state.backend_parked {
+        if matches!(repo_state.open, Loadable::Error(_)) {
+            repo_state.set_open(Loadable::NotLoaded);
+        }
+        repo_management::append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
+        return effects;
+    }
     if git_log_settings.verify_commit_signatures {
         repo_state.clear_commit_signatures();
     }

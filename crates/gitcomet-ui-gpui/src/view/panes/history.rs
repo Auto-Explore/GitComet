@@ -865,6 +865,7 @@ impl HistoryView {
                 this.pending_history_selections.drain(..=ix);
             }
             this.state = next;
+            this.prune_retained_indexed_history();
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
             }

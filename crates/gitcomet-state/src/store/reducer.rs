@@ -56,6 +56,7 @@ use std::sync::atomic::AtomicU64;
 pub(crate) use auth::repo_command_replay_msg_for_test;
 #[cfg(feature = "benchmarks")]
 pub(crate) use diff_selection::SelectDiffEffects;
+pub(super) use repo_management::park_repository;
 pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
 
 pub(crate) const SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY: usize = 1;
@@ -2470,7 +2471,7 @@ fn reduce_inner(
             effects::head_tracking_loaded(inputs, state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
-        Msg::DiffSession(event) => diff_session::reduce(state, event),
+        Msg::DiffSession(event) => diff_session::reduce(inputs, repos, state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::HistoryFind(event) => history_find::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {

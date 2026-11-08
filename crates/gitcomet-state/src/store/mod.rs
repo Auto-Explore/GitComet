@@ -22,6 +22,7 @@ mod reducer;
 mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
+mod repository_budget;
 mod repository_preferences;
 mod repository_registry;
 mod repository_requirement;
@@ -110,6 +111,7 @@ fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
             state.active_repo != Some(repo.id)
                 && !state.watch_leases.contains_key(&repo.id)
                 && matches!(repo.open, crate::model::Loadable::Ready(()))
+                && !repo.backend_parked
                 && repo.last_active_at.is_some()
         })
         .collect();
@@ -375,6 +377,7 @@ impl WorkerLoopContext<'_> {
                 reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
             }
             let effects = reduce_with(mutable, repos, id_alloc);
+            repository_budget::park_inactive(mutable, repos);
             repository_registry::update_repositories(
                 self.thread_msg_tx.store_id().get(),
                 mutable,
@@ -463,7 +466,10 @@ impl WorkerLoopContext<'_> {
         // a refresh when nothing changed (`unchanged_since_inactive`).
         let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
-            let warm = warm_inactive_repos(&state, WARM_INACTIVE_REPO_MONITORS);
+            let warm = warm_inactive_repos(
+                &state,
+                WARM_INACTIVE_REPO_MONITORS.min(repos.warm_repository_count()),
+            );
             let watched = state
                 .repos
                 .iter()

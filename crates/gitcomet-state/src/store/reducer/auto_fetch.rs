@@ -109,7 +109,7 @@ pub(super) fn refresh(
             ReferenceEffect::LoadUpstreamDivergence { repo_id },
         ));
     }
-    if !matches!(repo.open, Loadable::Ready(())) {
+    if repo.backend_parked || !matches!(repo.open, Loadable::Ready(())) {
         return effects;
     }
     for (kind, effect) in [
@@ -300,6 +300,28 @@ mod tests {
             Loadable::NotLoaded
         ));
         assert!(matches!(state.repos[0].status, Loadable::NotLoaded));
+    }
+
+    #[test]
+    fn automatic_refresh_keeps_parked_visited_tabs_lazy() {
+        let mut state = state();
+        let repo = &mut state.repos[0];
+        repo.set_open(Loadable::Ready(()));
+        repo.backend_parked = true;
+        repo.auto_fetch.status = AutoFetchStatus::Succeeded { at: UNIX_EPOCH };
+        let lifetime = repo.lifetime_id();
+        let effects = refresh(&mut state, RepoId(1), lifetime);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::References(
+                ReferenceEffect::LoadUpstreamDivergence { repo_id: RepoId(1) }
+            )]
+        ));
+        assert!(state.repos[0].is_backend_parked());
+        assert!(matches!(
+            state.repos[0].auto_fetch.status,
+            AutoFetchStatus::Succeeded { .. }
+        ));
     }
 
     #[test]

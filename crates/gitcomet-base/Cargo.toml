@@ -21,6 +21,9 @@ serde_json = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
 [dev-dependencies]
 gitcomet-base = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
