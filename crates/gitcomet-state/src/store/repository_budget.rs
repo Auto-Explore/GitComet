@@ -77,11 +77,13 @@ pub(super) fn has_unfinished_operation(repo: &RepoState) -> bool {
         || repo.conflict_state.conflict_session.is_some()
 }
 
-/// Called under the state lock. Actual handle destruction is deferred until
-/// the worker releases that lock, as it is when closing a tab.
-pub(super) fn park_inactive(state: &mut AppState, repos: &mut RepositoryRuntimes, now: SystemTime) {
+pub(super) fn cold_repositories(
+    state: &AppState,
+    repos: &RepositoryRuntimes,
+    now: SystemTime,
+) -> Vec<RepoId> {
     let warm = super::warm_inactive_repos(state, repos.warm_repository_count(now));
-    let cold: Vec<_> = state
+    state
         .repos
         .iter()
         .filter(|repo| {
@@ -92,15 +94,24 @@ pub(super) fn park_inactive(state: &mut AppState, repos: &mut RepositoryRuntimes
                 && repos.has_repository(&repo.id)
         })
         .map(|repo| repo.id)
-        .collect();
-    for id in cold {
-        let repo = state
-            .repos
-            .iter_mut()
-            .find(|repo| repo.id == id)
-            .expect("known tab");
+        .collect()
+}
+
+/// Called under the state lock. Actual handle destruction is deferred until
+/// the worker releases that lock, as it is when closing a tab.
+pub(super) fn park(state: &mut AppState, repos: &mut RepositoryRuntimes, cold: &[RepoId]) {
+    for repo in state
+        .repos
+        .iter_mut()
+        .filter(|repo| cold.contains(&repo.id))
+    {
         super::reducer::park_repository(repo, repos);
     }
+}
+
+pub(super) fn park_inactive(state: &mut AppState, repos: &mut RepositoryRuntimes, now: SystemTime) {
+    let cold = cold_repositories(state, repos, now);
+    park(state, repos, &cold);
 }
 
 /// Only ordinary idempotent repository reads may initiate a reopen. A push,

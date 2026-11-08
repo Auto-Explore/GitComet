@@ -377,7 +377,6 @@ impl WorkerLoopContext<'_> {
     ) where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
-        let now = std::time::SystemTime::now();
         let (effects, state, reduce_duration, publication) = {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
             let mutable = make_mut_state_with_diagnostics(&mut app_state);
@@ -386,7 +385,6 @@ impl WorkerLoopContext<'_> {
                 reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
             }
             let effects = reduce_with(mutable, repos, id_alloc);
-            repository_budget::park_inactive(mutable, repos, now);
             repository_registry::update_repositories(
                 self.thread_msg_tx.store_id().get(),
                 mutable,
@@ -446,6 +444,34 @@ impl WorkerLoopContext<'_> {
         drop(selections);
         drop(state);
         self.handle_effects(repos, effects);
+        self.park_cold_repositories(repos);
+    }
+
+    /// Runs once the pass's effects hold their backends: parking then
+    /// cancels that work instead of failing it on a missing handle.
+    fn park_cold_repositories(&mut self, repos: &mut RepositoryRuntimes) {
+        let now = std::time::SystemTime::now();
+        let cold = repository_budget::cold_repositories(
+            &self.thread_state.read().unwrap_or_else(|e| e.into_inner()),
+            repos,
+            now,
+        );
+        if cold.is_empty() {
+            return;
+        }
+        {
+            let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
+            let mutable = make_mut_state_with_diagnostics(&mut app_state);
+            repository_budget::park(mutable, repos, &cold);
+            repository_registry::update_repositories(
+                self.thread_msg_tx.store_id().get(),
+                mutable,
+                repos,
+            );
+            self.publication.fetch_add(1, Ordering::Relaxed);
+        }
+        repos.release_retired();
+        self.handle_effects(repos, std::iter::empty());
     }
 
     fn handle_effects<I>(&mut self, repos: &mut RepositoryRuntimes, effects: I)

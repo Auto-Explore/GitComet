@@ -719,3 +719,92 @@ fn stale_exhaustion_does_not_reopen_or_evict_a_newer_runtime() {
     assert!(repos.has_repository(&id));
     assert_eq!(repos.warm_repository_count(std::time::SystemTime::now()), 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_push_finishing_after_its_tab_goes_cold_parks_without_failing_its_refresh() {
+    use super::super::worktree_redirect::{open_repo_and_wait, wait_until};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = gitcomet_core::path_utils::canonicalize_or_original(dir.path().to_path_buf());
+    let remote = root.join("remote.git");
+    std::fs::create_dir(&remote).unwrap();
+    super::super::run_git(&remote, &["init", "-q", "--bare", "-b", "main"]);
+    let tabs: Vec<PathBuf> = ["pushing", "b", "c", "d"]
+        .into_iter()
+        .map(|name| {
+            let repo = root.join(name);
+            std::fs::create_dir(&repo).unwrap();
+            super::super::run_git(&repo, &["init", "-q", "-b", "main"]);
+            for (key, value) in [
+                ("user.name", "Test User"),
+                ("user.email", "test@example.com"),
+                ("commit.gpgsign", "false"),
+            ] {
+                super::super::run_git(&repo, &["config", key, value]);
+            }
+            super::super::run_git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+            repo
+        })
+        .collect();
+    let pushing = &tabs[0];
+    super::super::run_git(
+        pushing,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    super::super::run_git(pushing, &["push", "-q", "-u", "origin", "main"]);
+    super::super::run_git(pushing, &["commit", "-q", "--allow-empty", "-m", "second"]);
+    let hooks = root.join("hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let release = root.join("release");
+    let hook = hooks.join("pre-push");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nwhile [ ! -e '{}' ]; do sleep 0.02; done\n",
+            release.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    super::super::run_git(
+        pushing,
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    let id = open_repo_and_wait(&store, pushing);
+    let tab = |store: &AppStore| {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == id)
+            .cloned()
+            .expect("pushing tab")
+    };
+    store.dispatch(Msg::Push { repo_id: id });
+    wait_until("push to start", || tab(&store).push_in_flight == 1);
+    for path in &tabs[1..] {
+        open_repo_and_wait(&store, path);
+    }
+    assert!(
+        !tab(&store).is_backend_parked(),
+        "the push pins its backend"
+    );
+    std::fs::write(&release, "").unwrap();
+    wait_until("push to finish and its tab to park", || {
+        let repo = tab(&store);
+        repo.push_in_flight == 0 && repo.is_backend_parked()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let errors: Vec<_> = tab(&store)
+        .feedback
+        .diagnostics
+        .iter()
+        .filter(|entry| entry.kind == DiagnosticKind::Error)
+        .map(|entry| entry.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    store.shutdown_for_test().recv().unwrap();
+}
