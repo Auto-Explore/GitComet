@@ -814,9 +814,11 @@ fn capture_internal(
             repo: repository,
             ..
         } => {
-            if let Some(repo) = state.repos.iter().find(|repo| {
-                repo.id == *repo_id && repo.backend_parked && repo.repository_mode.is_some()
-            }) {
+            if let Some(repo) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *repo_id && repo.resumes_parked_backend())
+            {
                 if let Some(target) = &repo.diff_state.diff_target {
                     inputs.head(repos, repo, target, false);
                     if util::selected_conflict_target(repo, target).is_none() {

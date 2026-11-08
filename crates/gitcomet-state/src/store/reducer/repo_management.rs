@@ -1512,7 +1512,7 @@ pub(super) fn repo_opened_ok(
     let resuming = state
         .repos
         .iter()
-        .any(|repo| repo.id == repo_id && repo.backend_parked && repo.repository_mode.is_some());
+        .any(|repo| repo.id == repo_id && repo.resumes_parked_backend());
     if resuming {
         super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }

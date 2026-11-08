@@ -350,6 +350,11 @@ impl RepoState {
         self.backend_parked
     }
 
+    /// An open that reattaches a parked tab, as opposed to its first open.
+    pub(crate) fn resumes_parked_backend(&self) -> bool {
+        self.backend_parked && self.repository_mode.is_some()
+    }
+
     pub(crate) fn last_used_at(&self) -> Option<SystemTime> {
         self.last_active_at.max(self.last_background_use_at)
     }
