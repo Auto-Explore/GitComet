@@ -1222,3 +1222,50 @@ fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
     assert!(history.range_files_in_flight);
     assert!(history.range_files.is_loading());
 }
+
+#[test]
+fn a_parked_tab_whose_repository_is_gone_stays_open_with_its_error() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let id = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/gone-repo");
+    state.repos[0].repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    open_repo_ready(&mut repos, &ids, &mut state, "/tmp/gone-repo-active");
+    park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: id },
+    );
+    let failure = || {
+        Msg::Internal(InternalMsg::RepoOpenedErr {
+            repo_id: id,
+            spec: RepoSpec {
+                workdir: "/tmp/gone-repo".into(),
+            },
+            error: Error::new(ErrorKind::NotARepository),
+        })
+    };
+    reduce(&mut repos, &ids, &mut state, failure());
+    let repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == id)
+        .expect("the tab stays open");
+    assert!(matches!(repo.open, Loadable::Error(_)));
+    assert_eq!(state.active_repo, Some(id));
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: id },
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == id)),
+        "activation retries the open"
+    );
+}

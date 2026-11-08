@@ -1824,7 +1824,7 @@ pub(super) fn repo_opened_err(
     {
         return effects;
     }
-    let Some((provisional_external_drop, previous_active_repo)) = state
+    let Some((provisional_external_drop, previous_active_repo, resuming)) = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
@@ -1832,6 +1832,7 @@ pub(super) fn repo_opened_err(
             (
                 repo.is_provisional_external_drop_open(),
                 repo.external_drop_previous_active_repo(),
+                repo.resumes_parked_backend(),
             )
         })
     else {
@@ -1851,7 +1852,8 @@ pub(super) fn repo_opened_err(
     state.repo_open_failure_revision += 1;
     Arc::make_mut(&mut state.repo_open_failures)
         .insert(spec.workdir.clone(), state.repo_open_failure_revision);
-    let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository);
+    // A tab that was open keeps its place and navigation; activation retries.
+    let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository) && !resuming;
     if not_a_repository || (provisional_external_drop && !error.is_file_descriptor_exhaustion()) {
         let message = if not_a_repository {
             format!(
