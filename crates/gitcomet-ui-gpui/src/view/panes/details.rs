@@ -567,9 +567,6 @@ impl DetailsPaneView {
         });
         let review_search_subscription =
             cx.observe_in(&review_search_input, window, |this, input, window, cx| {
-                let Some((repo, list)) = this.review_search_list else {
-                    return;
-                };
                 let (escape, enter, down) = input.update(cx, |input, _| {
                     (
                         input.take_escape_pressed(),
@@ -577,6 +574,9 @@ impl DetailsPaneView {
                         input.take_arrow_down_pressed(),
                     )
                 });
+                let Some((repo, list)) = this.review_search_list else {
+                    return;
+                };
                 if escape {
                     this.reset_review_search(cx);
                     window.focus(this.review_file_focus(list), cx);
@@ -584,7 +584,7 @@ impl DetailsPaneView {
                     return;
                 }
                 if enter || down {
-                    this.focus_review_files(window, cx);
+                    this.focus_review_files(Some(list), window, cx);
                     return;
                 }
                 let query: SharedString = input.read(cx).text().trim().to_owned().into();
@@ -632,8 +632,8 @@ impl DetailsPaneView {
             worktree_filter_bounds_ref: Default::default(),
             range_filter_bounds_ref: Default::default(),
             status_section_resize: None,
-            status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
-            review_file_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            review_file_focus_handles: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             review_cursor: None,
             review_search_input,
             review_search_list: None,
@@ -1964,11 +1964,7 @@ impl DetailsPaneView {
             ordered
                 .iter()
                 .copied()
-                .filter(|&ix| {
-                    crate::view::path_display::path_display_string(&entries[ix].path)
-                        .to_lowercase()
-                        .contains(&query)
-                })
+                .filter(|&ix| crate::view::rows::path_matches_query(&entries[ix].path, &query))
                 .collect()
         };
         cache[slot] = Some((key, Arc::clone(&ordered)));
@@ -2601,6 +2597,17 @@ impl DetailsPaneView {
             .map(|repo| repo.history_state.selected_commit_rev);
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
+        let review_target = |repo: &RepoState| {
+            repo.diff_state
+                .inline_submodule_diff
+                .as_ref()
+                .map(|inline| &inline.target)
+                .or(repo.diff_state.diff_target.as_ref())
+                .cloned()
+        };
+        if self.active_repo().and_then(review_target) != next_repo.and_then(review_target) {
+            self.review_cursor = None;
+        }
         if previous_selection_rev != next_repo.map(|repo| repo.history_state.selected_commit_rev) {
             // Selecting the same commit again also reopens its details.
             self.review_details_dismissed = false;
@@ -2980,25 +2987,6 @@ impl DetailsPaneView {
         &self.status_section_focus_handles[Self::status_section_alignment_key(section) as usize]
     }
 
-    /// Step the open diff through its file list without moving focus.
-    pub(in crate::view) fn defer_status_file_step(
-        &self,
-        repo_id: RepoId,
-        step: DiffFileStep,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let diff_renderer = self.diff_renderer.clone();
-        let window_handle = window.window_handle();
-        cx.defer(move |cx| {
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = diff_renderer.update(cx, |pane, cx| {
-                    pane.try_step_diff_file(repo_id, step, window, cx)
-                });
-            });
-        });
-    }
-
     /// The shared action reads and clears our selection, so release the details
     /// pane before calling it. Keep section focus for the next Space or Ctrl+A.
     pub(in crate::view) fn defer_status_stage_and_advance(
@@ -3054,7 +3042,7 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         self.review_file_container(crate::view::rows::FileListId::Status(section), cx)
-            .key_context("StatusSection")
+            .key_context("ChangedFiles StatusSection")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {

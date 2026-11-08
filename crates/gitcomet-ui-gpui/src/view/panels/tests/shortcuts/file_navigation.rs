@@ -320,7 +320,7 @@ fn commit_details_file_list_keys_preview_without_moving_focus(cx: &mut gpui::Tes
     cx.update(|window, app| {
         view.read(app).details_pane.clone().update(app, |pane, cx| {
             pane.file_list_layout = FileListLayout::Flat;
-            pane.focus_review_files(window, cx);
+            pane.focus_review_files(None, window, cx);
         });
     });
     draw_and_drain_test_window(cx);

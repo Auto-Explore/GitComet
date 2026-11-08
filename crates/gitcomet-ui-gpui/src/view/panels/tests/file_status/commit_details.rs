@@ -1336,13 +1336,10 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
         "precondition: the input is focused"
     );
 
-    // The branch sidebar: a real surface that takes no focus of its own, so
-    // without an explicit blur the input stays focused behind the user's back.
-    let size = cx.update(|window, _app| window.viewport_size());
-    let sidebar = gpui::point(size.width * 0.05, size.height * 0.5);
-    cx.simulate_mouse_move(sidebar, None, gpui::Modifiers::default());
+    let heading = cx.debug_bounds("commit_details_heading").unwrap().center();
+    cx.simulate_mouse_move(heading, None, gpui::Modifiers::default());
     cx.simulate_event(gpui::MouseDownEvent {
-        position: sidebar,
+        position: heading,
         modifiers: gpui::Modifiers::default(),
         button: gpui::MouseButton::Left,
         click_count: 1,

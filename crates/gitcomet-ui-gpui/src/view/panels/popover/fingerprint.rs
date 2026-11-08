@@ -214,6 +214,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::UiScalePicker
         | PopoverKind::Hosted { .. }
         | PopoverKind::ErrorDetails { .. }
+        | PopoverKind::KeyboardShortcuts
         | PopoverKind::FilesystemConflict(_)
         | PopoverKind::DeletePermanentlyConfirm(_)
         | PopoverKind::FilesystemUnsavedEditsConfirm(_) => None,
@@ -636,6 +637,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::ErrorDetails { .. }
+        | PopoverKind::KeyboardShortcuts
         | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
         PopoverKind::Repo {
@@ -1222,6 +1224,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ErrorDetails { toast_id } => {
             toast_id.hash(hasher);
         }
+        PopoverKind::KeyboardShortcuts => {}
     }
 }
 

@@ -360,16 +360,19 @@ impl FileListController {
         {
             return Arc::clone(shown);
         }
-        let projection =
-            self.projection_cache
-                .projection_for(&key, &self.files, self.sort, self.kind_filter);
-        let query = self.query.to_lowercase();
+        let projection = self.projection_cache.projection_for_query(
+            &key,
+            &self.files,
+            self.sort,
+            self.kind_filter,
+            self.query.as_ref(),
+        );
         // Hashed once per rebuild: path comparisons in a tree set are slow.
         let visible: Option<rustc_hash::FxHashSet<&Path>> = self
             .visible
             .as_ref()
             .map(|visible| visible.paths.iter().map(PathBuf::as_path).collect());
-        let shown: Arc<[usize]> = if query.is_empty() && visible.is_none() {
+        let shown: Arc<[usize]> = if visible.is_none() {
             Arc::clone(&projection.source_indices)
         } else {
             projection
@@ -381,8 +384,6 @@ impl FileListController {
                     visible
                         .as_ref()
                         .is_none_or(|visible| visible.contains(path.as_path()))
-                        && (query.is_empty()
-                            || path.to_string_lossy().to_lowercase().contains(&query))
                 })
                 .collect()
         };

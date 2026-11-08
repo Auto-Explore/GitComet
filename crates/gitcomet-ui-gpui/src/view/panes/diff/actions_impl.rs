@@ -479,6 +479,7 @@ impl DiffRenderer {
         }
         if self.diff_search_has_query() {
             self.diff_autoscroll_pending = false;
+            self.review_file_jump = None;
             return;
         }
         let visible_len = if self.is_rendered_markdown_diff_active() {

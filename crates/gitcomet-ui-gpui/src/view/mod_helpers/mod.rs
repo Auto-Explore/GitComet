@@ -963,6 +963,9 @@ pub struct GitCometView {
     pub(super) _window_bounds_subscription: gpui::Subscription,
     pub(super) _appearance_subscription: gpui::Subscription,
     pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
+    /// Whether the key being dispatched typed a character; see
+    /// [`super::command_shortcuts::types_character`].
+    pub(super) keystroke_types_character: bool,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) _toast_errors_subscription: gpui::Subscription,

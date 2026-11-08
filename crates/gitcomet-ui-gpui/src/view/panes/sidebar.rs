@@ -648,7 +648,7 @@ impl SidebarPaneView {
             store,
             state,
             theme,
-            sidebar_focus: cx.focus_handle(),
+            sidebar_focus: cx.focus_handle().tab_stop(true),
             _ui_model_subscription: subscription,
             documents,
             _documents_subscription: documents_subscription,
@@ -1477,6 +1477,7 @@ impl SidebarPaneView {
             .flex_col()
             .size_full()
             .min_h(px(0.0))
+            .track_focus(&self.sidebar_focus)
             .on_key_down(cx.listener(Self::on_sidebar_key_down))
             .child(tab_bar)
             .child(content)

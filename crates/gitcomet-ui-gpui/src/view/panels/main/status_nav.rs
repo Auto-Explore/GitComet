@@ -1,5 +1,4 @@
 use super::*;
-use crate::view::rows::FileListId;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -864,70 +863,6 @@ impl DiffRenderer {
             cx,
         )
     }
-
-    /// The list the open diff came from, to size a page step.
-    fn open_diff_file_list(&self, cx: &mut gpui::Context<Self>) -> Option<FileListId> {
-        if let Some(inline) = self.active_inline_submodule_diff() {
-            return matches!(
-                inline.origin,
-                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
-            )
-            .then_some(FileListId::WorktreeFiles);
-        }
-        let repo = self.active_repo()?;
-        Some(match self.bound_diff_state(repo).diff_target.as_ref()? {
-            DiffTarget::Commit { .. } => FileListId::CommitFiles,
-            DiffTarget::CommitRange { .. } => FileListId::RangeFiles,
-            DiffTarget::WorkingTree { path, area, .. } => {
-                let view = self.active_change_tracking_view(cx);
-                FileListId::Status(status_navigation_section(
-                    repo,
-                    path.as_path(),
-                    *area,
-                    view,
-                )?)
-            }
-        })
-    }
-
-    /// Steps the open diff through its file list without moving focus. Does
-    /// nothing in the conflict resolver, so a stray key cannot leave a
-    /// half-resolved file.
-    pub(in crate::view) fn try_step_diff_file(
-        &mut self,
-        repo_id: RepoId,
-        step: DiffFileStep,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.is_conflict_resolver_active() {
-            return false;
-        }
-        let delta = match step {
-            DiffFileStep::Prev => -1,
-            DiffFileStep::Next => 1,
-            _ if self.hosted_decor.is_some() => return false,
-            DiffFileStep::First => isize::MIN,
-            DiffFileStep::Last => isize::MAX,
-            DiffFileStep::PageUp | DiffFileStep::PageDown => {
-                let page = self
-                    .open_diff_file_list(cx)
-                    .and_then(|list| {
-                        self.commands
-                            .navigation
-                            .as_ref()?
-                            .page_rows(repo_id, list, cx)
-                    })
-                    .unwrap_or(1) as isize;
-                if step == DiffFileStep::PageUp {
-                    -page
-                } else {
-                    page
-                }
-            }
-        };
-        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, false, window, cx)
-    }
 }
 
 #[cfg(test)]
@@ -951,20 +886,6 @@ mod tests {
             kind,
             conflict: None,
         }
-    }
-
-    #[test]
-    fn diff_file_step_maps_only_plain_navigation_keys() {
-        let step = |s: &str| DiffFileStep::from_keystroke(&gpui::Keystroke::parse(s).unwrap());
-        assert_eq!(step("up"), Some(DiffFileStep::Prev));
-        assert_eq!(step("down"), Some(DiffFileStep::Next));
-        assert_eq!(step("pageup"), Some(DiffFileStep::PageUp));
-        assert_eq!(step("pagedown"), Some(DiffFileStep::PageDown));
-        assert_eq!(step("home"), Some(DiffFileStep::First));
-        assert_eq!(step("end"), Some(DiffFileStep::Last));
-        assert_eq!(step("alt-up"), None);
-        assert_eq!(step("shift-down"), None);
-        assert_eq!(step("a"), None);
     }
 
     #[test]

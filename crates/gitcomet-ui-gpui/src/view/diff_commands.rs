@@ -286,17 +286,4 @@ impl DiffNavigation for WindowNavigation {
             .ok()
             .flatten()
     }
-    fn page_rows(
-        &self,
-        repo: RepoId,
-        list: crate::view::rows::FileListId,
-        cx: &App,
-    ) -> Option<usize> {
-        self.0
-            .read_with(cx, |root, cx| {
-                root.details_pane.read(cx).file_list_page_rows(repo, list)
-            })
-            .ok()
-            .flatten()
-    }
 }

@@ -64,6 +64,7 @@ impl PopoverHost {
             PopoverKind::ErrorDetails { toast_id } => {
                 error_details::panel(self, toast_id, window, cx)
             }
+            PopoverKind::KeyboardShortcuts => keyboard_shortcuts::panel(self, window, cx),
             PopoverKind::RepoPicker { .. } => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::UpstreamPicker { repo_id, branch } => {

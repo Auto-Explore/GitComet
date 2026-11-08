@@ -1,6 +1,9 @@
 use super::*;
 use crate::view::rows::FileListId;
 
+#[path = "review_regressions.rs"]
+mod regressions;
+
 fn review_repo() -> RepoState {
     let id = CommitId("abcdef0123456789".into());
     let mut repo = shortcut_fixture_repo(
@@ -90,6 +93,421 @@ fn open_file(cx: &mut gpui::VisualTestContext, view: &Entity<GitCometView>, path
     cx.simulate_keystrokes("enter");
     draw_and_drain_test_window(cx);
     assert!(diff_panel_is_focused(cx, view));
+}
+
+fn close_commit_details(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+    area: Option<DiffArea>,
+) {
+    prepare(cx, view);
+    let mut repo = review_repo();
+    let file = gitcomet_core::domain::FileStatus {
+        path: "working.rs".into(),
+        kind: FileStatusKind::Modified,
+        conflict: None,
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(if area == Some(DiffArea::Staged) {
+                vec![file.clone()]
+            } else {
+                vec![]
+            }),
+            unstaged: Arc::new(if area == Some(DiffArea::Unstaged) {
+                vec![file]
+            } else {
+                vec![]
+            }),
+        }
+        .into(),
+    );
+    apply_state(cx, view, app_state_with_active_repo(repo));
+    cx.simulate_keystrokes("f6");
+    draw_and_drain_test_window(cx);
+    assert!(files_focused(cx, view));
+    let close = cx.debug_bounds("commit_details_close_icon").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    wait_until(cx, "commit details closed", |cx| {
+        sync_store_snapshot(cx, view);
+        cx.update(|_, app| {
+            view.read(app).state.repos[0]
+                .history_state
+                .selected_commit
+                .is_none()
+        })
+    });
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+fn review_close_commit_details_focuses_graph_when_status_is_empty(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    close_commit_details(cx, &view, None);
+    assert!(graph_focused(cx, &view));
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("history_find").is_some());
+}
+
+#[gpui::test]
+fn review_close_commit_details_preserves_and_focuses_open_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    open_file(cx, &view, "a.rs");
+    diff_content(cx, &view, false, false);
+    let target = cx.update(|_, app| {
+        view.read(app).store.snapshot().repos[0]
+            .diff_state
+            .diff_target
+            .clone()
+    });
+    let close = cx.debug_bounds("commit_details_close_icon").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    wait_until(cx, "commit details closed over diff", |cx| {
+        sync_store_snapshot(cx, &view);
+        cx.update(|_, app| {
+            view.read(app).state.repos[0]
+                .history_state
+                .selected_commit
+                .is_none()
+        })
+    });
+    assert!(diff_panel_is_focused(cx, &view));
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target,
+            target
+        )
+    });
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(diff_search_input_is_focused(cx, &view));
+}
+
+fn assert_close_focuses_status(
+    cx: &mut gpui::TestAppContext,
+    area: DiffArea,
+    section: StatusSection,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    close_commit_details(cx, &view, Some(area));
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::Status(section))
+            .is_focused(window)
+    }));
+    cx.simulate_keystrokes("down");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("working.rs"));
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target,
+            Some(DiffTarget::working_tree("working.rs".into(), area))
+        )
+    });
+}
+
+#[gpui::test]
+fn review_close_commit_details_focuses_unstaged_rows(cx: &mut gpui::TestAppContext) {
+    assert_close_focuses_status(cx, DiffArea::Unstaged, StatusSection::CombinedUnstaged);
+}
+
+#[gpui::test]
+fn review_close_commit_details_focuses_staged_rows(cx: &mut gpui::TestAppContext) {
+    assert_close_focuses_status(cx, DiffArea::Staged, StatusSection::Staged);
+}
+
+fn working_copy_repo(staged: &[&str], unstaged: &[&str]) -> RepoState {
+    let mut repo = review_repo();
+    repo.history_state.selected_commit = None;
+    let files = |paths: &[&str]| {
+        Arc::new(
+            paths
+                .iter()
+                .map(|path| gitcomet_core::domain::FileStatus {
+                    path: (*path).into(),
+                    kind: FileStatusKind::Modified,
+                    conflict: None,
+                })
+                .collect(),
+        )
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: files(staged),
+            unstaged: files(unstaged),
+        }
+        .into(),
+    );
+    repo
+}
+
+fn focus_status(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+    section: StatusSection,
+) {
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::Status(section))
+            .clone();
+        window.focus(&focus, app);
+    });
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+fn review_return_to_files_preserves_staged_area(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    let mut repo = working_copy_repo(&["both.rs"], &["both.rs"]);
+    let target = DiffTarget::working_tree("both.rs".into(), DiffArea::Staged);
+    repo.diff_state.diff_target = Some(target.clone());
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        view.update(app, |root, cx| {
+            root.navigate_review(
+                crate::view::review_navigation::ReviewNavigation::Files { from_graph: false },
+                window,
+                cx,
+            )
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::Status(StatusSection::Staged))
+            .is_focused(window)
+    }));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target,
+            Some(target)
+        )
+    });
+}
+
+#[gpui::test]
+fn review_mouse_selection_replaces_previous_keyboard_cursor(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    let mut repo = working_copy_repo(&[], &["a.rs", "b.rs", "c.rs"]);
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_status(cx, &view, StatusSection::CombinedUnstaged);
+    cx.simulate_keystrokes("down");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    let row = cx.debug_bounds("status_row_9071_unstaged_2").unwrap();
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("c.rs"));
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("up");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+}
+
+#[gpui::test]
+fn review_clicking_previewed_file_clears_directory_cursor(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(working_copy_repo(&[], &["src/a.rs", "src/b.rs"])),
+    );
+    cx.update(|_, app| {
+        view.read(app).details_pane.clone().update(app, |pane, cx| {
+            pane.file_list_layout = FileListLayout::Tree;
+            cx.notify();
+        });
+    });
+    focus_status(cx, &view, StatusSection::CombinedUnstaged);
+    cx.simulate_keystrokes("down down");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("src/a.rs"));
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("left");
+    draw_and_drain_test_window(cx);
+    let row = cx.debug_bounds("status_row_9071_unstaged_1").unwrap();
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+    draw_and_drain_test_window(cx);
+    assert!(diff_panel_is_focused(cx, &view));
+    assert_eq!(
+        selected_path(cx, &view).as_deref(),
+        Some(std::path::Path::new("src/a.rs"))
+    );
+}
+
+#[gpui::test]
+fn review_staged_search_returns_focus_to_staged_results(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    let mut repo = working_copy_repo(&["a.rs", "b.rs"], &["unstaged.rs"]);
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree("a.rs".into(), DiffArea::Staged));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_status(cx, &view, StatusSection::Staged);
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    cx.simulate_input("b.rs");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::Status(StatusSection::Staged))
+            .is_focused(window)
+    }));
+}
+
+#[gpui::test]
+fn review_worktree_files_can_be_focused_from_root_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    let mut repo = working_copy_repo(&[], &[]);
+    let linked = tempfile::tempdir().unwrap();
+    repo.history_state.worktree_selection = Some(linked.path().to_owned());
+    repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
+        gitcomet_core::domain::WorktreeDirtySummary {
+            path: linked.path().to_owned(),
+            head: None,
+            branch: Some("linked".into()),
+            detached: false,
+            added: 0,
+            modified: 1,
+            deleted: 0,
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: "a.rs".into(),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            }],
+            line_stats: Default::default(),
+        },
+    ]));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        view.update(app, |root, cx| {
+            root.navigate_review(
+                crate::view::review_navigation::ReviewNavigation::Files { from_graph: true },
+                window,
+                cx,
+            )
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::WorktreeFiles)
+            .is_focused(window)
+    }));
+}
+
+#[gpui::test]
+fn review_search_does_not_leave_file_jump_pending(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    open_file(cx, &view, "a.rs");
+    diff_content(cx, &view, false, false);
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    cx.simulate_input("new");
+    draw_and_drain_test_window(cx);
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+    });
+    cx.simulate_keystrokes("alt-down");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    diff_content(cx, &view, false, false);
+    cx.simulate_keystrokes("escape alt-down");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("c.png"));
+}
+
+#[gpui::test]
+fn review_cycle_focuses_the_mounted_document_canvas(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    cx.update(|window, app| {
+        view.update(app, |root, cx| {
+            root.set_sidebar_collapsed(false, cx);
+            root.documents_active = true;
+            cx.notify();
+        });
+        let focus = view.read(app).sidebar_pane.read(app).sidebar_focus.clone();
+        window.focus(&focus, app);
+    });
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("documents_canvas").is_some());
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .sidebar_focus
+            .is_focused(window)
+    }));
+    cx.simulate_keystrokes("f6");
+    draw_and_drain_test_window(cx);
+    let focus_state = cx.update(|window, app| {
+        let root = view.read(app);
+        (
+            root.repository_view_focus.is_focused(window),
+            root.documents_active,
+            root.sidebar_pane.read(app).sidebar_focus.is_focused(window),
+            root.background_hovers_blocked(app),
+            root.details_pane
+                .read(app)
+                .visible_review_focus_handles()
+                .iter()
+                .any(|handle| handle.is_focused(window)),
+        )
+    });
+    assert!(focus_state.0, "document focus state: {focus_state:?}");
+    assert!(!graph_focused(cx, &view));
 }
 
 fn diff_content(

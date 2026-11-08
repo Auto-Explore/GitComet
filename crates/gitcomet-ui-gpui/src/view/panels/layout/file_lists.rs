@@ -390,12 +390,7 @@ impl DetailsPaneView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(files)
-                    .child(crate::view::review_navigation::hint(
-                        self.theme,
-                        self.ui_scale(),
-                        "↑↓ Files · Enter Diff · Esc Graph",
-                    )),
+                    .child(files),
             )
             .into_any_element()
     }

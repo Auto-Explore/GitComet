@@ -89,6 +89,7 @@ impl DetailsPaneView {
                     .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
+                    .debug_selector(|| "commit_details_heading".to_string())
                     .child(header_title),
             )
             .child(
@@ -102,16 +103,8 @@ impl DetailsPaneView {
                         .debug_selector(|| "commit_details_close_icon".to_string()),
                     )
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        // The commit details and diff views are independent
-                        // panels; closing details must not close the diff.
-                        if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection {
-                                request_id: None,
-                                repo_id,
-                            });
-                        }
-                        cx.notify();
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.close_review_details(window, cx);
                     })
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );

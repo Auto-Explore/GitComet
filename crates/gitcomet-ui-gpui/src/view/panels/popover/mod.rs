@@ -39,6 +39,7 @@ mod force_push_confirm;
 mod force_remove_worktree_confirm;
 mod hook_activity;
 mod interactive_cherry_pick_confirm;
+mod keyboard_shortcuts;
 mod menu_layer;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
@@ -249,6 +250,7 @@ pub(in super::super) struct PopoverHost {
     error_details_text: error_details::TextState,
     error_details_scroll: ScrollHandle,
     error_details_rail_scroll: ScrollHandle,
+    keyboard_shortcuts: keyboard_shortcuts::State,
     /// Explicit 1-based mainline selected in the open merge-commit
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
@@ -693,6 +695,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
                 ..
             }
             | PopoverKind::ErrorDetails { .. }
+            | PopoverKind::KeyboardShortcuts
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::InteractiveCherryPickConfirm { .. }
@@ -1105,6 +1108,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::HookActivity { .. } | PopoverKind::ErrorDetails { .. } => {
             Some(DIALOG_900_WIDTH)
         }
+        PopoverKind::KeyboardShortcuts => Some(keyboard_shortcuts::WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),

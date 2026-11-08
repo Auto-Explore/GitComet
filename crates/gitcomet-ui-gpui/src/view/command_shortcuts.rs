@@ -35,6 +35,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
         "secondary-shift-b",
         super::commands::Command::ToggleDetails.id(),
     ));
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys(bindings(
+        "ctrl-shift-j",
+        super::commands::Command::ToggleTerminal.id(),
+    ));
     for keys in ["secondary-?", "secondary-shift-/", "secondary-shift-?"] {
         cx.bind_keys(bindings(
             keys,
@@ -46,6 +51,14 @@ pub(crate) fn bind_keys(cx: &mut App) {
 fn bindings(keys: &str, id: &str) -> [KeyBinding; 2] {
     let action = RunBuiltinCommand { id: id.to_owned() };
     let unbind = Unbind(action.name().into());
+    let terminal_action = matches!(
+        super::commands::Command::from_id(id),
+        Some(
+            super::commands::Command::ToggleTerminal | super::commands::Command::KeyboardShortcuts
+        )
+    ) && (cfg!(target_os = "macos")
+        || keys.contains("shift")
+        || keys.contains('?'));
     [
         // A negated context predicate does not match an empty context stack.
         // Bind globally, then disable just this action in protected contexts.
@@ -55,36 +68,46 @@ fn bindings(keys: &str, id: &str) -> [KeyBinding; 2] {
         KeyBinding::new(
             keys,
             unbind,
-            Some(
-                if matches!(
-                    super::commands::Command::from_id(id),
-                    Some(
-                        super::commands::Command::ToggleTerminal
-                            | super::commands::Command::KeyboardShortcuts
-                    )
-                ) {
-                    "!(!ContextMenu && !PopoverPrompt)"
-                } else {
-                    "!(!Terminal && !ContextMenu && !PopoverPrompt)"
-                },
-            ),
+            Some(if terminal_action {
+                "!(!ContextMenu && !PopoverPrompt)"
+            } else {
+                "!(!Terminal && !ContextMenu && !PopoverPrompt)"
+            }),
         ),
     ]
 }
 
 pub(crate) fn is_terminal_toggle(keystroke: &gpui::Keystroke) -> bool {
+    let shifted = !cfg!(target_os = "macos");
     keystroke.key == "j"
         && keystroke.modifiers.secondary()
-        && keystroke.modifiers.number_of_modifiers() == 1
+        && keystroke.modifiers.shift == shifted
+        && keystroke.modifiers.number_of_modifiers() == if shifted { 2 } else { 1 }
 }
 
+/// Off macOS a focused terminal keeps plain Ctrl+/; Windows and Linux report
+/// Ctrl+Shift+/ as `ctrl-?`, dropping the Shift.
 pub(crate) fn is_shortcut_help(keystroke: &gpui::Keystroke) -> bool {
     let mods = keystroke.modifiers;
     mods.secondary()
+        && (cfg!(target_os = "macos") || mods.shift || keystroke.key == "?")
         && !mods.alt
         && !mods.function
         && mods.number_of_modifiers() == if mods.shift { 2 } else { 1 }
         && matches!(keystroke.key.as_str(), "?" | "/")
+}
+
+/// Windows reports AltGr as Ctrl+Alt, so a chord that typed a character
+/// (AltGr+S is "ś" on a Polish layout) is text, not a shortcut.
+pub(crate) fn types_character(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    mods.control
+        && mods.alt
+        && !mods.platform
+        && keystroke
+            .key_char
+            .as_ref()
+            .is_some_and(|ch| *ch != keystroke.key)
 }
 
 impl GitCometView {
@@ -98,10 +121,10 @@ impl GitCometView {
             self.toggle_shortcut_help(window, cx);
             return;
         }
+        // Text inputs already take such characters; elsewhere they type nothing.
         if self.view_mode != GitCometViewMode::Normal
-            || self.is_overlay_open(cx)
-            || self.command_palette_open
-            || self.reveal_commit_open
+            || self.background_hovers_blocked(cx)
+            || self.keystroke_types_character
         {
             return;
         }

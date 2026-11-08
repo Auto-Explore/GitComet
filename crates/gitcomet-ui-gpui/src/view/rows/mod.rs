@@ -526,7 +526,14 @@ fn build_commit_file_projection(
     }
 }
 
+pub(in crate::view) fn path_matches_query(path: &std::path::Path, query_lower: &str) -> bool {
+    super::path_display::path_display_string(path)
+        .to_lowercase()
+        .contains(query_lower)
+}
+
 impl<K: Eq + Clone> CommitFileProjectionCache<K> {
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn projection_for(
         &mut self,
         key: &K,
@@ -559,11 +566,7 @@ impl<K: Eq + Clone> CommitFileProjectionCache<K> {
                 .source_indices
                 .iter()
                 .copied()
-                .filter(|&ix| {
-                    super::path_display::path_display_string(&files[ix].path)
-                        .to_lowercase()
-                        .contains(&query)
-                })
+                .filter(|&ix| path_matches_query(&files[ix].path, &query))
                 .collect();
         }
         let projection = Arc::new(projection);

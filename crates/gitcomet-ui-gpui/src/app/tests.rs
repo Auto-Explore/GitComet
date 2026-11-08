@@ -1984,13 +1984,16 @@ fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui
         ("secondary-alt-u", "unstage-all"),
         ("secondary-alt-n", "create-branch"),
         ("secondary-alt-c", "checkout-branch"),
-        ("secondary-alt-down", "pull"),
-        ("secondary-alt-up", "push"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-down", "pull"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-up", "push"),
         ("secondary-shift-s", "stash"),
         ("secondary-r", "reload-repository"),
         ("f5", "reload-repository"),
         ("secondary-shift-f", "fetch-all"),
-        ("secondary-alt-t", "open-external-terminal"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-t", "open-external-terminal"),
         ("secondary-b", "toggle-sidebar"),
         ("secondary-alt-b", "toggle-details"),
         ("secondary-shift-b", "toggle-details"),
@@ -2026,6 +2029,15 @@ fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui
             *observed.lock().unwrap(),
             vec![crate::view::ToggleCommandPalette.name().to_owned()]
         );
+        #[cfg(not(target_os = "macos"))]
+        {
+            observed.lock().unwrap().clear();
+            cx.simulate_keystrokes("ctrl-alt-up ctrl-alt-down ctrl-alt-t ctrl-alt-shift-up ctrl-alt-shift-down ctrl-alt-shift-l ctrl-alt-shift-p ctrl-alt-shift-t");
+            assert!(
+                observed.lock().unwrap().is_empty(),
+                "reserved keys in {context:?}"
+            );
+        }
     }
 }
 
@@ -2045,7 +2057,7 @@ fn repository_command_shortcuts_leave_terminal_and_nested_prompt_inputs_alone(
             let _ = window.draw(app);
         });
         cx.simulate_keystrokes(
-            "secondary-r f5 secondary-b secondary-alt-b secondary-shift-b secondary-alt-n secondary-alt-c secondary-alt-enter secondary-alt-s secondary-alt-up",
+            "secondary-r f5 secondary-b secondary-alt-b secondary-shift-b secondary-alt-n secondary-alt-c secondary-alt-enter secondary-alt-s secondary-alt-up secondary-alt-shift-p",
         );
         assert_eq!(
             *observed.lock().unwrap(),

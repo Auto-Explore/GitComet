@@ -1,11 +1,10 @@
 use super::*;
 use crate::view::review_navigation::{self, ReviewNavigation};
 use crate::view::rows::{FileListId, FileListPlan, FileListRow, RowIx};
-use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ReviewRow {
-    File(PathBuf),
+    File(DiffTarget),
     Directory(Arc<std::path::Path>),
     Group(usize),
 }
@@ -54,8 +53,31 @@ impl DetailsPaneView {
     pub(in crate::view) fn visible_review_focus_handles(&self) -> Vec<FocusHandle> {
         self.visible_review_lists()
             .into_iter()
+            .filter(|&list| {
+                self.review_list(list)
+                    .is_some_and(|data| data.plan.row_len() > 0)
+            })
             .map(|list| self.review_file_focus(list).clone())
             .collect()
+    }
+
+    pub(in crate::view) fn close_review_details(
+        &mut self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(repo_id) = self.active_repo_id() {
+            self.store.dispatch(Msg::ClearCommitSelection {
+                request_id: None,
+                repo_id,
+            });
+        }
+        review_navigation::defer(
+            self.root_view.clone(),
+            ReviewNavigation::WorkingCopy,
+            window,
+            cx,
+        );
     }
 
     fn review_list(&self, list: FileListId) -> Option<ReviewList> {
@@ -146,7 +168,7 @@ impl DetailsPaneView {
     fn review_row_key(&self, list: FileListId, data: &ReviewList, row: usize) -> Option<ReviewRow> {
         Some(match data.plan.row_at(RowIx(row))? {
             FileListRow::File { ordinal, .. } => {
-                ReviewRow::File(self.review_target(list, ordinal.0)?.file_path()?.to_owned())
+                ReviewRow::File(self.review_target(list, ordinal.0)?)
             }
             FileListRow::Directory { key, .. } => ReviewRow::Directory(key),
             FileListRow::Group { group, .. } => ReviewRow::Group(group),
@@ -177,8 +199,8 @@ impl DetailsPaneView {
                     .as_ref()
                     .map(|inline| &inline.target)
                     .or(repo.diff_state.diff_target.as_ref())
-                    .and_then(|target| target.file_path())
-                    .map(|path| ReviewRow::File(path.to_owned()))
+                    .cloned()
+                    .map(ReviewRow::File)
             })?;
         if let Some((id, current, _, row)) = &self.review_cursor
             && *id == repo.id
@@ -191,11 +213,31 @@ impl DetailsPaneView {
             .find(|&row| self.review_row_key(list, data, row).as_ref() == Some(&key))
     }
 
-    pub(in crate::view) fn focus_review_files(
+    pub(in crate::view) fn restore_review_file_focus(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) {
+    ) -> bool {
+        self.review_cursor = None;
+        for list in self.visible_review_lists() {
+            let Some(data) = self.review_list(list) else {
+                continue;
+            };
+            if let Some(row) = self.review_current_row(list, &data) {
+                window.focus(self.review_file_focus(list), cx);
+                self.select_review_row(list, &data, row, cx);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub(in crate::view) fn focus_review_files(
+        &mut self,
+        preferred: Option<FileListId>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         // File stepping in the diff can change the selection while this list
         // is unfocused. Return to that file, rather than an older list cursor.
         if let Some(repo) = self.active_repo()
@@ -204,22 +246,22 @@ impl DetailsPaneView {
             self.review_cursor = None;
         }
         let lists = self.visible_review_lists();
-        let list = lists
-            .iter()
-            .copied()
-            .find(|list| {
-                self.review_list(*list)
-                    .is_some_and(|data| self.review_current_row(*list, &data).is_some())
+        let list = preferred
+            .filter(|list| lists.contains(list))
+            .or_else(|| {
+                lists.iter().copied().find(|list| {
+                    self.review_list(*list)
+                        .is_some_and(|data| self.review_current_row(*list, &data).is_some())
+                })
             })
             .or_else(|| {
                 lists.iter().copied().find(|list| {
                     self.review_list(*list)
                         .is_some_and(|data| data.plan.row_len() > 0)
                 })
-            })
-            .or(lists.first().copied());
+            });
         let Some(list) = list else {
-            return;
+            return false;
         };
         window.focus(self.review_file_focus(list), cx);
         if let Some(data) = self.review_list(list) {
@@ -231,8 +273,9 @@ impl DetailsPaneView {
                     })
                 })
                 .unwrap_or(0);
-            self.select_review_row(list, &data, row, window, cx);
+            self.select_review_row(list, &data, row, cx);
         }
+        true
     }
 
     fn select_review_row(
@@ -240,7 +283,6 @@ impl DetailsPaneView {
         list: FileListId,
         data: &ReviewList,
         row: usize,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(repo_id) = self.active_repo_id() else {
@@ -260,8 +302,7 @@ impl DetailsPaneView {
                     .selected_worktree_summary()
                     .map(|summary| summary.path.clone())
                 {
-                    self.open_worktree_file_diff(repo_id, &path, &target, window, cx);
-                    window.focus(self.review_file_focus(list), cx);
+                    self.preview_worktree_file_diff(repo_id, &path, &target);
                 }
             } else {
                 let selected = self
@@ -298,6 +339,12 @@ impl DetailsPaneView {
         div()
             .key_context("ChangedFiles")
             .track_focus(self.review_file_focus(list))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.review_cursor = None;
+                }),
+            )
             .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
                 if this.open_review_search(window, cx) {
                     cx.stop_propagation();
@@ -333,7 +380,6 @@ impl DetailsPaneView {
             return true;
         }
         if let FileListId::Status(section) = list
-            && DiffFileStep::from_keystroke(key).is_none()
             && self.handle_status_section_shortcut(section, key, window, cx)
         {
             self.review_cursor = None;
@@ -369,12 +415,12 @@ impl DetailsPaneView {
             _ => None,
         };
         if let Some(next) = next {
-            self.select_review_row(list, &data, next, window, cx);
+            self.select_review_row(list, &data, next, cx);
             return true;
         }
         match (key.key.as_str(), data.plan.row_at(RowIx(row))) {
             ("enter", Some(FileListRow::File { .. })) => {
-                self.select_review_row(list, &data, row, window, cx);
+                self.select_review_row(list, &data, row, cx);
                 review_navigation::defer(
                     self.root_view.clone(),
                     ReviewNavigation::Diff,
@@ -394,9 +440,9 @@ impl DetailsPaneView {
                 if key.key == "enter" || (key.key == "right") == collapsed {
                     self.toggle_file_list_dir(repo_id, list, path, chain, collapsed, cx);
                 } else if key.key == "right" && row + 1 < len {
-                    self.select_review_row(list, &data, row + 1, window, cx);
+                    self.select_review_row(list, &data, row + 1, cx);
                 } else {
-                    self.review_parent_row(list, &data, row, window, cx);
+                    self.review_parent_row(list, &data, row, cx);
                 }
             }
             (
@@ -408,11 +454,11 @@ impl DetailsPaneView {
                 if key.key == "enter" || (key.key == "right") == collapsed {
                     self.toggle_file_list_group(repo_id, list, group, cx);
                 } else if key.key == "right" && row + 1 < len {
-                    self.select_review_row(list, &data, row + 1, window, cx);
+                    self.select_review_row(list, &data, row + 1, cx);
                 }
             }
             ("left", Some(FileListRow::File { .. })) => {
-                self.review_parent_row(list, &data, row, window, cx)
+                self.review_parent_row(list, &data, row, cx)
             }
             _ => return false,
         }
@@ -424,7 +470,6 @@ impl DetailsPaneView {
         list: FileListId,
         data: &ReviewList,
         row: usize,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let depth = match data.plan.row_at(RowIx(row)) {
@@ -439,7 +484,7 @@ impl DetailsPaneView {
                 _ => false,
             })
         {
-            self.select_review_row(list, data, parent, window, cx);
+            self.select_review_row(list, data, parent, cx);
         }
     }
 

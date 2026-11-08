@@ -263,19 +263,37 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !command_palette_available(self.view_mode) || self.is_overlay_open(cx) {
+        if self
+            .popover_host
+            .read(cx)
+            .is_kind_open(&PopoverKind::KeyboardShortcuts)
+        {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
             return;
         }
-        let was_help =
-            self.command_palette_open && self.command_palette.read(cx).is_shortcut_help();
+        if !command_palette_available(self.view_mode)
+            || self.is_overlay_open(cx)
+            || self.document_picker_open(cx)
+            || self.window_gated
+        {
+            return;
+        }
+        // Two scrim-backed modals never stack; closing first also hands back
+        // the focus the dialog returns to.
         if self.command_palette_open {
             self.close_command_palette(window, cx);
         }
-        if !was_help {
-            self.open_command_palette(window, cx);
-            self.command_palette
-                .update(cx, |palette, cx| palette.show_shortcut_help(cx));
+        if self.reveal_commit_open {
+            self.close_reveal_commit(window, cx);
         }
+        let request = PopoverRequest::from(PopoverKind::KeyboardShortcuts);
+        let request = match window.focused(cx) {
+            Some(focus) => request.returning_focus_to(focus),
+            None => request,
+        };
+        self.open_popover_centered(request, window, cx);
     }
 
     pub(super) fn open_reveal_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -1196,6 +1214,7 @@ impl GitCometView {
             _window_bounds_subscription: window_bounds_subscription,
             _appearance_subscription: appearance_subscription,
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
+            keystroke_types_character: false,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
             _home_subscription: home_subscription,

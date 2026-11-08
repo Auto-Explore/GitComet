@@ -401,6 +401,7 @@ impl DiffRenderer {
                 handled = true;
             }
             if !handled
+                && self.diff_panel_focus_handle.is_focused(window)
                 && self
                     .commands
                     .navigation
@@ -504,6 +505,15 @@ impl DiffRenderer {
         {
             let direction = if key == "f1" { -1 } else { 1 };
             handled = self.try_select_adjacent_diff_file(repo_id, direction, window, cx);
+        }
+
+        if !handled
+            && self.diff_panel_focus_handle.is_focused(window)
+            && mods.alt
+            && mods.number_of_modifiers() == 1
+            && matches!(key, "up" | "down")
+        {
+            handled = self.review_adjacent_file(if key == "up" { -1 } else { 1 }, window, cx);
         }
 
         if !handled
@@ -898,10 +908,6 @@ impl DiffRenderer {
                         self.commands
                             .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
                     }
-                }
-                "up" | "down" if !mods.shift && self.diff_panel_focus_handle.is_focused(window) => {
-                    handled =
-                        self.review_adjacent_file(if key == "up" { -1 } else { 1 }, window, cx);
                 }
                 _ => {}
             }

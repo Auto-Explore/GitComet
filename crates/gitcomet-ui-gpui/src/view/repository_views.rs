@@ -848,7 +848,11 @@ impl GitCometView {
     pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
         // A standalone document takes the main slot; the panes around it stay.
         if self.documents_active {
-            return stable_cached_fill_view(self.documents.clone());
+            return div()
+                .size_full()
+                .track_focus(&self.repository_view_focus)
+                .child(stable_cached_fill_view(self.documents.clone()))
+                .into_any_element();
         }
         let history = || stable_cached_fill_view(self.main_pane.clone());
         let active = self
@@ -893,14 +897,7 @@ impl GitCometView {
         // A view whose tabs replace Details shows one of them; the tab that
         // opens with it is selected when it opens.
         let own = self.panel_has_host_tabs(repo, PanelArea::Details);
-        let active = router.active_view(repo).or_else(|| {
-            (!own)
-                .then(|| {
-                    tabs.iter()
-                        .find_map(|(index, ..)| router.built(repo, *index))
-                })
-                .flatten()
-        });
+        let active = self.active_details_view();
         let strip = self.details_strip(tabs, selected, own, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
@@ -916,6 +913,23 @@ impl GitCometView {
                 .child(body)
                 .into_any_element(),
         )
+    }
+
+    pub(in crate::view) fn active_details_view(&self) -> Option<gpui::AnyView> {
+        let router = self.details_tabs.as_ref()?;
+        let repo = self.active_repo()?;
+        let tabs = router.listed_tabs(&self.active_view_target(repo));
+        if tabs.is_empty() {
+            return None;
+        }
+        router.active_view(repo).or_else(|| {
+            (!self.panel_has_host_tabs(repo, PanelArea::Details))
+                .then(|| {
+                    tabs.iter()
+                        .find_map(|(index, ..)| router.built(repo, *index))
+                })
+                .flatten()
+        })
     }
 
     /// Extension sections for the active repository below the sidebar's

@@ -441,14 +441,8 @@ impl DetailsPaneView {
                         ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection {
-                                request_id: None,
-                                repo_id,
-                            });
-                        }
-                        cx.notify();
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.close_review_details(window, cx);
                     })
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
@@ -769,14 +763,7 @@ impl DetailsPaneView {
                                 .flex_col()
                                 .flex_1()
                                 .min_h(px(0.0))
-                                .child(files_body)
-                                .child(
-                                    crate::view::review_navigation::hint(
-                                        self.theme,
-                                        self.ui_scale(),
-                                        "↑↓ Files · Enter Diff · Esc Graph",
-                                    ),
-                                ),
+                                .child(files_body),
                             ),
                     ),
             )

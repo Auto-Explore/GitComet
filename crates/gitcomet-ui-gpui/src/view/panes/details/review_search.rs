@@ -75,7 +75,7 @@ impl DetailsPaneView {
                 .is_focused(window)
         {
             // Keep the filter active while reviewing its results.
-            self.focus_review_files(window, cx);
+            self.focus_review_files(Some(list), window, cx);
             return true;
         }
         false

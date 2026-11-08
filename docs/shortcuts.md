@@ -26,7 +26,7 @@ These shortcuts apply in the normal GitComet window.
 | Open a new window | `Cmd-N`, `Cmd-Shift-N` | `Ctrl-N`, `Ctrl-Shift-N` | |
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open the command palette | `Cmd-P`, `Cmd-Shift-P` | `Ctrl-P`, `Ctrl-Shift-P` | Search for an action; its shortcut is shown beside it. |
-| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-/`, `Ctrl-?` | No Shift required for the primary shortcut. The question-mark shortcut remains an alias. Opens the searchable cheat sheet; Escape closes it and restores focus. Available from the terminal too. |
+| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-/`, `Ctrl-?` | Also the keyboard button in the bottom bar. Opens the searchable cheat sheet; Escape closes it and restores focus. With terminal focus on Windows/Linux, use `Ctrl-Shift-/`. |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open a workspace | `Cmd-Shift-R` | `Ctrl-Shift-R` | Lists saved workspaces. In an empty window the chosen workspace opens there; otherwise its own window is focused or opened. Also in the command palette and the app menu. |
 | Go to a commit | `Cmd-G` | `Ctrl-G` | Opens the Go to dialog. Accepts a full or short SHA (4+ characters, unique), a branch, a tag, or any revision such as `HEAD~3`; matches are exact. In an embedded terminal the shell keeps `Ctrl-G`. |
@@ -55,17 +55,19 @@ Additional window-management shortcuts:
 ## Repository and layout shortcuts
 
 These shortcuts apply in a normal repository window, including from text inputs.
-They are inactive while a menu, dialog, command palette, or Go to dialog is open.
+They are inactive while a menu, dialog, command palette, Go to dialog, or recent-documents picker is open.
 A focused embedded terminal keeps these keys for its shell or TUI, except for the
-terminal toggle and shortcut cheat sheet. Repository availability checks and confirmations
+terminal toggle and shortcut cheat sheet (use their shifted terminal variants on Windows/Linux). Repository availability checks and confirmations
 are the same as when running the corresponding command from the palette.
+On Windows, `Ctrl-Alt` is AltGr: where the keyboard layout types a character for
+that chord (AltGr-S is `ś` on Polish), the shortcut does not run.
 
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Reload repository | `Cmd-R`, `F5` | `Ctrl-R`, `F5` | |
 | Fetch all remotes | `Cmd-Shift-F` | `Ctrl-Shift-F` | |
-| Pull | `Cmd-Option-Down` | `Ctrl-Alt-Down` | Uses the configured upstream. |
-| Push | `Cmd-Option-Up` | `Ctrl-Alt-Up` | Opens upstream setup when required. |
+| Pull | `Cmd-Option-Down` | None | Uses the configured upstream. Available from the palette and buttons. |
+| Push | `Cmd-Option-Up` | None | Opens upstream setup when required. Available from the palette and buttons. |
 | Open commit dialog | `Cmd-Option-Enter` | `Ctrl-Alt-Enter` | Review and submit in the dialog; `Cmd-Enter` / `Ctrl-Enter` still submits from the commit message input. |
 | Stage all changes | `Cmd-Option-S` | `Ctrl-Alt-S` | Unresolved conflict markers still require confirmation. |
 | Unstage all changes | `Cmd-Option-U` | `Ctrl-Alt-U` | |
@@ -74,8 +76,8 @@ are the same as when running the corresponding command from the palette.
 | Stash changes | `Cmd-Shift-S` | `Ctrl-Shift-S` | Opens the stash dialog. |
 | Toggle sidebar | `Cmd-B` | `Ctrl-B` | |
 | Toggle details pane | `Cmd-Option-B`, `Cmd-Shift-B` | `Ctrl-Alt-B`, `Ctrl-Shift-B` | |
-| Toggle embedded terminal | `Cmd-J` | `Ctrl-J` | Closing an active session keeps the existing confirmation. |
-| Open external terminal | `Cmd-Option-T` | `Ctrl-Alt-T` | |
+| Toggle embedded terminal | `Cmd-J` | `Ctrl-J`, `Ctrl-Shift-J` | With terminal focus on Windows/Linux, use `Ctrl-Shift-J`. Closing an active session keeps the existing confirmation. |
+| Open external terminal | `Cmd-Option-T` | None | Available from the palette and terminal controls. |
 
 ## Image preview shortcuts
 
@@ -177,6 +179,10 @@ outlined only while its list has focus. In a focused diff, the current change
 block is outlined instead. Moving focus away hides the outline but keeps the
 review position. Selecting a file previews it without moving keyboard focus.
 
+Closing Commit details moves focus to the first nonempty working-copy file list
+(Untracked/Unstaged before Staged). With no visible file rows, focus returns to
+the main canvas. An open diff preview stays open.
+
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Next / previous pane | `F6`, `Shift-F6` | `F6`, `Shift-F6` | Visible panes only; terminal input and modal dialogs keep focus. |
@@ -230,8 +236,8 @@ These shortcuts apply when the embedded terminal has focus.
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Copy terminal selection | `Cmd-C` | `Ctrl-Shift-C` | Disabled/no-op without a terminal selection. |
-| Toggle the terminal | `Cmd-J` | `Ctrl-J` | Also works with terminal focus. Closing a running command keeps its confirmation. |
-| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-/`, `Ctrl-?` | Escape restores terminal focus. |
+| Toggle the terminal | `Cmd-J` | `Ctrl-Shift-J` | Closing a running command keeps its confirmation. Plain `Ctrl-J` reaches the shell. |
+| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-Shift-/`, `Ctrl-Shift-?` | Escape restores terminal focus. Plain `Ctrl-/` reaches the shell. |
 | Paste clipboard text | `Cmd-V` | `Ctrl-Shift-V` | Clipboard CRLF/CR line endings are normalized to LF. Bracketed paste is used when the shell enables it. |
 | Select all terminal buffer | `Cmd-A` | `Ctrl-Shift-A` | Selects the scrollback buffer plus the visible terminal grid. |
 | Scroll terminal history | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | Only in the normal screen buffer. |
@@ -256,7 +262,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |
 | Next search match | `F3` | `F3` | While diff search is open. The ↓ button in the search box does the same. |
-| Return to the file list | `Escape` | `Escape` | Keeps the preview open. Closes search, an editor, or an inline submodule first. Standalone diff windows retain their close behavior. |
+| Return to the file list | `Escape` | `Escape` | With diff focus, returns to the matching row and keeps its preview open. If no row matches, closes the preview and focuses the graph. Closes search, an editor, or an inline submodule first. Standalone diff windows retain their close behavior. |
 | Previous file | `Option-Up`, `F1` | `Alt-Up`, `F1` | Option/Alt-Up from the focused diff lands at the previous file’s last change. |
 | Next file | `Option-Down`, `F4` | `Alt-Down`, `F4` | Option/Alt-Down from the focused diff lands at the next file’s first change. |
 | Previous / next change block | `Up`, `Down` | `Up`, `Down` | Focused diff only. At a file boundary, continues to the previous file’s last block or the next file’s first block. Stops at the outermost files. Images and files without text changes remain review stops. Conflicts retain their own navigation. |

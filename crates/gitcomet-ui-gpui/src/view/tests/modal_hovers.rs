@@ -48,7 +48,8 @@ impl Modal {
         cx: &mut gpui::Context<GitCometView>,
     ) {
         match self {
-            Self::Palette | Self::Shortcuts => view.close_command_palette(window, cx),
+            Self::Palette => view.close_command_palette(window, cx),
+            Self::Shortcuts => view.toggle_shortcut_help(window, cx),
             Self::GoTo => view.close_reveal_commit(window, cx),
             Self::BranchPicker | Self::ChildDialog => view.popover_host.update(cx, |host, cx| {
                 host.close_popover(cx);
@@ -166,7 +167,7 @@ fn check_modal_hovers(cx: &mut gpui::TestAppContext, modal: Modal, pending: bool
     }
 
     // Window-level history listeners can still fire behind a modal.
-    cx.update(|_, app| view.update(app, |view, cx| arm_hovers(view, cx)));
+    cx.update(|_, app| view.update(app, arm_hovers));
     cx.executor().advance_clock(Duration::from_secs(1));
     test_support::redraw(cx);
     assert!(
@@ -191,7 +192,7 @@ fn check_modal_hovers(cx: &mut gpui::TestAppContext, modal: Modal, pending: bool
     );
 
     // Dismissal must allow fresh hovers after the modal closes.
-    cx.update(|_, app| view.update(app, |view, cx| arm_hovers(view, cx)));
+    cx.update(|_, app| view.update(app, arm_hovers));
     cx.executor().advance_clock(Duration::from_secs(1));
     test_support::redraw(cx);
     assert!(

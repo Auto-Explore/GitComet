@@ -78,7 +78,7 @@ impl DiffRenderer {
             || self.file_diff_cache_inflight.is_some()
     }
 
-    pub(in crate::view) fn review_jump_pending(&mut self) -> bool {
+    pub(in crate::view) fn consume_pending_review_jump(&mut self) -> bool {
         let Some(jump) = &self.review_file_jump else {
             return false;
         };
@@ -97,10 +97,10 @@ impl DiffRenderer {
         if self.diff_nav_entries().is_empty() {
             self.review_file_jump = None;
             self.diff_autoscroll_pending = false;
-            return false;
+            return true;
         }
         self.maybe_autoscroll_diff_to_first_change();
-        self.review_file_jump.is_some()
+        true
     }
 
     pub(in crate::view) fn review_adjacent_file(
@@ -109,7 +109,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if self.review_jump_pending() || self.review_diff_is_loading() {
+        if self.consume_pending_review_jump() || self.review_diff_is_loading() {
             return true;
         }
         let Some(repo) = self.active_repo_id() else {
@@ -135,7 +135,7 @@ impl DiffRenderer {
                 self.navigate_next_diff_change(cx)
             };
         }
-        if self.review_jump_pending() || self.review_diff_is_loading() {
+        if self.consume_pending_review_jump() || self.review_diff_is_loading() {
             return true;
         }
         let entries = self.diff_nav_entries();
@@ -182,15 +182,22 @@ impl DiffRenderer {
                 }
             }
             "pageup" | "pagedown" => {
-                let scroll = self.diff_scroll.0.borrow().base_handle.clone();
+                let preview = self.is_file_preview_active();
+                let scroll = if preview {
+                    self.worktree_preview_scroll.0.borrow().base_handle.clone()
+                } else {
+                    self.diff_scroll.0.borrow().base_handle.clone()
+                };
                 let offset = scroll.offset();
                 let direction = if key == "pageup" { 1.0 } else { -1.0 };
                 let y = (offset.y + scroll.bounds().size.height * 0.9 * direction)
                     .max(-scroll.max_offset().y)
                     .min(px(0.0));
                 scroll.set_offset(point(offset.x, y));
-                let right = self.diff_split_right_scroll.0.borrow().base_handle.clone();
-                right.set_offset(point(right.offset().x, y));
+                if !preview {
+                    let right = self.diff_split_right_scroll.0.borrow().base_handle.clone();
+                    right.set_offset(point(right.offset().x, y));
+                }
             }
             _ => return false,
         }
