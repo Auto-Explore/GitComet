@@ -105,13 +105,13 @@ checksum = "67753fa0e5e56fa79255f125be5bb94b2f3570537bd1c66e9b146858f53cd298"
 
 [[package]]
 name = "aes"
-version = "0.8.4"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+checksum = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
 dependencies = [
- "cfg-if",
  "cipher",
- "cpufeatures 0.2.17",
+ "cpubits",
+ "cpufeatures",
  "zeroize",
 ]
 
@@ -345,11 +345,11 @@ dependencies = [
 
 [[package]]
 name = "ashpd"
-version = "0.13.13"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111"
+checksum = "8ba377f1fb1e3972907220f1f8e7c0a45164580905c981d872c1fb90d921cbcc"
 dependencies = [
- "enumflags2",
+ "bitflags 2.13.2",
  "futures-channel",
  "futures-util",
  "getrandom 0.4.3",
@@ -358,7 +358,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
- "zbus 5.19.0",
+ "zbus 6.2.1",
 ]
 
 [[package]]
@@ -743,29 +743,21 @@ version = "0.1.6"
 
 [[package]]
 name = "block-buffer"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
-name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
 name = "block-padding"
-version = "0.3.3"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+checksum = "710f1dd022ef4e93f8a438b4ba958de7f64308434fa6a87104481645cc30068b"
 dependencies = [
- "generic-array",
+ "hybrid-array",
 ]
 
 [[package]]
@@ -928,9 +920,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbc"
-version = "0.1.2"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+checksum = "ce2dc9ee5f88d11e0beb842c88b33c8a5cf0d1329c4b19494af42b07dbfe8896"
 dependencies = [
  "cipher",
 ]
@@ -975,7 +967,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures",
  "rand_core 0.10.1",
 ]
 
@@ -1033,11 +1025,12 @@ dependencies = [
 
 [[package]]
 name = "cipher"
-version = "0.4.4"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
 dependencies = [
- "crypto-common 0.1.7",
+ "block-buffer",
+ "crypto-common",
  "inout",
  "zeroize",
 ]
@@ -1101,6 +1094,12 @@ checksum = "197fd99cb113a8d5d9b6376f3aa817f32c1078f2343b714fff7d2ca44fdf67d5"
 dependencies = [
  "hashbrown 0.16.1",
 ]
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codespan-reporting"
@@ -1284,13 +1283,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
-name = "cpufeatures"
-version = "0.2.17"
+name = "cpubits"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
-dependencies = [
- "libc",
-]
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
 
 [[package]]
 name = "cpufeatures"
@@ -1396,16 +1392,6 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-common"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
-dependencies = [
- "generic-array",
- "typenum",
-]
-
-[[package]]
-name = "crypto-common"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
@@ -1421,6 +1407,15 @@ checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 dependencies = [
  "link-section",
  "linktime-proc-macro",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
+dependencies = [
+ "cmov",
 ]
 
 [[package]]
@@ -1667,24 +1662,14 @@ dependencies = [
 
 [[package]]
 name = "digest"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-dependencies = [
- "block-buffer 0.10.4",
- "crypto-common 0.1.7",
- "subtle",
-]
-
-[[package]]
-name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
- "block-buffer 0.12.1",
+ "block-buffer",
  "const-oid",
- "crypto-common 0.2.2",
+ "crypto-common",
+ "ctutils",
 ]
 
 [[package]]
@@ -2042,9 +2027,9 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "fixedbitset"
-version = "0.5.8"
+version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6f4104e621bb9770df60493863c91302f5767e050cc09c38326bcf1e5c682a"
+checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
 
 [[package]]
 name = "flate2"
@@ -2343,16 +2328,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generic-array"
-version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
-dependencies = [
- "typenum",
- "version_check",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2496,7 +2471,7 @@ dependencies = [
  "gix-quote",
  "gix-validate",
  "jiff",
- "md-5 0.11.0",
+ "md-5",
  "memchr",
  "percent-encoding",
  "process-wrap",
@@ -2504,7 +2479,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "rustix",
  "serde_json",
- "sha2 0.11.1",
+ "sha2",
  "smallvec",
  "strsim",
  "tempfile",
@@ -3240,7 +3215,7 @@ dependencies = [
  "gix-error",
  "gix-utils",
  "sha1dc",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -3828,7 +3803,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3907,7 +3882,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "block",
@@ -3933,7 +3908,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3943,7 +3918,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3953,7 +3928,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4001,7 +3976,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4050,7 +4025,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4061,7 +4036,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4075,7 +4050,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_parley"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "fontique",
@@ -4090,7 +4065,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -4104,7 +4079,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -4112,7 +4087,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
@@ -4126,7 +4101,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "async-task",
  "backtrace",
@@ -4141,7 +4116,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "schemars",
  "serde",
@@ -4151,7 +4126,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -4162,7 +4137,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "log",
@@ -4172,7 +4147,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4196,7 +4171,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -4228,7 +4203,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4261,7 +4236,7 @@ dependencies = [
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -4410,20 +4385,20 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hkdf"
-version = "0.12.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
 dependencies = [
  "hmac",
 ]
 
 [[package]]
 name = "hmac"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
- "digest 0.10.7",
+ "digest",
 ]
 
 [[package]]
@@ -4473,6 +4448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
 dependencies = [
  "typenum",
+ "zeroize",
 ]
 
 [[package]]
@@ -4745,12 +4721,12 @@ dependencies = [
 
 [[package]]
 name = "inout"
-version = "0.1.4"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+checksum = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
 dependencies = [
  "block-padding",
- "generic-array",
+ "hybrid-array",
 ]
 
 [[package]]
@@ -5237,22 +5213,12 @@ dependencies = [
 
 [[package]]
 name = "md-5"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
-dependencies = [
- "cfg-if",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
 dependencies = [
  "cfg-if",
- "digest 0.11.3",
+ "digest",
 ]
 
 [[package]]
@@ -5967,9 +5933,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oo7"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78f2bfed90f1618b4b48dcad9307f25e14ae894e2949642c87c351601d62cebd"
+checksum = "dcdb85efa0c7d561dda91c7b9dd81564c63a0e875c6590663dc1972867b1e335"
 dependencies = [
  "aes",
  "ashpd",
@@ -5978,26 +5944,23 @@ dependencies = [
  "async-lock",
  "blocking",
  "cbc",
- "cipher",
- "digest 0.10.7",
  "endi",
  "futures-lite",
  "futures-util",
  "getrandom 0.4.3",
+ "hex",
  "hkdf",
- "hmac",
- "md-5 0.10.6",
+ "md-5",
  "num",
  "num-bigint-dig",
  "pbkdf2",
  "serde",
  "serde_bytes",
- "sha2 0.10.9",
+ "sha2",
  "subtle",
- "zbus 5.19.0",
- "zbus_macros 5.19.0",
+ "zbus 6.2.1",
  "zeroize",
- "zvariant",
+ "zgvariant",
 ]
 
 [[package]]
@@ -6222,11 +6185,11 @@ dependencies = [
 
 [[package]]
 name = "pbkdf2"
-version = "0.12.2"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
 dependencies = [
- "digest 0.10.7",
+ "digest",
  "hmac",
 ]
 
@@ -7330,24 +7293,13 @@ checksum = "c5b0ebf6537e3e8db8bb7d21ecb6d7399738c953c757945c6b95e46c4e95df7b"
 
 [[package]]
 name = "sha2"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha2"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
- "digest 0.11.3",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]
@@ -7971,7 +7923,14 @@ version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
+ "bytes",
+ "libc",
+ "mio",
  "pin-project-lite",
+ "signal-hook-registry",
+ "socket2",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10127,7 +10086,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "encoding_rs",
 ]
@@ -10135,7 +10094,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c55d73659dd6560d3e70281056f841e6d366c0e5#c55d73659dd6560d3e70281056f841e6d366c0e5"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -10290,6 +10249,8 @@ dependencies = [
  "serde",
  "serde_repr",
  "socket2",
+ "tokio",
+ "tracing",
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
@@ -10499,6 +10460,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgvariant"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5576e785f58266b3c26ef3b35d5914991981226733376d8ce34d185c0fccb240"
+dependencies = [
+ "endi",
+ "serde",
+ "serde_bytes",
+ "winnow",
+ "zbus_utils",
+ "zcheapstr",
+ "zgvariant_derive",
+]
+
+[[package]]
+name = "zgvariant_derive"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd6ca94bb7097734710aa30f08cc9979045b220e743ca3a5d6cda1bed58396e9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+ "zbus_utils",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10520,6 +10508,7 @@ dependencies = [
  "futures-io",
  "rustix",
  "socket2",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -10556,7 +10545,6 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
- "serde_bytes",
  "winnow",
  "zcheapstr",
  "zvariant_derive",
