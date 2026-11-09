@@ -379,7 +379,7 @@ pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::G
 }
 
 /// The sequencer commands that auto-skip empty steps.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 enum SequenceKind {
     CherryPick,
     Revert,
@@ -1267,15 +1267,22 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         let marker_before = self.sequencer_progress_marker(kind)?;
         let (output, last) = self.run_sequence_auto_skip(kind, cmd, label)?;
-        if kind == SequenceKind::CherryPick && !self.cherry_pick_in_progress_impl()? {
-            self.clear_persisted_cherry_pick_mainline();
-        }
+        let cherry_pick_in_progress = match kind {
+            SequenceKind::CherryPick => {
+                let in_progress = self.cherry_pick_in_progress_impl()?;
+                if !in_progress {
+                    self.clear_persisted_cherry_pick_mainline();
+                }
+                Some(in_progress)
+            }
+            SequenceKind::Revert => None,
+        };
         if last.status.success() {
             return Ok(output);
         }
-        let still_in_progress = match kind {
-            SequenceKind::CherryPick => self.cherry_pick_in_progress_impl()?,
-            SequenceKind::Revert => self.sequencer_state_impl()? == SequencerState::Revert,
+        let still_in_progress = match cherry_pick_in_progress {
+            Some(in_progress) => in_progress,
+            None => self.sequencer_state_impl()? == SequencerState::Revert,
         };
         let paused_after_progress = still_in_progress
             && match (marker_before, self.sequencer_progress_marker(kind)?) {
