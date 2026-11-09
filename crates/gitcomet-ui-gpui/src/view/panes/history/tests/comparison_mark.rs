@@ -208,7 +208,8 @@ fn marking_a_commit_repaints_the_history() {
 }
 
 /// A message cell too narrow to keep half for the subject shows only the
-/// icon, which still explains itself on hover; narrower still, no chip.
+/// icon, which still explains itself on hover; when even the icon would take
+/// half, no chip.
 #[gpui::test]
 fn a_narrow_message_cell_shows_the_chip_as_its_icon(cx: &mut gpui::TestAppContext) {
     let chip = |cx: &mut gpui::TestAppContext, width| {
@@ -222,5 +223,6 @@ fn a_narrow_message_cell_shows_the_chip_as_its_icon(cx: &mut gpui::TestAppContex
     assert!(labelled > px(60.0), "labelled chip spans {labelled:?}");
     assert!(icon < px(30.0), "icon-only chip spans {icon:?}");
     assert!(tooltip);
-    assert_eq!(chip(cx, 900.0), None);
+    // The message column is still there, about 30px wide.
+    assert_eq!(chip(cx, 1000.0), None);
 }

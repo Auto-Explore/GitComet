@@ -28,9 +28,9 @@ const HISTORY_REF_CONNECTOR_DOT_PX: f32 = 1.5;
 const HISTORY_REF_CONNECTOR_PITCH_PX: f32 = 4.0;
 const COMPARISON_MARK_CHIP_TEXT: &str = "Compare base";
 const COMPARISON_MARK_CHIP_ICON: &str = "icons/git_compare.svg";
-// The labelled chip (~105px) fits a default-width message cell (~330px); in a
-// cell too narrow to keep half for the subject it shows only the icon.
-const COMPARISON_MARK_CHIP_LABEL_MAX_CELL_FRACTION: f32 = 0.5;
+// The chip never takes more than half the message cell from the subject: the
+// labelled chip (~105px) fits a default cell (~330px), else only its icon shows.
+const COMPARISON_MARK_CHIP_MAX_CELL_FRACTION: f32 = 0.5;
 
 const HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 8_192;
 
@@ -1030,7 +1030,7 @@ impl MarkChipStyle {
 }
 
 /// Paints the comparison mark's chip at the start of a message cell `cell_width`
-/// wide; `None` when even its icon does not fit.
+/// wide; `None` when even its icon would take more than half the cell.
 #[allow(clippy::too_many_arguments)]
 fn paint_comparison_mark_chip(
     theme: AppTheme,
@@ -1061,11 +1061,12 @@ fn paint_comparison_mark_chip(
         text: Some(text),
         color,
     };
-    if style.width(&mark) > cell_width * COMPARISON_MARK_CHIP_LABEL_MAX_CELL_FRACTION {
+    let max_width = cell_width * COMPARISON_MARK_CHIP_MAX_CELL_FRACTION;
+    if style.width(&mark) > max_width {
         mark.text = None;
         mark.icon_width = style.icon_size;
     }
-    if style.width(&mark) + lead > cell_width {
+    if style.width(&mark) > max_width || style.width(&mark) + lead > cell_width {
         return None;
     }
     let chip = style.bounds(&mark, x, row);
