@@ -440,14 +440,23 @@ impl Render for GitCometView {
                 }
             };
 
-            let inline_error = self.auth_prompt_input_error.clone().or_else(|| {
-                (prompt.status == AuthPromptStatus::Rejected).then(|| prompt.reason.clone())
-            });
-            let reason = prompt
-                .challenge
-                .as_ref()
-                .map(|challenge| challenge.prompt.clone())
-                .unwrap_or_else(|| prompt.reason.clone());
+            let inline_error =
+                self.auth_prompt_input_error
+                    .clone()
+                    .or_else(|| match &prompt.status {
+                        AuthPromptStatus::Rejected { message } => Some(message.clone()),
+                        AuthPromptStatus::AwaitingInput | AuthPromptStatus::Validating => None,
+                    });
+            let details = prompt
+                .output
+                .clone()
+                .or_else(|| {
+                    prompt
+                        .challenge
+                        .as_ref()
+                        .map(|challenge| challenge.prompt.clone())
+                })
+                .unwrap_or_default();
 
             let confirm_button = components::Button::new(
                 "auth_prompt_confirm",
@@ -493,17 +502,14 @@ impl Render for GitCometView {
                             .child(error),
                     )
                 })
-                .when(
-                    !reason.trim().is_empty() && prompt.status != AuthPromptStatus::Rejected,
-                    |this| {
-                        this.child(prompt_banner_details(
-                            theme,
-                            ui_scale_percent,
-                            "auth_prompt_reason_scroll",
-                            reason,
-                        ))
-                    },
-                )
+                .when(!details.trim().is_empty(), |this| {
+                    this.child(prompt_banner_details(
+                        theme,
+                        ui_scale_percent,
+                        "auth_prompt_details_scroll",
+                        details,
+                    ))
+                })
                 .child(
                     div()
                         .pt_1()

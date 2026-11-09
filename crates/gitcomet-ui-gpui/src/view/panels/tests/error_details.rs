@@ -259,7 +259,7 @@ fn unrelated_error_toasts_remain_visible_during_authentication(cx: &mut gpui::Te
         challenge: None,
         status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
-        reason: "authentication failed".into(),
+        output: Some("authentication failed".into()),
         operation: AuthRetryOperation::Clone {
             url: "https://example.test/repo.git".into(),
             dest: "/tmp/review-auth".into(),

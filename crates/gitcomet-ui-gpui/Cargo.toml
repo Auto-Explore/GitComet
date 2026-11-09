@@ -51,7 +51,6 @@ gitcomet-ui-terminal = { workspace = true }
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
 image = { workspace = true }
-jiff = { workspace = true }
 memchr = { workspace = true }
 palette = { workspace = true }
 regex = { workspace = true }

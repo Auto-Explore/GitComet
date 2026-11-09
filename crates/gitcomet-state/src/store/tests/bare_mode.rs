@@ -237,7 +237,7 @@ fn authentication_replay_rechecks_bare_mode_and_preserves_supported_fetch() {
             challenge: None,
             status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: crate::model::AuthPromptKind::UsernamePassword,
-            reason: "authentication required".into(),
+            output: Some("authentication required".into()),
             operation: crate::model::AuthRetryOperation::RepoCommand { repo_id, command },
         });
         let effects = reduce(

@@ -837,7 +837,7 @@ fn authentication_prompt_waits_while_the_commit_message_is_being_typed(
             challenge: None,
             status: AuthPromptStatus::AwaitingInput,
             kind,
-            reason: "authentication required".into(),
+            output: Some("authentication required".into()),
             operation: AuthRetryOperation::RepoCommand {
                 repo_id,
                 command: gitcomet_state::msg::RepoCommandKind::Pull {

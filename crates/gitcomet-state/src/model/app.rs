@@ -320,15 +320,17 @@ pub struct AuthPromptState {
     pub challenge: Option<gitcomet_core::auth::AuthChallenge>,
     pub status: AuthPromptStatus,
     pub kind: AuthPromptKind,
-    pub reason: String,
+    // What the failed command printed, kept when it explains the prompt
+    // better than the challenge does: a remote's reason for a rejection.
+    pub output: Option<String>,
     pub operation: AuthRetryOperation,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthPromptStatus {
     AwaitingInput,
     Validating,
-    Rejected,
+    Rejected { message: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -2806,7 +2806,6 @@ dependencies = [
  "gpui_ce_platform",
  "gpui_ce_wgpu",
  "image",
- "jiff",
  "memchr",
  "metal",
  "palette",
