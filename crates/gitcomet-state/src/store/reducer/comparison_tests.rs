@@ -802,3 +802,32 @@ fn clearing_the_commit_selection_closes_the_comparisons_file_diff() {
     assert_eq!(repo(&state, repo_id).history_state.range_selection, None);
     assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
 }
+
+/// A right-click keeps the selection, so the same pair must not reload its list.
+#[test]
+fn refocusing_within_a_pair_keeps_its_loaded_comparison() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    state.repos[0].history_state.range_files = Loadable::Ready(Arc::new(Vec::new()));
+    let rev = state.repos[0].history_state.range_files_rev;
+
+    let effects = select(
+        &mut state,
+        repo_id,
+        "c1",
+        CommitSelectMode::PreserveIfSelected,
+    );
+
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "the unchanged pair must not reload"
+    );
+    let history = &repo(&state, repo_id).history_state;
+    assert!(matches!(history.range_files, Loadable::Ready(_)));
+    assert_eq!(history.range_files_rev, rev);
+    assert_eq!(history.selected_commit, Some(CommitId("c1".into())));
+}

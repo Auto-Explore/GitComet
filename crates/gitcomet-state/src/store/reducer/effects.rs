@@ -425,9 +425,34 @@ pub(super) fn select_commit_multi(
             // over the details pane, so a single-commit detail load is wasted.
             // Leaving comparison mode is what reconciles the details pane again.
             repo_state.set_selected_commit(Some(focus));
-            let from_label = range_endpoint_label(&from);
-            let to_label = range_endpoint_label(&to);
-            compare_range(state, repo_id, from, Some(to), from_label, to_label, source)
+            let next = RangeSelection {
+                source,
+                ..RangeSelection::new(
+                    from.clone(),
+                    Some(to.clone()),
+                    range_endpoint_label(&from),
+                    range_endpoint_label(&to),
+                )
+            };
+            // A right-click keeps the selection; its loaded comparison stays.
+            if repo_state
+                .history_state
+                .range_selection
+                .as_ref()
+                .is_some_and(|range| range.same_comparison(&next) && range.source == source)
+            {
+                Vec::new()
+            } else {
+                compare_range(
+                    state,
+                    repo_id,
+                    next.from,
+                    next.to,
+                    next.from_label,
+                    next.to_label,
+                    source,
+                )
+            }
         }
         None => {
             let left_comparison = repo_state.clear_range_comparison();
