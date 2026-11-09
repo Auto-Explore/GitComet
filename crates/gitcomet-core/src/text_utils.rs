@@ -196,16 +196,19 @@ mod tests {
     #[test]
     fn common_affix_len_never_counts_an_element_twice() {
         use super::common_affix_len;
-        let cases: [(&[u8], &[u8], (usize, usize)); 6] = [
-            (b"", b"", (0, 0)),
-            (b"abc", b"abc", (3, 0)),
-            (b"aa", b"aaa", (2, 0)),
-            (b"axc", b"ayc", (1, 1)),
-            (b"abc", b"xbc", (0, 2)),
-            (b"ab", b"", (0, 0)),
-        ];
-        for (a, b, expected) in cases {
-            assert_eq!(common_affix_len(a, b), expected, "{a:?} vs {b:?}");
+        for (a, b, expected) in [
+            ("", "", (0, 0)),
+            ("abc", "abc", (3, 0)),
+            ("aa", "aaa", (2, 0)),
+            ("axc", "ayc", (1, 1)),
+            ("abc", "xbc", (0, 2)),
+            ("ab", "", (0, 0)),
+        ] {
+            assert_eq!(
+                common_affix_len(a.as_bytes(), b.as_bytes()),
+                expected,
+                "{a:?} vs {b:?}"
+            );
         }
     }
 
