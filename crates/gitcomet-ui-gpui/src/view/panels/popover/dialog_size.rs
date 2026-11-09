@@ -46,19 +46,6 @@ fn extent(available: Pixels, preferred: Pixels, max: Pixels, fraction: f32) -> P
         .min(available)
 }
 
-/// `time` in the user's date, time and timezone settings.
-pub(super) fn timestamp_label(this: &PopoverHost, time: std::time::SystemTime) -> String {
-    let mut label = String::with_capacity(24);
-    format_datetime_into(
-        &mut label,
-        time,
-        this.date_time_format,
-        this.timezone,
-        this.show_timezone,
-    );
-    label
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

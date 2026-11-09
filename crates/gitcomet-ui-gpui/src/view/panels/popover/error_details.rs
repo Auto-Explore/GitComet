@@ -1,7 +1,7 @@
 //! The errors on screen in full: what failed, the command and its output,
 //! and what can be done about each.
 
-use super::dialog_size::{DialogSize, timestamp_label};
+use super::dialog_size::DialogSize;
 use super::*;
 use crate::kit::interaction as controls;
 use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
