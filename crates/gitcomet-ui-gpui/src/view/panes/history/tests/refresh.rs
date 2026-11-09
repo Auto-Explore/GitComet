@@ -2182,6 +2182,161 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
     }
 }
 
+/// Exact half-device ties must translate the complete row group together,
+/// including when the first visible index changes during ordinary scrolling.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn indexed_history_quarter_pixel_scroll_keeps_rows_paint_and_hits_together(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(crate::appearance::pin_compact_for_test);
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    let selected = commits[11].id.clone();
+    state.repos[0].history_state.selected_commit = Some(selected);
+    state.repos[0].history_state.selected_commit_rev += 1;
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let selectors: Vec<&'static str> = (0..32)
+        .map(|ix| Box::leak(format!("history_row_{ix}").into_boxed_str()) as &'static str)
+        .collect();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let boundary = cx.update(|window, app| {
+            window.activate();
+            window.set_scale_factor(2.0);
+            let entity = view.read(app).main_pane.read(app).history_view.clone();
+            let boundary = entity.update(app, |history, cx| {
+                let mut scroll = history.scroll_interaction.borrow_mut();
+                let logical = scroll.logical.as_mut().unwrap();
+                let boundary = logical.height * 10.0;
+                logical.set_position(boundary - 0.5);
+                cx.notify();
+                boundary
+            });
+            window.refresh();
+            let _ = window.draw(app);
+            boundary
+        });
+        cx.run_until_parked();
+        let viewport = cx.debug_bounds("indexed_history_viewport").unwrap();
+        let measured = cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .history_viewport_bounds()
+                .unwrap()
+        });
+        let graph_right = cx
+            .debug_bounds("history_message_header_cell")
+            .unwrap()
+            .left();
+        let snapshot = |cx: &mut gpui::VisualTestContext| {
+            let (top, _, _) = logical_top(cx, &view);
+            let rows: Vec<_> = (top..top + 12)
+                .map(|ix| cx.debug_bounds(selectors[ix]).unwrap())
+                .collect();
+            for pair in rows.windows(2) {
+                assert_eq!(
+                    pair[0].bottom(),
+                    pair[1].top(),
+                    "rows must meet at half-device ties"
+                );
+            }
+            let first = cx.debug_bounds("history_row_10").unwrap();
+            let selected = cx.debug_bounds("history_row_11").unwrap();
+            let graph_node = cx.update(|window, _| {
+                let scale = window.scale_factor();
+                let scaled_row = selected.map(|value| gpui::ScaledPixels(f32::from(value) * scale));
+                let quads = window.painted_quads();
+                assert!(
+                    quads
+                        .iter()
+                        .any(|quad| quad.bounds == scaled_row && !quad.background.is_transparent()),
+                    "the selected row background must share its layout bounds"
+                );
+                let node = quads
+                    .iter()
+                    .find(|quad| {
+                        quad.corner_radii.top_left.0 > 0.0
+                            && !quad.background.is_transparent()
+                            && quad.bounds.size.width == quad.bounds.size.height
+                            && quad.bounds.size.width.0 / scale >= 7.0
+                            && (quad.bounds.center().y.0 / scale - f32::from(selected.center().y))
+                                .abs()
+                                < 0.6
+                            && quad.bounds.right().0 / scale < f32::from(graph_right)
+                    })
+                    .expect("painted author node");
+                node.bounds
+            });
+            assert_eq!(
+                cx.debug_bounds("indexed_history_viewport").unwrap(),
+                viewport
+            );
+            (first, selected, graph_node)
+        };
+        let mut previous = snapshot(cx);
+        for phase in [
+            gpui::TouchPhase::Started,
+            gpui::TouchPhase::Moved,
+            gpui::TouchPhase::Moved,
+        ] {
+            cx.update(|window, app| {
+                window.dispatch_event(
+                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                        position: viewport.center(),
+                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-0.25))),
+                        touch_phase: phase,
+                        modifiers: Default::default(),
+                    }),
+                    app,
+                );
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            let current = snapshot(cx);
+            let moved = current.0.top() - previous.0.top();
+            assert!(moved <= px(0.0));
+            assert_eq!(
+                current.1.top() - previous.1.top(),
+                moved,
+                "all rows move together across the index boundary"
+            );
+            assert_eq!(
+                current.2.top().0 - previous.2.top().0,
+                f32::from(moved) * 2.0,
+                "painted graph follows row/background movement"
+            );
+            previous = current;
+        }
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            assert_eq!(history.history_scroll_position(), boundary + 0.25);
+            assert_eq!(history.history_viewport_bounds().unwrap(), measured);
+        });
+        // This point is inside row10, just above the shared edge. Before the
+        // fix row11 overlapped it by half a pixel and stole the click.
+        let row = previous.0;
+        cx.simulate_click(
+            point(row.center().x, row.bottom() - px(0.25)),
+            gpui::Modifiers::default(),
+        );
+        wait_until(cx, "translated row click", |_| {
+            store.snapshot().repos[0]
+                .history_state
+                .selected_commit
+                .as_ref()
+                == Some(&commits[10].id)
+        });
+    });
+}
+
 #[gpui::test]
 fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
     let (index, commits) = indexed_fixture(10);

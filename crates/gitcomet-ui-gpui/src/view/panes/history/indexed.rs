@@ -8,9 +8,77 @@ use gitcomet_core::domain::WorktreeDirtySummary;
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HistoryIndexHandle};
 use gitcomet_core::services::CancellationToken;
 use gitcomet_state::indexed_history::IndexedHistoryMsg as Event;
+use gpui::{App, Element, ElementId, GlobalElementId, InspectorElementId, LayoutId};
 use std::rc::Rc;
 
 type PreparedDecorations = ((bool, u64), Arc<FxHashMap<usize, HistoryDecorationRowVm>>);
+
+/// Translate the row group together, after laying out nonnegative row tops.
+/// Snapping each moving top independently gives negative and positive half-pixel
+/// ties different directions, so the first visible row can overlap its neighbour.
+struct HistoryRowsOffset {
+    within: Pixels,
+    child: Option<AnyElement>,
+}
+
+impl IntoElement for HistoryRowsOffset {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for HistoryRowsOffset {
+    type RequestLayoutState = AnyElement;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, AnyElement) {
+        let mut child = self.child.take().expect("indexed history rows");
+        (child.request_layout(window, cx), child)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        child: &mut AnyElement,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.with_element_offset(point(px(0.0), -self.within), |window| {
+            child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        child: &mut AnyElement,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        child.paint(window, cx);
+    }
+}
 
 pub(in crate::view) struct Presentation {
     pub key: HistoryBaseCacheRequest,
@@ -1321,12 +1389,7 @@ impl HistoryView {
         let range = logical.visible_range();
         // All physical coordinates remain local to the viewport. GPUI's f32
         // Pixels never represents millions of row heights.
-        let rows = Self::render_history_rows(
-            self,
-            range.clone(),
-            Some((logical.height, logical.within)),
-            cx,
-        );
+        let rows = Self::render_history_rows(self, range.clone(), Some(logical.height), cx);
         let interaction = self.scroll_interaction.clone();
         let shown_repo = self.indexed.presentation.as_ref().map(|p| p.key.repo_id);
         let view = cx.entity().downgrade();
@@ -1371,7 +1434,18 @@ impl HistoryView {
                     .overflow_hidden()
                     .on_scroll_wheel(cx.listener(Self::history_wheel))
                     .child(measure)
-                    .children(rows),
+                    .child(HistoryRowsOffset {
+                        within: px(logical.within as f32),
+                        child: Some(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .children(rows)
+                                .into_any_element(),
+                        ),
+                    }),
             )
             .child(
                 components::Scrollbar::new(
