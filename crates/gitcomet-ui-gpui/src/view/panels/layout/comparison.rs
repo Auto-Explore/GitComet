@@ -4,6 +4,7 @@
 use super::*;
 use crate::view::panes::{ComparisonCardCache, ComparisonOrderCache};
 use crate::view::rows::CommitCard;
+use gitcomet_state::model::{ComparisonSource, RangeSelection};
 use rustc_hash::FxHashSet;
 
 const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
@@ -55,18 +56,24 @@ impl DetailsPaneView {
             .collect()
     }
 
-    /// Commits to preview as cards while a two-point comparison is active.
-    /// Prefers a multi-selection *only* when it is genuinely multi, because that
-    /// is the one case where the selection is what is being compared (its merged
-    /// diff). A single leftover selection — every plain history click leaves one
-    /// — describes an unrelated commit, so the mark + compare, branch/tag and
-    /// working-tree flows derive their endpoints from the range itself, looking
-    /// each SHA up in indexed ranges or the bootstrap page for its metadata.
-    /// Ordered newest first (tip before base) to match the log. The working tree
-    /// has no commit of its own, so a compare-against-working-tree range yields
-    /// a single card.
+    /// Whether the cards are the selected commits rather than the endpoints: a
+    /// merged diff, or a multi-selection list with no comparison.
+    fn cards_follow_selection(repo: &RepoState) -> bool {
+        match repo
+            .history_state
+            .range_selection
+            .as_ref()
+            .map(|range| range.source)
+        {
+            None | Some(ComparisonSource::MergedSelection) => true,
+            Some(ComparisonSource::SelectedPair | ComparisonSource::Explicit) => false,
+        }
+    }
+
+    /// Commit ids for the cards, newest first. Endpoint cards skip the empty
+    /// tree, so a working-tree comparison yields a single card.
     pub(super) fn range_comparison_commit_ids(repo: &RepoState) -> Vec<CommitId> {
-        if repo.history_state.multi_selection.is_multi() {
+        if Self::cards_follow_selection(repo) {
             return Self::multi_selected_commit_ids_in_log_order(repo);
         }
         let Some(range) = repo.history_state.range_selection.as_ref() else {
@@ -115,7 +122,7 @@ impl DetailsPaneView {
         let mut key = rustc_hash::FxHasher::default();
         repo.id.hash(&mut key);
         repo.log_rev.hash(&mut key);
-        if !repo.history_state.multi_selection.is_multi()
+        if !Self::cards_follow_selection(repo)
             && let Some(range) = &repo.history_state.range_selection
         {
             range.from.hash(&mut key);
@@ -201,7 +208,7 @@ impl DetailsPaneView {
     }
 
     fn comparison_count(repo: &RepoState) -> usize {
-        if repo.history_state.multi_selection.is_multi() {
+        if Self::cards_follow_selection(repo) {
             repo.history_state.multi_selection.commits.len()
         } else {
             Self::range_comparison_commit_ids(repo).len()
@@ -447,13 +454,14 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
 
-        // A multi-selection without a comparison has no merged diff: only
-        // consecutive commits have one diff holding exactly their changes.
+        // Shown when the selection has no comparison: three or more commits
+        // with a gap, commits not in the loaded log, or a selection an
+        // external rewrite shrank.
         let no_diff_hint = div()
             .debug_selector(|| "multi_commit_no_merged_diff".to_string())
             .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.secondary)
-            .child("Select consecutive commits to see their combined changes.");
+            .child("Select two commits to compare them, or consecutive commits to see their combined changes.");
         let body = self.commit_cards_list(repo_id, count, cx);
 
         div()
@@ -502,7 +510,7 @@ impl DetailsPaneView {
             Loaded(usize),
         }
 
-        let (card_count, is_merged_selection, range, files_state) = {
+        let (card_count, range, files_state) = {
             let Some(repo) = self.active_repo() else {
                 return div().into_any_element();
             };
@@ -510,28 +518,15 @@ impl DetailsPaneView {
                 return div().into_any_element();
             };
             let card_count = Self::comparison_count(repo);
-            // Only a genuine multi-selection is a "merged diff of N commits";
-            // every other flow compares two named points, however many of them
-            // happen to resolve to a card.
-            let is_merged_selection = repo.history_state.multi_selection.is_multi();
             let files_state = match &repo.history_state.range_files {
                 Loadable::Ready(files) => RangeFilesState::Loaded(files.len()),
                 Loadable::Error(e) => RangeFilesState::Failed(e.clone()),
                 Loadable::Loading | Loadable::NotLoaded => RangeFilesState::Loading,
             };
-            (card_count, is_merged_selection, range, files_state)
+            (card_count, range, files_state)
         };
 
-        let header_title: SharedString = if is_merged_selection {
-            format!("{card_count} commits selected").into()
-        } else {
-            "Comparison".into()
-        };
-        let subheader: SharedString = if is_merged_selection {
-            format!("Viewing merged diff of {card_count} commits").into()
-        } else {
-            format!("Viewing diff: {} → {}", range.from_label, range.to_label).into()
-        };
+        let (header_title, subheader) = comparison_titles(&range, card_count);
 
         let header = components::content_header_bar(theme, ui_scale)
             .justify_between()
@@ -772,5 +767,59 @@ impl DetailsPaneView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+/// The comparison view's header and subheader. Only a merged selection is a
+/// "merged diff"; a selected pair and an explicit compare name their endpoints.
+fn comparison_titles(range: &RangeSelection, card_count: usize) -> (SharedString, SharedString) {
+    let endpoints = || format!("Viewing diff: {} → {}", range.from_label, range.to_label).into();
+    match range.source {
+        ComparisonSource::MergedSelection => (
+            format!("{card_count} commits selected").into(),
+            format!("Viewing merged diff of {card_count} commits").into(),
+        ),
+        ComparisonSource::SelectedPair => {
+            (format!("{card_count} commits selected").into(), endpoints())
+        }
+        ComparisonSource::Explicit => ("Comparison".into(), endpoints()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn range(source: ComparisonSource) -> RangeSelection {
+        RangeSelection {
+            source,
+            ..RangeSelection::new(
+                CommitId("aaaa".into()),
+                Some(CommitId("bbbb".into())),
+                "aaaa".into(),
+                "bbbb".into(),
+            )
+        }
+    }
+
+    #[test]
+    fn a_selected_pair_names_its_endpoints_not_a_merged_diff() {
+        let (title, subheader) = comparison_titles(&range(ComparisonSource::SelectedPair), 2);
+        assert_eq!(title.as_ref(), "2 commits selected");
+        assert_eq!(subheader.as_ref(), "Viewing diff: aaaa → bbbb");
+    }
+
+    #[test]
+    fn a_merged_selection_names_its_commit_count() {
+        let (title, subheader) = comparison_titles(&range(ComparisonSource::MergedSelection), 3);
+        assert_eq!(title.as_ref(), "3 commits selected");
+        assert_eq!(subheader.as_ref(), "Viewing merged diff of 3 commits");
+    }
+
+    #[test]
+    fn an_explicit_comparison_names_its_endpoints() {
+        let (title, subheader) = comparison_titles(&range(ComparisonSource::Explicit), 2);
+        assert_eq!(title.as_ref(), "Comparison");
+        assert_eq!(subheader.as_ref(), "Viewing diff: aaaa → bbbb");
     }
 }

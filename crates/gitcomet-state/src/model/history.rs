@@ -478,6 +478,22 @@ pub struct RangeSelection {
     /// The commit the loaded list was measured from: the merge base of a
     /// merge-base comparison. `None` until the list loads.
     pub base: Option<CommitId>,
+    pub source: ComparisonSource,
+}
+
+/// What started a comparison, which decides whether the history multi-selection
+/// describes it and how the UI names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComparisonSource {
+    /// Consecutive selected commits: `from` is the oldest one's parent, so the
+    /// diff is their combined changes.
+    MergedSelection,
+    /// Exactly two selected commits that are not consecutive: the direct diff
+    /// between them, older (lower in the log) to newer.
+    SelectedPair,
+    /// Mark/compare, a branch, a tag, or the working tree. Any multi-selection
+    /// left over from earlier clicks describes something else and is dropped.
+    Explicit,
 }
 
 impl RangeSelection {
@@ -498,6 +514,7 @@ impl RangeSelection {
             to_label,
             options: Default::default(),
             base: None,
+            source: ComparisonSource::Explicit,
         }
     }
 
@@ -774,6 +791,22 @@ impl RepoState {
         self.set_range_selection(None);
         self.release_range_files();
         true
+    }
+
+    /// Leave a comparison derived from the multi-selection, once the selection
+    /// lost one of its commits. An explicit comparison stays.
+    pub(crate) fn clear_selection_comparison(&mut self) -> bool {
+        match self
+            .history_state
+            .range_selection
+            .as_ref()
+            .map(|range| range.source)
+        {
+            Some(ComparisonSource::MergedSelection | ComparisonSource::SelectedPair) => {
+                self.clear_range_comparison()
+            }
+            Some(ComparisonSource::Explicit) | None => false,
+        }
     }
 
     /// Drop the comparison's file list and retire any load still in flight,

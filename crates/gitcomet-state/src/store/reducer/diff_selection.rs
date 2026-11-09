@@ -8,9 +8,9 @@ use super::util::{
     diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
-    AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
-    InlineSubmoduleDiffState, Loadable, RepoId, RepoState, ViewHistoryEntry,
-    submodule_inline_diff_entries,
+    AppState, ComparisonSource, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView,
+    InlineSubmoduleDiffEntry, InlineSubmoduleDiffState, Loadable, RepoId, RepoState,
+    ViewHistoryEntry, submodule_inline_diff_entries,
 };
 use crate::msg::Effect;
 use crate::msg::RepoCommandEffect;
@@ -497,7 +497,7 @@ pub(super) fn global_nav(
                 range.from_label,
                 range.to_label,
                 range.options,
-                super::effects::ComparisonSource::Explicit,
+                ComparisonSource::Explicit,
             )),
             None => {
                 if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {

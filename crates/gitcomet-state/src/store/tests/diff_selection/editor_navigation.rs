@@ -643,6 +643,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         to_label: "tip".into(),
         options: gitcomet_core::services::ComparisonOptions::merge_base().with_untracked(true),
         base: None,
+        source: crate::model::ComparisonSource::Explicit,
     };
 
     // Step 0: the history log. Step 1: a comparison (which clears the diff pane).

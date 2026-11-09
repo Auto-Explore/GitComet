@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{AppState, Loadable, RepoState};
+use crate::model::{AppState, ComparisonSource, Loadable, RepoState};
 use crate::msg::{CommitSelectMode, Effect};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
@@ -90,6 +90,7 @@ fn selecting_two_commits_enters_ordered_range_comparison() {
     // click order, so the merged diff includes that commit's own changes.
     assert_eq!(range.from, c1);
     assert_eq!(range.to, Some(c3.clone()));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
 
     // The diff pane stays empty: the comparison presents the file
     // side-selection first, and the user opens a file to view its diff.
@@ -393,6 +394,7 @@ fn mark_then_compare_with_marked_builds_the_range() {
     assert_eq!(range.to, Some(c3.clone()));
     assert_eq!(range.from_label, "main");
     assert_eq!(range.to_label, "feature");
+    assert_eq!(range.source, ComparisonSource::Explicit);
 }
 
 #[test]
@@ -577,41 +579,42 @@ fn external_change_does_not_refresh_a_commit_comparison() {
     );
 }
 
-/// `c3` and `c1` with `c2` between them: no diff holds exactly their changes,
-/// as `c0..c3` would add `c2`'s. The selection stays a plain list until it
-/// closes the gap.
+/// Two commits with a gap between them compare directly, `c1..c3`, the way
+/// `git diff c1 c3` does, rather than claiming to be their merged diff.
 #[test]
-fn selecting_commits_with_a_gap_between_them_shows_no_merged_diff() {
+fn selecting_two_commits_with_a_gap_compares_them_directly() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
+    let c1 = CommitId("c1".into());
+    let c3 = CommitId("c3".into());
 
-    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    let effects = select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
 
     let history = &repo(&state, repo_id).history_state;
     assert!(history.multi_selection.is_multi());
-    assert_eq!(history.range_selection, None);
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
-        "a selection with a gap must not load a merged diff"
-    );
-
-    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
-    let range = repo(&state, repo_id)
-        .history_state
+    let range = history
         .range_selection
-        .clone()
-        .expect("closing the gap starts the comparison");
-    assert_eq!(range.from, CommitId("c0".into()));
-    assert_eq!(range.to, Some(CommitId("c3".into())));
+        .as_ref()
+        .expect("two selected commits start a comparison");
+    assert_eq!(range.from, c1);
+    assert_eq!(range.to, Some(c3.clone()));
+    assert_eq!(range.source, ComparisonSource::SelectedPair);
+    assert_eq!(range.from_label, "c1");
+    assert_eq!(range.to_label, "c3");
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRangeFiles { from, to, .. } if *from == c1 && *to == Some(c3.clone())
+        )),
+        "a LoadRangeFiles effect for c1->c3 should be issued"
+    );
 }
 
-/// Two branch tips listed next to each other are not consecutive commits: the
-/// diff from one's parent to the other is the difference between branches.
+/// Two branch tips are the usual reason to pick two commits: the lower one in
+/// the log is the base, whichever was clicked first.
 #[test]
-fn selecting_commits_on_different_branches_shows_no_merged_diff() {
+fn selecting_two_branch_tips_compares_them_directly() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
@@ -624,16 +627,57 @@ fn selecting_commits_on_different_branches_shows_no_merged_diff() {
     }));
 
     select(&mut state, repo_id, "a1", CommitSelectMode::Single);
-    let effects = select(&mut state, repo_id, "b1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "b1", CommitSelectMode::Toggle);
+
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("two branch tips start a comparison");
+    assert_eq!(range.from, CommitId("b1".into()));
+    assert_eq!(range.to, Some(CommitId("a1".into())));
+    assert_eq!(range.source, ComparisonSource::SelectedPair);
+}
+
+/// Three or more commits with a gap have no single diff holding exactly their
+/// changes, so they stay a plain list until the gap closes.
+#[test]
+fn selecting_three_commits_with_a_gap_shows_no_diff_until_the_gap_closes() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![
+            commit("c4", "c3"),
+            commit("c3", "c2"),
+            commit("c2", "c1"),
+            commit("c1", "c0"),
+        ],
+        next_cursor: None,
+    }));
+
+    select(&mut state, repo_id, "c4", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
 
     let history = &repo(&state, repo_id).history_state;
-    assert!(history.multi_selection.is_multi());
+    assert_eq!(history.multi_selection.commits.len(), 3);
     assert_eq!(history.range_selection, None);
     assert!(
         !effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadRangeFiles { .. }))
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "a selection with a gap must not load a diff"
     );
+
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("closing the gap starts the comparison");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("c4".into())));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
 }
 
 /// The list landing again can change the selected file's change: deleted on

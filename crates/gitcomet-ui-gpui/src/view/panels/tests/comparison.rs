@@ -1,6 +1,8 @@
 use super::*;
 use gitcomet_core::domain::{Commit, CommitFileChange, CommitId, CommitParentIds, FileStatusKind};
-use gitcomet_state::model::{CommitMultiSelection, Loadable, RangeSelection, RepoId};
+use gitcomet_state::model::{
+    CommitMultiSelection, ComparisonSource, Loadable, RangeSelection, RepoId,
+};
 
 fn sha(ix: usize) -> String {
     format!("{ix:040}")
@@ -80,6 +82,11 @@ fn draw_comparison_view(
         to_label: "tip".into(),
         options: Default::default(),
         base: None,
+        source: if selected >= 2 {
+            ComparisonSource::MergedSelection
+        } else {
+            ComparisonSource::Explicit
+        },
     };
     draw_details(
         cx,
@@ -145,19 +152,19 @@ fn draw_details<'a>(
     (view, cx)
 }
 
-/// Commits that are not consecutive have no merged diff, so the reducer opens
+/// Three or more commits with a gap have no merged diff, so the reducer opens
 /// no comparison for them. The pane lists them and says why there is no diff,
 /// rather than leaving a list that reads as if the diff were still to come.
 #[gpui::test]
 fn a_selection_without_a_merged_diff_says_why(cx: &mut gpui::TestAppContext) {
-    let (_, cx) = draw_details(cx, RepoId(76), 3, &[0, 2], None, Files::Loading);
+    let (_, cx) = draw_details(cx, RepoId(76), 4, &[0, 1, 3], None, Files::Loading);
 
     assert!(
         cx.debug_bounds("multi_commit_no_merged_diff").is_some(),
-        "expected the hint that only consecutive commits have a combined diff"
+        "expected the no-comparison hint"
     );
     assert!(cx.debug_bounds("commit_multi_row_0").is_some());
-    assert!(cx.debug_bounds("commit_multi_row_1").is_some());
+    assert!(cx.debug_bounds("commit_multi_row_2").is_some());
     assert!(
         cx.debug_bounds("range_comparison_body").is_none(),
         "no comparison body without a comparison"

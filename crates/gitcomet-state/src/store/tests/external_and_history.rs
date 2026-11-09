@@ -2550,6 +2550,90 @@ fn log_loaded_reconciles_commit_multi_selection() {
     assert_eq!(sel.anchor_log_rev, None);
 }
 
+/// Reloads the log without `gone` while `kept`/`gone` are compared as `source`;
+/// returns the comparison left and the reload's effects.
+fn reload_dropping_a_compared_commit(
+    source: crate::model::ComparisonSource,
+) -> (Option<crate::model::RangeSelection>, Vec<Effect>) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "s".into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+    let kept = CommitId("kept".into());
+    let gone = CommitId("gone".into());
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
+        commits: vec![kept.clone(), gone.clone()].into(),
+        ..Default::default()
+    };
+    repo_state.history_state.selected_commit = Some(kept.clone());
+    repo_state.history_state.range_selection = Some(crate::model::RangeSelection {
+        source,
+        ..crate::model::RangeSelection::new(gone, Some(kept), "gone".into(), "kept".into())
+    });
+
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(std::sync::Arc::new(LogPage {
+                commits: vec![commit("kept"), commit("other")],
+                next_cursor: None,
+            })
+            .into()),
+        }),
+    );
+    (
+        state.repos[0].history_state.range_selection.clone(),
+        effects,
+    )
+}
+
+#[test]
+fn log_reload_that_drops_a_compared_commit_leaves_the_selection_comparison() {
+    use crate::model::ComparisonSource;
+    for source in [
+        ComparisonSource::SelectedPair,
+        ComparisonSource::MergedSelection,
+    ] {
+        let (range, effects) = reload_dropping_a_compared_commit(source);
+        assert_eq!(range, None, "{source:?}");
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::LoadCommitDetails { commit_id, .. } if commit_id.as_ref() == "kept"
+            )),
+            "the details pane goes back to the still-selected commit ({source:?})"
+        );
+    }
+    let (range, _) = reload_dropping_a_compared_commit(ComparisonSource::Explicit);
+    assert!(
+        range.is_some(),
+        "an explicit comparison does not come from the selection"
+    );
+}
+
 fn lookup_commit(id: &CommitId, summary: &str) -> Commit {
     Commit {
         id: id.clone(),

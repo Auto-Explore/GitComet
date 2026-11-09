@@ -44,7 +44,7 @@ pub(super) mod test_inputs;
 mod util;
 mod worktree_removal;
 
-use crate::model::{AppState, Loadable, RepoId};
+use crate::model::{AppState, ComparisonSource, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
@@ -1304,7 +1304,7 @@ fn reduce_inner(
             Some(to),
             from_label,
             to_label,
-            effects::ComparisonSource::Explicit,
+            ComparisonSource::Explicit,
         ),
         Msg::CompareWithWorkingTree {
             repo_id,
@@ -1317,7 +1317,7 @@ fn reduce_inner(
             None,
             from_label,
             "Working tree".to_string(),
-            effects::ComparisonSource::Explicit,
+            ComparisonSource::Explicit,
         ),
         Msg::CompareWithOptions {
             repo_id,
@@ -1334,7 +1334,7 @@ fn reduce_inner(
             from_label,
             to_label,
             options,
-            effects::ComparisonSource::Explicit,
+            ComparisonSource::Explicit,
         ),
         Msg::ClearComparison { repo_id } => effects::clear_comparison(state, repo_id),
         Msg::MarkForComparison {

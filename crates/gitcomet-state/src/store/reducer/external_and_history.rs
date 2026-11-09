@@ -1,6 +1,9 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
 use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
-use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
+use super::effects::{
+    append_ensure_sidebar_data_effects, reconcile_selected_commit_details,
+    select_commit_and_load_details,
+};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
     selected_history_reloads_for_activation,
@@ -981,6 +984,8 @@ pub(super) fn log_loaded(
 
             let mut next = repo_state.history_state.multi_selection.clone();
             Arc::make_mut(&mut next.commits).retain(&survives);
+            let dropped =
+                next.commits.len() != repo_state.history_state.multi_selection.commits.len();
             if let Some(anchor) = &next.anchor
                 && !survives(anchor)
             {
@@ -1007,6 +1012,7 @@ pub(super) fn log_loaded(
             let refocus = focus_gone.then(|| next.commits.last().cloned()).flatten();
 
             repo_state.set_commit_multi_selection(next);
+            let left_comparison = dropped && repo_state.clear_selection_comparison();
 
             if focus_gone {
                 match refocus {
@@ -1020,6 +1026,8 @@ pub(super) fn log_loaded(
                         repo_state.set_commit_details(Loadable::NotLoaded);
                     }
                 }
+            } else if left_comparison {
+                effects.extend(reconcile_selected_commit_details(repo_state, repo_id));
             }
         }
 
