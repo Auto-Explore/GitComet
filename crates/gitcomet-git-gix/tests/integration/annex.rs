@@ -310,7 +310,7 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
         &["-c", "annex.largefiles=anything", "add", "notes.txt"],
     );
     run_git(&repo, &["commit", "-qm", "edit notes"]);
-    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
 
     let diff = open(&repo)
         .diff_file_text(
@@ -402,7 +402,7 @@ fn hide_missing_adjusted_branch_hides_files_without_content() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let base = git_stdout(&repo, &["branch", "--show-current"]).to_string();
+    let base = git_stdout(&repo, &["branch", "--show-current"]);
     fs::write(repo.join("kept.bin"), vec![5u8; 1024]).unwrap();
     run_git(&repo, &["annex", "add", "-q", "kept.bin"]);
     run_git(&repo, &["commit", "-qm", "add kept.bin"]);
@@ -422,9 +422,9 @@ fn hide_missing_adjusted_branch_hides_files_without_content() {
         },
     )
     .unwrap();
-    let head = git_stdout_raw(&repo, &["branch", "--show-current"]);
+    let head = git_stdout(&repo, &["branch", "--show-current"]);
     assert_eq!(
-        gitcomet_core::annex::adjusted_branch(head.trim()),
+        gitcomet_core::annex::adjusted_branch(head.as_str()),
         Some((base.as_str(), "hidemissing"))
     );
     assert!(
@@ -461,9 +461,9 @@ fn adjust_and_leave_adjusted_branch() {
         },
     )
     .unwrap();
-    let head = git_stdout_raw(&repo, &["branch", "--show-current"]);
+    let head = git_stdout(&repo, &["branch", "--show-current"]);
     assert_eq!(
-        gitcomet_core::annex::adjusted_branch(head.trim()),
+        gitcomet_core::annex::adjusted_branch(head.as_str()),
         Some((base.as_str(), "unlocked"))
     );
 
@@ -698,7 +698,7 @@ fn get_multiple_keys_attempts_later_keys_after_failure_regression() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let key = git_stdout(&repo, &["annex", "lookupkey", "big.bin"]).to_string();
+    let key = git_stdout(&repo, &["annex", "lookupkey", "big.bin"]);
     run_git(&repo, &["annex", "copy", "-q", "--to=backup", "big.bin"]);
     run_git(&repo, &["annex", "drop", "-q", "big.bin"]);
     let missing = format!("SHA256E-s1--{}.bin", "0".repeat(64));
@@ -1784,14 +1784,14 @@ fn whereis_preserves_untrusted_and_empty_locations() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let opened = open(&repo);
-    let key = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"]);
+    let key = git_stdout(&repo, &["annex", "lookupkey", "big.bin"]);
     run_git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
     run_git(&repo, &["annex", "drop", "big.bin"]);
     run_git(&repo, &["annex", "untrust", "backup"]);
     let locations = opened
-        .annex_whereis(key.trim(), &CancellationToken::new())
+        .annex_whereis(key.as_str(), &CancellationToken::new())
         .unwrap();
-    assert_eq!(locations.key, key.trim());
+    assert_eq!(locations.key, key.as_str());
     assert!(locations.copies.is_empty());
     assert_eq!(locations.untrusted.len(), 1);
     assert!(locations.untrusted[0].description.contains("backup"));
@@ -1801,7 +1801,7 @@ fn whereis_preserves_untrusted_and_empty_locations() {
         &["annex", "drop", "--force", "--from", "backup", "big.bin"],
     );
     let locations = opened
-        .annex_whereis(key.trim(), &CancellationToken::new())
+        .annex_whereis(key.as_str(), &CancellationToken::new())
         .unwrap();
     assert!(locations.copies.is_empty() && locations.untrusted.is_empty());
     assert!(
@@ -1811,7 +1811,7 @@ fn whereis_preserves_untrusted_and_empty_locations() {
     );
     let cancelled = CancellationToken::new();
     cancelled.cancel();
-    assert!(opened.annex_whereis(key.trim(), &cancelled).is_err());
+    assert!(opened.annex_whereis(key.as_str(), &cancelled).is_err());
 }
 
 #[test]
@@ -1819,7 +1819,7 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let old = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"]);
+    let old = git_stdout(&repo, &["annex", "lookupkey", "big.bin"]);
     run_git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
     run_git(&repo, &["annex", "unlock", "big.bin"]);
     fs::write(repo.join("big.bin"), b"a new version").unwrap();
@@ -1829,7 +1829,7 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
     run_git(&repo, &["rm", "big.bin"]);
     run_git(&repo, &["commit", "-qm", "remove path"]);
     let opened = open(&repo);
-    for (key, in_backup) in [(old.trim(), true), (new.trim(), false)] {
+    for (key, in_backup) in [(old.as_str(), true), (new.trim(), false)] {
         let locations = opened
             .annex_whereis(key, &CancellationToken::new())
             .unwrap();
@@ -1910,7 +1910,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
     for name in ["a:b.txt", "percent%.txt"] {
         fs::write(repo.join(name), "escaped content\n").unwrap();
         run_git(&repo, &["annex", "add", "--backend=WORM", name]);
-        let raw = git_stdout(&repo, &["annex", "lookupkey", name]).to_string();
+        let raw = git_stdout(&repo, &["annex", "lookupkey", name]);
         let link = fs::read_link(repo.join(name)).unwrap();
         assert_eq!(
             annex::key_from_symlink_target(link.to_str().unwrap().as_bytes())

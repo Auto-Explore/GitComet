@@ -597,8 +597,8 @@ fn set_upstream_honours_auto_setup_rebase() {
             .set_upstream_branch_with_output("main", &upstream("origin", "main"))
             .expect("set upstream");
 
-        let actual = git_stdout_raw(&work_repo, &["config", "branch.main.rebase"]);
-        assert_eq!(actual.trim(), rebase, "{setting}");
+        let actual = git_stdout(&work_repo, &["config", "branch.main.rebase"]);
+        assert_eq!(actual.as_str(), rebase, "{setting}");
     }
 }
 
@@ -662,7 +662,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
 
-    let upstream_after = git_stdout_raw(
+    let upstream_after = git_stdout(
         &work_repo,
         &[
             "for-each-ref",
@@ -670,7 +670,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
             "refs/heads/feature",
         ],
     );
-    assert_eq!(upstream_after.trim(), "origin/feature");
+    assert_eq!(upstream_after.as_str(), "origin/feature");
 
     let after = opened
         .list_branches(&gitcomet_core::services::CancellationToken::new())
@@ -1366,7 +1366,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
         initialize_repo_with_commit(repo);
         run_git(repo, &["remote", "add", "origin", "."]);
         run_git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        let oid = git_stdout_raw(repo, &["rev-parse", "HEAD"]);
+        let oid = git_stdout(repo, &["rev-parse", "HEAD"]);
         let mut refs = String::new();
         let mut config = fs::OpenOptions::new()
             .append(true)
@@ -1375,7 +1375,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
         for index in 0..count {
             refs.push_str(&format!(
                 "create refs/heads/branch-{index} {}\n",
-                oid.trim()
+                oid.as_str()
             ));
             writeln!(config, "\n[branch \"branch-{index}\"]\n remote = origin\n merge = refs/heads/main\n gitcometPendingUpstream = false").unwrap();
         }

@@ -428,14 +428,14 @@ fn annex_link_text_in_a_plain_worktree_file_is_a_pointer() {
     );
     let link_target = format!(".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}/{ANNEX_KEY}");
     fs::write(repo.join("locked.bin"), &link_target).unwrap();
-    let blob = git_stdout_raw(&repo, &["hash-object", "-w", "locked.bin"]);
+    let blob = git_stdout(&repo, &["hash-object", "-w", "locked.bin"]);
     run_git(
         &repo,
         &[
             "update-index",
             "--add",
             "--cacheinfo",
-            &format!("120000,{},locked.bin", blob.trim()),
+            &format!("120000,{},locked.bin", blob.as_str()),
         ],
     );
 
@@ -504,8 +504,8 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
             fs::write(&object, content).unwrap();
             objects.push(object);
             fs::write(repo.join("a.bin"), pointer).unwrap();
-            let id = git_stdout_raw(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
-            index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.trim()));
+            let id = git_stdout(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
+            index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.as_str()));
         }
         let mut child = git_cmd(&repo)
             .args(["update-index", "--index-info"])
@@ -843,7 +843,7 @@ fn commit_file_rows_carry_large_file_state() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
-    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
 
     let opened = GixBackend.open(&repo).unwrap();
     let details = opened
@@ -1143,7 +1143,7 @@ fn seed_lfs_history(root: &Path) -> (PathBuf, String) {
     fs::write(repo.join("a.bin"), "middle version\n").unwrap();
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "middle"]);
-    let middle = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
+    let middle = git_stdout(&repo, &["rev-parse", "HEAD"]);
     fs::write(repo.join("a.bin"), "current version\n").unwrap();
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "current"]);
@@ -1997,7 +1997,7 @@ fn commit_rows_look_for_pointers_only_where_lfs_or_annex_is_used() {
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "pointer-shaped text"]);
     let row = |repo: &Path| {
-        let head = git_stdout(repo, &["rev-parse", "HEAD"]).to_string();
+        let head = git_stdout(repo, &["rev-parse", "HEAD"]);
         let details = GixBackend
             .open(repo)
             .unwrap()
@@ -2765,7 +2765,7 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
         rows.unstaged.as_ref(),
         &[row("raw.bin", FileStatusKind::Modified)]
     );
-    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
     let details = opened
         .commit_details(&gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
