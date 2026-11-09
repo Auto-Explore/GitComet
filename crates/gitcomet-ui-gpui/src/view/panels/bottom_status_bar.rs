@@ -27,16 +27,6 @@ where
     )
 }
 
-fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
-    let launch_date = jiff::civil::date(2026, 11, 9);
-    let days = today.duration_until(launch_date).as_secs() / 86_400;
-    match days {
-        1 => "Pro launches in 1 day".into(),
-        2..=100 => format!("Pro launches in {days} days").into(),
-        _ => "Get Pro!".into(),
-    }
-}
-
 fn sidebar_toggle_icon_path(collapsed: bool) -> &'static str {
     if collapsed {
         "icons/side_panel_left_expand.svg"
@@ -70,10 +60,7 @@ fn status_bar_chip(
         .id(id)
         .group(id)
         .debug_selector(move || id.to_string())
-        .h(scaled_px(theme.metrics.row_height(
-            BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX,
-            BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX,
-        )))
+        .h(status_bar_item_height(ui_scale_percent, theme))
         .px(scaled_px(4.0))
         .flex()
         .items_center()
@@ -87,6 +74,15 @@ fn status_bar_chip(
         )
 }
 
+/// One box height for every chip and text item, so their glyphs snap to the
+/// same pixel row.
+fn status_bar_item_height(ui_scale_percent: u32, theme: AppTheme) -> Pixels {
+    crate::ui_scale::scaler(ui_scale_percent)(theme.metrics.row_height(
+        BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX,
+        BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX,
+    ))
+}
+
 pub(in super::super) struct BottomStatusBarView {
     pub(super) relocated_items: RelocatedBarItems,
     theme: AppTheme,
@@ -95,7 +91,6 @@ pub(in super::super) struct BottomStatusBarView {
     root_view: WeakEntity<GitCometView>,
     active_context_menu_invoker: Option<SharedString>,
     minimized_hook_activity_repos: rustc_hash::FxHashSet<RepoId>,
-    pro_launch_label: SharedString,
     /// Extension status items in registration order, built once the window
     /// has opened. Empty without extensions.
     extension_items: Vec<ExtensionBarItem>,
@@ -133,8 +128,6 @@ impl BottomStatusBarView {
             root_view,
             active_context_menu_invoker: None,
             minimized_hook_activity_repos: Default::default(),
-            // Use local calendar days and keep the startup label for this window.
-            pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
             extension_items: Vec::new(),
             active_view: gitcomet_extension_api::ViewTarget::History,
             edition_strip: None,
@@ -531,7 +524,7 @@ impl BarItemOwner for BottomStatusBarView {
                 }),
             )
             .gitcomet_tooltip(theme, format!("See {name} Pro").into())
-            .child(self.pro_launch_label.clone())
+            .child("Get Pro!")
         });
 
         // GPUI paints an SVG as a mask tinted by the text color, so the mark's
@@ -546,13 +539,14 @@ impl BarItemOwner for BottomStatusBarView {
         let brand = div()
             .id("bottom_status_bar_brand_link")
             .debug_selector(|| "bottom_status_bar_brand_link".to_string())
+            .h(status_bar_item_height(ui_scale_percent, theme))
             .flex()
             .items_center()
             .gap(scaled_px(4.0))
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
-            .child(brand_mark(scaled_px(13.0)))
+            .child(brand_mark(scaled_px(14.0)))
             .child(
                 div()
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
@@ -581,6 +575,7 @@ impl BarItemOwner for BottomStatusBarView {
         let version_link = div()
             .id("bottom_status_bar_version")
             .debug_selector(|| "bottom_status_bar_version".to_string())
+            .h(status_bar_item_height(ui_scale_percent, theme))
             .flex()
             .items_center()
             .text_size(theme.ui_text(11.0))
@@ -701,7 +696,11 @@ impl BarItemOwner for BottomStatusBarView {
                             row.child(
                                 div()
                                     .id("build_dev_badge")
+                                    .h(status_bar_item_height(ui_scale_percent, theme))
+                                    .flex()
+                                    .items_center()
                                     .text_size(theme.ui_text(10.0))
+                                    .line_height(scaled_px(theme.metrics.ui_text(12.0)))
                                     .child("DEV"),
                             )
                         }),
@@ -767,7 +766,8 @@ impl Render for BottomStatusBarView {
 }
 
 /// The product's mark beside its name: a branded mark keeps its own colours;
-/// GitComet's is a tinted mask.
+/// GitComet's is the blue mask on the app icon's dark plate, so it looks the
+/// same on light and dark themes.
 fn brand_mark(size: Pixels) -> AnyElement {
     if gitcomet_core::identity::current()
         .branding()
@@ -779,32 +779,22 @@ fn brand_mark(size: Pixels) -> AnyElement {
             .flex_none()
             .into_any_element()
     } else {
-        svg_icon("brand/mark.svg", gpui::rgb(0x5ac1fe), size).into_any_element()
+        div()
+            .size(size)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(size * 0.22)
+            .bg(gpui::rgb(0x00131d))
+            .child(svg_icon("brand/mark.svg", gpui::rgb(0x5ac1fe), size * 0.78))
+            .into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{details_toggle_icon_path, pro_launch_label, sidebar_toggle_icon_path};
-
-    #[test]
-    fn pro_countdown_uses_calendar_days_and_falls_back_outside_launch_window() {
-        use jiff::civil::date;
-
-        for (today, expected) in [
-            (date(2026, 10, 7), "Pro launches in 33 days"),
-            (date(2026, 10, 10), "Pro launches in 30 days"),
-            (date(2026, 10, 11), "Pro launches in 29 days"),
-            (date(2026, 11, 8), "Pro launches in 1 day"),
-            (date(2026, 11, 9), "Get Pro!"),
-            (date(2026, 11, 10), "Get Pro!"),
-            (date(2026, 8, 1), "Pro launches in 100 days"),
-            (date(2026, 7, 31), "Get Pro!"),
-            (date(2025, 11, 9), "Get Pro!"),
-        ] {
-            assert_eq!(pro_launch_label(today).as_ref(), expected, "{today}");
-        }
-    }
+    use super::{details_toggle_icon_path, sidebar_toggle_icon_path};
 
     #[test]
     fn pane_toggle_arrows_only_appear_when_the_panel_is_collapsed() {
