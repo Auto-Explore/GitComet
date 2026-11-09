@@ -1082,6 +1082,15 @@ fn a_finished_commit_pushes_by_its_own_request_not_the_latest_one() {
         })
         .expect("the first commit asked for a push");
     assert_eq!(context.hooks, GitHooks::Skip);
+    assert_eq!(
+        state.repos[0]
+            .pending
+            .commit_retry
+            .as_ref()
+            .map(|pending| pending.message.as_str()),
+        Some("second"),
+        "the second commit is still pending"
+    );
 }
 
 #[test]

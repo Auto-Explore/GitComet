@@ -815,7 +815,10 @@ pub(super) fn commit_finished(
         request.amend,
         auth_prompt.is_some(),
     );
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+    // A commit started while this one ran keeps its pending slot.
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.pending.commit_retry.as_ref() == Some(&request)
+    {
         repo_state.pending.commit_retry = None;
     }
     if let Some(prompt) = auth_prompt {
