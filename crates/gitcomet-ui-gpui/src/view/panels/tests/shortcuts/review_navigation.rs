@@ -1019,3 +1019,90 @@ fn f3_steps_the_open_file_filter_and_f2_steps_back(cx: &mut gpui::TestAppContext
     wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
     assert!(review_search_input_focused(cx, &view));
 }
+
+fn comparison_repo() -> RepoState {
+    let mut repo = review_repo();
+    let [tip, base] = [
+        CommitId("abcdef0123456789".into()),
+        CommitId("0123456789abcdef".into()),
+    ];
+    repo.history_state.multi_selection = gitcomet_state::model::CommitMultiSelection {
+        commits: vec![tip.clone(), base.clone()].into(),
+        ..Default::default()
+    };
+    repo.history_state.range_selection = Some(gitcomet_state::model::RangeSelection {
+        source: gitcomet_state::model::ComparisonSource::SelectedPair,
+        // A merge-base comparison lists files from the resolved base.
+        options: gitcomet_core::services::ComparisonOptions::merge_base(),
+        base: Some(CommitId("fedcba9876543210".into())),
+        ..gitcomet_state::model::RangeSelection::new(
+            base,
+            Some(tip),
+            "01234567".into(),
+            "abcdef01".into(),
+        )
+    });
+    repo.history_state.range_files = Loadable::Ready(Arc::new(
+        ["a.rs", "b.rs"]
+            .into_iter()
+            .map(|path| CommitFileChange::new(path.into(), FileStatusKind::Modified))
+            .collect(),
+    ));
+    repo.history_state.range_files_rev = 1;
+    repo
+}
+
+fn range_files_focused(cx: &mut gpui::VisualTestContext, view: &Entity<GitCometView>) -> bool {
+    cx.update(|window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(FileListId::RangeFiles)
+            .is_focused(window)
+    })
+}
+
+/// The comparison's file list hands focus back and forth like a commit's.
+#[gpui::test]
+fn review_enter_escape_cross_the_comparison_file_list(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    prepare(cx, &view);
+    apply_state(cx, &view, app_state_with_active_repo(comparison_repo()));
+    draw_and_drain_test_window(cx);
+
+    cx.simulate_keystrokes("enter");
+    wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
+    sync_store_snapshot(cx, &view);
+    assert!(
+        range_files_focused(cx, &view),
+        "Enter on the graph focuses the files"
+    );
+    let opened_from = cx.update(|_, app| {
+        match &view.read(app).store.snapshot().repos[0]
+            .diff_state
+            .diff_target
+        {
+            Some(DiffTarget::CommitRange { from_commit_id, .. }) => Some(from_commit_id.clone()),
+            _ => None,
+        }
+    });
+    assert_eq!(
+        opened_from,
+        Some(CommitId("fedcba9876543210".into())),
+        "the file opens from the comparison's resolved base, as a click does"
+    );
+    cx.simulate_keystrokes("enter");
+    draw_and_drain_test_window(cx);
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "Enter on a file focuses its diff"
+    );
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        range_files_focused(cx, &view),
+        "Escape in the diff returns to the files"
+    );
+}

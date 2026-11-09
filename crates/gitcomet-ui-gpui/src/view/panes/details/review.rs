@@ -135,7 +135,7 @@ impl DetailsPaneView {
                     repo.history_state.range_files_rev,
                     files,
                 );
-                DiffTarget::commit_range(range.from.clone(), range.to.clone(), None)
+                DiffTarget::commit_range(range.diff_from().clone(), range.to.clone(), None)
                     .for_change(files.get(*projection.source_indices.get(ordinal)?)?)
             }
             FileListId::WorktreeFiles => {
