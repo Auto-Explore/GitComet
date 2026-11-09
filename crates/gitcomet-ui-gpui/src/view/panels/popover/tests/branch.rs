@@ -443,10 +443,6 @@ impl GitRepository for TrackingRepo {
         )))
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn interactive_cherry_pick_with_output(
         &self,
         entries: &[gitcomet_core::services::InteractiveRebaseEntry],

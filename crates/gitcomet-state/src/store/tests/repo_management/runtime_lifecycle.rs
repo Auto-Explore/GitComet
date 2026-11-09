@@ -90,10 +90,6 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.checkout_commit(_id)
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        self.inner.cherry_pick(_id)
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         self.inner.stash_create(_message, _include_untracked)
     }

@@ -920,9 +920,6 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn checkout_commit(&self, id: &CommitId) -> Result<()> {
             self.inner.checkout_commit(id)
         }
-        fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-            self.inner.cherry_pick(id)
-        }
         fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
             self.inner.stash_create(message, include_untracked)
         }

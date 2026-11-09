@@ -233,9 +233,6 @@ impl GitRepository for UnsupportedRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -465,9 +462,6 @@ impl GitRepository for MetadataSchedulingRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -665,9 +659,6 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         unsupported_repo_result()
     }
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -884,9 +875,6 @@ impl GitRepository for RecordingLogRepo {
         unsupported_repo_result()
     }
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1154,9 +1142,6 @@ impl GitRepository for RecordingCheckoutRepo {
             .expect("checkout recording mutex")
             .push(format!("checkout_commit {}", id.as_ref()));
         Ok(())
-    }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()

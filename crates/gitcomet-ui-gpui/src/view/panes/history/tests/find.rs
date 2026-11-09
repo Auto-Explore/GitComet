@@ -1475,7 +1475,6 @@ impl GitRepository for IndexedFindRepo {
         fn delete_branch(&self, name: &str) -> ();
         fn checkout_branch(&self, name: &str) -> ();
         fn checkout_commit(&self, id: &CommitId) -> ();
-        fn cherry_pick(&self, id: &CommitId) -> ();
         fn stash_create(&self, message: &str, include_untracked: bool) -> ();
 
         fn stash_apply(&self, index: usize) -> ();

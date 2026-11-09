@@ -223,9 +223,6 @@ impl GitRepository for ControlledRewordRepo {
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {
         self.fallback.checkout_commit(id)
     }
-    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-        self.fallback.cherry_pick(id)
-    }
     fn stash_create(&self, message: &str, untracked: bool) -> Result<()> {
         self.fallback.stash_create(message, untracked)
     }

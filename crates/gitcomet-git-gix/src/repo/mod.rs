@@ -1355,12 +1355,6 @@ impl GitRepository for GixRepo {
         self.checkout_commit_impl(id)
     }
 
-    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.cherry_pick_impl(id)
-    }
-
     fn cherry_pick_with_output(
         &self,
         id: &CommitId,
@@ -1455,19 +1449,6 @@ impl GitRepository for GixRepo {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.commit_with_outcome_impl(message)
-    }
-
-    fn commit_amend(&self, message: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_amend_impl(message)
-    }
-
-    fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_amend_impl(message)?;
-        Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
     fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {

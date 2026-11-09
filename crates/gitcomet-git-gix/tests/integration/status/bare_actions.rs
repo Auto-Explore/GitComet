@@ -92,8 +92,6 @@ fn direct_worktree_mutations_and_reads_refuse_bare_without_changing_git_data() {
     reject!(repo.commit("blocked"));
     reject!(repo.commit_with_outcome("blocked"));
     reject!(repo.commit_with_identity("blocked", None));
-    reject!(repo.commit_amend("blocked"));
-    reject!(repo.commit_amend_with_output("blocked"));
     reject!(repo.commit_amend_with_outcome("blocked"));
     reject!(repo.commit_amend_with_identity("blocked", None));
     for hooks in [GitHooks::Run, GitHooks::Skip] {
@@ -112,7 +110,6 @@ fn direct_worktree_mutations_and_reads_refuse_bare_without_changing_git_data() {
     reject!(repo.rebase_abort_with_output());
     reject!(repo.interactive_rebase_with_output("HEAD", &[]));
     reject!(repo.interactive_cherry_pick_with_output(&[], false));
-    reject!(repo.cherry_pick(&head));
     reject!(repo.cherry_pick_with_output(&head, true, None));
     reject!(repo.revert_with_output(&head, true, None));
     reject!(repo.apply_file_change_with_output(&apply, true));

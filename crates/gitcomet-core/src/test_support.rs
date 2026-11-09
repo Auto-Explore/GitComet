@@ -136,10 +136,6 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported()
     }

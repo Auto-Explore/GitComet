@@ -1363,7 +1363,6 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
-    fn cherry_pick(&self, id: &CommitId) -> Result<()>;
     /// Runs a single cherry-pick. `mainline` is Git's 1-based parent number
     /// for a merge commit and must be `None` for non-merge commits.
     fn cherry_pick_with_output(
@@ -1431,14 +1430,10 @@ pub trait GitRepository: Send + Sync {
         self.commit(message)?;
         Ok(CommitOperationOutcome::default())
     }
-    fn commit_amend(&self, _message: &str) -> Result<()> {
+    fn commit_amend_with_outcome(&self, _message: &str) -> Result<CommitOperationOutcome> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",
         )))
-    }
-    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
-        self.commit_amend(message)?;
-        Ok(CommitOperationOutcome::default())
     }
 
     /// Identity override for this operation. Existing implementations remain
@@ -1886,11 +1881,6 @@ pub trait GitRepository: Send + Sync {
             last = self.delete_remote_branch_with_output(remote, branch)?;
         }
         Ok(last)
-    }
-
-    fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
-        self.commit_amend(message)?;
-        Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
     fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {

@@ -527,14 +527,16 @@ fn amending_the_adjustment_commit_is_refused() {
     fs::write(repo.join("notes.txt"), "one\n").unwrap();
     git(&repo, &["add", "notes.txt"]);
     let error = open(&repo)
-        .commit_amend("rewritten")
+        .commit_amend_with_outcome("rewritten")
         .expect_err("amending the adjustment commit loses the change");
     assert!(error.to_string().contains("adjusted branch"), "{error}");
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
 
     // A commit of the user's own, not yet propagated, can still be amended.
     open(&repo).commit("one").unwrap();
-    open(&repo).commit_amend("one, reworded").unwrap();
+    open(&repo)
+        .commit_amend_with_outcome("one, reworded")
+        .unwrap();
     assert_eq!(
         git(&repo, &["log", "-1", "--format=%s"]).trim(),
         "one, reworded"

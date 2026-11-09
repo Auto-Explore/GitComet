@@ -208,7 +208,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
         "feature",
         CheckoutRemoteBranchMode::Create,
     ));
-    assert_unsupported(repo.commit_amend("message"));
+    assert_unsupported(repo.commit_amend_with_outcome("message"));
     assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
     assert_unsupported(repo.compare_files(
         &commit,
@@ -262,7 +262,6 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     ));
     assert_unsupported(repo.unset_upstream_branch_with_output("main"));
     assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
-    assert_unsupported(repo.commit_amend_with_output("message"));
     assert_unsupported(repo.pull_branch_with_output("origin", "main"));
     assert_unsupported(repo.merge_ref_with_output("origin/main"));
     assert_unsupported(repo.squash_ref_with_output("origin/main"));
@@ -525,10 +524,6 @@ impl GitRepository for RecordingHistoryModeRepo {
     }
 
     fn checkout_commit(&self, _id: &CommitId) -> super::Result<()> {
-        unsupported()
-    }
-
-    fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
         unsupported()
     }
 

@@ -855,14 +855,6 @@ impl GixRepo {
         run_git_simple(cmd, "git checkout <commit>")
     }
 
-    pub(super) fn cherry_pick_impl(&self, id: &CommitId) -> Result<()> {
-        validate_hex_commit_id(id)?;
-
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("cherry-pick").arg("--").arg(id.as_ref());
-        run_git_simple(cmd, "git cherry-pick")
-    }
-
     pub(super) fn stash_create_impl(&self, message: &str, include_untracked: bool) -> Result<()> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("stash").arg("push");

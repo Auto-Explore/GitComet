@@ -293,10 +293,6 @@ impl GitRepository for SubmoduleTestRepo {
         Self::unsupported()
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Self::unsupported()
-    }
-
     /// Keep removal in flight until the spinner test releases it.
     fn remove_worktree_with_output(
         &self,
@@ -501,10 +497,6 @@ impl GitRepository for StashTestRepo {
     }
 
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-        Self::unsupported()
-    }
-
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         Self::unsupported()
     }
 

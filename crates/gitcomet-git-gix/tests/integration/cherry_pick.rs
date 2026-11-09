@@ -1348,7 +1348,7 @@ fn conflicting_cherry_pick_returns_error_and_leaves_worktree_conflicted() {
     commit_file(&repo, "file.txt", "main\n", "main change");
 
     let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
         .expect_err("conflicting cherry-pick should fail");
 
     let message = err.to_string();
@@ -1378,7 +1378,7 @@ fn dirty_worktree_rejects_cherry_pick_and_preserves_local_change() {
     fs::write(repo.join("file.txt"), "dirty worktree\n").expect("write dirty worktree");
 
     let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
         .expect_err("dirty worktree should reject cherry-pick");
 
     let message = err.to_string();
@@ -1402,12 +1402,12 @@ fn dirty_index_rejects_cherry_pick_and_preserves_staged_change() {
     run_git(&repo, &["add", "file.txt"]);
 
     let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
         .expect_err("dirty index should reject cherry-pick");
 
     let message = err.to_string();
     assert!(
-        message.contains("local changes") || message.contains("would be overwritten"),
+        message.contains("file.txt already has staged changes"),
         "unexpected dirty-index error: {message}"
     );
     assert_eq!(

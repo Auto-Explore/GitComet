@@ -106,9 +106,6 @@ impl GitRepository for RecordingRewordRepo {
     fn checkout_commit(&self, _: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _: &str, _: bool) -> Result<()> {
         unsupported_repo_result()
     }

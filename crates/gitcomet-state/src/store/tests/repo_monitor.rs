@@ -201,10 +201,6 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }

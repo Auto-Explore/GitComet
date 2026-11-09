@@ -902,9 +902,6 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1173,9 +1170,6 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1397,9 +1391,6 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1584,9 +1575,6 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
             unimplemented!()
         }
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1776,9 +1764,6 @@ fn load_stashes_effect_truncates_results_to_limit() {
             unimplemented!()
         }
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1974,9 +1959,6 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
             self.calls.lock().unwrap().push(format!(
                 "stash {message} include_untracked={include_untracked}"
@@ -2170,9 +2152,6 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2362,9 +2341,6 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             unimplemented!()
         }
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -2557,9 +2533,6 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2745,9 +2718,6 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             unimplemented!()
         }
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -3905,9 +3875,6 @@ fn pull_releases_the_object_store_before_its_refresh() {
             unimplemented!()
         }
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
