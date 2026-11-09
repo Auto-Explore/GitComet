@@ -1268,12 +1268,7 @@ impl GixRepo {
         cmd.arg("--no-prune-tags");
         if remotes.explicit {
             if remotes.names.is_empty() {
-                return Ok(CommandOutput {
-                    command: "git fetch".to_string(),
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: Some(0),
-                });
+                return Ok(CommandOutput::empty_success("git fetch"));
             }
             cmd.arg("--").args(&remotes.names);
         }

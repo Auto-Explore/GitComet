@@ -379,7 +379,7 @@ pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::G
 }
 
 /// The sequencer commands that auto-skip empty steps.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum SequenceKind {
     CherryPick,
     Revert,
@@ -590,7 +590,11 @@ impl GixRepo {
             let mut cmd = self.git_workdir_cmd();
             cmd.env("GIT_EDITOR", "true");
             cmd.arg("cherry-pick").arg("--continue");
-            return self.run_cherry_pick_step_output(cmd, "git cherry-pick --continue");
+            return self.run_sequence_step_output(
+                SequenceKind::CherryPick,
+                cmd,
+                "git cherry-pick --continue",
+            );
         }
 
         if let Some(operation) = self.operation_in_progress_label()? {
@@ -997,7 +1001,7 @@ impl GixRepo {
     /// A single revert has no todo to advance past an empty resolution:
     /// `revert --continue` refuses it ("nothing to commit") and the UI offers
     /// only Continue and Abort, so such a stop is skipped instead. A sequence
-    /// continues through [`Self::run_revert_step_output`], which skips empty
+    /// continues through [`Self::run_sequence_step_output`], which skips empty
     /// steps and reports a pause at the next conflict as progress.
     fn revert_continue_with_output(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
@@ -1014,30 +1018,7 @@ impl GixRepo {
         // where that check misfires.
         cmd.env("GIT_EDITOR", "true");
         cmd.arg("revert").arg("--continue");
-        self.run_revert_step_output(cmd, "git revert --continue")
-    }
-
-    /// Like [`Self::run_cherry_pick_step_output`]: a non-zero exit is success
-    /// only when the sequence advanced and stopped at a later conflict.
-    fn run_revert_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
-        let marker_before = self.revert_progress_marker()?;
-        let (output, last) = self.run_sequence_auto_skip(SequenceKind::Revert, cmd, label)?;
-        if last.status.success() {
-            return Ok(output);
-        }
-        let paused_after_progress = self.sequencer_state_impl()? == SequencerState::Revert
-            && match (marker_before, self.revert_progress_marker()?) {
-                (None, Some(_)) => self.index_has_conflicts(),
-                (Some(before), Some(after)) => {
-                    after.advanced_from(&before) && self.index_has_conflicts()
-                }
-                (_, None) => false,
-            };
-        if paused_after_progress {
-            Ok(output)
-        } else {
-            Err(git_command_failed_error(label, last))
-        }
+        self.run_sequence_step_output(SequenceKind::Revert, cmd, "git revert --continue")
     }
 
     /// The in-progress operation a new pick or revert would collide with.
@@ -1149,9 +1130,11 @@ impl GixRepo {
             Err(rebase_error) => {
                 let mut cherry_pick_cmd = self.git_workdir_cmd();
                 cherry_pick_cmd.arg("cherry-pick").arg("--continue");
-                match self
-                    .run_cherry_pick_step_output(cherry_pick_cmd, "git cherry-pick --continue")
-                {
+                match self.run_sequence_step_output(
+                    SequenceKind::CherryPick,
+                    cherry_pick_cmd,
+                    "git cherry-pick --continue",
+                ) {
                     Ok(output) => Ok(output),
                     // A cherry-pick genuinely in progress owns this continue:
                     // its failure (unresolved files, a failed hook) is the
@@ -1271,30 +1254,36 @@ impl GixRepo {
         }
     }
 
-    /// Run a cherry-pick step (`cherry-pick --continue`). Empty stops are
-    /// advanced past automatically ([`Self::run_sequence_auto_skip`]).
-    /// Like the rebase path, a non-zero exit is reported as success only
-    /// when the sequencer genuinely advanced and paused again at a later
-    /// step; a continue that made no progress (unresolved conflicts, a
-    /// failed hook re-running the same step) keeps git's error.
-    fn run_cherry_pick_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
-        let marker_before = self.cherry_pick_progress_marker()?;
-        let (output, last) = self.run_sequence_auto_skip(SequenceKind::CherryPick, cmd, label)?;
-        let still_in_progress = self.cherry_pick_in_progress_impl()?;
-        if !still_in_progress {
+    /// Runs a cherry-pick or revert step, skipping empty stops
+    /// ([`Self::run_sequence_auto_skip`]). Like the rebase path, a non-zero exit
+    /// is success only when the sequence advanced and paused at a later
+    /// conflict; no progress (unresolved conflicts, a failed hook re-running
+    /// the same step) keeps git's error.
+    fn run_sequence_step_output(
+        &self,
+        kind: SequenceKind,
+        cmd: Command,
+        label: &str,
+    ) -> Result<CommandOutput> {
+        let marker_before = self.sequencer_progress_marker(kind)?;
+        let (output, last) = self.run_sequence_auto_skip(kind, cmd, label)?;
+        if kind == SequenceKind::CherryPick && !self.cherry_pick_in_progress_impl()? {
             self.clear_persisted_cherry_pick_mainline();
         }
         if last.status.success() {
             return Ok(output);
         }
+        let still_in_progress = match kind {
+            SequenceKind::CherryPick => self.cherry_pick_in_progress_impl()?,
+            SequenceKind::Revert => self.sequencer_state_impl()? == SequencerState::Revert,
+        };
         let paused_after_progress = still_in_progress
-            && match (marker_before, self.cherry_pick_progress_marker()?) {
-                // The command started a cherry-pick and paused at a conflict.
+            && match (marker_before, self.sequencer_progress_marker(kind)?) {
+                // The command started the sequence and paused at a conflict.
                 (None, Some(_)) => self.index_has_conflicts(),
-                // Native cherry-pick todos contain only pick steps. If Git
-                // advanced and then stopped without an unmerged index, the
-                // later command failed (for example a hook or signer); that
-                // is not a conflict pause and its error must be preserved.
+                // Native todos hold only pick or revert steps, so advancing and
+                // then stopping without an unmerged index is a later failure
+                // (a hook or signer) whose error must be kept.
                 (Some(before), Some(after)) => {
                     after.advanced_from(&before) && self.index_has_conflicts()
                 }
@@ -1323,13 +1312,13 @@ impl GixRepo {
         let mut last = run_git_raw_output(cmd, label)?;
         append_raw_output(&mut acc, &last);
         while !last.status.success() && self.sequence_stopped_became_empty(kind)? {
-            let marker = self.sequencer_progress_marker(kind.root_ref())?;
+            let marker = self.sequencer_progress_marker(kind)?;
             let mut skip = self.git_workdir_cmd();
             skip.arg(kind.subcommand()).arg("--skip");
             last = run_git_raw_output(skip, kind.skip_label())?;
             append_raw_output(&mut acc, &last);
             // A skip that moved nothing forward would loop forever.
-            if self.sequencer_progress_marker(kind.root_ref())? == marker {
+            if self.sequencer_progress_marker(kind)? == marker {
                 break;
             }
         }
@@ -1349,7 +1338,7 @@ impl GixRepo {
             return Ok(false);
         }
         let stopped_on = self
-            .sequencer_progress_marker(kind.root_ref())?
+            .sequencer_progress_marker(kind)?
             .and_then(|progress| progress.stopped_on);
         let stopped_on = match kind {
             SequenceKind::CherryPick => stopped_on,
@@ -1445,22 +1434,10 @@ impl GixRepo {
         }
     }
 
-    /// Progress marker of the cherry-pick in progress: the remaining steps
-    /// in the sequencer todo plus the commit the sequence is stopped on.
-    /// `None` when no cherry-pick state exists at all. A single-commit
-    /// cherry-pick writes no `sequencer` directory, only `CHERRY_PICK_HEAD`.
-    fn cherry_pick_progress_marker(&self) -> Result<Option<SequencerProgress>> {
-        self.sequencer_progress_marker(crate::refs::RootRef::CherryPick)
-    }
-
-    fn revert_progress_marker(&self) -> Result<Option<SequencerProgress>> {
-        self.sequencer_progress_marker(crate::refs::RootRef::Revert)
-    }
-
-    fn sequencer_progress_marker(
-        &self,
-        root: crate::refs::RootRef,
-    ) -> Result<Option<SequencerProgress>> {
+    /// The remaining steps in the sequencer todo plus the commit the sequence
+    /// is stopped on; `None` without either. A single pick or revert writes no
+    /// `sequencer` directory, only its `*_HEAD`.
+    fn sequencer_progress_marker(&self, kind: SequenceKind) -> Result<Option<SequencerProgress>> {
         let repo = self.repo();
         let git_dir = repo.path();
         let remaining_steps = fs::read_to_string(git_dir.join("sequencer").join("todo"))
@@ -1471,7 +1448,7 @@ impl GixRepo {
                     .filter(|line| !line.is_empty() && !line.starts_with('#'))
                     .count()
             });
-        let stopped_on = crate::refs::root_ref(&repo, root)?.map(|id| id.to_string());
+        let stopped_on = crate::refs::root_ref(&repo, kind.root_ref())?.map(|id| id.to_string());
         Ok(if remaining_steps.is_none() && stopped_on.is_none() {
             None
         } else {
@@ -2148,7 +2125,7 @@ impl GixRepo {
             // "empty" error that only `--skip` moves past, and the UI
             // exposes no skip control — advance automatically so the
             // remaining picks land.
-            return self.run_cherry_pick_step_output(cmd, &label);
+            return self.run_sequence_step_output(SequenceKind::CherryPick, cmd, &label);
         }
 
         // Reject plans git's todo parser would reject only after starting
@@ -2235,12 +2212,10 @@ impl GixRepo {
             ));
         }
 
-        let mut output = CommandOutput {
-            command: format!("git cherry-pick --no-commit {} commits", entries.len()),
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: Some(0),
-        };
+        let mut output = CommandOutput::empty_success(format!(
+            "git cherry-pick --no-commit {} commits",
+            entries.len()
+        ));
         let mut tree = self.index_tree()?;
         let mut changed_any = false;
         for (ix, entry) in entries.iter().enumerate() {
