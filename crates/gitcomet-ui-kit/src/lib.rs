@@ -65,7 +65,7 @@ pub use scrollbar::{
     ScrollbarMarkerKind,
 };
 #[cfg(feature = "benchmarks")]
-pub use scrollbar::{ThumbMetrics, compute_vertical_click_offset, vertical_thumb_metrics};
+pub use scrollbar::{ThumbMetrics, compute_click_offset, thumb_metrics};
 pub use text_input::utf8_edit_delta_between_texts;
 pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteToLineEnd, DeleteToLineStart, DeleteWordLeft,

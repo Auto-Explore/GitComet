@@ -71,7 +71,7 @@ impl ScrollbarDragStepFixture {
     }
 
     pub fn run_with_metrics(&mut self) -> (u64, ScrollbarDragStepMetrics) {
-        use crate::kit::{compute_vertical_click_offset, vertical_thumb_metrics};
+        use crate::kit::{ScrollbarAxis, compute_click_offset, thumb_metrics};
         use gpui::{Bounds, point, px, size};
 
         let mut h = FxHasher::default();
@@ -95,7 +95,7 @@ impl ScrollbarDragStepFixture {
 
         // Start with the current mouse Y at the thumb centre.
         let initial_thumb =
-            vertical_thumb_metrics(px(self.viewport_h), px(self.max_offset), px(self.scroll_y));
+            thumb_metrics(px(self.viewport_h), px(self.max_offset), px(self.scroll_y));
         let mut mouse_y = match initial_thumb {
             Some(tm) => {
                 let off: f32 = tm.offset.into();
@@ -107,8 +107,7 @@ impl ScrollbarDragStepFixture {
 
         for _ in 0..self.steps {
             // 1) Compute thumb metrics at the current scroll position.
-            let thumb =
-                vertical_thumb_metrics(px(self.viewport_h), px(self.max_offset), px(self.scroll_y));
+            let thumb = thumb_metrics(px(self.viewport_h), px(self.max_offset), px(self.scroll_y));
             thumb_metric_recomputes = thumb_metric_recomputes.saturating_add(1);
 
             let (thumb_size, thumb_length_f, thumb_offset_f) = match thumb {
@@ -142,7 +141,8 @@ impl ScrollbarDragStepFixture {
 
             // 3) Compute new scroll offset using the production offset function.
             //    Use thumb_size/2 as the grab offset (simulating grab at thumb centre).
-            let new_offset = compute_vertical_click_offset(
+            let new_offset = compute_click_offset(
+                ScrollbarAxis::Vertical,
                 px(mouse_y),
                 track_bounds,
                 thumb_size,
