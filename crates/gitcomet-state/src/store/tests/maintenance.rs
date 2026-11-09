@@ -130,7 +130,10 @@ impl GitRepository for CommonDirRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {

@@ -97,7 +97,7 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
             .is_empty()
     );
     repo.stage(&[Path::new("file.txt")]).unwrap();
-    repo.commit("root").unwrap();
+    repo.commit_with_outcome("root").unwrap();
     let page = repo
         .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
         .unwrap();
@@ -317,7 +317,7 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
         "+two"
     ));
     repo.stage(&[Path::new("notes.txt")]).unwrap();
-    repo.commit("second").unwrap();
+    repo.commit_with_outcome("second").unwrap();
     let second = repo.head_commit_id().unwrap().unwrap();
     assert_eq!(second.as_ref().len(), width);
     assert_eq!(second.as_ref(), git(dir.path(), &["rev-parse", "HEAD"]));

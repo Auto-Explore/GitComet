@@ -921,7 +921,10 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1178,7 +1181,10 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1399,7 +1405,10 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1585,7 +1594,10 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1777,7 +1789,10 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1964,7 +1979,10 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -2156,7 +2174,10 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -2347,7 +2368,10 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -2536,7 +2560,10 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -2723,7 +2750,10 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -3878,7 +3908,10 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {

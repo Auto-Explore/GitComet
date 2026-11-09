@@ -1219,10 +1219,6 @@ impl GixRepo {
         }
     }
 
-    pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
-        self.commit_identity_impl(message, None, false, GitHooks::Run)
-    }
-
     fn commit_identity_impl(
         &self,
         message: &str,
@@ -1263,7 +1259,7 @@ impl GixRepo {
     pub(super) fn commit_with_outcome_impl(&self, message: &str) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
         let pre_head = self.head_commit_id_for_outcome()?;
-        self.commit_impl(message)?;
+        self.commit_identity_impl(message, None, false, GitHooks::Run)?;
         let post_head = self.head_commit_id_for_outcome()?;
         Ok(CommitOperationOutcome {
             local_branch,

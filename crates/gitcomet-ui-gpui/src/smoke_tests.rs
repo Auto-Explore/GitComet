@@ -347,7 +347,10 @@ impl GitRepository for SubmoduleTestRepo {
         Self::unsupported()
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         Self::unsupported()
     }
 
@@ -534,7 +537,10 @@ impl GitRepository for StashTestRepo {
         Self::unsupported()
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         Self::unsupported()
     }
 

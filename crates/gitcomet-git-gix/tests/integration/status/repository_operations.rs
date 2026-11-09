@@ -186,7 +186,7 @@ fn commit_creates_new_commit_and_cleans_status() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.commit("second").unwrap();
+    opened.commit_with_outcome("second").unwrap();
 
     let msg = git_command()
         .arg("-C")
@@ -796,7 +796,7 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
     assert!(status.unstaged.is_empty(), "expected no unstaged changes");
 
     opened
-        .commit("Merge branch 'feature'")
+        .commit_with_outcome("Merge branch 'feature'")
         .expect("merge commit should succeed even without tree changes");
 
     assert!(

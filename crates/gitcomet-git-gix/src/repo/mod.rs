@@ -1439,12 +1439,6 @@ impl GitRepository for GixRepo {
         self.unstage_impl(paths)
     }
 
-    fn commit(&self, message: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_impl(message)
-    }
-
     fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;

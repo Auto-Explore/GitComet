@@ -1425,11 +1425,7 @@ pub trait GitRepository: Send + Sync {
 
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;
-    fn commit(&self, message: &str) -> Result<()>;
-    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
-        self.commit(message)?;
-        Ok(CommitOperationOutcome::default())
-    }
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome>;
     fn commit_amend_with_outcome(&self, _message: &str) -> Result<CommitOperationOutcome> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",

@@ -117,8 +117,11 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.unstage(_paths)
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
-        self.inner.commit(_message)
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        self.inner.commit_with_outcome(_message)
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {

@@ -555,7 +555,10 @@ impl GitRepository for RecordingHistoryModeRepo {
         unsupported()
     }
 
-    fn commit(&self, _message: &str) -> super::Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> super::Result<crate::services::CommitOperationOutcome> {
         unsupported()
     }
 

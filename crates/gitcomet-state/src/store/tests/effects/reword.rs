@@ -124,7 +124,10 @@ impl GitRepository for RecordingRewordRepo {
     fn unstage(&self, _: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _: bool) -> Result<CommandOutput> {

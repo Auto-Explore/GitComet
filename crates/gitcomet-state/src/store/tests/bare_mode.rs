@@ -935,8 +935,11 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn unstage(&self, paths: &[&Path]) -> Result<()> {
             self.inner.unstage(paths)
         }
-        fn commit(&self, message: &str) -> Result<()> {
-            self.inner.commit(message)
+        fn commit_with_outcome(
+            &self,
+            message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+            self.inner.commit_with_outcome(message)
         }
         fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
             self.inner.fetch_all(prune)

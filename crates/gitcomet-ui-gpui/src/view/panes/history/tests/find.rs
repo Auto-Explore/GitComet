@@ -1481,7 +1481,7 @@ impl GitRepository for IndexedFindRepo {
         fn stash_drop(&self, index: usize) -> ();
         fn stage(&self, paths: &[&Path]) -> ();
         fn unstage(&self, paths: &[&Path]) -> ();
-        fn commit(&self, message: &str) -> ();
+        fn commit_with_outcome(&self, message: &str) -> gitcomet_core::services::CommitOperationOutcome;
 
 
         fn push_with_output(&self) -> gitcomet_core::services::CommandOutput;

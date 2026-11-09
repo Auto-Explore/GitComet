@@ -529,7 +529,7 @@ fn amending_the_adjustment_commit_is_refused() {
     assert_eq!(git_stdout_raw(&repo, &["rev-parse", "HEAD"]), head);
 
     // A commit of the user's own, not yet propagated, can still be amended.
-    open(&repo).commit("one").unwrap();
+    open(&repo).commit_with_outcome("one").unwrap();
     open(&repo)
         .commit_amend_with_outcome("one, reworded")
         .unwrap();

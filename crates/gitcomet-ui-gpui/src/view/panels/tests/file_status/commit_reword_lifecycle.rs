@@ -238,8 +238,11 @@ impl GitRepository for ControlledRewordRepo {
     fn unstage(&self, paths: &[&Path]) -> Result<()> {
         self.fallback.unstage(paths)
     }
-    fn commit(&self, message: &str) -> Result<()> {
-        self.fallback.commit(message)
+    fn commit_with_outcome(
+        &self,
+        message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        self.fallback.commit_with_outcome(message)
     }
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
         self.fallback.fetch_all(prune)

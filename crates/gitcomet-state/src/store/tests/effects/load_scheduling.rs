@@ -452,7 +452,10 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -663,7 +666,10 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -900,7 +906,10 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1149,7 +1158,10 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1392,7 +1404,10 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {

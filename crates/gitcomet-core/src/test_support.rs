@@ -165,7 +165,10 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<crate::services::CommitOperationOutcome> {
         unsupported()
     }
 

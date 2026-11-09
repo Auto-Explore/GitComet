@@ -493,8 +493,11 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
-        Ok(())
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        Ok(gitcomet_core::services::CommitOperationOutcome::default())
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
