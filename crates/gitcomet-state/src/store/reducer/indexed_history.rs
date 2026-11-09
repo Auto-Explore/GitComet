@@ -853,10 +853,11 @@ mod tests {
     }
 
     /// Rebuilds the index with only rows `0..2`, dropping the selected row 2,
-    /// over a comparison of `source`; returns what is left of the comparison.
+    /// over a comparison of `source`; returns what is left of the comparison
+    /// and the rebuild's effects.
     fn rebuild_dropping_a_compared_commit(
         source: crate::model::ComparisonSource,
-    ) -> Option<crate::model::RangeSelection> {
+    ) -> (Option<crate::model::RangeSelection>, Vec<Effect>) {
         let (mut state, index) = fixture();
         let [newest, oldest] = [0, 2].map(|row| index.commit_id(row).unwrap());
         let repo = &mut state.repos[0];
@@ -884,7 +885,7 @@ mod tests {
             builder.push(&id, [parent.as_slice()], false).unwrap();
         }
         let built = builder.finish(&CancellationToken::new()).unwrap();
-        reduce(
+        let effects = reduce(
             &mut state,
             Event::Built {
                 repo_id: RepoId(1),
@@ -892,7 +893,10 @@ mod tests {
                 result: Ok(Some(built)),
             },
         );
-        state.repos[0].history_state.range_selection.clone()
+        (
+            state.repos[0].history_state.range_selection.clone(),
+            effects,
+        )
     }
 
     #[test]
@@ -902,14 +906,20 @@ mod tests {
             ComparisonSource::SelectedPair,
             ComparisonSource::MergedSelection,
         ] {
-            assert_eq!(
-                rebuild_dropping_a_compared_commit(source),
-                None,
-                "{source:?}"
+            let (range, effects) = rebuild_dropping_a_compared_commit(source);
+            assert_eq!(range, None, "{source:?}");
+            assert!(
+                effects.iter().any(|e| matches!(
+                    e,
+                    Effect::LoadCommitDetails { commit_id, .. } if commit_id.as_ref() == "0000000000000000000000000000000000000000"
+                )),
+                "the details pane goes back to the still-selected commit ({source:?})"
             );
         }
         assert!(
-            rebuild_dropping_a_compared_commit(ComparisonSource::Explicit).is_some(),
+            rebuild_dropping_a_compared_commit(ComparisonSource::Explicit)
+                .0
+                .is_some(),
             "an explicit comparison does not come from the selection"
         );
     }
