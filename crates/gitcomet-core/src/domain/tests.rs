@@ -1,10 +1,103 @@
 mod comparison;
 
 use super::*;
+use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
+
+#[derive(Debug)]
+struct PagedDiffLineProvider {
+    lines: Arc<[DiffLine]>,
+    page_size: usize,
+    pages: Mutex<FxHashMap<usize, Arc<[DiffLine]>>>,
+}
+
+impl PagedDiffLineProvider {
+    pub(crate) fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
+        Self {
+            lines,
+            page_size: page_size.max(1),
+            pages: Mutex::new(FxHashMap::default()),
+        }
+    }
+
+    pub fn cached_page_count(&self) -> usize {
+        self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
+    }
+
+    fn page_bounds(&self, page_ix: usize) -> Option<(usize, usize)> {
+        let start = page_ix.saturating_mul(self.page_size);
+        (start < self.lines.len()).then(|| {
+            let end = start.saturating_add(self.page_size).min(self.lines.len());
+            (start, end)
+        })
+    }
+
+    fn load_page(&self, page_ix: usize) -> Option<Arc<[DiffLine]>> {
+        if let Ok(pages) = self.pages.lock()
+            && let Some(page) = pages.get(&page_ix)
+        {
+            return Some(Arc::clone(page));
+        }
+
+        let (start, end) = self.page_bounds(page_ix)?;
+        let page = Arc::<[DiffLine]>::from(&self.lines[start..end]);
+        if let Ok(mut pages) = self.pages.lock() {
+            return Some(Arc::clone(
+                pages.entry(page_ix).or_insert_with(|| Arc::clone(&page)),
+            ));
+        }
+        Some(page)
+    }
+}
+
+impl DiffRowProvider for PagedDiffLineProvider {
+    type RowRef = DiffLine;
+    type SliceIter<'a>
+        = std::vec::IntoIter<DiffLine>
+    where
+        Self: 'a;
+
+    fn len_hint(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn row(&self, ix: usize) -> Option<Self::RowRef> {
+        if ix >= self.lines.len() {
+            return None;
+        }
+        let page_ix = ix / self.page_size;
+        let row_ix = ix % self.page_size;
+        let page = self.load_page(page_ix)?;
+        page.get(row_ix).cloned()
+    }
+
+    fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
+        if start >= end || start >= self.lines.len() {
+            return Vec::new().into_iter();
+        }
+        let end = end.min(self.lines.len());
+        let mut rows = Vec::with_capacity(end - start);
+        let mut ix = start;
+        while ix < end {
+            let page_ix = ix / self.page_size;
+            let page_row_ix = ix % self.page_size;
+            let Some(page) = self.load_page(page_ix) else {
+                break;
+            };
+            if let Some(line) = page.get(page_row_ix) {
+                rows.push(line.clone());
+                ix += 1;
+            } else {
+                break;
+            }
+        }
+        rows.into_iter()
+    }
+}
 
 #[test]
 fn working_tree_targets_name_their_worktree() {
@@ -360,7 +453,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
 +new2\n\
  old3\n";
     let diff = Diff::from_unified(target, unified);
-    let provider = diff.paged_lines(2);
+    let provider = PagedDiffLineProvider::new(Arc::from(diff.lines.clone()), 2);
 
     assert_eq!(provider.cached_page_count(), 0);
     assert_eq!(provider.len_hint(), diff.lines.len());
