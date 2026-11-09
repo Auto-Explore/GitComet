@@ -667,7 +667,7 @@ pub(super) fn bootstrap_word_highlights(
     ThreeWaySides<conflict_resolver::WordHighlights>,
     FxHashMap<usize, conflict_resolver::TwoWayWordHighlightPair>,
 ) {
-    // the aligned row space gives exact base↔side line pairs, so
+    // The aligned row space gives exact base↔side line pairs, so
     // word highlights come from a row-capped per-line word diff instead of
     // the old whole-file side_by_side/myers pass (which the streamed path
     // had to skip). Identity maps (no side texts / impractical alignment)
@@ -702,7 +702,7 @@ pub(super) fn bootstrap_word_highlights(
             .with_conflict_block_count(Some(conflict_block_count))
     });
 
-    // aligned two-way (ours↔theirs) word highlights, computed
+    // Aligned two-way (ours↔theirs) word highlights, computed
     // once here and shared by both diff columns, replacing the old
     // per-render/per-column inline word diff. Independent of base, so this
     // runs even for both-added conflicts where the three-way pass stays empty.

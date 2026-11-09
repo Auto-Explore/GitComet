@@ -592,7 +592,8 @@ impl DiffRenderer {
         }
     }
 
-    /// Select a conflict as the active one without picking a side (/// clicking a conflict block body selects it).
+    /// Select a conflict as the active one without picking a side (clicking a
+    /// conflict block body selects it).
     pub(in crate::view) fn conflict_resolver_select_conflict(
         &mut self,
         conflict_ix: usize,

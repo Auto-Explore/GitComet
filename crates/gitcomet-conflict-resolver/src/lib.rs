@@ -50,7 +50,7 @@ pub enum ConflictPickSide {
 pub enum AutosolveTraceMode {
     /// The safe rules and the subchunk split, applied automatically when the
     /// file opened. Whitespace-only, regex and history merges are never
-    /// automatic — kdiff3 parity, see the auto-solve policy.
+    /// automatic, as in kdiff3 (see the state reducer's `auto_resolve_session_on_open`).
     OnOpen,
     #[cfg(any(test, feature = "test-support"))]
     History,

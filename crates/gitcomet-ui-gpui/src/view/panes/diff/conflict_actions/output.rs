@@ -408,8 +408,8 @@ impl DiffRenderer {
         }
     }
 
-    /// Rebuild the resolved-output fold projection for collapsed context mode
-    ///. Output line space; derived from the outline's conflict markers.
+    /// Rebuild the resolved-output fold projection for collapsed context mode,
+    /// in output line space, from the outline's conflict markers.
     /// Streamed outputs stay unfolded (their row space is already projected).
     pub(in crate::view) fn ensure_resolved_output_visible_projection(&mut self) {
         if !self.conflict_resolver.resolved_output_visible_dirty {

@@ -1451,7 +1451,7 @@ impl DiffRenderer {
                     .unwrap_or_default();
                 let source = gutter_row.source();
                 let (_, badge_fg) = resolved_output_source_badge_colors(theme, source);
-                // outside marker regions the badge is provenance of
+                // Outside marker regions the badge is provenance of
                 // a line git itself pre-merged (or plain context), not a
                 // resolver pick — mute it so only real picks read as
                 // decisions.

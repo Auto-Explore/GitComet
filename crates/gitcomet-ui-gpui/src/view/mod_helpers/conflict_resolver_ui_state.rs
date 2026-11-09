@@ -860,7 +860,7 @@ impl ConflictResolverUiState {
         !self.three_way_aligned.is_identity() && !self.three_way_text.base.is_empty()
     }
 
-    /// whether `column`'s line at aligned `row` differs from the
+    /// Whether `column`'s line at aligned `row` differs from the
     /// base line paired at the same row. A line on one side of a padding row
     /// counts as a change; the base column itself is never "changed".
     pub(crate) fn three_way_row_differs_from_base(

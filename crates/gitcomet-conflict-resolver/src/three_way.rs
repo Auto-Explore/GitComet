@@ -505,7 +505,7 @@ impl ThreeWayAlignedMap {
     }
 }
 
-/// cap on aligned rows that receive word-level highlights, bounding
+/// Cap on aligned rows that receive word-level highlights, bounding
 /// the per-row word-diff work on files with huge change counts.
 pub const ALIGNED_WORD_HIGHLIGHT_MAX_ROWS: usize = 4_000;
 
@@ -593,7 +593,7 @@ pub fn compute_aligned_three_way_word_highlights(
     (wh_base, wh_ours, wh_theirs)
 }
 
-/// aligned two-way (ours↔theirs) word highlights, precomputed
+/// Aligned two-way (ours↔theirs) word highlights, precomputed
 /// once per conflict-source rebuild and shared by both diff columns (Ours and
 /// Theirs). Keyed by aligned row — the renderer's row space. Only rows where
 /// both sides have a line and the two lines differ byte-wise get an entry; the

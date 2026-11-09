@@ -2118,8 +2118,8 @@ impl DiffRenderer {
         }
 
         {
-            // The full text resolver gets its own settings menu under the cog
-            //; everything else keeps the diff actions menu.
+            // The full text resolver gets its own settings menu under the cog;
+            // everything else keeps the diff actions menu.
             let resolver_settings_active =
                 is_conflict_resolver && !self.conflict_resolver_is_simple_strategy();
             let (cog_id, cog_kind, cog_tooltip): (&'static str, PopoverKind, &'static str) =
