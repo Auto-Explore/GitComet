@@ -408,6 +408,7 @@ pub struct ConflictFile {
 
 impl ConflictFile {
     /// A conflict file at `path` with no stage or current content loaded.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn empty(path: impl Into<RepoPath>) -> Self {
         Self {
             path: path.into(),
