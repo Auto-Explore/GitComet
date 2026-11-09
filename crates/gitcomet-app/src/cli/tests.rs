@@ -140,7 +140,7 @@ fn difftool_resolves_from_explicit_flags() {
         path: Some("display.txt".into()),
         label_left: Some("Ours".into()),
         label_right: Some("Theirs".into()),
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -162,14 +162,7 @@ fn difftool_resolves_from_env_fallback() {
     env.set("REMOTE", &remote);
     env.set("MERGED", "file.txt");
 
-    let args = DifftoolArgs {
-        local: None,
-        remote: None,
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
-    };
+    let args = DifftoolArgs { ..difftool_args() };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.local, local);
@@ -188,14 +181,7 @@ fn difftool_uses_base_env_as_display_path_fallback() {
     env.set("REMOTE", &remote);
     env.set("BASE", "base-name.txt");
 
-    let args = DifftoolArgs {
-        local: None,
-        remote: None,
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
-    };
+    let args = DifftoolArgs { ..difftool_args() };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("base-name.txt"));
@@ -213,14 +199,7 @@ fn difftool_prefers_merged_over_base_for_display_path() {
     env.set("MERGED", "merged-name.txt");
     env.set("BASE", "base-name.txt");
 
-    let args = DifftoolArgs {
-        local: None,
-        remote: None,
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
-    };
+    let args = DifftoolArgs { ..difftool_args() };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("merged-name.txt"));
@@ -239,12 +218,8 @@ fn difftool_path_flag_overrides_merged_and_base_display_env() {
     env.set("BASE", "base-name.txt");
 
     let args = DifftoolArgs {
-        local: None,
-        remote: None,
         path: Some("explicit-name.txt".into()),
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -266,10 +241,7 @@ fn difftool_flags_take_precedence_over_env() {
     let args = DifftoolArgs {
         local: Some(flag_local.clone()),
         remote: Some(flag_remote.clone()),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -284,12 +256,8 @@ fn difftool_missing_local_errors() {
     let env = TestEnv::new();
 
     let args = DifftoolArgs {
-        local: None,
         remote: Some(remote),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -304,11 +272,7 @@ fn difftool_missing_remote_errors() {
 
     let args = DifftoolArgs {
         local: Some(local),
-        remote: None,
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -324,10 +288,7 @@ fn difftool_nonexistent_local_errors() {
     let args = DifftoolArgs {
         local: Some(dir.path().join("no_such_file.txt")),
         remote: Some(remote),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -346,10 +307,7 @@ fn difftool_nonexistent_remote_errors() {
     let args = DifftoolArgs {
         local: Some(local),
         remote: Some(dir.path().join("no_such_file.txt")),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -367,10 +325,7 @@ fn difftool_empty_local_path_errors() {
     let args = DifftoolArgs {
         local: Some(PathBuf::new()),
         remote: Some(remote),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -389,14 +344,7 @@ fn difftool_empty_merged_env_is_ignored_for_display_path() {
     env.set("MERGED", "");
     env.set("BASE", "fallback-name.txt");
 
-    let args = DifftoolArgs {
-        local: None,
-        remote: None,
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
-    };
+    let args = DifftoolArgs { ..difftool_args() };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("fallback-name.txt"));
@@ -414,10 +362,7 @@ fn difftool_accepts_directories() {
     let args = DifftoolArgs {
         local: Some(left_dir.clone()),
         remote: Some(right_dir.clone()),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -435,10 +380,7 @@ fn difftool_rejects_file_vs_directory_mismatch() {
     let args = DifftoolArgs {
         local: Some(file_path),
         remote: Some(right_dir),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -467,10 +409,7 @@ fn difftool_accepts_broken_symlink_inputs() {
     let args = DifftoolArgs {
         local: Some(local.clone()),
         remote: Some(remote.clone()),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
@@ -497,10 +436,7 @@ fn difftool_accepts_symlinked_directory_inputs() {
     let args = DifftoolArgs {
         local: Some(left_link.clone()),
         remote: Some(right_link.clone()),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
@@ -525,10 +461,7 @@ fn difftool_rejects_fifo_input() {
     let args = DifftoolArgs {
         local: Some(local_fifo.clone()),
         remote: Some(remote),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -562,10 +495,7 @@ fn difftool_rejects_symlink_to_fifo_input() {
     let args = DifftoolArgs {
         local: Some(local_link.clone()),
         remote: Some(remote),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -598,11 +528,7 @@ fn mergetool_resolves_from_explicit_flags() {
         label_base: Some("Base".into()),
         label_local: Some("Ours".into()),
         label_remote: Some("Theirs".into()),
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -629,20 +555,7 @@ fn mergetool_resolves_from_env_fallback() {
     env.set("REMOTE", &remote);
     env.set("BASE", &base);
 
-    let args = MergetoolArgs {
-        merged: None,
-        local: None,
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
-    };
+    let args = MergetoolArgs { ..mergetool_args() };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -663,15 +576,7 @@ fn mergetool_base_optional() {
         merged: Some(merged.clone()),
         local: Some(local.clone()),
         remote: Some(remote.clone()),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -694,20 +599,7 @@ fn mergetool_empty_base_env_treated_as_missing() {
     env.set("REMOTE", &remote);
     env.set("BASE", "");
 
-    let args = MergetoolArgs {
-        merged: None,
-        local: None,
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
-    };
+    let args = MergetoolArgs { ..mergetool_args() };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert!(
@@ -728,14 +620,7 @@ fn mergetool_empty_base_flag_treated_as_missing() {
         local: Some(local),
         remote: Some(remote),
         base: Some(PathBuf::new()),
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap();
@@ -755,15 +640,7 @@ fn mergetool_empty_merged_path_errors() {
         merged: Some(PathBuf::new()),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -778,18 +655,9 @@ fn mergetool_missing_merged_errors() {
     let env = TestEnv::new();
 
     let args = MergetoolArgs {
-        merged: None,
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -805,17 +673,8 @@ fn mergetool_missing_local_errors() {
 
     let args = MergetoolArgs {
         merged: Some(merged),
-        local: None,
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -832,16 +691,7 @@ fn mergetool_missing_remote_errors() {
     let args = MergetoolArgs {
         merged: Some(merged),
         local: Some(local),
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -860,15 +710,7 @@ fn mergetool_nonexistent_merged_is_allowed() {
         merged: Some(merged.clone()),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -888,14 +730,7 @@ fn mergetool_nonexistent_base_errors_when_explicitly_provided() {
         local: Some(local),
         remote: Some(remote),
         base: Some(dir.path().join("no_such_base.txt")),
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -914,15 +749,7 @@ fn mergetool_existing_merged_directory_errors() {
         merged: Some(merged_dir),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -944,15 +771,7 @@ fn mergetool_local_directory_errors() {
         merged: Some(merged),
         local: Some(local_dir),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -971,15 +790,7 @@ fn mergetool_remote_directory_errors() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote_dir),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1000,14 +811,7 @@ fn mergetool_base_directory_errors_when_explicitly_provided() {
         local: Some(local),
         remote: Some(remote),
         base: Some(base_dir),
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1034,15 +838,7 @@ fn mergetool_local_fifo_errors() {
         merged: Some(merged),
         local: Some(local_fifo.clone()),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1079,15 +875,7 @@ fn mergetool_local_symlink_to_fifo_errors() {
         merged: Some(merged),
         local: Some(local_link.clone()),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1121,15 +909,7 @@ fn mergetool_existing_merged_fifo_errors() {
         merged: Some(merged_fifo.clone()),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1165,9 +945,7 @@ fn difftool_handles_paths_with_spaces() {
         local: Some(local.clone()),
         remote: Some(remote.clone()),
         path: Some("path with spaces.txt".into()),
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1188,15 +966,7 @@ fn mergetool_handles_paths_with_spaces() {
         merged: Some(merged.clone()),
         local: Some(local.clone()),
         remote: Some(remote.clone()),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1217,10 +987,7 @@ fn difftool_handles_unicode_paths() {
     let args = DifftoolArgs {
         local: Some(local.clone()),
         remote: Some(remote.clone()),
-        path: None,
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1251,9 +1018,7 @@ fn difftool_resolves_paths_in_nested_subdirectory() {
         local: Some(local.clone()),
         remote: Some(remote.clone()),
         path: Some("src/lib/module.rs".into()),
-        label_left: None,
-        label_right: None,
-        gui: false,
+        ..difftool_args()
     };
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1294,14 +1059,7 @@ fn mergetool_resolves_paths_in_nested_subdirectory() {
         local: Some(local.clone()),
         remote: Some(remote.clone()),
         base: Some(base.clone()),
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1345,20 +1103,7 @@ fn mergetool_env_resolution_with_subdirectory_paths() {
         .set("REMOTE", &remote)
         .set("BASE", &base);
 
-    let args = MergetoolArgs {
-        merged: None,
-        local: None,
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
-    };
+    let args = MergetoolArgs { ..mergetool_args() };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -1383,20 +1128,7 @@ fn mergetool_env_only_resolution_with_all_four_vars() {
         .set("REMOTE", &remote)
         .set("BASE", &base);
 
-    let args = MergetoolArgs {
-        merged: None,
-        local: None,
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
-    };
+    let args = MergetoolArgs { ..mergetool_args() };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -1416,20 +1148,7 @@ fn mergetool_env_only_resolution_without_base() {
         .set("REMOTE", &remote);
     // Deliberately no BASE
 
-    let args = MergetoolArgs {
-        merged: None,
-        local: None,
-        remote: None,
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
-    };
+    let args = MergetoolArgs { ..mergetool_args() };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert!(config.base.is_none());
@@ -2731,15 +2450,7 @@ fn mergetool_conflict_style_defaults_to_merge() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2760,15 +2471,8 @@ fn mergetool_conflict_style_diff3() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
         conflict_style: Some("diff3".into()),
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2787,15 +2491,8 @@ fn mergetool_conflict_style_zdiff3() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
         conflict_style: Some("zdiff3".into()),
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2814,15 +2511,8 @@ fn mergetool_conflict_style_invalid_errors() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
         conflict_style: Some("bad".into()),
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2841,15 +2531,8 @@ fn mergetool_diff_algorithm_histogram() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
         diff_algorithm: Some("histogram".into()),
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2868,15 +2551,8 @@ fn mergetool_diff_algorithm_invalid_errors() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
         diff_algorithm: Some("patience".into()),
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2895,15 +2571,8 @@ fn mergetool_marker_size_custom_value() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
         marker_size: Some(10),
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2922,15 +2591,8 @@ fn mergetool_marker_size_zero_errors() {
         merged: Some(merged),
         local: Some(local),
         remote: Some(remote),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
         marker_size: Some(0),
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     };
 
     let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2975,15 +2637,7 @@ fn mergetool_args_no_style(dir: &tempfile::TempDir) -> MergetoolArgs {
         merged: Some(tmp_file(dir, "m.txt", "x")),
         local: Some(tmp_file(dir, "l.txt", "a")),
         remote: Some(tmp_file(dir, "r.txt", "b")),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
-        auto: false,
-        gui: false,
+        ..mergetool_args()
     }
 }
 
@@ -3154,15 +2808,8 @@ fn mergetool_auto_flag_propagates_to_config() {
         merged: Some(tmp_file(&dir, "m.txt", "x")),
         local: Some(tmp_file(&dir, "l.txt", "a")),
         remote: Some(tmp_file(&dir, "r.txt", "b")),
-        base: None,
-        label_base: None,
-        label_local: None,
-        label_remote: None,
-        conflict_style: None,
-        diff_algorithm: None,
-        marker_size: None,
         auto: true,
-        gui: false,
+        ..mergetool_args()
     };
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -3312,4 +2959,34 @@ fn extract_merge_fixtures_rejects_zero_limits() {
         err.contains("--max-files-per-merge"),
         "unexpected error: {err}"
     );
+}
+
+/// Mergetool arguments with nothing set.
+fn mergetool_args() -> MergetoolArgs {
+    MergetoolArgs {
+        merged: None,
+        local: None,
+        remote: None,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: None,
+        diff_algorithm: None,
+        marker_size: None,
+        auto: false,
+        gui: false,
+    }
+}
+
+/// Difftool arguments with nothing set.
+fn difftool_args() -> DifftoolArgs {
+    DifftoolArgs {
+        local: None,
+        remote: None,
+        path: None,
+        label_left: None,
+        label_right: None,
+        gui: false,
+    }
 }
