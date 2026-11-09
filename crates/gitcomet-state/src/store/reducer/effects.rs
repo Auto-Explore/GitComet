@@ -2434,10 +2434,7 @@ fn apply_upstream_divergence_result(
     }
     let value = match result {
         Ok(value) => Loadable::Ready(value),
-        Err(error) => {
-            push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
-            Loadable::Error(error.to_string())
-        }
+        Err(error) => error_loadable(inputs, repo, &error),
     };
     repo.set_upstream_divergence(value);
 }

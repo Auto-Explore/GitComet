@@ -1020,14 +1020,8 @@ pub(super) fn diff_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
+                repo_state.diff_state.diff = super::util::error_loadable(inputs, repo_state, &e);
                 repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
-                repo_state.diff_state.diff = Loadable::Error(e.to_string());
                 repo_state.bump_diff_state_rev();
             }
         }
@@ -1148,15 +1142,10 @@ pub(super) fn diff_file_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
+                repo_state.diff_state.diff_file =
+                    super::util::error_loadable(inputs, repo_state, &e);
                 repo_state.diff_state.diff_file_rev =
                     repo_state.diff_state.diff_file_rev.wrapping_add(1);
-                repo_state.diff_state.diff_file = Loadable::Error(e.to_string());
                 repo_state.bump_diff_state_rev();
             }
         }
@@ -1329,13 +1318,8 @@ pub(super) fn submodule_summary_loaded(
             Err(e) => {
                 repo_state.diff_state.submodule_summary_rev =
                     repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                repo_state.diff_state.submodule_summary = Loadable::Error(e.to_string());
+                repo_state.diff_state.submodule_summary =
+                    super::util::error_loadable(inputs, repo_state, &e);
             }
         }
         repo_state.bump_diff_state_rev();
