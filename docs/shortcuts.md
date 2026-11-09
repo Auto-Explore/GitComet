@@ -142,6 +142,7 @@ These shortcuts apply when a GitComet text input has focus.
 Compatibility note:
 - GitComet also keeps the opposite modifier family wired in text inputs where practical, so `Alt`-based word movement and `Ctrl`-based editing aliases remain available as portability fallbacks.
 - Diff-navigation fallbacks stay active from focused GitComet text inputs for `F1`, `F4`, `F2`, `F3`, `F7`, and `Shift-F7` when the input does not handle those keys itself.
+- An extension view with a search of its own answers `Cmd/Ctrl-F`, `F2` and `F3` while it holds focus, through `gitcomet_ui_kit::search_keys::on_search_keys`; the keys it does not take reach the host's searches.
 
 ### Commit composer
 

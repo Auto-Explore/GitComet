@@ -1,5 +1,9 @@
 use super::gitcomet_view::NavKeyFocus;
 use super::*;
+use crate::kit::search_keys::{
+    DiffNextSearchMatchOrChange, DiffPrevSearchMatchOrChange, OpenActiveViewSearch,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevSearchMatchOrChange,
+};
 use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
 #[cfg(test)]

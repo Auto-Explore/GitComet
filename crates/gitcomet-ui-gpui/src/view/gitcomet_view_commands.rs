@@ -3,12 +3,12 @@
 use super::commands::Command;
 use super::{
     AnnexPopoverKind, AnnexPrompt, BranchPickerPurpose, CloseWindow, DecreaseUiScale, DiffArea,
-    DiffViewMode, GitCometView, IncreaseUiScale, Loadable, Msg, NewWindow, OpenActiveViewSearch,
-    OpenRepository, PopoverKind, PullMode, PushRequest, RemotePopoverKind, RepoPopoverKind,
-    ResetUiScale, StashPickerPurpose, SubmodulePopoverKind, ToggleRevealCommit, Window,
-    WorktreePopoverKind, command_palette, components, head_branch_has_live_upstream,
-    head_is_detached, push_request,
+    DiffViewMode, GitCometView, IncreaseUiScale, Loadable, Msg, NewWindow, OpenRepository,
+    PopoverKind, PullMode, PushRequest, RemotePopoverKind, RepoPopoverKind, ResetUiScale,
+    StashPickerPurpose, SubmodulePopoverKind, ToggleRevealCommit, Window, WorktreePopoverKind,
+    command_palette, components, head_branch_has_live_upstream, head_is_detached, push_request,
 };
+use crate::kit::search_keys::OpenActiveViewSearch;
 
 impl GitCometView {
     /// Runs the built-in or extension command with palette id `command_id`.

@@ -2767,7 +2767,10 @@ impl DiffRenderer {
                 }),
             )
             .on_action(cx.listener(
-                |this, _: &crate::view::TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                |this,
+                 _: &crate::kit::search_keys::TextInputDiffPrevSearchMatchOrChange,
+                 _window,
+                 cx| {
                     if this.navigate_prev_search_match_or_diff_change(cx) {
                         cx.notify();
                     }
@@ -2775,7 +2778,10 @@ impl DiffRenderer {
                 },
             ))
             .on_action(cx.listener(
-                |this, _: &crate::view::TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                |this,
+                 _: &crate::kit::search_keys::TextInputDiffNextSearchMatchOrChange,
+                 _window,
+                 cx| {
                     if this.navigate_next_search_match_or_diff_change(cx) {
                         cx.notify();
                     }

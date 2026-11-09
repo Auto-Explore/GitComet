@@ -1,18 +1,20 @@
 use crate::assets::GitCometAssets;
+use crate::kit::search_keys::{
+    DiffNextSearchMatchOrChange, DiffPrevSearchMatchOrChange, OpenActiveViewSearch,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevSearchMatchOrChange,
+};
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
-    DiffNextChange, DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevChange, DiffPrevFile,
-    DiffPrevSearchMatchOrChange, DiffRenderer, FocusedMergetoolLabels, FocusedMergetoolViewConfig,
-    GitCometView, GitCometViewConfig, GitCometViewMode, HistoryFindPrevious,
-    InitialRepositoryLaunchMode, LocateFileInExplorer, OpenActiveViewSearch, OpenRemoteInBrowser,
-    PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose,
-    PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev,
-    SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,
-    TextInputCommitAndPushSubmit, TextInputCommitSubmit, TextInputDiffNextChange,
-    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
-    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
-    WorkspaceBootstrap, is_diff_shortcut_candidate,
+    DiffNextChange, DiffNextFile, DiffPrevChange, DiffPrevFile, DiffRenderer,
+    FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
+    GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode, LocateFileInExplorer,
+    OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
+    PushUpstreamRemoteClose, PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect,
+    PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste,
+    TerminalSelectAll, TextInputCommitAndPushSubmit, TextInputCommitSubmit,
+    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    ToggleCommandPalette, WorkspaceBootstrap, is_diff_shortcut_candidate,
 };
 use gitcomet_core::identity::{self, WindowKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
