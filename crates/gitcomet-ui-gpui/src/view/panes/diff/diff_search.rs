@@ -563,6 +563,40 @@ fn next_row_start_after_stream_abs(
     row_starts.get(ix).map(|(start, _)| *start)
 }
 
+/// Where each visible row starts in a search's byte stream, and the last row
+/// a match was reported for, so a row is reported once however often it matches.
+#[derive(Default)]
+struct StreamRowIndex {
+    row_starts: Vec<(usize, usize)>,
+    last_reported_visible_ix: Option<usize>,
+}
+
+impl StreamRowIndex {
+    fn has_rows(&self) -> bool {
+        !self.row_starts.is_empty()
+    }
+
+    fn push(&mut self, stream_abs: usize, visible_ix: usize) {
+        self.row_starts.push((stream_abs, visible_ix));
+    }
+
+    fn reported(&self, visible_ix: usize) -> bool {
+        self.last_reported_visible_ix == Some(visible_ix)
+    }
+
+    fn report(&mut self, match_start: usize, out: &mut Vec<usize>) {
+        let Some(visible_ix) = visible_ix_for_stream_abs(self.row_starts.as_slice(), match_start)
+        else {
+            return;
+        };
+        if self.reported(visible_ix) {
+            return;
+        }
+        out.push(visible_ix);
+        self.last_reported_visible_ix = Some(visible_ix);
+    }
+}
+
 struct LiteralFileDiffLineTextStreamSearch {
     needle: Vec<u8>,
     prefix: Vec<usize>,
@@ -573,8 +607,7 @@ struct LiteralFileDiffLineTextStreamSearch {
     recent_bytes: VecDeque<u8>,
     pending_whole_word_start: Option<usize>,
     pending_whole_word_after: Vec<u8>,
-    row_starts: Vec<(usize, usize)>,
-    last_reported_visible_ix: Option<usize>,
+    rows: StreamRowIndex,
 }
 
 impl LiteralFileDiffLineTextStreamSearch {
@@ -604,33 +637,24 @@ impl LiteralFileDiffLineTextStreamSearch {
             ),
             pending_whole_word_start: None,
             pending_whole_word_after: Vec::with_capacity(MAX_UTF8_CHAR_BYTES),
-            row_starts: Vec::new(),
-            last_reported_visible_ix: None,
+            rows: StreamRowIndex::default(),
         })
     }
 
     fn has_rows(&self) -> bool {
-        !self.row_starts.is_empty()
+        self.rows.has_rows()
     }
 
     fn push_row_start(&mut self, visible_ix: usize) {
-        self.row_starts.push((self.stream_abs, visible_ix));
+        self.rows.push(self.stream_abs, visible_ix);
     }
 
     fn row_reported(&self, visible_ix: usize) -> bool {
-        self.last_reported_visible_ix == Some(visible_ix)
+        self.rows.reported(visible_ix)
     }
 
     fn report_match_start(&mut self, match_start: usize, out: &mut Vec<usize>) {
-        let Some(visible_ix) = visible_ix_for_stream_abs(self.row_starts.as_slice(), match_start)
-        else {
-            return;
-        };
-        if self.last_reported_visible_ix == Some(visible_ix) {
-            return;
-        }
-        out.push(visible_ix);
-        self.last_reported_visible_ix = Some(visible_ix);
+        self.rows.report(match_start, out);
     }
 
     fn finish_pending_whole_word(&mut self, out: &mut Vec<usize>) {
@@ -816,8 +840,7 @@ struct RegexFileDiffLineTextStreamSearch<'a> {
     window: String,
     window_start_abs: usize,
     stream_abs: usize,
-    row_starts: Vec<(usize, usize)>,
-    last_reported_visible_ix: Option<usize>,
+    rows: StreamRowIndex,
 }
 
 impl<'a> RegexFileDiffLineTextStreamSearch<'a> {
@@ -827,33 +850,24 @@ impl<'a> RegexFileDiffLineTextStreamSearch<'a> {
             window: String::with_capacity(FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES),
             window_start_abs: 0,
             stream_abs: 0,
-            row_starts: Vec::new(),
-            last_reported_visible_ix: None,
+            rows: StreamRowIndex::default(),
         }
     }
 
     fn has_rows(&self) -> bool {
-        !self.row_starts.is_empty()
+        self.rows.has_rows()
     }
 
     fn push_row_start(&mut self, visible_ix: usize) {
-        self.row_starts.push((self.stream_abs, visible_ix));
+        self.rows.push(self.stream_abs, visible_ix);
     }
 
     fn row_reported(&self, visible_ix: usize) -> bool {
-        self.last_reported_visible_ix == Some(visible_ix)
+        self.rows.reported(visible_ix)
     }
 
     fn report_match_start(&mut self, match_start: usize, out: &mut Vec<usize>) {
-        let Some(visible_ix) = visible_ix_for_stream_abs(self.row_starts.as_slice(), match_start)
-        else {
-            return;
-        };
-        if self.last_reported_visible_ix == Some(visible_ix) {
-            return;
-        }
-        out.push(visible_ix);
-        self.last_reported_visible_ix = Some(visible_ix);
+        self.rows.report(match_start, out);
     }
 
     fn scan_window(&mut self, stream_finished: bool, out: &mut Vec<usize>) {
@@ -874,7 +888,7 @@ impl<'a> RegexFileDiffLineTextStreamSearch<'a> {
             }
 
             let next_row_start =
-                next_row_start_after_stream_abs(self.row_starts.as_slice(), match_start_abs)
+                next_row_start_after_stream_abs(self.rows.row_starts.as_slice(), match_start_abs)
                     .unwrap_or_else(|| self.window_start_abs.saturating_add(self.window.len()));
             let next_search_start = next_row_start
                 .saturating_sub(self.window_start_abs)
@@ -2706,27 +2720,6 @@ fn conflict_resolver_visible_match_indices_with_matcher(
     out
 }
 
-/// Line `line_ix` of `text` without its newline; empty past the end.
-fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
-    if text.is_empty() {
-        return "";
-    }
-    let text_len = text.len();
-    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-    if start >= text_len {
-        return "";
-    }
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-        end = end.saturating_sub(1);
-    }
-    text.get(start..end).unwrap_or("")
-}
-
 /// Search three-way source texts by iterating projection spans directly.
 ///
 /// This avoids the per-visible-item O(log spans) projection lookup by walking
@@ -2750,13 +2743,21 @@ fn search_three_way_via_spans(
                     let row = source_line_start + i;
                     let aligned = ctx.three_way_aligned;
                     let base = aligned.side_line_for_row(0, row).map_or("", |l| {
-                        line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+                        conflict_resolver::line_text_from_starts(
+                            ctx.three_way_base_text,
+                            ctx.three_way_base_line_starts,
+                            l,
+                        )
                     });
                     let ours = aligned.side_line_for_row(1, row).map_or("", |l| {
-                        line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+                        conflict_resolver::line_text_from_starts(
+                            ctx.three_way_ours_text,
+                            ctx.three_way_ours_line_starts,
+                            l,
+                        )
                     });
                     let theirs = aligned.side_line_for_row(2, row).map_or("", |l| {
-                        line_text(
+                        conflict_resolver::line_text_from_starts(
                             ctx.three_way_theirs_text,
                             ctx.three_way_theirs_line_starts,
                             l,
@@ -2815,19 +2816,27 @@ fn search_three_way_via_spans_with_matcher(
                     base_rows.push((
                         visible_ix,
                         Cow::Borrowed(aligned.side_line_for_row(0, row).map_or("", |l| {
-                            line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+                            conflict_resolver::line_text_from_starts(
+                                ctx.three_way_base_text,
+                                ctx.three_way_base_line_starts,
+                                l,
+                            )
                         })),
                     ));
                     ours_rows.push((
                         visible_ix,
                         Cow::Borrowed(aligned.side_line_for_row(1, row).map_or("", |l| {
-                            line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+                            conflict_resolver::line_text_from_starts(
+                                ctx.three_way_ours_text,
+                                ctx.three_way_ours_line_starts,
+                                l,
+                            )
                         })),
                     ));
                     theirs_rows.push((
                         visible_ix,
                         Cow::Borrowed(aligned.side_line_for_row(2, row).map_or("", |l| {
-                            line_text(
+                            conflict_resolver::line_text_from_starts(
                                 ctx.three_way_theirs_text,
                                 ctx.three_way_theirs_line_starts,
                                 l,
@@ -2893,13 +2902,21 @@ fn three_way_visible_item_matches_query(
             // `ix` is an aligned row; translate per side.
             let aligned = ctx.three_way_aligned;
             let base = aligned.side_line_for_row(0, ix).map_or("", |l| {
-                line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+                conflict_resolver::line_text_from_starts(
+                    ctx.three_way_base_text,
+                    ctx.three_way_base_line_starts,
+                    l,
+                )
             });
             let ours = aligned.side_line_for_row(1, ix).map_or("", |l| {
-                line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+                conflict_resolver::line_text_from_starts(
+                    ctx.three_way_ours_text,
+                    ctx.three_way_ours_line_starts,
+                    l,
+                )
             });
             let theirs = aligned.side_line_for_row(2, ix).map_or("", |l| {
-                line_text(
+                conflict_resolver::line_text_from_starts(
                     ctx.three_way_theirs_text,
                     ctx.three_way_theirs_line_starts,
                     l,
