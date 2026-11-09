@@ -5,8 +5,8 @@ use super::history::gix_head_id_or_none;
 use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
-    push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
-    stable_path_bytes, submodule_script_path,
+    push_literal_paths, push_read_only_diff_flags, run_git_capture_bytes_cancellable,
+    run_git_simple, run_git_with_output, stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -1135,12 +1135,8 @@ fn git_numstat_counts(
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
-    // Without autoRefreshIndex=false, git writes refreshed stats to the index.
-    command
-        .arg("--no-optional-locks")
-        .arg("-c")
-        .arg("diff.autoRefreshIndex=false")
-        .arg("diff");
+    push_read_only_diff_flags(&mut command);
+    command.arg("diff");
     if cached {
         command.arg("--cached");
     }

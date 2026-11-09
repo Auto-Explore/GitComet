@@ -4,7 +4,10 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{push_literal_paths, run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
+use crate::util::{
+    push_literal_paths, push_read_only_diff_flags, run_git_parsed_stdout,
+    run_git_parsed_stdout_cancellable,
+};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
@@ -126,9 +129,7 @@ impl GixRepo {
             .arg("diff.dstPrefix=b/");
         cmd.arg("--no-pager");
         if matches!(target, DiffTarget::WorkingTree { .. }) {
-            cmd.arg("--no-optional-locks")
-                .arg("-c")
-                .arg("diff.autoRefreshIndex=false");
+            push_read_only_diff_flags(&mut cmd);
         }
         let subcommand = match target {
             DiffTarget::Commit { .. } => "show",

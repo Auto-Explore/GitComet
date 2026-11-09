@@ -84,6 +84,12 @@ pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path
         .arg(arg);
 }
 
+/// Global flags for a read-only `git diff` or `show` that may compare against
+/// the worktree; without them git writes refreshed stat data to the index.
+pub(crate) fn push_read_only_diff_flags(cmd: &mut Command) {
+    cmd.args(["--no-optional-locks", "-c", "diff.autoRefreshIndex=false"]);
+}
+
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
     if super::background::background_git_enabled() {
