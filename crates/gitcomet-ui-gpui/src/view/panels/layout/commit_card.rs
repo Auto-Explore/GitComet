@@ -214,7 +214,6 @@ impl DetailsPaneView {
                             PopoverKind::CommitShaLinkMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
-                                allow_navigate: true,
                             }
                             .invoked_by(menu_id.into()),
                             bounds,
@@ -239,6 +238,9 @@ impl DetailsPaneView {
                     .rounded(px(theme.radii.control))
                     .border_1()
                     .border_color(theme.colors.stroke.default)
+                    .when(chip.washed(), |d| {
+                        d.debug_selector(|| "commit_card_sha_find_wash".to_string())
+                    })
                     .bg(if chip.washed() {
                         with_alpha(theme.colors.accent.foreground, 0.18)
                     } else {

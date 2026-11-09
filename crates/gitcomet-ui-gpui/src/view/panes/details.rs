@@ -141,11 +141,6 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_reword_scroll: ScrollHandle,
     pub(in super::super) commit_reword: Option<CommitRewordDraft>,
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
@@ -508,43 +503,6 @@ impl DetailsPaneView {
             )
         });
 
-        let commit_details_sha_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-
-        let commit_details_date_input = cx.new(|cx| {
-            components::TextInput::new(components::TextInputOptions::selectable(), window, cx)
-        });
-
-        let commit_details_parent_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-        let commit_details_parent_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_parent_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_parent_link_menu",
-                root_view.clone(),
-            )
-        });
-
-        let commit_details_sha_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_sha_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_sha_link_menu",
-                root_view.clone(),
-            )
-        });
-
         let history_find_query = history_view.read(cx).history_find_query().cloned();
         let history_find_subscription = cx.observe(&history_view, |this, history, cx| {
             let query = history.read(cx).history_find_query();
@@ -657,11 +615,6 @@ impl DetailsPaneView {
             commit_reword_scroll,
             commit_reword: None,
             commit_details_message_link_menu,
-            commit_details_sha_link_menu,
-            commit_details_sha_input,
-            commit_details_date_input,
-            commit_details_parent_input,
-            commit_details_parent_link_menu,
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,

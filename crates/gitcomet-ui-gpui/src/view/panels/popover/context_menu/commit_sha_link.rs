@@ -1,27 +1,15 @@
 use super::*;
 
-pub(super) fn model(
-    repo_id: RepoId,
-    commit_id: &CommitId,
-    allow_navigate: bool,
-) -> ContextMenuModel {
-    model_for_commit_sha_link(repo_id, commit_id, allow_navigate)
+pub(super) fn model(repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
+    model_for_commit_sha_link(repo_id, commit_id)
 }
 
-fn model_for_commit_sha_link(
-    repo_id: RepoId,
-    commit_id: &CommitId,
-    allow_navigate: bool,
-) -> ContextMenuModel {
-    let mut items = vec![
+fn model_for_commit_sha_link(repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
+    ContextMenuModel::new(vec![
         ContextMenuItem::Header("Commit".into()),
         ContextMenuItem::Label(commit_id.as_ref().to_owned().into()),
         ContextMenuItem::Separator,
-    ];
-
-    // The details pane's own SHA field turns this off.
-    if allow_navigate {
-        items.push(ContextMenuItem::Entry {
+        ContextMenuItem::Entry {
             label: "Reveal commit".into(),
             icon: Some("icons/link.svg".into()),
             shortcut: None,
@@ -30,31 +18,27 @@ fn model_for_commit_sha_link(
                 repo_id,
                 commit_id: commit_id.clone(),
             }),
-        });
-    }
-
-    items.push(ContextMenuItem::Entry {
-        label: "Start file browsing".into(),
-        icon: Some("icons/history.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::BrowseRepositoryAtCommit {
-            repo_id,
-            commit_id: commit_id.clone(),
-        }),
-    });
-
-    items.push(ContextMenuItem::Entry {
-        label: "Copy to clipboard".into(),
-        icon: Some("icons/copy.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::CopyCommitSha {
-            commit_id: commit_id.clone(),
-        }),
-    });
-
-    ContextMenuModel::new(items)
+        },
+        ContextMenuItem::Entry {
+            label: "Start file browsing".into(),
+            icon: Some("icons/history.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::BrowseRepositoryAtCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "Copy to clipboard".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyCommitSha {
+                commit_id: commit_id.clone(),
+            }),
+        },
+    ])
 }
 
 #[cfg(test)]
@@ -75,7 +59,7 @@ mod tests {
     #[test]
     fn model_offers_revealing_and_browsing() {
         let commit_id = CommitId("deadbeef".into());
-        let model = model_for_commit_sha_link(RepoId(3), &commit_id, true);
+        let model = model_for_commit_sha_link(RepoId(3), &commit_id);
 
         assert_eq!(
             entry_labels(&model),
@@ -89,20 +73,9 @@ mod tests {
     }
 
     #[test]
-    fn a_commits_own_sha_cannot_reveal_itself() {
-        let commit_id = CommitId("deadbeef".into());
-        let model = model_for_commit_sha_link(RepoId(3), &commit_id, false);
-
-        assert_eq!(
-            entry_labels(&model),
-            vec!["Start file browsing", "Copy to clipboard"]
-        );
-    }
-
-    #[test]
     fn entries_carry_the_repo_and_commit_they_act_on() {
         let commit_id = CommitId("deadbeef".into());
-        let model = model_for_commit_sha_link(RepoId(3), &commit_id, true);
+        let model = model_for_commit_sha_link(RepoId(3), &commit_id);
         let actions = model
             .items
             .iter()

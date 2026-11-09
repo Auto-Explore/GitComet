@@ -147,11 +147,6 @@ impl DetailsPaneView {
                 if !current && show_delayed_loading {
                     components::empty_state(theme, "Commit", "Loading").into_any_element()
                 } else {
-                    let parent = details
-                        .parent_ids
-                        .first()
-                        .map(|p: &CommitId| p.as_ref().to_string())
-                        .unwrap_or_else(|| "—".to_string());
                     let find = self.commit_details_find_highlights(details);
 
                     if current {
@@ -163,39 +158,13 @@ impl DetailsPaneView {
                             &find.summary,
                             cx,
                         );
-                        self.sync_commit_details_sha_menu(
-                            details.id.as_ref(),
-                            repo_id,
-                            true,
-                            find.sha,
-                            theme,
-                            cx,
-                        );
                     } else {
                         self.sync_retained_commit_details_message_input(
                             details.message.as_str(),
                             &find.summary,
                             cx,
                         );
-                        self.sync_commit_details_sha_input(
-                            details.id.as_ref(),
-                            find.sha,
-                            theme,
-                            cx,
-                        );
                     }
-                    Self::sync_commit_details_input_value(
-                        &self.commit_details_date_input,
-                        self.commit_details_date_display(details).as_str(),
-                        cx,
-                    );
-                    self.sync_commit_details_parent_input(
-                        parent.as_str(),
-                        if current { repo_id } else { RepoId(0) },
-                        current && parent != "—",
-                        theme,
-                        cx,
-                    );
 
                     let message = if current {
                         let availability = self

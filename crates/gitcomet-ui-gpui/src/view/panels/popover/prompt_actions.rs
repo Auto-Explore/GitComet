@@ -311,18 +311,9 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::CommitShaLinkMenu {
-                repo_id,
-                commit_id,
-                allow_navigate,
-            } => self.context_menu_view(
-                PopoverKind::CommitShaLinkMenu {
-                    repo_id,
-                    commit_id,
-                    allow_navigate,
-                },
-                cx,
-            ),
+            PopoverKind::CommitShaLinkMenu { repo_id, commit_id } => {
+                self.context_menu_view(PopoverKind::CommitShaLinkMenu { repo_id, commit_id }, cx)
+            }
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }

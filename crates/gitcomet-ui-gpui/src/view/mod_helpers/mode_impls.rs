@@ -373,8 +373,6 @@ pub(crate) enum PopoverKind {
     CommitShaLinkMenu {
         repo_id: RepoId,
         commit_id: CommitId,
-        /// A commit's own SHA field cannot navigate to itself.
-        allow_navigate: bool,
     },
     DiffEditorMenu {
         context_actions: Vec<gitcomet_extension_api::HostedAction>,
