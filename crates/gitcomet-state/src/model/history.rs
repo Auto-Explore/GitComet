@@ -791,12 +791,24 @@ impl RepoState {
         }
         self.set_range_selection(None);
         self.release_range_files();
-        // Only a comparison opens range diffs, so one open is this comparison's.
-        if matches!(
-            self.diff_state.diff_target,
-            Some(gitcomet_core::domain::DiffTarget::CommitRange { .. })
-        ) {
+        // Only a comparison opens range diffs, so one open is this comparison's,
+        // as is an editor's way back to one.
+        let is_range = |target: &gitcomet_core::domain::DiffTarget| {
+            matches!(
+                target,
+                gitcomet_core::domain::DiffTarget::CommitRange { .. }
+            )
+        };
+        if self.diff_state.diff_target.as_ref().is_some_and(is_range) {
             self.close_diff();
+        }
+        if self
+            .diff_state
+            .edit_return_view
+            .as_ref()
+            .is_some_and(|view| is_range(&view.target))
+        {
+            self.diff_state.edit_return_view = None;
         }
         true
     }

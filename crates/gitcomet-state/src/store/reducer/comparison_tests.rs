@@ -855,3 +855,27 @@ fn a_parent_listed_above_its_child_still_gets_the_merged_diff() {
     assert_eq!(range.to, Some(CommitId("child".into())));
     assert_eq!(range.source, ComparisonSource::MergedSelection);
 }
+
+/// An editor opened from the comparison's diff returns to it on exit; once the
+/// comparison has ended, exiting must not reopen that dead diff.
+#[test]
+fn leaving_the_editor_after_the_comparison_ended_does_not_reopen_its_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    dispatch_effects(
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: "a.txt".into(),
+        },
+    );
+    assert!(repo(&state, repo_id).diff_state.edit_mode);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+
+    dispatch_effects(&mut state, Msg::ExitDiffEditMode { repo_id });
+
+    assert!(!matches!(
+        repo(&state, repo_id).diff_state.diff_target,
+        Some(gitcomet_core::domain::DiffTarget::CommitRange { .. })
+    ));
+}
