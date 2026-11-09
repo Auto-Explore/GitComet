@@ -1080,10 +1080,16 @@ fn paint_comparison_mark_chip(
     Some(chip)
 }
 
+/// The menu entry that compares a commit against the mark named `label`.
+pub(in crate::view) fn compare_with_mark_label(label: &str) -> SharedString {
+    format!("Compare with {label}").into()
+}
+
 fn comparison_mark_tooltip(label: &str) -> SharedString {
     format!(
         "{label} is marked for comparison. Right-click another commit, branch or tag \
-         and choose \"Compare with {label}\"."
+         and choose \"{}\".",
+        compare_with_mark_label(label)
     )
     .into()
 }

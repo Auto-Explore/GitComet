@@ -1199,6 +1199,7 @@ mod diff_text;
 mod history;
 pub(in crate::view) use history::history_row_height;
 mod history_canvas;
+pub(in crate::view) use history_canvas::compare_with_mark_label;
 #[cfg(test)]
 pub(in crate::view) use history_canvas::{
     history_mark_chip, history_mark_menu_chip, history_mark_menu_invoker, history_row_menu_is_open,

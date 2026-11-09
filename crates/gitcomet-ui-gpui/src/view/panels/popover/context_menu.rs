@@ -56,6 +56,53 @@ mod worktree;
 mod worktree_file;
 mod worktree_section;
 
+/// Comparing `commit_id` (named `label`) against the comparison mark: compare
+/// and merge-base compare when the mark is another commit, and clearing the
+/// mark wherever one is set, the marked commit's own row included.
+fn marked_comparison_entries(
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    label: &str,
+    mark: Option<(&CommitId, &str)>,
+) -> Vec<ContextMenuItem> {
+    let Some((mark_commit, mark_label)) = mark else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    if mark_commit != commit_id {
+        items.push(ContextMenuItem::Entry {
+            label: crate::view::rows::compare_with_mark_label(mark_label),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithMarked {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: label.to_string(),
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "Compare with merge base".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithMergeBase {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: label.to_string(),
+            }),
+        });
+    }
+    items.push(ContextMenuItem::Entry {
+        label: "Clear comparison mark".into(),
+        icon: Some("icons/generic_close.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
+    });
+    items
+}
+
 fn resolve_checkout_file_path(
     workdir: &std::path::Path,
     path: &std::path::Path,
@@ -1804,6 +1851,43 @@ mod tests {
     use super::*;
 
     use crate::kit::components::secondary_shortcut;
+
+    fn entry_labels(items: &[ContextMenuItem]) -> Vec<String> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_marked_commit_offers_only_to_clear_its_mark() {
+        let marked = CommitId("c00".into());
+        let entries = marked_comparison_entries(RepoId(1), &marked, "c00", Some((&marked, "main")));
+        assert_eq!(entry_labels(&entries), ["Clear comparison mark"]);
+    }
+
+    #[test]
+    fn another_commit_compares_against_the_mark() {
+        let marked = CommitId("c00".into());
+        let entries = marked_comparison_entries(
+            RepoId(1),
+            &CommitId("c01".into()),
+            "c01",
+            Some((&marked, "main")),
+        );
+        assert_eq!(
+            entry_labels(&entries),
+            [
+                "Compare with main",
+                "Compare with merge base",
+                "Clear comparison mark"
+            ]
+        );
+        assert!(marked_comparison_entries(RepoId(1), &marked, "c00", None).is_empty());
+    }
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {
