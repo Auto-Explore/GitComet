@@ -1808,10 +1808,6 @@ impl ConflictResolverUiState {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
-mod conflict_resolver_ui_state_tests;
-
 /// Each conflict block's choice, by conflict index.
 pub(crate) fn block_choices(
     segments: &[conflict_resolver::ConflictSegment],
@@ -1846,3 +1842,7 @@ fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static 
         _ => "Ordered source selection",
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
+mod conflict_resolver_ui_state_tests;
