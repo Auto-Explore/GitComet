@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::theme::{ThemeCatalog, ThemeOption, ThemePreviewColors};
+use crate::theme::{ThemeCatalog, ThemeOption, ThemePreviewColors, mix_rgba};
 use crate::view::components::{InteractionState, InteractionStyle};
 use gitcomet_state::session::WorkspaceId;
 
@@ -184,18 +184,7 @@ fn orb_base(colors: ThemePreviewColors) -> gpui::Rgba {
     } else {
         gpui::rgba(0xffffffff)
     };
-    mix_color(colors.base, toward, 0.2)
-}
-
-/// Unlike `theme::mix_colors`, this mixes alpha too rather than forcing 1.0.
-fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba::new(
-        a.red + (b.red - a.red) * t,
-        a.green + (b.green - a.green) * t,
-        a.blue + (b.blue - a.blue) * t,
-        a.alpha + (b.alpha - a.alpha) * t,
-    )
+    mix_rgba(colors.base, toward, 0.2)
 }
 
 /// One theme's layers in a 64-unit box: gradient defs, then the blurred fill.
