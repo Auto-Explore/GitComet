@@ -3,6 +3,7 @@
 //! are built by hand so they need no git-annex binary.
 
 use crate::git_cli::{git_cmd, git_command, git_stdout_raw};
+#[cfg(unix)]
 use crate::test_git_env;
 
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus};

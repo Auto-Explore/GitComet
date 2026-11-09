@@ -1,4 +1,6 @@
-use crate::git_cli::{git_cmd, git_stdout, run_git, run_git_with_env};
+#[cfg(unix)]
+use crate::git_cli::git_cmd;
+use crate::git_cli::{git_stdout, run_git, run_git_with_env};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{GitBackend, GitRepository, InteractiveRebaseAction};
 use gitcomet_core::test_support::git_fixture::append_config;
