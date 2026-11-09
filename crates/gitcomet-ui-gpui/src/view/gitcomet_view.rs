@@ -1114,37 +1114,15 @@ impl GitCometView {
             cx.notify();
         });
 
-        let auth_prompt_username_input_subscription =
-            cx.observe(&auth_prompt_username_input, |this, input, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+        let auth_prompt_username_input_subscription = cx.observe(
+            &auth_prompt_username_input,
+            Self::on_auth_prompt_input_changed,
+        );
 
-                if escape_pressed {
-                    this.cancel_auth_prompt(cx);
-                    return;
-                }
-                if enter_pressed {
-                    this.try_auth_prompt_submit(cx);
-                    return;
-                }
-                cx.notify();
-            });
-
-        let auth_prompt_secret_input_subscription =
-            cx.observe(&auth_prompt_secret_input, |this, input, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
-
-                if escape_pressed {
-                    this.cancel_auth_prompt(cx);
-                    return;
-                }
-                if enter_pressed {
-                    this.try_auth_prompt_submit(cx);
-                    return;
-                }
-                cx.notify();
-            });
+        let auth_prompt_secret_input_subscription = cx.observe(
+            &auth_prompt_secret_input,
+            Self::on_auth_prompt_input_changed,
+        );
 
         let scale = ui_scale::UiScale::from_percent(ui_scale.percent);
         let initial_sidebar_width_design =
@@ -1593,105 +1571,68 @@ impl GitCometView {
         Self::cubic_bezier(0.4, 0.0, 0.2, 1.0, t)
     }
 
-    pub(super) fn animate_sidebar_render_width_to(
+    /// Enter submits the auth prompt and Escape cancels it, from either field.
+    fn on_auth_prompt_input_changed(
         &mut self,
-        target: Pixels,
+        input: Entity<components::TextInput>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let start = self.sidebar_render_width;
-        let start_f: f32 = start.into();
-        let target_f: f32 = target.into();
-        self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
-        let seq = self.sidebar_width_anim_seq;
-        if (start_f - target_f).abs() <= 0.5 {
-            self.sidebar_render_width = target;
-            self.sidebar_width_animating = false;
+        let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+        let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+        if escape_pressed {
+            self.cancel_auth_prompt(cx);
             return;
         }
-
-        if !crate::ui_runtime::current().uses_pane_animations() {
-            self.sidebar_render_width = target;
-            self.sidebar_width_animating = false;
-            self.refresh_main_pane_after_panel_animation(cx);
-            cx.notify();
+        if enter_pressed {
+            self.try_auth_prompt_submit(cx);
             return;
         }
-
-        self.sidebar_width_animating = true;
-        let started = Instant::now();
-        let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
-
-        cx.spawn(
-            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
-                smol::Timer::after(Duration::from_millis(16)).await;
-
-                let mut t =
-                    started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
-                if !t.is_finite() {
-                    t = 1.0;
-                }
-                let t = t.clamp(0.0, 1.0);
-                let eased = Self::pane_collapse_ease(t);
-                let mut done = t >= 1.0;
-
-                let _ = view.update(cx, |this, cx| {
-                    if this.sidebar_width_anim_seq != seq {
-                        done = true;
-                        return;
-                    }
-
-                    let mut changed = false;
-                    let next_width = px(start_f + (target_f - start_f) * eased);
-                    if this.sidebar_render_width != next_width {
-                        this.sidebar_render_width = next_width;
-                        changed = true;
-                    }
-                    if t >= 1.0 {
-                        if this.sidebar_render_width != px(target_f) {
-                            this.sidebar_render_width = px(target_f);
-                        }
-                        this.sidebar_width_animating = false;
-                        this.refresh_main_pane_after_panel_animation(cx);
-                        changed = true;
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                });
-
-                if done {
-                    break;
-                }
-            },
-        )
-        .detach();
+        cx.notify();
     }
 
-    pub(super) fn animate_details_render_width_to(
+    /// The render width, animation sequence and animating flag of `pane`.
+    fn side_pane_width_anim(&mut self, pane: SidePane) -> (&mut Pixels, &mut u64, &mut bool) {
+        match pane {
+            SidePane::Sidebar => (
+                &mut self.sidebar_render_width,
+                &mut self.sidebar_width_anim_seq,
+                &mut self.sidebar_width_animating,
+            ),
+            SidePane::Details => (
+                &mut self.details_render_width,
+                &mut self.details_width_anim_seq,
+                &mut self.details_width_animating,
+            ),
+        }
+    }
+
+    /// Eases `pane`'s render width to `target`; a newer call cancels this one.
+    fn animate_side_pane_render_width_to(
         &mut self,
+        pane: SidePane,
         target: Pixels,
         cx: &mut gpui::Context<Self>,
     ) {
-        let start = self.details_render_width;
-        let start_f: f32 = start.into();
+        let (width, anim_seq, animating) = self.side_pane_width_anim(pane);
+        let start_f: f32 = (*width).into();
         let target_f: f32 = target.into();
-        self.details_width_anim_seq = self.details_width_anim_seq.wrapping_add(1);
-        let seq = self.details_width_anim_seq;
+        *anim_seq = anim_seq.wrapping_add(1);
+        let seq = *anim_seq;
         if (start_f - target_f).abs() <= 0.5 {
-            self.details_render_width = target;
-            self.details_width_animating = false;
+            *width = target;
+            *animating = false;
             return;
         }
 
         if !crate::ui_runtime::current().uses_pane_animations() {
-            self.details_render_width = target;
-            self.details_width_animating = false;
+            *width = target;
+            *animating = false;
             self.refresh_main_pane_after_panel_animation(cx);
             cx.notify();
             return;
         }
 
-        self.details_width_animating = true;
+        *animating = true;
         let started = Instant::now();
         let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
 
@@ -1709,22 +1650,21 @@ impl GitCometView {
                 let mut done = t >= 1.0;
 
                 let _ = view.update(cx, |this, cx| {
-                    if this.details_width_anim_seq != seq {
+                    let (width, anim_seq, animating) = this.side_pane_width_anim(pane);
+                    if *anim_seq != seq {
                         done = true;
                         return;
                     }
 
                     let mut changed = false;
                     let next_width = px(start_f + (target_f - start_f) * eased);
-                    if this.details_render_width != next_width {
-                        this.details_render_width = next_width;
+                    if *width != next_width {
+                        *width = next_width;
                         changed = true;
                     }
                     if t >= 1.0 {
-                        if this.details_render_width != px(target_f) {
-                            this.details_render_width = px(target_f);
-                        }
-                        this.details_width_animating = false;
+                        *width = px(target_f);
+                        *animating = false;
                         this.refresh_main_pane_after_panel_animation(cx);
                         changed = true;
                     }
@@ -1805,7 +1745,7 @@ impl GitCometView {
         } else {
             self.sidebar_width
         };
-        self.animate_sidebar_render_width_to(target, cx);
+        self.animate_side_pane_render_width_to(SidePane::Sidebar, target, cx);
         // Persist so the sidebar reopens in the same state next launch.
         self.schedule_ui_settings_persist(cx);
         cx.notify();
@@ -1924,7 +1864,7 @@ impl GitCometView {
         } else {
             self.details_width
         };
-        self.animate_details_render_width_to(target, cx);
+        self.animate_side_pane_render_width_to(SidePane::Details, target, cx);
         cx.notify();
     }
 
@@ -2943,4 +2883,11 @@ impl GitCometView {
 pub(in crate::view) enum NavKeyFocus {
     TextInput,
     Elsewhere,
+}
+
+/// The collapsible panes beside the main view.
+#[derive(Clone, Copy)]
+enum SidePane {
+    Sidebar,
+    Details,
 }
