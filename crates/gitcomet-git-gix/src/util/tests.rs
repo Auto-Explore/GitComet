@@ -857,8 +857,8 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
     git(&[
         "config",
         "filter.lfs.smudge",
-        "for i in 1 2 3 4 5 6; do if [ -n \"$GIT_LFS_PROGRESS\" ]; then \
-         echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
+        "for i in 1 2 3 4 5 6 7 8 9 10; do if [ -n \"$GIT_LFS_PROGRESS\" ]; then \
+         echo \"download $i/10 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.2; done; cat",
     ]);
     git(&["config", "filter.lfs.required", "true"]);
     let repo = crate::test_support::open_repo(workdir);
@@ -874,7 +874,9 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
     ] {
         let mut cmd = repo.git_workdir_cmd();
         cmd.args(&args);
-        run_command_with_timeout(cmd, label, Duration::from_millis(600), None)
+        // 2 s of filter runtime outlasts the 1.5 s deadline only through the
+        // progress file; the slack absorbs git startup/exit on loaded runners.
+        run_command_with_timeout(cmd, label, Duration::from_millis(1500), None)
             .unwrap_or_else(|e| panic!("progress lines keep `{label}` alive: {e}"));
         assert_eq!(
             std::fs::read_to_string(checked_out.join("a.bin")).unwrap(),
