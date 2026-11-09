@@ -202,7 +202,7 @@ impl DetailsPaneView {
                 ui_scale.px(12.0),
             ))
             .on_activate(
-                false,
+                !current,
                 components::ControlActivation::Action,
                 cx.listener({
                     let chip_bounds = Rc::clone(&chip_bounds);

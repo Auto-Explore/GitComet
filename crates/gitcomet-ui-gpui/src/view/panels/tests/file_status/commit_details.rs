@@ -1358,9 +1358,8 @@ fn commit_card_chevrons_are_inert_while_the_card_is_stale(cx: &mut gpui::TestApp
         let bounds = cx.debug_bounds(menu).expect(menu);
         simulate_counted_click(cx, bounds.center(), 1);
         draw_and_drain_test_window(cx);
-        let kind = cx.update(|_window, app| {
-            crate::view::test_support::popover_kind(view.read(app), app)
-        });
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
         assert_eq!(kind, None, "{menu} opened a menu for the previous commit");
     }
 }
