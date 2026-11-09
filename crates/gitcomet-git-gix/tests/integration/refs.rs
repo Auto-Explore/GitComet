@@ -1,4 +1,4 @@
-use crate::git_cli::{git_cmd, git_output, git_stdout_raw as run_git_capture, run_git};
+use crate::git_cli::{git_cmd, git_output, git_stdout_raw, run_git};
 use gitcomet_core::domain::{HistoryMode, Upstream, UpstreamDivergence};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::test_support::git_fixture::{
@@ -214,15 +214,15 @@ fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
             .expect("set exact upstream");
 
         assert_eq!(
-            run_git_capture(&repo, &["config", "--get", "branch.feature.remote"]).trim(),
+            git_stdout_raw(&repo, &["config", "--get", "branch.feature.remote"]).trim(),
             target.remote
         );
         assert_eq!(
-            run_git_capture(&repo, &["config", "--get", "branch.feature.merge"]).trim(),
+            git_stdout_raw(&repo, &["config", "--get", "branch.feature.merge"]).trim(),
             format!("refs/heads/{}", target.branch)
         );
         assert_eq!(
-            run_git_capture(
+            git_stdout_raw(
                 &repo,
                 &[
                     "for-each-ref",
@@ -282,11 +282,11 @@ fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
         .expect("checkout should resolve the mapped local tracking ref");
 
     assert_eq!(
-        run_git_capture(&repo, &["branch", "--show-current"]).trim(),
+        git_stdout_raw(&repo, &["branch", "--show-current"]).trim(),
         "review-local"
     );
     assert_eq!(
-        run_git_capture(
+        git_stdout_raw(
             &repo,
             &[
                 "for-each-ref",
@@ -599,7 +599,7 @@ fn set_upstream_honours_auto_setup_rebase() {
             .set_upstream_branch_with_output("main", &upstream("origin", "main"))
             .expect("set upstream");
 
-        let actual = run_git_capture(&work_repo, &["config", "branch.main.rebase"]);
+        let actual = git_stdout_raw(&work_repo, &["config", "branch.main.rebase"]);
         assert_eq!(actual.trim(), rebase, "{setting}");
     }
 }
@@ -664,7 +664,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
 
-    let upstream_after = run_git_capture(
+    let upstream_after = git_stdout_raw(
         &work_repo,
         &[
             "for-each-ref",
@@ -735,7 +735,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .expect("pending upstream survives a pruning fetch before its first push");
 
     assert!(
-        run_git_capture(
+        git_stdout_raw(
             &work_repo,
             &[
                 "ls-remote",
@@ -749,15 +749,15 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         "setting upstream must not push or create the remote ref"
     );
     assert_eq!(
-        run_git_capture(&work_repo, &["config", "--get", "branch.feature.remote"]).trim(),
+        git_stdout_raw(&work_repo, &["config", "--get", "branch.feature.remote"]).trim(),
         "origin"
     );
     assert_eq!(
-        run_git_capture(&work_repo, &["config", "--get", "branch.feature.merge"]).trim(),
+        git_stdout_raw(&work_repo, &["config", "--get", "branch.feature.merge"]).trim(),
         "refs/heads/review/feature"
     );
     assert_eq!(
-        run_git_capture(
+        git_stdout_raw(
             &work_repo,
             &["config", "--get", "branch.feature.gitcometPendingUpstream"],
         )
@@ -779,7 +779,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .push_with_output()
         .expect("later push uses the configured target");
     assert!(
-        !run_git_capture(
+        !git_stdout_raw(
             &work_repo,
             &[
                 "ls-remote",
@@ -793,7 +793,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         "the next normal push must create the configured remote branch"
     );
     assert!(
-        run_git_capture(
+        git_stdout_raw(
             &work_repo,
             &["ls-remote", "--heads", "origin", "refs/heads/feature"],
         )
@@ -1140,7 +1140,7 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
         .expect("unset upstream");
     assert_eq!(output.exit_code, Some(0));
 
-    let upstream_after = run_git_capture(
+    let upstream_after = git_stdout_raw(
         &work_repo,
         &[
             "for-each-ref",
@@ -1262,7 +1262,7 @@ fn list_branches_uses_first_merge_entry() {
             );
         }
         assert_eq!(
-            run_git_capture(
+            git_stdout_raw(
                 repo,
                 &[
                     "for-each-ref",
@@ -1337,16 +1337,16 @@ fn changing_upstream_replaces_repeated_merge_entries() {
             .set_upstream_branch_with_output("main", &upstream("origin", "new"))
             .unwrap();
         assert_eq!(
-            run_git_capture(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]).trim(),
+            git_stdout_raw(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]).trim(),
             "origin/new",
             "separate sections: {separate_sections}"
         );
         assert_eq!(
-            run_git_capture(repo, &["config", "--get-all", "branch.main.merge"]).trim(),
+            git_stdout_raw(repo, &["config", "--get-all", "branch.main.merge"]).trim(),
             "refs/heads/new"
         );
         assert_eq!(
-            run_git_capture(repo, &["config", "branch.main.description"]).trim(),
+            git_stdout_raw(repo, &["config", "branch.main.description"]).trim(),
             "keep-me"
         );
         let branches = opened
@@ -1373,7 +1373,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
         initialize_repo_with_commit(repo);
         run_git(repo, &["remote", "add", "origin", "."]);
         run_git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        let oid = run_git_capture(repo, &["rev-parse", "HEAD"]);
+        let oid = git_stdout_raw(repo, &["rev-parse", "HEAD"]);
         let mut refs = String::new();
         let mut config = fs::OpenOptions::new()
             .append(true)
@@ -1451,7 +1451,7 @@ fn fetch_refspecs_fetches_exactly_the_named_refs() {
         .expect("refspec fetch");
     assert!(output.command.contains("refs/pull/7/head"), "{output:?}");
 
-    let refs = run_git_capture(&repo, &["for-each-ref", "--format=%(refname)"]);
+    let refs = git_stdout_raw(&repo, &["for-each-ref", "--format=%(refname)"]);
     assert!(refs.contains("refs/remotes/origin/pr/7"), "{refs}");
     assert!(
         !refs.contains("refs/remotes/origin/unrelated"),

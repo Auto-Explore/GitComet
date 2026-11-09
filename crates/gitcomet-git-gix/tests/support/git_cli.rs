@@ -11,16 +11,13 @@ pub(crate) fn git_command() -> Command {
     cmd
 }
 
+/// [`git_command`] in `repo`, with editors stubbed so fixture commits,
+/// merges and rebases never wait on one; a caller's own `.env` still wins.
 pub(crate) fn git_cmd(repo: &Path) -> Command {
     let mut cmd = git_command();
-    cmd.arg("-C").arg(repo);
-    cmd
-}
-
-/// [`git_cmd`] with every editor stubbed out, for commands that may open one.
-pub(crate) fn git_no_editor(repo: &Path) -> Command {
-    let mut cmd = git_cmd(repo);
-    cmd.env("GIT_EDITOR", "true")
+    cmd.arg("-C")
+        .arg(repo)
+        .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
         .env("VISUAL", "true");
     cmd
@@ -50,6 +47,12 @@ pub(crate) fn git_output(repo: &Path, args: &[&str]) -> Output {
 
 pub(crate) fn run_git(repo: &Path, args: &[&str]) {
     run_checked(&mut git_cmd(repo), args);
+}
+
+pub(crate) fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
+    let mut cmd = git_cmd(repo);
+    cmd.envs(envs.iter().copied());
+    run_checked(&mut cmd, args);
 }
 
 pub(crate) fn git_stdout(repo: &Path, args: &[&str]) -> String {

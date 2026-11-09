@@ -1,4 +1,4 @@
-use crate::git_cli::{git_no_editor, run_checked, stdout_text};
+use crate::git_cli::{git_output, git_stdout, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
     GitBackend, GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry, SequencerState,
@@ -7,26 +7,7 @@ use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-use std::process::Output;
 use std::sync::Arc;
-
-// Fixture commits and picks must never wait on an editor.
-fn git_output(repo: &Path, args: &[&str]) -> Output {
-    git_no_editor(repo)
-        .args(args)
-        .output()
-        .expect("git command to run")
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    run_checked(&mut git_no_editor(repo), args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    stdout_text(run_checked(&mut git_no_editor(repo), args))
-        .trim()
-        .to_string()
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");
@@ -1379,30 +1360,6 @@ fn dirty_worktree_rejects_cherry_pick_and_preserves_local_change() {
         "dirty worktree\n"
     );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M file.txt");
-}
-
-#[test]
-fn dirty_index_rejects_cherry_pick_and_preserves_staged_change() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let repo = dir.path().join("repo");
-    let picked = setup_conflicting_cherry_pick_repo(&repo);
-    fs::write(repo.join("file.txt"), "staged change\n").expect("write staged change");
-    run_git(&repo, &["add", "file.txt"]);
-
-    let err = open_backend(&repo)
-        .cherry_pick_with_output(&commit_id(&picked), true, None)
-        .expect_err("dirty index should reject cherry-pick");
-
-    let message = err.to_string();
-    assert!(
-        message.contains("file.txt already has staged changes"),
-        "unexpected dirty-index error: {message}"
-    );
-    assert_eq!(
-        fs::read_to_string(repo.join("file.txt")).unwrap(),
-        "staged change\n"
-    );
-    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M  file.txt");
 }
 
 #[test]

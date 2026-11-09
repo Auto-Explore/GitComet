@@ -1,4 +1,4 @@
-use crate::git_cli::{git_stdout_raw as run_git_capture, run_git};
+use crate::git_cli::{git_stdout_raw, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -31,7 +31,7 @@ fn export_patch_and_apply_patch_round_trip() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "add line"],
     );
 
-    let head = run_git_capture(repo, &["rev-parse", "HEAD"])
+    let head = git_stdout_raw(repo, &["rev-parse", "HEAD"])
         .trim()
         .to_string();
     let patch_path = dir.path().join("change.patch");
@@ -65,7 +65,7 @@ fn export_patch_and_apply_patch_round_trip() {
         "one\ntwo\n"
     );
 
-    let subject = run_git_capture(repo, &["log", "-1", "--pretty=%s"])
+    let subject = git_stdout_raw(repo, &["log", "-1", "--pretty=%s"])
         .trim()
         .to_string();
     assert_eq!(subject, "add line");
@@ -92,7 +92,7 @@ fn apply_unified_patch_to_worktree_applies_and_reverses() {
     );
 
     fs::write(&file, "base\nchanged\n").expect("write modified file");
-    let patch = run_git_capture(repo, &["diff", "--", "a.txt"]);
+    let patch = git_stdout_raw(repo, &["diff", "--", "a.txt"]);
     assert!(patch.contains("+changed"));
 
     run_git(repo, &["checkout", "--", "a.txt"]);
@@ -147,7 +147,7 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
     run_git(&repo, &["commit", "-m", "base"]);
     fs::write(repo.join("f.txt"), "b\n").expect("write");
     run_git(&repo, &["commit", "-am", "patched"]);
-    let patch = run_git_capture(&repo, &["format-patch", "-1", "--stdout"]);
+    let patch = git_stdout_raw(&repo, &["format-patch", "-1", "--stdout"]);
     let patch_path = dir.path().join("0001.patch");
     fs::write(&patch_path, patch).expect("write patch");
     run_git(&repo, &["reset", "--hard", "HEAD~1"]);
@@ -169,7 +169,7 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
     assert_eq!(output.command, "git am --continue");
     assert!(!repo.join(".git/rebase-apply").exists(), "am finished");
     assert_eq!(
-        run_git_capture(&repo, &["log", "-1", "--format=%s"]).trim(),
+        git_stdout_raw(&repo, &["log", "-1", "--format=%s"]).trim(),
         "patched"
     );
 }

@@ -2,7 +2,7 @@
 //! use the real `git-lfs` filter (installed on every CI lane); annex fixtures
 //! are built by hand so they need no git-annex binary.
 
-use crate::git_cli::{git_cmd, git_command, git_stdout_raw as git};
+use crate::git_cli::{git_cmd, git_command, git_stdout_raw};
 use crate::test_git_env;
 
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus};
@@ -38,7 +38,7 @@ fn git_lfs_available() -> bool {
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).unwrap();
-    git(repo, &["init", "-q"]);
+    git_stdout_raw(repo, &["init", "-q"]);
     gitcomet_core::test_support::git_fixture::append_config(
         repo,
         &[
@@ -61,8 +61,8 @@ fn init_lfs_repo(repo: &Path) {
     .unwrap();
     fs::write(repo.join("a.bin"), b"large file contents\n").unwrap();
     fs::write(repo.join("notes.txt"), b"plain\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "init"]);
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "init"]);
 }
 
 fn status(
@@ -92,9 +92,9 @@ fn bare_lfs_support_reads_committed_attributes_without_an_index_or_checkout() {
     )
     .unwrap();
     fs::write(source.join("a.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nsize 5\n").unwrap();
-    git(&source, &["add", "."]);
-    git(&source, &["commit", "-qm", "LFS pointers"]);
-    git(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
+    git_stdout_raw(&source, &["add", "."]);
+    git_stdout_raw(&source, &["commit", "-qm", "LFS pointers"]);
+    git_stdout_raw(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
     fs::write(
         bare.join(".gitattributes"),
         "administrative-only filter=lfs\n",
@@ -193,7 +193,7 @@ fn lfs_lock_capability_detects_separate_attribute_rules() {
             ),
         )
         .unwrap();
-        git(repo, &["add", "."]);
+        git_stdout_raw(repo, &["add", "."]);
 
         let (status, opened) = status(repo);
         let support = opened
@@ -218,8 +218,8 @@ fn plain_repository_is_not_active() {
     let repo = dir.path().join("repo");
     init_repo(&repo);
     fs::write(repo.join("a.txt"), "a\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "init"]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "init"]);
     let (_, opened) = status(&repo);
     let support = opened
         .large_file_support(&CancellationToken::new())
@@ -238,11 +238,11 @@ fn plain_pointer_text_diff_regression() {
         "1".repeat(64)
     );
     fs::write(repo.join("example.png"), &pointer).unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "pointer example"]);
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "pointer example"]);
     let opened = GixBackend.open(repo).unwrap();
     let target = DiffTarget::commit(
-        CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into()),
         "example.png".into(),
     );
     let text = opened
@@ -288,7 +288,7 @@ fn lfs_rows_report_pointer_worktree_and_presence() {
     init_lfs_repo(&repo);
     fs::write(repo.join("a.bin"), b"new large contents\n").unwrap();
     fs::write(repo.join("b.psd"), b"layered image\n").unwrap();
-    git(&repo, &["add", "b.psd"]);
+    git_stdout_raw(&repo, &["add", "b.psd"]);
 
     let (status, opened) = status(&repo);
     let files = opened
@@ -325,7 +325,7 @@ fn lfs_pointer_only_worktree_reports_missing_content() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
-    let pointer = git(&repo, &["cat-file", "blob", "HEAD:a.bin"]);
+    let pointer = git_stdout_raw(&repo, &["cat-file", "blob", "HEAD:a.bin"]);
     fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
     // Pointer text in the worktree; touch so status compares content.
     fs::write(repo.join("a.bin"), &pointer).unwrap();
@@ -367,11 +367,11 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
     )
     .unwrap();
     fs::write(repo.join("README"), "annex fixture\n").unwrap();
-    git(&repo, &["add", "README"]);
-    git(&repo, &["commit", "-qm", "init"]);
-    git(&repo, &["branch", "git-annex"]);
-    git(&repo, &["add", "."]);
-    git(
+    git_stdout_raw(&repo, &["add", "README"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "init"]);
+    git_stdout_raw(&repo, &["branch", "git-annex"]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(
         &repo,
         &[
             "config",
@@ -416,8 +416,8 @@ fn annex_link_text_in_a_plain_worktree_file_is_a_pointer() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_repo(&repo);
-    git(&repo, &["config", "core.symlinks", "false"]);
-    git(
+    git_stdout_raw(&repo, &["config", "core.symlinks", "false"]);
+    git_stdout_raw(
         &repo,
         &[
             "config",
@@ -427,8 +427,8 @@ fn annex_link_text_in_a_plain_worktree_file_is_a_pointer() {
     );
     let link_target = format!(".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}/{ANNEX_KEY}");
     fs::write(repo.join("locked.bin"), &link_target).unwrap();
-    let blob = git(&repo, &["hash-object", "-w", "locked.bin"]);
-    git(
+    let blob = git_stdout_raw(&repo, &["hash-object", "-w", "locked.bin"]);
+    git_stdout_raw(
         &repo,
         &[
             "update-index",
@@ -471,7 +471,7 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
         let repo = dir.path().join("repo");
         init_repo(&repo);
         if annex {
-            git(&repo, &["config", "annex.uuid", "test-annex"]);
+            git_stdout_raw(&repo, &["config", "annex.uuid", "test-annex"]);
         } else {
             fs::write(repo.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
         }
@@ -503,7 +503,7 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
             fs::write(&object, content).unwrap();
             objects.push(object);
             fs::write(repo.join("a.bin"), pointer).unwrap();
-            let id = git(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
+            let id = git_stdout_raw(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
             index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.trim()));
         }
         let mut child = git_cmd(&repo)
@@ -560,16 +560,16 @@ fn annex_worktree_diffs_never_run_the_clean_filter() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_repo(&repo);
-    git(&repo, &["config", "annex.uuid", "test-annex"]);
+    git_stdout_raw(&repo, &["config", "annex.uuid", "test-annex"]);
     fs::write(repo.join("a.bin"), format!("/annex/objects/{ANNEX_KEY}\n")).unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "pointer"]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "pointer"]);
     fs::write(repo.join(".gitattributes"), "*.bin filter=annex\n").unwrap();
     // Filters get no GIT_WORK_TREE, so the marker path is absolute. The filter
     // succeeds: the marker, not an error, is what catches a regression.
     let marker = dir.path().join("filter-invoked");
     let filter = format!("touch '{}'; cat", marker.display());
-    git(&repo, &["config", "filter.annex.clean", &filter]);
+    git_stdout_raw(&repo, &["config", "filter.annex.clean", &filter]);
     fs::write(repo.join("a.bin"), "edited content\n").unwrap();
     let opened = GixBackend.open(&repo).unwrap();
     for _ in 0..2 {
@@ -618,7 +618,7 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_repo(&repo);
-    git(&repo, &["config", "annex.uuid", "test-annex"]);
+    git_stdout_raw(&repo, &["config", "annex.uuid", "test-annex"]);
     fs::write(repo.join(".gitattributes"), "*.bin filter=annex\n").unwrap();
     // What `git annex add` leaves for an unlocked file: the pointer in the
     // index, stamped with the worktree content's stat.
@@ -632,8 +632,8 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
         .unwrap();
     let clean =
         format!("filter.annex.clean=cat >/dev/null; printf '/annex/objects/{ANNEX_KEY}\\n'");
-    git(&repo, &["-c", &clean, "add", "."]);
-    git(&repo, &["-c", &clean, "commit", "-qm", "unlocked"]);
+    git_stdout_raw(&repo, &["-c", &clean, "add", "."]);
+    git_stdout_raw(&repo, &["-c", &clean, "commit", "-qm", "unlocked"]);
     let opened = GixBackend.open(&repo).unwrap();
     let pointer = |side: Option<LargeFileSide>| side.map(|side| side.pointer);
     let annexed = gitcomet_core::annex::parse_key(ANNEX_KEY).map(LargeFilePointer::Annex);
@@ -766,7 +766,7 @@ fn lfs_text_diff_reports_missing_content() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
-    let pointer = git(&repo, &["cat-file", "blob", "HEAD:a.bin"]);
+    let pointer = git_stdout_raw(&repo, &["cat-file", "blob", "HEAD:a.bin"]);
     fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
     fs::write(repo.join("a.bin"), pointer.replace("size 20", "size 21")).unwrap();
 
@@ -809,10 +809,10 @@ fn lfs_image_diff_decodes_both_sides_from_the_store() {
     let before = b"\x89PNG\r\n\x1a\nbefore".to_vec();
     let after = b"\x89PNG\r\n\x1a\nafter".to_vec();
     fs::write(repo.join("pic.png"), &before).unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "image"]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "image"]);
     fs::write(repo.join("pic.png"), &after).unwrap();
-    git(&repo, &["add", "pic.png"]);
+    git_stdout_raw(&repo, &["add", "pic.png"]);
 
     let opened = GixBackend.open(&repo).unwrap();
     let image = opened
@@ -842,7 +842,9 @@ fn commit_file_rows_carry_large_file_state() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
-    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
 
     let opened = GixBackend.open(&repo).unwrap();
     let details = opened
@@ -890,7 +892,7 @@ fn configure_lfs_filters(repo: &Path) {
         ("filter.lfs.smudge", "git-lfs smudge -- %f"),
         ("filter.lfs.required", "true"),
     ] {
-        git(repo, &["config", key, value]);
+        git_stdout_raw(repo, &["config", key, value]);
     }
 }
 
@@ -903,7 +905,7 @@ fn bare_conversion_materializes_local_lfs_content_through_required_process_filte
     let source = directory.path().join("source");
     let root = directory.path().join("bare.git");
     init_lfs_repo(&source);
-    git(
+    git_stdout_raw(
         directory.path(),
         &[
             "clone",
@@ -913,8 +915,8 @@ fn bare_conversion_materializes_local_lfs_content_through_required_process_filte
         ],
     );
     configure_lfs_filters(&root);
-    git(&root, &["lfs", "fetch", "--all", "origin"]);
-    git(&root, &["config", "filter.lfs.smudge", "exit 7"]);
+    git_stdout_raw(&root, &["lfs", "fetch", "--all", "origin"]);
+    git_stdout_raw(&root, &["config", "filter.lfs.smudge", "exit 7"]);
     let repo = GixBackend.open(&root).unwrap();
     let preview = repo.preview_disable_bare_mode().unwrap();
     repo.disable_bare_mode(&preview).unwrap();
@@ -922,9 +924,9 @@ fn bare_conversion_materializes_local_lfs_content_through_required_process_filte
         fs::read(root.join("a.bin")).unwrap(),
         b"large file contents\n"
     );
-    assert_eq!(git(&root, &["status", "--porcelain=v1"]), "");
+    assert_eq!(git_stdout_raw(&root, &["status", "--porcelain=v1"]), "");
     assert_eq!(
-        git(&root, &["config", "--get-all", "core.bare"]).trim(),
+        git_stdout_raw(&root, &["config", "--get-all", "core.bare"]).trim(),
         "false"
     );
 }
@@ -941,14 +943,14 @@ fn lfs_push_all_then_pull_downloads_only_the_named_path() {
     let remote = dir.path().join("remote.git");
     init_lfs_repo(&repo);
     fs::write(repo.join("b.bin"), b"second large file\n").unwrap();
-    git(&repo, &["add", "b.bin"]);
-    git(&repo, &["commit", "-qm", "second"]);
-    git(
+    git_stdout_raw(&repo, &["add", "b.bin"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "second"]);
+    git_stdout_raw(
         dir.path(),
         &["init", "-q", "--bare", remote.to_str().unwrap()],
     );
-    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
-    git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    git_stdout_raw(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    git_stdout_raw(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     run_lfs(
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
@@ -957,7 +959,7 @@ fn lfs_push_all_then_pull_downloads_only_the_named_path() {
     );
 
     let clone = dir.path().join("clone");
-    git(
+    git_stdout_raw(
         dir.path(),
         &[
             "clone",
@@ -986,7 +988,7 @@ fn lfs_push_all_then_pull_downloads_only_the_named_path() {
         pointer("b.bin").starts_with("version https://git-lfs"),
         "only the named path is downloaded"
     );
-    let status = git(&clone, &["status", "--porcelain"]);
+    let status = git_stdout_raw(&clone, &["status", "--porcelain"]);
     assert!(
         status.trim().is_empty(),
         "checkout leaves a clean tree: {status}"
@@ -1002,8 +1004,8 @@ fn lfs_track_writes_attributes_and_converts_existing_files() {
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
     fs::write(repo.join("scene.blend"), b"binary scene\n").unwrap();
-    git(&repo, &["add", "scene.blend"]);
-    git(&repo, &["commit", "-qm", "scene in git"]);
+    git_stdout_raw(&repo, &["add", "scene.blend"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "scene in git"]);
 
     run_lfs(
         &repo,
@@ -1019,12 +1021,12 @@ fn lfs_track_writes_attributes_and_converts_existing_files() {
         attributes.contains("*.blend filter=lfs diff=lfs merge=lfs -text lockable"),
         "{attributes}"
     );
-    let staged = git(&repo, &["cat-file", "blob", ":scene.blend"]);
+    let staged = git_stdout_raw(&repo, &["cat-file", "blob", ":scene.blend"]);
     assert!(
         staged.starts_with("version https://git-lfs"),
         "renormalized: {staged}"
     );
-    let staged_names = git(&repo, &["diff", "--cached", "--name-only"]);
+    let staged_names = git_stdout_raw(&repo, &["diff", "--cached", "--name-only"]);
     assert!(staged_names.contains(".gitattributes"), "{staged_names}");
 }
 
@@ -1041,7 +1043,7 @@ fn lfs_install_local_configures_filters_and_hooks() {
         gitcomet_core::large_files::LargeFileCommand::LfsInstall,
     );
     assert_eq!(
-        git(&repo, &["config", "--local", "filter.lfs.process"]).trim(),
+        git_stdout_raw(&repo, &["config", "--local", "filter.lfs.process"]).trim(),
         "git-lfs filter-process"
     );
     assert!(repo.join(".git/hooks/pre-push").is_file());
@@ -1069,8 +1071,8 @@ fn lfs_first_tracking_stages_new_attributes_with_the_pointer() {
         b"scene previously stored in Git\n",
     )
     .unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "ordinary file"]);
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "ordinary file"]);
     run_lfs(
         repo,
         gitcomet_core::large_files::LargeFileCommand::LfsTrack {
@@ -1080,12 +1082,12 @@ fn lfs_first_tracking_stages_new_attributes_with_the_pointer() {
             renormalize: vec!["scene.blend".into()],
         },
     );
-    let names = git(repo, &["diff", "--cached", "--name-only"]);
+    let names = git_stdout_raw(repo, &["diff", "--cached", "--name-only"]);
     assert!(
         names.lines().any(|name| name == ".gitattributes"),
         "attributes must accompany the pointer: {names}"
     );
-    assert!(git(repo, &["show", ":scene.blend"]).starts_with("version https://git-lfs"));
+    assert!(git_stdout_raw(repo, &["show", ":scene.blend"]).starts_with("version https://git-lfs"));
 }
 
 #[test]
@@ -1101,8 +1103,8 @@ fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
     for name in [selected, other] {
         fs::write(repo.join(name), "ordinary file\n").unwrap();
     }
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "unmanaged files"]);
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "unmanaged files"]);
     fs::write(repo.join(other), "unstaged changes must stay unstaged\n").unwrap();
     run_lfs(
         repo,
@@ -1113,7 +1115,7 @@ fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
             renormalize: vec![selected.into()],
         },
     );
-    let attributes = git(repo, &["check-attr", "filter", "--", selected, other]);
+    let attributes = git_stdout_raw(repo, &["check-attr", "filter", "--", selected, other]);
     assert!(
         attributes.contains("project [1].blend: filter: lfs"),
         "{attributes}"
@@ -1122,9 +1124,12 @@ fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
         attributes.contains("project 1.blend: filter: unspecified"),
         "{attributes}"
     );
-    assert!(git(repo, &["show", &format!(":{selected}")]).starts_with("version https://git-lfs"));
+    assert!(
+        git_stdout_raw(repo, &["show", &format!(":{selected}")])
+            .starts_with("version https://git-lfs")
+    );
     assert_eq!(
-        git(repo, &["show", &format!(":{other}")]),
+        git_stdout_raw(repo, &["show", &format!(":{other}")]),
         "ordinary file\n"
     );
 }
@@ -1137,16 +1142,18 @@ fn seed_lfs_history(root: &Path) -> (PathBuf, String) {
     let repo = root.join("source");
     init_lfs_repo(&repo);
     fs::write(repo.join("a.bin"), "middle version\n").unwrap();
-    git(&repo, &["add", "a.bin"]);
-    git(&repo, &["commit", "-qm", "middle"]);
-    let middle = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    git_stdout_raw(&repo, &["add", "a.bin"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "middle"]);
+    let middle = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
     fs::write(repo.join("a.bin"), "current version\n").unwrap();
-    git(&repo, &["add", "a.bin"]);
-    git(&repo, &["commit", "-qm", "current"]);
+    git_stdout_raw(&repo, &["add", "a.bin"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "current"]);
     let remote = root.join("remote.git");
-    git(root, &["init", "-q", "--bare", remote.to_str().unwrap()]);
-    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
-    git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    git_stdout_raw(root, &["init", "-q", "--bare", remote.to_str().unwrap()]);
+    git_stdout_raw(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    git_stdout_raw(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     run_lfs(
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
@@ -1159,7 +1166,7 @@ fn seed_lfs_history(root: &Path) -> (PathBuf, String) {
 fn clone_lfs_remote(root: &Path, remote: &Path) -> PathBuf {
     let root = &canonicalize_or_original(root.to_path_buf());
     let clone = root.join("clone");
-    git(
+    git_stdout_raw(
         root,
         &[
             "clone",
@@ -1195,7 +1202,7 @@ fn lfs_fetch_all_stores_every_version_without_checkout() {
         gitcomet_core::large_files::LargeFileCommand::LfsFetchAll,
     );
     for rev in ["HEAD", middle.as_str(), "HEAD~2"] {
-        let pointer = git(&repo, &["show", &format!("{rev}:a.bin")]);
+        let pointer = git_stdout_raw(&repo, &["show", &format!("{rev}:a.bin")]);
         let oid = pointer
             .lines()
             .find_map(|line| line.strip_prefix("oid sha256:"))
@@ -1217,7 +1224,7 @@ fn lfs_explicit_download_overrides_fetch_exclusions() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = clone_lfs_history(dir.path());
-    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git_stdout_raw(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
     run_lfs(
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsPull {
@@ -1229,7 +1236,7 @@ fn lfs_explicit_download_overrides_fetch_exclusions() {
         "current version\n"
     );
     assert_eq!(
-        git(&repo, &["config", "lfs.fetchexclude"]).trim(),
+        git_stdout_raw(&repo, &["config", "lfs.fetchexclude"]).trim(),
         "*.bin",
         "the override must not change user configuration"
     );
@@ -1248,10 +1255,10 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
     for selection in ["single", "lfsdefault", "branch"] {
         let dir = tempfile::tempdir().unwrap();
         let repo = clone_lfs_remote(dir.path(), &remote);
-        git(&repo, &["remote", "rename", "origin", "upstream"]);
-        git(&repo, &["config", "--unset", "branch.main.remote"]);
+        git_stdout_raw(&repo, &["remote", "rename", "origin", "upstream"]);
+        git_stdout_raw(&repo, &["config", "--unset", "branch.main.remote"]);
         if selection != "single" {
-            git(
+            git_stdout_raw(
                 &repo,
                 &[
                     "remote",
@@ -1260,7 +1267,7 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
                     &file_url(&dir.path().join("absent.git")),
                 ],
             );
-            git(
+            git_stdout_raw(
                 &repo,
                 &[
                     "config",
@@ -1274,7 +1281,7 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
             );
         }
         if selection == "branch" {
-            git(&repo, &["config", "branch.main.remote", "upstream"]);
+            git_stdout_raw(&repo, &["config", "branch.main.remote", "upstream"]);
         }
         let opened = GixBackend.open(&repo).unwrap();
         let target = DiffTarget::commit(
@@ -1309,7 +1316,7 @@ fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, middle) = clone_lfs_history(dir.path());
-    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git_stdout_raw(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
     let before = fs::read(repo.join("a.bin")).unwrap();
     let target = DiffTarget::commit(
         gitcomet_core::domain::CommitId(middle.into()),
@@ -1371,8 +1378,8 @@ fn lfs_added_and_deleted_previews_show_payloads() {
     let repo = dir.path();
     init_lfs_repo(repo);
     fs::write(repo.join("new.bin"), "new content\n").unwrap();
-    git(repo, &["add", "new.bin"]);
-    git(repo, &["rm", "a.bin"]);
+    git_stdout_raw(repo, &["add", "new.bin"]);
+    git_stdout_raw(repo, &["rm", "a.bin"]);
     let opened = GixBackend.open(repo).unwrap();
     for (path, side, expected) in [
         ("new.bin", DiffPreviewTextSide::New, "new content\n"),
@@ -1413,11 +1420,11 @@ fn lfs_missing_images_do_not_send_pointer_text_to_the_decoder() {
     )
     .unwrap();
     fs::write(repo.join("pic.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "image"]);
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "image"]);
     fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
     let target = DiffTarget::commit(
-        gitcomet_core::domain::CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        gitcomet_core::domain::CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into()),
         "pic.png".into(),
     );
     let opened = GixBackend.open(repo).unwrap();
@@ -1442,8 +1449,14 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = clone_lfs_history(dir.path());
-    let root = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD~2"]).trim().into());
-    let head = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let root = gitcomet_core::domain::CommitId(
+        git_stdout_raw(&repo, &["rev-parse", "HEAD~2"])
+            .trim()
+            .into(),
+    );
+    let head = gitcomet_core::domain::CommitId(
+        git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into(),
+    );
     let before = fs::read(repo.join("a.bin")).unwrap();
     let opened = GixBackend.open(&repo).unwrap();
     let root_target = DiffTarget::commit(root.clone(), "a.bin".into());
@@ -1507,7 +1520,7 @@ fn lfs_images_use_the_image_size_limit_instead_of_the_text_limit() {
     let mut bytes = vec![0; 17 * 1024 * 1024];
     bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
     fs::write(repo.join("large.png"), &bytes).unwrap();
-    git(repo, &["add", "."]);
+    git_stdout_raw(repo, &["add", "."]);
     let opened = GixBackend.open(repo).unwrap();
     let target = DiffTarget::working_tree("large.png".into(), DiffArea::Staged);
     let text = opened
@@ -1555,15 +1568,15 @@ fn lfs_named_checkout_treats_glob_characters_literally() {
         for name in [selected, other] {
             fs::write(repo.join(name), format!("{name} content\n")).unwrap();
         }
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-qm", "named files"]);
+        git_stdout_raw(&repo, &["add", "."]);
+        git_stdout_raw(&repo, &["commit", "-qm", "named files"]);
         let remote = dir.path().join("remote.git");
-        git(
+        git_stdout_raw(
             dir.path(),
             &["init", "-q", "--bare", remote.to_str().unwrap()],
         );
-        git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
-        git(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
+        git_stdout_raw(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+        git_stdout_raw(&repo, &["push", "-q", "-u", "origin", "HEAD:main"]);
         run_lfs(
             &repo,
             gitcomet_core::large_files::LargeFileCommand::LfsPushAll {
@@ -1573,7 +1586,7 @@ fn lfs_named_checkout_treats_glob_characters_literally() {
         for name in [selected, other] {
             fs::write(
                 repo.join(name),
-                git(&repo, &["show", &format!("HEAD:{name}")]),
+                git_stdout_raw(&repo, &["show", &format!("HEAD:{name}")]),
             )
             .unwrap();
         }
@@ -1620,7 +1633,7 @@ fn unlocked_annex_presence_is_read_from_the_object_store() {
     let pointer = |key: &str| format!("/annex/objects/{key}\n");
     fs::write(repo.join("present.bin"), pointer(ANNEX_KEY)).unwrap();
     fs::write(repo.join("absent.bin"), pointer(OTHER_ANNEX_KEY)).unwrap();
-    git(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["add", "."]);
 
     let (status, opened) = status(&repo);
     let files = opened
@@ -1651,8 +1664,8 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = clone_lfs_history(dir.path());
-    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
-    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    git_stdout_raw(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git_stdout_raw(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
     // A staged diff must not try to fetch an unrelated worktree object that
     // the remote does not have.
     let worktree = format!(
@@ -1723,15 +1736,15 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let repo = clone_lfs_remote(dir.path(), &remote);
-        let pointer = git(&repo, &["show", "HEAD~2:a.bin"]);
-        git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
-        git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+        let pointer = git_stdout_raw(&repo, &["show", "HEAD~2:a.bin"]);
+        git_stdout_raw(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+        git_stdout_raw(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
         if path != "a.bin" {
             fs::create_dir(repo.join("nested")).unwrap();
-            git(&repo, &["mv", "a.bin", path]);
+            git_stdout_raw(&repo, &["mv", "a.bin", path]);
         }
         fs::write(repo.join(path), &pointer).unwrap();
-        let index_before = git(&repo, &["ls-files", "--stage"]);
+        let index_before = git_stdout_raw(&repo, &["ls-files", "--stage"]);
         let target = if range {
             DiffTarget::commit_range(CommitId(middle.as_str().into()), None, Some(path.into()))
         } else {
@@ -1790,7 +1803,10 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
             source_text(diff.new_source.as_ref()).as_deref(),
             Some("large file contents\n")
         );
-        assert_eq!(git(&repo, &["ls-files", "--stage"]), index_before);
+        assert_eq!(
+            git_stdout_raw(&repo, &["ls-files", "--stage"]),
+            index_before
+        );
         assert_eq!(fs::read_to_string(repo.join(path)).unwrap(), pointer);
     }
 }
@@ -1878,8 +1894,8 @@ fn annex_locked_worktree_image_resolves_through_its_symlink() {
         symlink(relative, &path).unwrap();
     };
     link(&old_key, &before);
-    git(&repo, &["add", "pic.png"]);
-    git(&repo, &["commit", "-qm", "image"]);
+    git_stdout_raw(&repo, &["add", "pic.png"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "image"]);
     link(&new_key, &after);
 
     let opened = GixBackend.open(&repo).unwrap();
@@ -1914,11 +1930,11 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
     let remote = dir.path().join("remote.git");
-    git(
+    git_stdout_raw(
         dir.path(),
         &["init", "-q", "--bare", remote.to_str().unwrap()],
     );
-    git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
+    git_stdout_raw(&repo, &["remote", "add", "origin", &file_url(&remote)]);
     let opened = GixBackend.open(&repo).unwrap();
     let _auth_lock = crate::auth_test_lock();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
@@ -1947,10 +1963,10 @@ fn lfs_lock_listing_asks_credential_helpers_not_to_prompt() {
     // `access=basic` makes git-lfs ask for credentials before connecting,
     // so no server is needed (port 9 refuses the connection).
     let url = "http://127.0.0.1:9/repo.git/info/lfs";
-    git(&repo, &["config", "lfs.url", url]);
-    git(&repo, &["config", &format!("lfs.{url}.access"), "basic"]);
+    git_stdout_raw(&repo, &["config", "lfs.url", url]);
+    git_stdout_raw(&repo, &["config", &format!("lfs.{url}.access"), "basic"]);
     let marker = dir.path().join("helper-calls");
-    git(
+    git_stdout_raw(
         &repo,
         &[
             "config",
@@ -1987,10 +2003,12 @@ fn commit_rows_look_for_pointers_only_where_lfs_or_annex_is_used() {
                    oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\
                    size 12345\n";
     fs::write(repo.join("a.bin"), pointer).unwrap();
-    git(&repo, &["add", "a.bin"]);
-    git(&repo, &["commit", "-qm", "pointer-shaped text"]);
+    git_stdout_raw(&repo, &["add", "a.bin"]);
+    git_stdout_raw(&repo, &["commit", "-qm", "pointer-shaped text"]);
     let row = |repo: &Path| {
-        let head = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let head = git_stdout_raw(repo, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
         let details = GixBackend
             .open(repo)
             .unwrap()
@@ -2030,10 +2048,12 @@ fn timing_commit_details_of_a_large_plain_commit() {
         )
         .unwrap();
     }
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "large"]);
-    git(&repo, &["gc", "-q"]);
-    let head = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "large"]);
+    git_stdout_raw(&repo, &["gc", "-q"]);
+    let head = gitcomet_core::domain::CommitId(
+        git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into(),
+    );
     let opened = GixBackend.open(&repo).unwrap();
     let mut samples = Vec::new();
     for _ in 0..5 {
@@ -2062,8 +2082,8 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
             .lfs
             .in_use()
     );
-    git(repo, &["config", "filter.lfs.clean", "git-lfs clean -- %f"]);
-    git(repo, &["config", "lfs.storage", "custom-lfs"]);
+    git_stdout_raw(repo, &["config", "filter.lfs.clean", "git-lfs clean -- %f"]);
+    git_stdout_raw(repo, &["config", "lfs.storage", "custom-lfs"]);
     fs::write(repo.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
     let support = opened
         .large_file_support(&CancellationToken::new())
@@ -2100,7 +2120,7 @@ fn support_refresh_updates_worktree_filter_configuration() {
         ("filter.lfs.smudge", "cat"),
         ("filter.lfs.required", "false"),
     ] {
-        git(repo, &["config", key, value]);
+        git_stdout_raw(repo, &["config", key, value]);
     }
     fs::write(repo.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
     fs::write(
@@ -2111,8 +2131,8 @@ fn support_refresh_updates_worktree_filter_configuration() {
         ),
     )
     .unwrap();
-    git(repo, &["add", "."]);
-    git(
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(
         repo,
         &["commit", "-qm", "pointer before enabling LFS filters"],
     );
@@ -2142,15 +2162,15 @@ fn support_refresh_updates_worktree_filter_configuration() {
         Some("new content\n")
     );
 
-    git(repo, &["add", "a.bin"]);
-    git(repo, &["commit", "-qm", "content tracked with LFS"]);
+    git_stdout_raw(repo, &["add", "a.bin"]);
+    git_stdout_raw(repo, &["commit", "-qm", "content tracked with LFS"]);
     // Invalidate the cached stat without changing the content, forcing status
     // to compare through the newly installed clean filter.
     fs::write(repo.join("a.bin"), "new content\n").unwrap();
     opened
         .large_file_support(&CancellationToken::new())
         .unwrap();
-    assert!(git(repo, &["--no-optional-locks", "status", "--porcelain"]).is_empty());
+    assert!(git_stdout_raw(repo, &["--no-optional-locks", "status", "--porcelain"]).is_empty());
     let fresh_status = GixBackend
         .open(repo)
         .unwrap()
@@ -2171,7 +2191,7 @@ fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     init_repo(repo);
-    git(repo, &["commit", "--allow-empty", "-qm", "initial"]);
+    git_stdout_raw(repo, &["commit", "--allow-empty", "-qm", "initial"]);
     let opened = GixBackend.open(repo).unwrap();
     assert!(
         !opened
@@ -2180,13 +2200,13 @@ fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
             .annex
             .in_use()
     );
-    git(
+    git_stdout_raw(
         repo,
         &["update-ref", "refs/remotes/origin/git-annex", "HEAD"],
     );
     for packed in [false, true] {
         if packed {
-            git(repo, &["pack-refs", "--all", "--prune"]);
+            git_stdout_raw(repo, &["pack-refs", "--all", "--prune"]);
         }
         let support = opened
             .large_file_support(&CancellationToken::new())
@@ -2223,11 +2243,11 @@ fn annex_remote_tracking_detection_matches_the_complete_branch_name() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         init_repo(repo);
-        git(repo, &["commit", "--allow-empty", "-qm", "initial"]);
+        git_stdout_raw(repo, &["commit", "--allow-empty", "-qm", "initial"]);
         for remote in remotes {
             // Configure overlapping namespaces directly: `remote add` rejects
             // them even though existing config can contain both names.
-            git(
+            git_stdout_raw(
                 repo,
                 &[
                     "config",
@@ -2235,7 +2255,7 @@ fn annex_remote_tracking_detection_matches_the_complete_branch_name() {
                     "https://example.invalid/repo.git",
                 ],
             );
-            git(
+            git_stdout_raw(
                 repo,
                 &[
                     "config",
@@ -2245,10 +2265,10 @@ fn annex_remote_tracking_detection_matches_the_complete_branch_name() {
             );
         }
         let opened = GixBackend.open(repo).unwrap();
-        git(repo, &["update-ref", reference, "HEAD"]);
+        git_stdout_raw(repo, &["update-ref", reference, "HEAD"]);
         for packed in [false, true] {
             if packed {
-                git(repo, &["pack-refs", "--all", "--prune"]);
+                git_stdout_raw(repo, &["pack-refs", "--all", "--prune"]);
             }
             let support = opened
                 .large_file_support(&CancellationToken::new())
@@ -2269,9 +2289,9 @@ fn lfs_status_download_fetches_staged_content_and_preserves_staged_blobs() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = clone_lfs_history(dir.path());
-    git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
-    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
-    let index_before = git(&repo, &["ls-files", "--stage"]);
+    git_stdout_raw(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
+    git_stdout_raw(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    let index_before = git_stdout_raw(&repo, &["ls-files", "--stage"]);
     let pointer = fs::read(repo.join("a.bin")).unwrap();
     assert!(gitcomet_core::lfs::parse_pointer(&pointer).is_some());
     run_lfs(
@@ -2284,7 +2304,10 @@ fn lfs_status_download_fetches_staged_content_and_preserves_staged_blobs() {
         fs::read_to_string(repo.join("a.bin")).unwrap(),
         "current version\n"
     );
-    assert_eq!(git(&repo, &["ls-files", "--stage"]), index_before);
+    assert_eq!(
+        git_stdout_raw(&repo, &["ls-files", "--stage"]),
+        index_before
+    );
 }
 
 #[test]
@@ -2294,8 +2317,8 @@ fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, middle) = clone_lfs_history(dir.path());
-    git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
-    let before = git(&repo, &["ls-files", "--stage"]);
+    git_stdout_raw(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
+    let before = git_stdout_raw(&repo, &["ls-files", "--stage"]);
     let pointer = fs::read(repo.join("a.bin")).unwrap();
     let target = DiffTarget::commit_range(
         gitcomet_core::domain::CommitId(middle.into()),
@@ -2340,7 +2363,7 @@ fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
         source_text(diff.new_source.as_ref()).as_deref(),
         Some("current version\n")
     );
-    assert_eq!(git(&repo, &["ls-files", "--stage"]), before);
+    assert_eq!(git_stdout_raw(&repo, &["ls-files", "--stage"]), before);
     assert_eq!(fs::read(repo.join("a.bin")).unwrap(), pointer);
 }
 
@@ -2363,10 +2386,10 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
     let image_bytes = b"\x89PNG\r\n\x1a\nimage";
     fs::write(repo.join("pic.png"), image_bytes).unwrap();
     fs::write(repo.join("a.bin"), "new content\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "new content and image"]);
-    let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
-    let parent = CommitId(git(&repo, &["rev-parse", "HEAD^"]).trim().into());
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "new content and image"]);
+    let head = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let parent = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD^"]).trim().into());
     let opened = GixBackend.open(&repo).unwrap();
     let text_target = DiffTarget::commit(head.clone(), "a.bin".into());
     let image_target = DiffTarget::commit(head.clone(), "pic.png".into());
@@ -2377,7 +2400,7 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
     let cancellation = CancellationToken::new();
     let mut previous = repo.join(".git/lfs");
     for configured in [PathBuf::from("moved-lfs"), root.join("external-lfs")] {
-        git(
+        git_stdout_raw(
             &repo,
             &["config", "lfs.storage", configured.to_str().unwrap()],
         );
@@ -2478,14 +2501,14 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     init_repo(repo);
-    git(repo, &["commit", "--allow-empty", "-qm", "empty"]);
-    let parent = CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into());
+    git_stdout_raw(repo, &["commit", "--allow-empty", "-qm", "empty"]);
+    let parent = CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into());
     fs::create_dir(repo.join("nested")).unwrap();
     fs::write(repo.join("nested/.gitattributes"), "*.bin filter=lfs\n").unwrap();
     fs::write(repo.join("nested/a.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:1111111111111111111111111111111111111111111111111111111111111111\nsize 12\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-qm", "nested LFS pointer"]);
-    let head = CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into());
+    git_stdout_raw(repo, &["add", "."]);
+    git_stdout_raw(repo, &["commit", "-qm", "nested LFS pointer"]);
+    let head = CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into());
     let opened = GixBackend.open(repo).unwrap();
     assert!(!repo.join(".git/lfs").exists());
     for rows in [
@@ -2573,8 +2596,8 @@ esac
             for path in &paths {
                 fs::write(repo.join(path), "payload\n").unwrap();
             }
-            git(repo, &["add", "."]);
-            git(repo, &["commit", "-qm", "files"]);
+            git_stdout_raw(repo, &["add", "."]);
+            git_stdout_raw(repo, &["commit", "-qm", "files"]);
             let opened = GixBackend.open(repo).unwrap();
             let command = LargeFileCommand::LfsPull { paths };
             {
@@ -2602,8 +2625,8 @@ esac
 #[cfg(unix)]
 fn prepare_slow_clean_filter(repo: &Path, clean: &str) {
     fs::write(repo.join("file.slow"), "content\n").unwrap();
-    git(repo, &["add", "file.slow"]);
-    git(repo, &["config", "filter.slow.clean", clean]);
+    git_stdout_raw(repo, &["add", "file.slow"]);
+    git_stdout_raw(repo, &["config", "filter.slow.clean", clean]);
     fs::write(repo.join(".gitattributes"), "*.slow filter=slow\n").unwrap();
 }
 
@@ -2730,11 +2753,11 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
     )
     .unwrap();
     fs::write(repo.join("raw.bin"), &content).unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "raw under an lfs rule"]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "raw under an lfs rule"]);
     configure_lfs_filters(&repo);
     fs::remove_file(repo.join("raw.bin")).unwrap();
-    git(&repo, &["checkout", "--", "raw.bin"]);
+    git_stdout_raw(&repo, &["checkout", "--", "raw.bin"]);
 
     // Checkout refreshes the index's file stats. Invalidate them without changing
     // content so both Git and the backend run the LFS clean filter, independent
@@ -2747,12 +2770,17 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
         .unwrap();
 
     let (rows, opened) = status(&repo);
-    assert_eq!(git(&repo, &["status", "--porcelain"]), " M raw.bin\n");
+    assert_eq!(
+        git_stdout_raw(&repo, &["status", "--porcelain"]),
+        " M raw.bin\n"
+    );
     assert_eq!(
         rows.unstaged.as_ref(),
         &[row("raw.bin", FileStatusKind::Modified)]
     );
-    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
     let details = opened
         .commit_details(&gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
@@ -2775,7 +2803,7 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
     }
 
     opened.stage(&[Path::new("raw.bin")]).unwrap();
-    assert!(git(&repo, &["show", ":raw.bin"]).starts_with("version https://git-lfs"));
+    assert!(git_stdout_raw(&repo, &["show", ":raw.bin"]).starts_with("version https://git-lfs"));
     let (rows, opened) = status(&repo);
     let files = opened
         .uncommitted_large_files_for_status(&rows, &CancellationToken::new())
@@ -2950,9 +2978,9 @@ fn lfs_lock_list_and_unlock_against_a_lock_server() {
     for name in ["ours.psd", "theirs.psd"] {
         fs::write(repo.join(name), format!("{name} pixels\n")).unwrap();
     }
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-qm", "art"]);
-    git(&repo, &["config", "lfs.url", &server.url]);
+    git_stdout_raw(&repo, &["add", "."]);
+    git_stdout_raw(&repo, &["commit", "-qm", "art"]);
+    git_stdout_raw(&repo, &["config", "lfs.url", &server.url]);
     let opened = GixBackend.open(&repo).unwrap();
     let listed = || {
         let mut locks: Vec<_> = opened

@@ -3,8 +3,8 @@
 //! Uses SSH signing rather than GPG: generating a throwaway ed25519 key is fast
 //! and hermetic, while a GPG keypair needs entropy and an agent.
 
-#[cfg(unix)]
 use crate::git_cli::{git_cmd, git_stdout, run_git};
+#[cfg(unix)]
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::domain::{CommitId, DiffTarget, SignatureFormat, SignatureStatus};
 use gitcomet_core::services::{GitBackend, GitRepository};

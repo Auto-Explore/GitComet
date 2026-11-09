@@ -1,20 +1,9 @@
-use crate::git_cli::{git_cmd, git_no_editor, run_checked, stdout_text};
+use crate::git_cli::{git_cmd, git_stdout, run_git};
 use gitcomet_core::services::GitBackend;
 use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_core::test_support::git_fixture::{LinearCommit, import_linear_history};
 use gitcomet_git_gix::GixBackend;
 use std::path::Path;
-
-// Fixture commits and merges must never wait on an editor.
-fn run_git(repo: &Path, args: &[&str]) {
-    run_checked(&mut git_no_editor(repo), args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    stdout_text(run_checked(&mut git_no_editor(repo), args))
-        .trim()
-        .to_string()
-}
 
 #[test]
 fn blame_file_reports_head_and_explicit_revision() {

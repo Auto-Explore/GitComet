@@ -1,4 +1,4 @@
-use crate::git_cli::{git_no_editor, run_checked, stdout_text};
+use crate::git_cli::{git_output, git_stdout, run_git};
 use gitcomet_core::domain::{ApplyChangeTarget, CommitId, DiffTarget};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::{
@@ -8,26 +8,7 @@ use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 use std::sync::Arc;
-
-// Fixture merges and commits must never wait on an editor.
-fn git_output(repo: &Path, args: &[&str]) -> Output {
-    git_no_editor(repo)
-        .args(args)
-        .output()
-        .expect("git command to run")
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    run_checked(&mut git_no_editor(repo), args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    stdout_text(run_checked(&mut git_no_editor(repo), args))
-        .trim()
-        .to_string()
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");

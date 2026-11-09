@@ -1,4 +1,4 @@
-use crate::git_cli::git_stdout as git;
+use crate::git_cli::git_stdout;
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -7,18 +7,18 @@ use std::path::{Path, PathBuf};
 fn repository(root: &Path, name: &str) -> PathBuf {
     let path = root.join(name);
     fs::create_dir_all(&path).expect("create fixture repository");
-    git(&path, &["init", "-b", "main"]);
-    git(&path, &["config", "user.name", "Test"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "commit.gpgsign", "false"]);
+    git_stdout(&path, &["init", "-b", "main"]);
+    git_stdout(&path, &["config", "user.name", "Test"]);
+    git_stdout(&path, &["config", "user.email", "test@example.com"]);
+    git_stdout(&path, &["config", "commit.gpgsign", "false"]);
     path
 }
 
 fn commit(repo: &Path, contents: &str) -> String {
     fs::write(repo.join("file.txt"), contents).expect("write fixture file");
-    git(repo, &["add", "file.txt"]);
-    git(repo, &["commit", "-m", contents]);
-    git(repo, &["rev-parse", "HEAD"])
+    git_stdout(repo, &["add", "file.txt"]);
+    git_stdout(repo, &["commit", "-m", contents]);
+    git_stdout(repo, &["rev-parse", "HEAD"])
 }
 
 fn remote_url(path: &Path) -> String {
@@ -38,11 +38,11 @@ fn background_fetch_leaves_skipped_remotes_alone() {
     commit(&origin, "origin first");
     commit(&fork, "fork first");
     let local = repository(root.path(), "local");
-    git(&local, &["remote", "add", "origin", &remote_url(&origin)]);
-    git(&local, &["remote", "add", "fork", &remote_url(&fork)]);
-    git(&local, &["fetch", "--all"]);
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&origin)]);
+    git_stdout(&local, &["remote", "add", "fork", &remote_url(&fork)]);
+    git_stdout(&local, &["fetch", "--all"]);
     let origin_latest = commit(&origin, "origin second");
-    let fork_before = git(&local, &["rev-parse", "fork/main"]);
+    let fork_before = git_stdout(&local, &["rev-parse", "fork/main"]);
     commit(&fork, "fork second");
 
     GixBackend
@@ -51,8 +51,11 @@ fn background_fetch_leaves_skipped_remotes_alone() {
         .fetch_all_background_except(true, &["fork".to_string()], &CancellationToken::new())
         .expect("background fetch succeeds");
 
-    assert_eq!(git(&local, &["rev-parse", "origin/main"]), origin_latest);
-    assert_eq!(git(&local, &["rev-parse", "fork/main"]), fork_before);
+    assert_eq!(
+        git_stdout(&local, &["rev-parse", "origin/main"]),
+        origin_latest
+    );
+    assert_eq!(git_stdout(&local, &["rev-parse", "fork/main"]), fork_before);
 }
 
 #[test]
@@ -61,12 +64,12 @@ fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() 
     let remote = repository(root.path(), "remote");
     commit(&remote, "first");
     let local = repository(root.path(), "local");
-    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
-    git(&local, &["fetch", "origin"]);
-    git(&local, &["reset", "--hard", "origin/main"]);
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git_stdout(&local, &["fetch", "origin"]);
+    git_stdout(&local, &["reset", "--hard", "origin/main"]);
     let worktree = |name: &str| {
         let path = root.path().join(name);
-        git(
+        git_stdout(
             &local,
             &["worktree", "add", "-b", name, path.to_str().unwrap()],
         );
@@ -74,12 +77,12 @@ fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() 
     };
     let sparse = worktree("sparse");
     let narrowed = worktree("narrowed");
-    git(&local, &["config", "extensions.worktreeConfig", "true"]);
-    git(
+    git_stdout(&local, &["config", "extensions.worktreeConfig", "true"]);
+    git_stdout(
         &sparse,
         &["config", "--worktree", "core.sparseCheckout", "true"],
     );
-    git(
+    git_stdout(
         &narrowed,
         &[
             "config",
@@ -116,10 +119,10 @@ fn worktrees_whose_relative_remote_url_names_other_repositories_fetch_apart() {
     }
     let local = repository(&root.path().join("a"), "checkout");
     commit(&local, "base");
-    git(&local, &["remote", "add", "origin", "../remote"]);
+    git_stdout(&local, &["remote", "add", "origin", "../remote"]);
     let worktree = |path: PathBuf| {
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        git(
+        git_stdout(
             &local,
             &["worktree", "add", "-b", &name, path.to_str().unwrap()],
         );
@@ -151,10 +154,10 @@ fn refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");
     commit(&remote, "first");
-    git(&remote, &["branch", "doomed"]);
+    git_stdout(&remote, &["branch", "doomed"]);
     let local = repository(root.path(), "local");
-    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
-    git(&local, &["fetch", "origin"]);
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git_stdout(&local, &["fetch", "origin"]);
     let opened = GixBackend.open(&local).expect("open repository");
     let cancel = CancellationToken::new();
     let fingerprint = || opened.refs_fingerprint(&cancel).expect("fingerprint");
@@ -173,12 +176,12 @@ fn refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
     let advanced = fingerprint();
     assert_ne!(advanced, settled, "a new remote commit");
 
-    git(&remote, &["tag", "v1"]);
+    git_stdout(&remote, &["tag", "v1"]);
     fetch();
     let tagged = fingerprint();
     assert_ne!(tagged, advanced, "a new tag");
 
-    git(&remote, &["branch", "-D", "doomed"]);
+    git_stdout(&remote, &["branch", "-D", "doomed"]);
     fetch();
     assert_ne!(fingerprint(), tagged, "a pruned tracking branch");
 }
@@ -189,7 +192,7 @@ fn refs_fingerprint_moves_when_a_mirror_fetch_updates_its_branches() {
     let remote = repository(root.path(), "remote");
     commit(&remote, "first");
     let mirror = root.path().join("mirror.git");
-    git(
+    git_stdout(
         root.path(),
         &[
             "clone",
@@ -207,7 +210,10 @@ fn refs_fingerprint_moves_when_a_mirror_fetch_updates_its_branches() {
         .fetch_all_background(true, &cancel)
         .expect("background fetch succeeds");
     // A mirror's refspec writes refs/heads, not refs/remotes.
-    assert_eq!(git(&mirror, &["rev-parse", "refs/heads/main"]), latest);
+    assert_eq!(
+        git_stdout(&mirror, &["rev-parse", "refs/heads/main"]),
+        latest
+    );
     assert_ne!(fingerprint(), settled, "the fetch moved main");
 }
 
@@ -217,13 +223,13 @@ fn background_fetch_updates_tracking_refs_without_changing_checkout() {
     let remote = repository(root.path(), "remote");
     let first = commit(&remote, "first");
     let local = repository(root.path(), "local");
-    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
-    git(&local, &["fetch", "origin"]);
-    git(&local, &["reset", "--hard", "origin/main"]);
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git_stdout(&local, &["fetch", "origin"]);
+    git_stdout(&local, &["reset", "--hard", "origin/main"]);
     fs::write(local.join("file.txt"), "staged").expect("write staged contents");
-    git(&local, &["add", "file.txt"]);
+    git_stdout(&local, &["add", "file.txt"]);
     fs::write(local.join("file.txt"), "working").expect("write unstaged contents");
-    let index = git(&local, &["write-tree"]);
+    let index = git_stdout(&local, &["write-tree"]);
     let latest = commit(&remote, "second");
 
     let opened = GixBackend.open(&local).expect("open repository");
@@ -232,9 +238,9 @@ fn background_fetch_updates_tracking_refs_without_changing_checkout() {
         .expect("background fetch succeeds");
 
     assert_eq!(output.exit_code, Some(0));
-    assert_eq!(git(&local, &["rev-parse", "origin/main"]), latest);
-    assert_eq!(git(&local, &["rev-parse", "HEAD"]), first);
-    assert_eq!(git(&local, &["write-tree"]), index);
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), latest);
+    assert_eq!(git_stdout(&local, &["rev-parse", "HEAD"]), first);
+    assert_eq!(git_stdout(&local, &["write-tree"]), index);
     assert_eq!(
         fs::read_to_string(local.join("file.txt")).unwrap(),
         "working"
@@ -252,7 +258,7 @@ fn background_fetch_leaves_staged_manual_credentials_available() {
     let remote = repository(root.path(), "remote");
     commit(&remote, "first");
     let local = repository(root.path(), "local");
-    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&remote)]);
     let opened = GixBackend.open(&local).expect("open repository");
     let manual_auth = StagedGitAuth {
         kind: GitAuthKind::UsernamePassword,
@@ -288,7 +294,7 @@ mod transport {
 
     impl HttpRemote {
         fn start(remote: &Path) -> Self {
-            git(remote, &["update-server-info"]);
+            git_stdout(remote, &["update-server-info"]);
             let git_dir = remote.join(".git");
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture HTTP server");
             let address = listener.local_addr().expect("fixture server address");
@@ -387,7 +393,7 @@ mod transport {
 
     fn install_remote(local: &Path, script: &Path, contents: &str) {
         fs::write(script, contents).expect("write remote transport");
-        git(
+        git_stdout(
             local,
             &[
                 "remote",
@@ -396,7 +402,7 @@ mod transport {
                 "ssh://fixture.invalid/repository",
             ],
         );
-        git(
+        git_stdout(
             local,
             &[
                 "config",
@@ -404,7 +410,7 @@ mod transport {
                 &format!("sh {}", shell_path(script)),
             ],
         );
-        git(local, &["config", "ssh.variant", "ssh"]);
+        git_stdout(local, &["config", "ssh.variant", "ssh"]);
     }
 
     #[test]
@@ -415,7 +421,7 @@ mod transport {
         let latest = commit(&remote, "first");
         let local = repository(root.path(), "local");
         let server = HttpRemote::start(&remote);
-        git(&local, &["remote", "add", "origin", &server.url()]);
+        git_stdout(&local, &["remote", "add", "origin", &server.url()]);
         let popup = root.path().join("popup");
         let helper_called = root.path().join("helper-called");
         let stored = root.path().join("stored");
@@ -425,8 +431,8 @@ mod transport {
             shell_path(&helper_called),
             shell_path(&stored),
         );
-        git(&local, &["config", "credential.helper", &helper]);
-        git(&local, &["config", "credential.interactive", "true"]);
+        git_stdout(&local, &["config", "credential.helper", &helper]);
+        git_stdout(&local, &["config", "credential.interactive", "true"]);
         let opened = GixBackend.open(&local).expect("open repository");
 
         let missing = opened.fetch_all_background(false, &CancellationToken::new());
@@ -452,7 +458,7 @@ mod transport {
 
         assert!(server.authenticated_requests.load(Ordering::Acquire) > 0);
         assert!(!popup.exists());
-        assert_eq!(git(&local, &["rev-parse", "origin/main"]), latest);
+        assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), latest);
     }
 
     #[test]
@@ -463,7 +469,7 @@ mod transport {
         commit(&remote, "first");
         let local = repository(root.path(), "local");
         let server = HttpRemote::start(&remote);
-        git(&local, &["remote", "add", "origin", &server.url()]);
+        git_stdout(&local, &["remote", "add", "origin", &server.url()]);
         let popup = root.path().join("popup");
         let helper_called = root.path().join("helper-called");
         let helper = format!(
@@ -471,8 +477,8 @@ mod transport {
             shell_path(&helper_called),
             shell_path(&popup),
         );
-        git(&local, &["config", "credential.helper", &helper]);
-        git(&local, &["config", "credential.interactive", "true"]);
+        git_stdout(&local, &["config", "credential.helper", &helper]);
+        git_stdout(&local, &["config", "credential.interactive", "true"]);
         let opened = GixBackend.open(&local).expect("open repository");
 
         // Remote tags are best-effort: a refused remote leaves no tags.
@@ -555,7 +561,7 @@ mod transport {
             .expect("verified cached passphrase permits the background fetch");
 
         assert!(transferred.exists());
-        assert_eq!(git(&local, &["rev-parse", "origin/main"]), latest);
+        assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), latest);
         clear_session_passphrase();
     }
 }

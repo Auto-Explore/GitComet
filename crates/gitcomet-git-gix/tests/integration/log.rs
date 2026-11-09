@@ -1,4 +1,4 @@
-use crate::git_cli::{git_cmd, git_no_editor, run_checked, stdout_text};
+use crate::git_cli::{git_cmd, git_stdout, run_git, run_git_with_env};
 use gitcomet_core::domain::{CommitId, FileStatusKind, HistoryMode, LineStats, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
@@ -14,23 +14,6 @@ mod ref_filter;
 mod sharing;
 mod snapshot_refresh;
 mod topology;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    run_git_with_env(repo, args, &[]);
-}
-
-// Fixture commits and rebases must never wait on an editor.
-fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
-    let mut cmd = git_no_editor(repo);
-    cmd.envs(envs.iter().copied());
-    run_checked(&mut cmd, args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    stdout_text(run_checked(&mut git_no_editor(repo), args))
-        .trim()
-        .to_string()
-}
 
 fn git_remote_url(path: &Path) -> String {
     if cfg!(windows) {

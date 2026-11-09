@@ -1,4 +1,4 @@
-use crate::git_cli::{git_cmd, git_no_editor, git_stdout, run_checked};
+use crate::git_cli::{git_cmd, git_stdout, run_git, run_git_with_env};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{GitBackend, GitRepository, InteractiveRebaseAction};
 use gitcomet_core::test_support::git_fixture::append_config;
@@ -6,17 +6,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    run_git_with_env(repo, args, &[]);
-}
-
-// Fixture commits and rebases must never wait on an editor.
-fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
-    let mut cmd = git_no_editor(repo);
-    cmd.envs(envs.iter().copied());
-    run_checked(&mut cmd, args);
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");
