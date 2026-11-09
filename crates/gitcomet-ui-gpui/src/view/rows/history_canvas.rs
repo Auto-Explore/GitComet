@@ -956,9 +956,12 @@ struct MarkChipStyle {
     // Between an icon and the text after it.
     icon_gap: Pixels,
     pad: Pixels,
+    // Between a leading chip and the subject after it.
+    gap: Pixels,
     height: Pixels,
     radius: Pixels,
     border_width: Pixels,
+    font_size: Pixels,
     line_height: Pixels,
 }
 
@@ -973,6 +976,16 @@ impl MarkChipStyle {
             point(x, row.top() + (row.size.height - self.height) * 0.5),
             size(self.width(mark), self.height),
         )
+    }
+
+    /// The outline of a chip whose menu is not open.
+    fn paint_closed_outline(&self, chip: Bounds<Pixels>, color: gpui::Rgba, window: &mut Window) {
+        self.paint_outline(
+            chip,
+            gpui::rgba(0x00000000),
+            with_alpha(color, 0.45),
+            window,
+        );
     }
 
     fn paint_outline(
@@ -1001,7 +1014,7 @@ impl MarkChipStyle {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let center_y = |height: Pixels| row.top() + (row.size.height - height).max(px(0.0)) * 0.5;
+        let center_y = |height: Pixels| super::canvas_text::center_text_y(row, height);
         let content_x = x + self.pad;
         if let Some(path) = &mark.icon {
             super::diff_canvas::paint_centered_svg_icon(
@@ -1030,15 +1043,12 @@ impl MarkChipStyle {
 }
 
 /// Paints the comparison mark's chip at the start of a message cell `cell_width`
-/// wide; `None` when even its icon would take more than half the cell.
-#[allow(clippy::too_many_arguments)]
+/// wide; `None` when even its icon and gap would take more than half the cell.
 fn paint_comparison_mark_chip(
     theme: AppTheme,
     style: &MarkChipStyle,
     base_style: &gpui::TextStyle,
-    font_size: Pixels,
     x: Pixels,
-    lead: Pixels,
     cell_width: Pixels,
     row: Bounds<Pixels>,
     window: &mut Window,
@@ -1048,7 +1058,7 @@ fn paint_comparison_mark_chip(
     let text = shape_truncated_line_cached(
         window,
         base_style,
-        font_size,
+        style.font_size,
         &SharedString::new_static(COMPARISON_MARK_CHIP_TEXT),
         fx_hash_str(COMPARISON_MARK_CHIP_TEXT),
         Pixels::MAX,
@@ -1061,21 +1071,17 @@ fn paint_comparison_mark_chip(
         text: Some(text),
         color,
     };
-    let max_width = cell_width * COMPARISON_MARK_CHIP_MAX_CELL_FRACTION;
-    if style.width(&mark) > max_width {
+    let budget = cell_width * COMPARISON_MARK_CHIP_MAX_CELL_FRACTION;
+    let fits = |mark: &LaidMark| style.width(mark) + style.gap <= budget;
+    if !fits(&mark) {
         mark.text = None;
         mark.icon_width = style.icon_size;
     }
-    if style.width(&mark) > max_width || style.width(&mark) + lead > cell_width {
+    if !fits(&mark) {
         return None;
     }
     let chip = style.bounds(&mark, x, row);
-    style.paint_outline(
-        chip,
-        gpui::rgba(0x00000000),
-        with_alpha(color, 0.45),
-        window,
-    );
+    style.paint_closed_outline(chip, color, window);
     style.paint_content(&mark, chip.left(), row, window, cx);
     Some(chip)
 }
@@ -1937,7 +1943,6 @@ pub(super) fn history_commit_row_canvas(
             // The hosted file list's glyph size, so a review's state icon
             // reads the same on History as in its changed files.
             let icon_size = scaled_px(ROW_MARK_ICON_PX).min(bounds.size.height);
-            let mark_pad = scaled_px(4.0);
             let mark_gap = scaled_px(3.0);
             let chip_height = scaled_px(theme.metrics.row_height(
                 HISTORY_TAG_CHIP_HEIGHT_PX,
@@ -1949,10 +1954,12 @@ pub(super) fn history_commit_row_canvas(
             let chip_style = MarkChipStyle {
                 icon_size,
                 icon_gap: scaled_px(2.0),
-                pad: mark_pad,
+                pad: scaled_px(4.0),
+                gap: inset,
                 height: chip_height,
                 radius: chip_radius,
                 border_width: scaled_px(1.0),
+                font_size: xxs_font,
                 line_height: xxs_line_height,
             };
             // The comparison mark leads the message, ahead of extension marks.
@@ -1962,9 +1969,7 @@ pub(super) fn history_commit_row_canvas(
                     theme,
                     &chip_style,
                     &base_style,
-                    xxs_font,
                     message_left + lead,
-                    lead,
                     summary_bounds.size.width,
                     bounds,
                     window,
@@ -2013,7 +2018,7 @@ pub(super) fn history_commit_row_canvas(
                         shape(
                             window,
                             &text,
-                            available - icon_width - mark_pad * 2.0,
+                            available - icon_width - chip_style.pad * 2.0,
                             color,
                         )
                     });
@@ -2028,7 +2033,7 @@ pub(super) fn history_commit_row_canvas(
                 let marks_width = |laid: &[LaidMark], shown: usize| -> Pixels {
                     let marks: Pixels = laid[..shown]
                         .iter()
-                        .map(|mark| mark.content() + mark_pad * 2.0)
+                        .map(|mark| chip_style.width(mark))
                         .sum();
                     marks + mark_gap * (shown.saturating_sub(1) as f32)
                 };
@@ -2050,7 +2055,7 @@ pub(super) fn history_commit_row_canvas(
                 let more_width = |hidden: usize| {
                     more.get(hidden)
                         .and_then(Option::as_ref)
-                        .map_or(px(0.0), |text| mark_gap + text.width + mark_pad * 2.0)
+                        .map_or(px(0.0), |text| mark_gap + text.width + chip_style.pad * 2.0)
                 };
                 let group = |laid: &[LaidMark], shown: usize| {
                     marks_width(laid, shown) + more_width(laid.len() - shown)
@@ -2065,8 +2070,10 @@ pub(super) fn history_commit_row_canvas(
                     && let Some(text) = mark_content(&marks[0]).1
                 {
                     let first = &laid[0];
-                    let room =
-                        available - more_width(laid.len() - 1) - first.icon_width - mark_pad * 2.0;
+                    let room = available
+                        - more_width(laid.len() - 1)
+                        - first.icon_width
+                        - chip_style.pad * 2.0;
                     let color = first.color;
                     laid[0].text = Some(shape(window, &text, room, color));
                 }
@@ -2078,7 +2085,7 @@ pub(super) fn history_commit_row_canvas(
                     MarkEdge::Leading => border_lead + inset,
                     MarkEdge::Trailing => inset,
                 };
-                if total <= mark_pad * 2.0 || total + lead > summary_bounds.size.width {
+                if total <= chip_style.pad * 2.0 || total + lead > summary_bounds.size.width {
                     continue;
                 }
                 let start = match edge {
@@ -2106,20 +2113,17 @@ pub(super) fn history_commit_row_canvas(
                     let target = MarkTarget::new(edge, marks_here).with_keys(keys);
                     if let Some(owner) = owner {
                         let open = open_chip == Some(history_mark_chip(&target));
-                        chip_style.paint_outline(
-                            chip_style.bounds(&mark, x, bounds),
-                            if open {
-                                crate::kit::components::control_open_background(theme)
-                            } else {
-                                gpui::rgba(0x00000000)
-                            },
-                            if open {
-                                mark.color
-                            } else {
-                                with_alpha(mark.color, 0.45)
-                            },
-                            window,
-                        );
+                        let chip = chip_style.bounds(&mark, x, bounds);
+                        if open {
+                            chip_style.paint_outline(
+                                chip,
+                                crate::kit::components::control_open_background(theme),
+                                mark.color,
+                                window,
+                            );
+                        } else {
+                            chip_style.paint_closed_outline(chip, mark.color, window);
+                        }
                         mark_chips.push((
                             target,
                             owner,

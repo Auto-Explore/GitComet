@@ -223,6 +223,8 @@ fn a_narrow_message_cell_shows_the_chip_as_its_icon(cx: &mut gpui::TestAppContex
     assert!(labelled > px(60.0), "labelled chip spans {labelled:?}");
     assert!(icon < px(30.0), "icon-only chip spans {icon:?}");
     assert!(tooltip);
+    // A ~45px cell: the icon fits half of it only without the gap after it.
+    assert_eq!(chip(cx, 1015.0), None);
     // The message column is still there, about 30px wide.
     assert_eq!(chip(cx, 1000.0), None);
 }

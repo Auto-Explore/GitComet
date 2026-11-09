@@ -56,28 +56,21 @@ impl DetailsPaneView {
             .collect()
     }
 
-    /// Whether the cards are the selected commits rather than the endpoints: a
-    /// merged diff, or a multi-selection list with no comparison.
-    fn cards_follow_selection(repo: &RepoState) -> bool {
-        match repo
-            .history_state
-            .range_selection
-            .as_ref()
-            .map(|range| range.source)
-        {
-            None | Some(ComparisonSource::MergedSelection) => true,
-            Some(ComparisonSource::SelectedPair | ComparisonSource::Explicit) => false,
+    /// The comparison whose endpoints are the cards; `None` when the cards are
+    /// the selected commits (a merged diff, or a list with no comparison).
+    fn endpoint_range(repo: &RepoState) -> Option<&RangeSelection> {
+        let range = repo.history_state.range_selection.as_ref()?;
+        match range.source {
+            ComparisonSource::MergedSelection => None,
+            ComparisonSource::SelectedPair | ComparisonSource::Explicit => Some(range),
         }
     }
 
     /// Commit ids for the cards, newest first. Endpoint cards skip the empty
     /// tree, so a working-tree comparison yields a single card.
     pub(super) fn range_comparison_commit_ids(repo: &RepoState) -> Vec<CommitId> {
-        if Self::cards_follow_selection(repo) {
+        let Some(range) = Self::endpoint_range(repo) else {
             return Self::multi_selected_commit_ids_in_log_order(repo);
-        }
-        let Some(range) = repo.history_state.range_selection.as_ref() else {
-            return Vec::new();
         };
         range
             .to
@@ -122,9 +115,7 @@ impl DetailsPaneView {
         let mut key = rustc_hash::FxHasher::default();
         repo.id.hash(&mut key);
         repo.log_rev.hash(&mut key);
-        if !Self::cards_follow_selection(repo)
-            && let Some(range) = &repo.history_state.range_selection
-        {
+        if let Some(range) = Self::endpoint_range(repo) {
             range.from.hash(&mut key);
             range.to.hash(&mut key);
         }
@@ -208,7 +199,7 @@ impl DetailsPaneView {
     }
 
     fn comparison_count(repo: &RepoState) -> usize {
-        if Self::cards_follow_selection(repo) {
+        if Self::endpoint_range(repo).is_none() {
             repo.history_state.multi_selection.commits.len()
         } else {
             Self::range_comparison_commit_ids(repo).len()
