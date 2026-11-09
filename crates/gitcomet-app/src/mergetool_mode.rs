@@ -114,51 +114,38 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     };
     write_merged_output(config, &bytes)?;
 
+    let display_name = path_label(&config.merged);
     if is_clean {
-        let display_name = merged_display_name(config);
-        Ok(MergetoolRunResult {
+        return Ok(MergetoolRunResult {
             stdout: String::new(),
             stderr: format!("Auto-merged {display_name}\n"),
             exit_code: exit_code::SUCCESS,
-        })
-    } else if config.auto {
-        // Auto mode: try heuristic passes on conflict blocks.
-        if let Some(clean_output) = try_autosolve_merge_plan(&plan, &options) {
-            // All conflicts resolved by heuristics — write clean output.
-            let bytes = match encode_output(&clean_output) {
-                Ok(bytes) => bytes,
-                Err(error) => return handle_encoding_conflict(config, &local_bytes, &error),
-            };
-            write_merged_output(config, &bytes)?;
-            let display_name = merged_display_name(config);
-            Ok(MergetoolRunResult {
-                stdout: String::new(),
-                stderr: format!("Auto-resolved {display_name}\n"),
-                exit_code: exit_code::SUCCESS,
-            })
-        } else {
-            // Some conflicts remain — write original markers.
-            let display_name = merged_display_name(config);
-            Ok(MergetoolRunResult {
-                stdout: String::new(),
-                stderr: format!(
-                    "Auto-merging {display_name}\nCONFLICT (content): Merge conflict in {display_name}\n\
-                     Automatic merge failed; {conflict_count} conflict(s) remain.\n",
-                ),
-                exit_code: exit_code::CANCELED,
-            })
-        }
-    } else {
-        let display_name = merged_display_name(config);
-        Ok(MergetoolRunResult {
-            stdout: String::new(),
-            stderr: format!(
-                "Auto-merging {display_name}\nCONFLICT (content): Merge conflict in {display_name}\n\
-                 Automatic merge failed; {conflict_count} conflict(s) remain.\n",
-            ),
-            exit_code: exit_code::CANCELED,
-        })
+        });
     }
+    // Auto mode tries heuristic passes on the conflict blocks; when they
+    // resolve everything the clean output replaces the markers.
+    if config.auto
+        && let Some(clean_output) = try_autosolve_merge_plan(&plan, &options)
+    {
+        let bytes = match encode_output(&clean_output) {
+            Ok(bytes) => bytes,
+            Err(error) => return handle_encoding_conflict(config, &local_bytes, &error),
+        };
+        write_merged_output(config, &bytes)?;
+        return Ok(MergetoolRunResult {
+            stdout: String::new(),
+            stderr: format!("Auto-resolved {display_name}\n"),
+            exit_code: exit_code::SUCCESS,
+        });
+    }
+    Ok(MergetoolRunResult {
+        stdout: String::new(),
+        stderr: format!(
+            "Auto-merging {display_name}\nCONFLICT (content): Merge conflict in {display_name}\n\
+             Automatic merge failed; {conflict_count} conflict(s) remain.\n",
+        ),
+        exit_code: exit_code::CANCELED,
+    })
 }
 
 /// The inputs decoded to UTF-8, and the format to write the result in, when
@@ -203,37 +190,30 @@ fn decode_merge_inputs(
 }
 
 /// Extract a human-readable display name from the MERGED output path.
-fn merged_display_name(config: &MergetoolConfig) -> String {
-    config
-        .merged
-        .file_name()
-        .and_then(|n| n.to_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| format!("{:?}", config.merged))
-}
-
 fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
     let ours = Some(
         config
             .label_local
             .clone()
-            .unwrap_or_else(|| default_path_label(&config.local)),
+            .unwrap_or_else(|| path_label(&config.local)),
     );
     let theirs = Some(
         config
             .label_remote
             .clone()
-            .unwrap_or_else(|| default_path_label(&config.remote)),
+            .unwrap_or_else(|| path_label(&config.remote)),
     );
     let base = Some(match (&config.label_base, &config.base) {
         (Some(label), _) => label.clone(),
-        (None, Some(base_path)) => default_path_label(base_path),
+        (None, Some(base_path)) => path_label(base_path),
         (None, None) => format_base_label(&BaseLabelScenario::NoBase),
     });
 
     MergeLabels { ours, base, theirs }
 }
 
-fn default_path_label(path: &Path) -> String {
+/// The file name of `path` for labels and messages, or its debug form.
+pub(crate) fn path_label(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| format!("{path:?}"))
@@ -250,7 +230,7 @@ fn handle_binary_merge(
     local_bytes: &[u8],
     remote_bytes: &[u8],
 ) -> Result<MergetoolRunResult, String> {
-    let filename = merged_display_name(config);
+    let filename = path_label(&config.merged);
 
     if local_bytes == remote_bytes {
         write_merged_output(config, local_bytes)?;
@@ -323,7 +303,7 @@ fn handle_encoding_conflict(
         stdout: String::new(),
         stderr: format!(
             "CONFLICT (encoding): {} — keeping local version.\n{error}\n",
-            merged_display_name(config)
+            path_label(&config.merged)
         ),
         exit_code: exit_code::CANCELED,
     })
