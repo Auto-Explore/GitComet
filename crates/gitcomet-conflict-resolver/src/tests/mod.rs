@@ -27,3 +27,18 @@ mod parsing;
 mod resolution;
 mod split_row_index;
 mod visibility;
+
+/// An unresolved block choosing ours with no base; struct update sets the rest.
+pub(super) fn block(
+    ours: impl Into<ConflictText>,
+    theirs: impl Into<ConflictText>,
+) -> ConflictBlock {
+    ConflictBlock {
+        base: None,
+        ours: ours.into(),
+        theirs: theirs.into(),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+        whitespace_only: false,
+    }
+}

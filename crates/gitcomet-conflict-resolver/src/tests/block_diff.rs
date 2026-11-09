@@ -14,14 +14,10 @@ fn three_way_word_highlights_align_shifted_local_and_remote_rows() {
         starts
     }
 
-    let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "alpha\nbeta changed\ngamma\n".into(),
-        theirs: "alpha\ninserted\nbeta remote\ngamma\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    let marker_segments = vec![ConflictSegment::Block(block(
+        "alpha\nbeta changed\ngamma\n",
+        "alpha\ninserted\nbeta remote\ngamma\n",
+    ))];
     let base_text = "";
     let ours_text = "alpha\nbeta changed\ngamma\n";
     let theirs_text = "alpha\ninserted\nbeta remote\ngamma\n";
@@ -79,14 +75,7 @@ fn three_way_word_highlights_keep_global_offsets_per_column() {
 
     let marker_segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "same\n".into(),
-            theirs: "added\nsame\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(block("same\n", "added\nsame\n")),
         ConflictSegment::Text("tail\n".into()),
     ];
     let base_text = "";
@@ -365,11 +354,7 @@ fn build_three_way_conflict_maps_includes_per_side_ranges() {
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base1\nbase2\n".into()),
-            ours: "ours1\n".into(),
-            theirs: "theirs1\ntheirs2\ntheirs3\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
+            ..block("ours1\n", "theirs1\ntheirs2\ntheirs3\n")
         }),
         ConflictSegment::Text("mid\n".into()),
     ];
@@ -390,20 +375,13 @@ fn per_side_ranges_binary_search_matches_per_line_maps() {
         ConflictSegment::Text("a\nb\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("B1\n".into()),
-            ours: "O1\nO2\n".into(),
-            theirs: "T1\nT2\nT3\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
+            ..block("O1\nO2\n", "T1\nT2\nT3\n")
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "x\n".into(),
-            theirs: "y\nz\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
-            whitespace_only: false,
+            ..block("x\n", "y\nz\n")
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -428,14 +406,7 @@ fn per_side_ranges_binary_search_matches_per_line_maps() {
 fn projection_matches_visible_map_identity() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "b\nc\n".into(),
-            theirs: "x\ny\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(block("b\nc\n", "x\ny\n")),
         ConflictSegment::Text("d\ne\n".into()),
     ];
     let ranges = vec![1..3];
@@ -452,12 +423,8 @@ fn projection_matches_visible_map_with_collapsed() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "b\nc\n".into(),
-            theirs: "x\ny\n".into(),
-            choice: ConflictChoice::Ours,
             resolved: true,
-            whitespace_only: false,
+            ..block("b\nc\n", "x\ny\n")
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -477,14 +444,7 @@ fn projection_matches_visible_map_with_large_block_gap() {
     let big_text: String = (0..big_block_lines).map(|i| format!("line{i}\n")).collect();
     let segments = vec![
         ConflictSegment::Text("before\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: big_text.clone().into(),
-            theirs: big_text.into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(block(big_text.clone(), big_text)),
         ConflictSegment::Text("after\n".into()),
     ];
     let total_lines = 1 + big_block_lines + 1;
@@ -508,21 +468,13 @@ fn projection_visible_index_for_conflict() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "b\nc\n".into(),
-            theirs: "x\ny\n".into(),
-            choice: ConflictChoice::Ours,
             resolved: true,
-            whitespace_only: false,
+            ..block("b\nc\n", "x\ny\n")
         }),
         ConflictSegment::Text("d\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "e\n".into(),
-            theirs: "z\n".into(),
             choice: ConflictChoice::Theirs,
-            resolved: false,
-            whitespace_only: false,
+            ..block("e\n", "z\n")
         }),
     ];
     let ranges = vec![1..3, 4..5];
@@ -551,21 +503,14 @@ fn projection_multiple_collapsed_blocks() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "b\nc\n".into(),
-            theirs: "x\ny\n".into(),
-            choice: ConflictChoice::Ours,
             resolved: true,
-            whitespace_only: false,
+            ..block("b\nc\n", "x\ny\n")
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "d\ne\nf\n".into(),
-            theirs: "p\nq\nr\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
-            whitespace_only: false,
+            ..block("d\ne\nf\n", "p\nq\nr\n")
         }),
         ConflictSegment::Text("end\n".into()),
     ];
