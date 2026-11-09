@@ -1236,7 +1236,7 @@ pub(crate) use gitcomet_core::process::bytes_to_text_preserving_utf8;
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
     let output = run_git_checked_output(cmd, label)?;
-    Ok(command_output(label, output))
+    Ok(command_output(label, &output))
 }
 
 /// Like [`run_git_parsed_stdout_until_done`]: ends when the command does or
@@ -1256,18 +1256,15 @@ pub(crate) fn run_git_with_output_and_timeout(
     if !output.status.success() {
         return Err(git_command_failed_error(label, output));
     }
-    Ok(command_output(label, output))
+    Ok(command_output(label, &output))
 }
 
-fn command_output(label: &str, output: GitOutput) -> CommandOutput {
-    let exit_code = output.status.code();
-    let stdout = bytes_to_text_preserving_utf8(&output.stdout);
-    let stderr = bytes_to_text_preserving_utf8(&output.stderr);
+pub(crate) fn command_output(label: &str, output: &GitOutput) -> CommandOutput {
     CommandOutput {
         command: label.to_string(),
-        stdout,
-        stderr,
-        exit_code,
+        stdout: bytes_to_text_preserving_utf8(&output.stdout),
+        stderr: bytes_to_text_preserving_utf8(&output.stderr),
+        exit_code: output.status.code(),
     }
 }
 

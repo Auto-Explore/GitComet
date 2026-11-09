@@ -1,7 +1,7 @@
 use super::GixRepo;
 use super::patch::write_pathspec_file;
 use crate::util::{
-    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
+    bytes_to_text_preserving_utf8, command_output, describe_path_list, git_command_failed_error,
     push_literal_pathspec_file, run_git_capture, run_git_capture_bytes, run_git_raw_output,
     run_git_with_output, validate_hex_commit_id, validate_ref_like_arg, with_shared_git_auth,
 };
@@ -375,15 +375,7 @@ fn nul_separated_paths(listing: &[u8]) -> BTreeSet<Vec<u8>> {
 }
 
 pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::GitOutput) {
-    append_command_output(
-        acc,
-        CommandOutput {
-            command: String::new(),
-            stdout: bytes_to_text_preserving_utf8(&output.stdout),
-            stderr: bytes_to_text_preserving_utf8(&output.stderr),
-            exit_code: output.status.code(),
-        },
-    );
+    append_command_output(acc, command_output("", output));
 }
 
 /// On-disk position of an in-progress cherry-pick or revert, compared before
@@ -619,12 +611,7 @@ impl GixRepo {
             if !started_with_sequencer {
                 self.clear_persisted_cherry_pick_mainline();
             }
-            return Ok(CommandOutput {
-                command: label,
-                stdout: bytes_to_text_preserving_utf8(&output.stdout),
-                stderr: bytes_to_text_preserving_utf8(&output.stderr),
-                exit_code: output.status.code(),
-            });
+            return Ok(command_output(&label, &output));
         }
 
         if self.cherry_pick_stopped_became_empty()? {
@@ -731,12 +718,7 @@ impl GixRepo {
             return Err(error);
         }
 
-        let mut output = CommandOutput {
-            command: label.to_string(),
-            stdout: bytes_to_text_preserving_utf8(&picked.stdout),
-            stderr: bytes_to_text_preserving_utf8(&picked.stderr),
-            exit_code: picked.status.code(),
-        };
+        let mut output = command_output(label, &picked);
         // An empty source is committed on purpose, as `--allow-empty` does on
         // the clean-index path; any other empty result was already applied.
         if changed.is_empty() && !touched.is_empty() {
@@ -1328,12 +1310,7 @@ impl GixRepo {
             return Err(git_command_failed_error(label, output));
         }
         if output.status.success() || paused_after_progress {
-            Ok(CommandOutput {
-                command: label.to_string(),
-                stdout: bytes_to_text_preserving_utf8(&output.stdout),
-                stderr: bytes_to_text_preserving_utf8(&output.stderr),
-                exit_code: output.status.code(),
-            })
+            Ok(command_output(label, &output))
         } else {
             Err(git_command_failed_error(label, output))
         }

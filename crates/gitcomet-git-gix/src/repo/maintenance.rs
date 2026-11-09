@@ -1,9 +1,7 @@
 //! `git maintenance`: whether git recommends it, and running it with an
 //! estimated progress meter.
 use super::GixRepo;
-use crate::util::{
-    bytes_to_text_preserving_utf8, run_git_raw_output, run_git_with_output_and_timeout,
-};
+use crate::util::{command_output, run_git_raw_output, run_git_with_output_and_timeout};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_operation::{self, GitOperationEvent};
 use gitcomet_core::git_progress::GitProgressMeter;
@@ -73,12 +71,7 @@ impl GixRepo {
         // run that did nothing; the recommendation may be hours old.
         let check = self.is_needed(None)?;
         if check.status.code() == Some(1) {
-            return Ok(CommandOutput {
-                command: MAINTENANCE_CHECK_COMMAND.to_string(),
-                stdout: bytes_to_text_preserving_utf8(&check.stdout),
-                stderr: bytes_to_text_preserving_utf8(&check.stderr),
-                exit_code: Some(1),
-            });
+            return Ok(command_output(MAINTENANCE_CHECK_COMMAND, &check));
         }
         let pack_limit = self
             .repo_with_current_config()

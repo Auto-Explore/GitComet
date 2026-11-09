@@ -2,9 +2,9 @@ use super::history::gix_head_id_or_none;
 use super::porcelain::edit_local_config_strict;
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
-    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error, run_git_capture,
-    run_git_raw_output, run_git_simple, run_git_with_output, validate_hex_commit_id,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, command_output, describe_path_list, git_command_failed_error,
+    run_git_capture, run_git_raw_output, run_git_simple, run_git_with_output,
+    validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -1838,12 +1838,7 @@ impl GixRepo {
             }
             return Err(git_command_failed_error(&label, output));
         }
-        let fetch_output = CommandOutput {
-            command: label,
-            stdout: bytes_to_text_preserving_utf8(&output.stdout),
-            stderr: bytes_to_text_preserving_utf8(&output.stderr),
-            exit_code: output.status.code(),
-        };
+        let fetch_output = command_output(&label, &output);
 
         let label = "git rev-parse --verify FETCH_HEAD^{commit}";
         let mut cmd = self.git_workdir_cmd();
