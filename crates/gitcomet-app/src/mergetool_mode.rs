@@ -189,26 +189,32 @@ fn decode_merge_inputs(
     ))
 }
 
-fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
-    let ours = Some(
-        config
-            .label_local
-            .clone()
-            .unwrap_or_else(|| path_label(&config.local)),
-    );
-    let theirs = Some(
-        config
-            .label_remote
-            .clone()
-            .unwrap_or_else(|| path_label(&config.remote)),
-    );
-    let base = Some(match (&config.label_base, &config.base) {
+/// The local, base and remote pane labels: given ones, else the file names,
+/// with Git's "empty tree" for a missing base.
+pub(crate) fn mergetool_labels(config: &MergetoolConfig) -> [String; 3] {
+    let local = config
+        .label_local
+        .clone()
+        .unwrap_or_else(|| path_label(&config.local));
+    let remote = config
+        .label_remote
+        .clone()
+        .unwrap_or_else(|| path_label(&config.remote));
+    let base = match (&config.label_base, &config.base) {
         (Some(label), _) => label.clone(),
         (None, Some(base_path)) => path_label(base_path),
         (None, None) => format_base_label(&BaseLabelScenario::NoBase),
-    });
+    };
+    [local, base, remote]
+}
 
-    MergeLabels { ours, base, theirs }
+fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
+    let [ours, base, theirs] = mergetool_labels(config);
+    MergeLabels {
+        ours: Some(ours),
+        base: Some(base),
+        theirs: Some(theirs),
+    }
 }
 
 /// The file name of `path` for labels and messages, or its debug form.

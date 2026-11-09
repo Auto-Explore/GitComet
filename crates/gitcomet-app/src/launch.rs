@@ -739,24 +739,13 @@ fn build_focused_mergetool_gui_config(
         ));
     };
 
+    let [label_local, label_base, label_remote] = mergetool_mode::mergetool_labels(config);
     Ok(gitcomet_ui_gpui::FocusedMergetoolConfig {
         repo_path,
         conflicted_file_path: config.merged.clone(),
-        label_local: config
-            .label_local
-            .clone()
-            .unwrap_or_else(|| path_label(&config.local)),
-        label_remote: config
-            .label_remote
-            .clone()
-            .unwrap_or_else(|| path_label(&config.remote)),
-        label_base: config.label_base.clone().unwrap_or_else(|| {
-            config
-                .base
-                .as_ref()
-                .map(|path| path_label(path))
-                .unwrap_or_else(|| "empty tree".to_string())
-        }),
+        label_local,
+        label_remote,
+        label_base,
     })
 }
 
