@@ -1642,8 +1642,9 @@ fn discarding_lines_in_a_hosted_pane_reverts_them(cx: &mut gpui::TestAppContext)
         &store,
         "b.rs reverted in the working tree",
         |_| {
-            std::fs::read_to_string(dir.path().join("b.rs")).unwrap()
-                == "pub fn b() -> i32 {\n    1\n}\n"
+            // Git unlinks before rewriting, so a missing file is "not yet".
+            std::fs::read_to_string(dir.path().join("b.rs"))
+                .is_ok_and(|text| text == "pub fn b() -> i32 {\n    1\n}\n")
         },
     );
 }
@@ -1708,8 +1709,9 @@ fn u_after_a_difftastic_right_click_discards_the_clicked_line(cx: &mut gpui::Tes
         cx.run_until_parked();
         cx.simulate_keystrokes("u");
         settle(cx, &view, &store, "line 2 reverted", |_| {
-            std::fs::read_to_string(dir.path().join("a.rs")).unwrap()
-                != "pub fn a() -> i32 {\n    let two = 2;\n    1\n}\n"
+            // Git unlinks before rewriting, so a missing file is "not yet".
+            std::fs::read_to_string(dir.path().join("a.rs"))
+                .is_ok_and(|text| text != "pub fn a() -> i32 {\n    let two = 2;\n    1\n}\n")
         });
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
