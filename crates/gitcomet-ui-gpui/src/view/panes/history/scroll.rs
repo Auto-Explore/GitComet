@@ -86,7 +86,10 @@ pub(super) struct HistoryScrollDriver {
 
 impl ScrollbarDriver for HistoryScrollDriver {
     fn interaction_changed(&self, cx: &mut gpui::App) {
-        let _ = self.view.update(cx, |_, cx| cx.notify());
+        let _ = self.view.update(cx, |view, cx| {
+            view.reset_history_scroll_motion();
+            cx.notify();
+        });
     }
     fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
         let state = self.interaction.borrow();
@@ -164,6 +167,36 @@ impl crate::kit::elastic_scroll::ElasticScrollDriver for HistoryScrollDriver {
 }
 
 impl HistoryView {
+    pub(in crate::view) fn reset_history_scroll_motion(&self) {
+        self.scroll_elastic.reset();
+    }
+
+    pub(in crate::view) fn set_history_scroll_active(&self, active: bool) {
+        self.scroll_elastic.set_active(active);
+    }
+
+    pub(super) fn configure_history_elastic(
+        &self,
+        scroll: crate::kit::elastic_scroll::ElasticScroll,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let scroll = scroll.motion_state(self.scroll_elastic.clone());
+        static RESAMPLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let enabled = *RESAMPLE.get_or_init(|| {
+            let diagnostics = crate::ui_probe::env_flag("GITCOMET_UI_PROBE")
+                || std::env::var_os("GITCOMET_UI_SCENARIO").is_some_and(|path| !path.is_empty());
+            // The private A/B switch cannot disable the production policy in
+            // an ordinary launch without explicit diagnostic opt-in.
+            !(diagnostics
+                && std::env::var("GITCOMET_HISTORY_MOMENTUM_RESAMPLING")
+                    .is_ok_and(|value| value == "off"))
+        });
+        if enabled {
+            scroll.resample_native_momentum()
+        } else {
+            scroll
+        }
+    }
+
     pub(super) fn cancel_history_scroll_reveal(&mut self) {
         self.history_scroll.0.borrow_mut().deferred_scroll_to_item = None;
         if let Some(pending) = self.pending_history_reveal.take() {
@@ -178,6 +211,7 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.reset_history_scroll_motion();
         self.history_wheel_interaction(cx);
         let mut scroll = self.scroll_interaction.borrow_mut();
         if let Some(logical) = &mut scroll.logical {

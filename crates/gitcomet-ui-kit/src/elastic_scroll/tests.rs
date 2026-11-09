@@ -353,3 +353,411 @@ fn reduced_motion_and_phaseless_wheels_keep_content_inside_bounds(cx: &mut TestA
         assert_eq!(cx.debug_bounds("elastic_content").unwrap(), original);
     });
 }
+
+struct MomentumFixture {
+    scroll: ScrollHandle,
+    state: ElasticScrollState,
+}
+impl Render for MomentumFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        ElasticScroll::new(
+            "momentum_elastic",
+            self.scroll.clone(),
+            div()
+                .id("momentum_viewport")
+                .w(px(200.0))
+                .h(px(120.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .child(
+                    div()
+                        .h(px(700.0))
+                        .debug_selector(|| "momentum_content".into()),
+                ),
+        )
+        .motion_state(self.state.clone())
+        .resample_native_momentum()
+        .vertical_only()
+    }
+}
+fn momentum_fixture(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<MomentumFixture>, &mut VisualTestContext) {
+    let (view, cx) = cx.add_window_view(|window, _| {
+        window.activate();
+        MomentumFixture {
+            scroll: ScrollHandle::new(),
+            state: ElasticScrollState::default(),
+        }
+    });
+    crate::test_support::refresh_and_draw(cx);
+    view.update(cx, |view, _| {
+        view.scroll.set_offset(point(px(0.0), px(-200.0)))
+    });
+    crate::test_support::refresh_and_draw(cx);
+    (view, cx)
+}
+fn momentum_packet(
+    cx: &mut VisualTestContext,
+    delta: f32,
+    source: ReplaySource,
+    phase: TouchPhase,
+    ended: bool,
+) {
+    momentum_packet_with_age(cx, delta, source, phase, ended, std::time::Duration::ZERO);
+}
+fn momentum_packet_with_age(
+    cx: &mut VisualTestContext,
+    delta: f32,
+    source: ReplaySource,
+    phase: TouchPhase,
+    ended: bool,
+    age: std::time::Duration,
+) {
+    cx.update(|window, app| {
+        let at = app.background_executor().now() - age;
+        with_replay_input(
+            ReplayInput {
+                source,
+                phase,
+                at,
+                momentum_ended: ended,
+            },
+            || {
+                window.dispatch_event(
+                    gpui::PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        position: point(px(40.0), px(40.0)),
+                        delta: ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                        touch_phase: phase,
+                        modifiers: Default::default(),
+                    }),
+                    app,
+                );
+            },
+        );
+    });
+}
+fn advance_momentum(cx: &mut VisualTestContext, millis: u64) -> usize {
+    cx.update(|window, app| {
+        app.background_executor()
+            .advance_clock(std::time::Duration::from_millis(millis));
+        window.simulate_next_frame(app)
+    })
+}
+
+#[gpui::test]
+fn native_momentum_is_coalesced_into_real_scroll_before_layout_and_finishes_exactly(
+    cx: &mut TestAppContext,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        let original = cx.debug_bounds("momentum_content").unwrap().top();
+        momentum_packet(cx, -12.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        cx.update(|_, app| {
+            app.background_executor()
+                .advance_clock(std::time::Duration::from_millis(8))
+        });
+        momentum_packet(cx, -12.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-200.0),
+            "native packets wait for the coalesced frame"
+        );
+        assert_eq!(
+            advance_momentum(cx, 8),
+            1,
+            "only one callback for both packets"
+        );
+        let position = view.read_with(cx, |v, _| v.scroll.offset().y);
+        assert!(
+            position < px(-200.0) && position > px(-224.0),
+            "interpolated logical pose: {position:?}"
+        );
+        crate::test_support::refresh_and_draw(cx);
+        let rendered = cx.debug_bounds("momentum_content").unwrap().top();
+        assert!(
+            (f32::from(rendered - original) - f32::from(position + px(200.0))).abs() < 1.0,
+            "content uses the same logical pose as hit testing/virtualization"
+        );
+        momentum_packet(cx, 0.0, ReplaySource::Momentum, TouchPhase::Moved, true);
+        advance_momentum(cx, 30);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-224.0));
+        crate::test_support::refresh_and_draw(cx);
+        assert_eq!(
+            advance_momentum(cx, 30),
+            0,
+            "ended momentum leaves no idle frame demand"
+        );
+    });
+}
+
+#[gpui::test]
+fn reset_and_new_touch_discard_pending_momentum_without_a_flush_jump(cx: &mut TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        momentum_packet(cx, -80.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        view.read_with(cx, |v, _| v.state.reset());
+        momentum_packet(cx, -4.0, ReplaySource::Momentum, TouchPhase::Moved, true);
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-204.0),
+            "stale epoch neither applies nor cancels the new callback"
+        );
+        crate::test_support::refresh_and_draw(cx);
+        momentum_packet(cx, -80.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        momentum_packet(cx, -3.0, ReplaySource::Touch, TouchPhase::Started, false);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-207.0),
+            "finger is immediate and old momentum is discarded"
+        );
+        advance_momentum(cx, 30);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-207.0));
+    });
+}
+
+#[gpui::test]
+fn hidden_panes_external_scroll_and_clicks_cancel_interior_momentum(cx: &mut TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        momentum_packet(cx, -80.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        view.read_with(cx, |v, _| v.state.set_active(false));
+        advance_momentum(cx, 30);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-200.0));
+        view.read_with(cx, |v, _| v.state.set_active(true));
+        momentum_packet(cx, -80.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        view.read_with(cx, |v, _| v.scroll.set_offset(point(px(0.0), px(-250.0))));
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-250.0),
+            "an external logical scroll wins"
+        );
+        crate::test_support::refresh_and_draw(cx);
+        momentum_packet(cx, -80.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        cx.update(|window, app| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(MouseDownEvent {
+                    button: gpui::MouseButton::Left,
+                    position: point(px(40.0), px(40.0)),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                app,
+            );
+        });
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-250.0),
+            "zero spring displacement must not hide pending momentum from clicks"
+        );
+    });
+}
+
+#[gpui::test]
+fn approaching_a_boundary_flushes_pending_native_travel_into_the_existing_spring(
+    cx: &mut TestAppContext,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        momentum_packet(cx, 100.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        momentum_packet(cx, 150.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(0.0));
+        crate::test_support::refresh_and_draw(cx);
+        assert!(
+            view.read_with(cx, |v, _| v.state.displacement()) > px(0.0),
+            "the ordinary boundary spring owns leftover native travel"
+        );
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(0.0),
+            "stale interpolation cannot run after boundary fallback"
+        );
+    });
+}
+
+#[gpui::test]
+fn invalid_native_time_flushes_accepted_momentum_without_losing_its_endpoint(
+    cx: &mut TestAppContext,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        momentum_packet_with_age(
+            cx,
+            -2.0,
+            ReplaySource::Momentum,
+            TouchPhase::Moved,
+            false,
+            std::time::Duration::from_millis(200),
+        );
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-242.0));
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-242.0),
+            "fallback invalidates the queued callback"
+        );
+    });
+}
+
+#[gpui::test]
+fn native_momentum_reversal_preserves_the_accepted_endpoint_before_normal_routing(
+    cx: &mut TestAppContext,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        momentum_packet(cx, 5.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-235.0));
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-235.0),
+            "reversal fallback invalidates its old frame generation"
+        );
+    });
+}
+
+#[gpui::test]
+fn cancelled_momentum_and_wheels_outside_the_pane_stop_its_pending_travel(cx: &mut TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        for (source, phase) in [
+            (ReplaySource::Momentum, TouchPhase::Cancelled),
+            (ReplaySource::Wheel, TouchPhase::Moved),
+        ] {
+            momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+            cx.update(|window, app| {
+                let at = app.background_executor().now();
+                with_replay_input(
+                    ReplayInput {
+                        source,
+                        phase,
+                        at,
+                        momentum_ended: false,
+                    },
+                    || {
+                        window.dispatch_event(
+                            gpui::PlatformInput::ScrollWheel(ScrollWheelEvent {
+                                position: point(px(400.0), px(400.0)),
+                                delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
+                                touch_phase: phase,
+                                modifiers: Default::default(),
+                            }),
+                            app,
+                        );
+                    },
+                );
+            });
+            advance_momentum(cx, 30);
+            assert_eq!(
+                view.read_with(cx, |v, _| v.scroll.offset().y),
+                px(-200.0),
+                "{source:?} outside the hitbox cancels prior pane momentum"
+            );
+        }
+    });
+}
+
+#[derive(Clone)]
+struct MeasuredMomentumDriver {
+    position: Rc<std::cell::Cell<f64>>,
+    maximum: Rc<std::cell::Cell<f64>>,
+}
+impl ElasticScrollDriver for MeasuredMomentumDriver {
+    fn metrics(&self) -> (f64, f64) {
+        (self.position.get(), self.maximum.get())
+    }
+    fn scroll_by(&self, delta: Pixels) -> Pixels {
+        let old = self.position.get();
+        let next = (old + f64::from(f32::from(delta))).clamp(-self.maximum.get(), 0.0);
+        self.position.set(next);
+        px((next - old) as f32)
+    }
+}
+struct MeasuredMomentumFixture {
+    driver: MeasuredMomentumDriver,
+    measured_maximum: Rc<std::cell::Cell<f64>>,
+    state: ElasticScrollState,
+}
+impl Render for MeasuredMomentumFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let maximum = self.driver.maximum.clone();
+        let measured = self.measured_maximum.clone();
+        ElasticScroll::new(
+            "measured_momentum",
+            self.driver.clone(),
+            div().w(px(200.0)).h(px(120.0)).child(
+                gpui::canvas(move |_, _, _| maximum.set(measured.get()), |_, _, _, _| {})
+                    .size_full(),
+            ),
+        )
+        .motion_state(self.state.clone())
+        .resample_native_momentum()
+        .vertical_only()
+    }
+}
+#[gpui::test]
+fn newly_measured_extent_is_adopted_on_input_but_later_geometry_still_cancels_momentum(
+    cx: &mut TestAppContext,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = cx.add_window_view(|window, _| {
+            window.activate();
+            MeasuredMomentumFixture {
+                driver: MeasuredMomentumDriver {
+                    position: Rc::new(std::cell::Cell::new(-200.0)),
+                    maximum: Rc::new(std::cell::Cell::new(0.0)),
+                },
+                measured_maximum: Rc::new(std::cell::Cell::new(580.0)),
+                state: ElasticScrollState::default(),
+            }
+        });
+        crate::test_support::refresh_and_draw(cx);
+        view.read_with(cx, |v, _| v.measured_maximum.set(700.0));
+        crate::test_support::refresh_and_draw(cx);
+        momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        assert!(view.read_with(cx, |v, _| v.state.pending_native_momentum()));
+        crate::test_support::refresh_and_draw(cx);
+        assert!(
+            view.read_with(cx, |v, _| v.state.pending_native_momentum()),
+            "input adopted the extent measured after the previous wrapper prepaint"
+        );
+        advance_momentum(cx, 30);
+        assert_eq!(view.read_with(cx, |v, _| v.driver.position.get()), -240.0);
+        view.read_with(cx, |v, _| v.state.reset());
+        momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        view.read_with(cx, |v, _| v.measured_maximum.set(800.0));
+        crate::test_support::refresh_and_draw(cx);
+        advance_momentum(cx, 30);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.driver.position.get()),
+            -240.0,
+            "geometry changed after the input, so queued movement is cancelled"
+        );
+        assert!(!view.read_with(cx, |v, _| v.state.pending_native_momentum()));
+    });
+}
+
+#[gpui::test]
+fn native_momentum_in_a_background_window_uses_the_ordinary_logical_route(cx: &mut TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (view, cx) = momentum_fixture(cx);
+        cx.deactivate_window();
+        cx.update(|window, _| assert!(!window.is_window_active()));
+        momentum_packet(cx, -40.0, ReplaySource::Momentum, TouchPhase::Moved, false);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.scroll.offset().y),
+            px(-240.0),
+            "background-window native scrolling must not be queued then discarded"
+        );
+        assert!(!view.read_with(cx, |v, _| v.state.pending_native_momentum()));
+        advance_momentum(cx, 30);
+        assert_eq!(view.read_with(cx, |v, _| v.scroll.offset().y), px(-240.0));
+    });
+}

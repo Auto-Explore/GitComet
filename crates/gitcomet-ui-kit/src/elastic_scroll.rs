@@ -4,8 +4,11 @@
 //! child keeps its layout and virtualization; only prepaint coordinates move.
 //! Other platforms and deterministic hosts retain their usual scroll handling.
 
+mod momentum;
 mod motion;
 mod native;
+#[doc(hidden)]
+pub use native::{ReplayInput, ReplaySource, with_replay_input};
 mod tracked;
 pub use tracked::TrackedElasticScroll;
 #[cfg(all(test, target_os = "macos"))]
@@ -137,7 +140,8 @@ impl ElasticScrollDriver for gpui::ListState {
 
 type WheelListener = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>;
 type WheelPredicate = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) -> bool>;
-type LogicalScrollListener = Rc<dyn Fn(Pixels, &ScrollWheelEvent, &mut Window, &mut App)>;
+type LogicalScrollCallback = dyn Fn(Pixels, &ScrollWheelEvent, &mut Window, &mut App);
+type LogicalScrollListener = Rc<LogicalScrollCallback>;
 
 /// Adds rubber-banding to an existing scrollable element.
 pub struct ElasticScroll {
@@ -154,6 +158,7 @@ pub struct ElasticScroll {
     /// remain independently clamped by the application's sync policy.
     shared_motion: Option<ElasticScrollState>,
     linked_motion: bool,
+    resample_native_momentum: bool,
 }
 
 /// Optional shared visual state for synchronized columns. Own one per pane,
@@ -162,11 +167,28 @@ pub struct ElasticScroll {
 pub struct ElasticScrollState(Rc<RefCell<State>>);
 
 impl ElasticScrollState {
+    /// An owner must deactivate a hidden pane before its next frame callback.
+    /// Reactivation starts from its current visible pose, without old travel.
+    pub fn set_active(&self, active: bool) {
+        let mut state = self.0.borrow_mut();
+        state.inactive = !active;
+        if !active {
+            state.cancel_momentum();
+        }
+    }
+
     pub fn reset(&self) {
         let mut state = self.0.borrow_mut();
         state.motion.reset();
+        state.cancel_momentum();
         state.expected_driver = None;
         state.geometry_reset_scheduled = false;
+    }
+
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pending_native_momentum(&self) -> bool {
+        self.0.borrow().momentum.active()
     }
 
     /// The displacement used by the most recent prepaint. Hit testing and IME
@@ -218,7 +240,15 @@ impl ElasticScroll {
             horizontal_only: false,
             shared_motion: None,
             linked_motion: false,
+            resample_native_momentum: false,
         }
+    }
+
+    /// Retimes only native momentum samples to the frame clock. Requires a
+    /// pane-owned motion state so document changes can cancel queued travel.
+    pub fn resample_native_momentum(mut self) -> Self {
+        self.resample_native_momentum = true;
+        self
     }
 
     pub fn vertical_only(mut self) -> Self {
@@ -292,6 +322,11 @@ impl ElasticScroll {
 
 #[derive(Default)]
 struct State {
+    inactive: bool,
+    momentum: momentum::Momentum,
+    momentum_expected: Option<(f64, f64)>,
+    momentum_event: Option<ScrollWheelEvent>,
+    momentum_binding: Option<MomentumBinding>,
     motion: motion::Motion,
     frame_scheduled: bool,
     applied_offset: f32,
@@ -300,6 +335,13 @@ struct State {
 }
 
 impl State {
+    fn cancel_momentum(&mut self) {
+        self.momentum.cancel();
+        self.momentum_expected = None;
+        self.momentum_event = None;
+        self.momentum_binding = None;
+    }
+
     fn schedule_geometry_reset(
         &mut self,
         state_weak: std::rc::Weak<RefCell<Self>>,
@@ -316,6 +358,7 @@ impl State {
                     let mut state = state.borrow_mut();
                     if state.geometry_reset_scheduled {
                         state.motion.reset();
+                        state.cancel_momentum();
                         state.expected_driver = None;
                         state.geometry_reset_scheduled = false;
                         true
@@ -329,6 +372,101 @@ impl State {
             }
         });
     }
+}
+
+#[derive(Clone)]
+struct MomentumBinding {
+    driver: std::rc::Weak<dyn ElasticScrollDriver>,
+    local: std::rc::Weak<RefCell<LocalState>>,
+    on_logical_scroll: Option<std::rc::Weak<LogicalScrollCallback>>,
+    view: gpui::EntityId,
+    viewport: gpui::Size<Pixels>,
+}
+impl MomentumBinding {
+    fn new(
+        driver: &Rc<dyn ElasticScrollDriver>,
+        local: &Rc<RefCell<LocalState>>,
+        listener: Option<&LogicalScrollListener>,
+        view: gpui::EntityId,
+        window: &Window,
+    ) -> Self {
+        Self {
+            driver: Rc::downgrade(driver),
+            local: Rc::downgrade(local),
+            on_logical_scroll: listener.map(Rc::downgrade),
+            view,
+            viewport: window.viewport_size(),
+        }
+    }
+}
+
+/// One callback per pane, evaluated before the next layout. Resolve the latest
+/// frame's weak binding, because rendering reconstructs the driver's wrapper.
+fn schedule_momentum(state: &ElasticScrollState, window: &mut Window) {
+    let Some(epoch) = state.0.borrow_mut().momentum.schedule() else {
+        return;
+    };
+    let weak = Rc::downgrade(&state.0);
+    window.on_next_frame(move |window, cx| {
+        let Some(state) = weak.upgrade() else { return };
+        let (delta, event, again, binding) = {
+            let mut state = state.borrow_mut();
+            if !state.momentum.begin_frame(epoch) {
+                return;
+            }
+            let Some(binding) = state.momentum_binding.clone() else {
+                state.cancel_momentum();
+                return;
+            };
+            let (Some(driver), Some(local)) = (binding.driver.upgrade(), binding.local.upgrade())
+            else {
+                state.cancel_momentum();
+                return;
+            };
+            if state.inactive
+                || !window.is_window_active()
+                || window.viewport_size() != binding.viewport
+                || state.momentum_expected != Some(driver.metrics())
+            {
+                state.cancel_momentum();
+                return;
+            }
+            let event = state.momentum_event.clone();
+            let delta = state.momentum.advance(cx.background_executor().now());
+            if delta != 0.0 {
+                let consumed = driver.scroll_by(px(delta as f32));
+                if (f64::from(f32::from(consumed)) - delta).abs() > 0.01 {
+                    state.cancel_momentum();
+                }
+            }
+            let metrics = driver.metrics();
+            local.borrow_mut().expected_metrics = Some(metrics);
+            let again = state.momentum.active();
+            if again {
+                state.momentum_expected = Some(metrics);
+            } else {
+                state.momentum_expected = None;
+                state.momentum_event = None;
+                state.momentum_binding = None;
+            }
+            (delta, event, again, binding)
+        };
+        if delta != 0.0 {
+            if let (Some(listener), Some(event)) = (
+                binding
+                    .on_logical_scroll
+                    .as_ref()
+                    .and_then(std::rc::Weak::upgrade),
+                event,
+            ) {
+                listener(px(delta as f32), &event, window, cx);
+            }
+            cx.notify(binding.view);
+        }
+        if again {
+            schedule_momentum(&ElasticScrollState(state), window);
+        }
+    });
 }
 
 #[derive(Default)]
@@ -426,6 +564,7 @@ impl Element for ElasticScroll {
             if let Some(state) = &self.shared_motion {
                 let mut state = state.0.borrow_mut();
                 state.motion.reset();
+                state.cancel_momentum();
                 state.applied_offset = 0.0;
             }
             child.prepaint(window, cx);
@@ -445,6 +584,7 @@ impl Element for ElasticScroll {
         let view = window.current_view();
         let offset = {
             let mut state = state.0.borrow_mut();
+            let local_for_binding = local.clone();
             let mut local = local.borrow_mut();
             let metrics = self.driver.metrics();
             let offset = state.motion.offset();
@@ -473,6 +613,19 @@ impl Element for ElasticScroll {
                 || !window.is_window_active()
             {
                 state.motion.reset();
+                state.cancel_momentum();
+            }
+            if !self.resample_native_momentum {
+                state.cancel_momentum();
+            }
+            if state.momentum.active() {
+                state.momentum_binding = Some(MomentumBinding::new(
+                    &self.driver,
+                    &local_for_binding,
+                    self.on_logical_scroll.as_ref(),
+                    view,
+                    window,
+                ));
             }
             local.expected_metrics = Some(metrics);
             local.size = Some(bounds.size);
@@ -578,11 +731,28 @@ impl Element for ElasticScroll {
                 // A live input predicate may change before Bubble. A prior
                 // packet's claim must never authorize replaying its delta.
                 local.borrow_mut().captured_delta = None;
-                if state.0.borrow().motion.touching()
-                    && matches!(
-                        native::read(event).phase,
-                        TouchPhase::Ended | TouchPhase::Cancelled
-                    )
+                let (pending, touching) = {
+                    let state = state.0.borrow();
+                    (state.momentum.active(), state.motion.touching())
+                };
+                let input = (pending || touching)
+                    .then(|| native::read(event, cx.background_executor().now()));
+                if !event.delta.precise()
+                    || input.as_ref().is_some_and(|input| {
+                        matches!(
+                            input.source,
+                            Some(native::Source::Touch | native::Source::Wheel)
+                        ) || input.phase == TouchPhase::Cancelled
+                            || (input.source != Some(native::Source::Momentum)
+                                && input.phase == TouchPhase::Started)
+                    })
+                {
+                    state.0.borrow_mut().cancel_momentum();
+                }
+                if touching
+                    && input.as_ref().is_some_and(|input| {
+                        matches!(input.phase, TouchPhase::Ended | TouchPhase::Cancelled)
+                    })
                 {
                     state
                         .0
@@ -620,9 +790,13 @@ impl Element for ElasticScroll {
         window.on_mouse_event({
             let state = prepaint.state.clone();
             move |_: &MouseDownEvent, phase, _, cx| {
-                if phase == DispatchPhase::Capture && state.0.borrow().motion.offset() != 0.0 {
-                    state.0.borrow_mut().motion.reset();
-                    cx.notify(view);
+                if phase == DispatchPhase::Capture {
+                    let mut state = state.0.borrow_mut();
+                    state.cancel_momentum();
+                    if state.motion.offset() != 0.0 {
+                        state.motion.reset();
+                        cx.notify(view);
+                    }
                 }
             }
         });
@@ -642,6 +816,8 @@ impl Element for ElasticScroll {
             let wheel_predicate = self.wheel_predicate.clone();
             let on_logical_scroll = self.on_logical_scroll.clone();
             let linked_motion = self.linked_motion;
+            let resample_momentum =
+                self.resample_native_momentum && self.shared_motion.is_some() && !linked_motion;
             move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble
                     || !hitbox.should_handle_scroll(window)
@@ -660,12 +836,14 @@ impl Element for ElasticScroll {
                 {
                     return;
                 }
+                let state_for_schedule = state.clone();
                 let mut state = state.0.borrow_mut();
                 if !event.delta.precise() {
                     if state.motion.offset() != 0.0 {
                         cx.notify(view);
                     }
                     state.motion.reset();
+                    state.cancel_momentum();
                     return;
                 }
                 let now = cx.background_executor().now();
@@ -681,14 +859,27 @@ impl Element for ElasticScroll {
                     ScrollbarAxis::Horizontal if !horizontal_only => delta.y,
                     ScrollbarAxis::Horizontal => px(0.0),
                 };
+                let input = native::read(event, now);
+                if resample_momentum && !window.is_window_active() {
+                    state.cancel_momentum();
+                }
+                if state.momentum.active() && state.momentum_expected != Some(driver.metrics()) {
+                    state.cancel_momentum();
+                }
+                if input.source != Some(native::Source::Momentum)
+                    || input.phase == TouchPhase::Cancelled
+                {
+                    state.cancel_momentum();
+                    state.momentum.direct(input.at.unwrap_or(now));
+                }
                 if !f32::from(delta).is_finite()
                     || (state.motion.offset() == 0.0 && !driver.should_handle(delta))
                 {
+                    state.cancel_momentum();
                     return;
                 }
                 let animate = motion_enabled(cx);
                 if animate {
-                    let input = native::read(event);
                     if input.source == Some(native::Source::Wheel) {
                         state.motion.reset();
                     } else {
@@ -708,7 +899,63 @@ impl Element for ElasticScroll {
                 } else {
                     state.motion.reset();
                 }
-                let delta = f32::from(delta);
+                let mut delta = f32::from(delta);
+                if resample_momentum
+                    && window.is_window_active()
+                    && !state.inactive
+                    && animate
+                    && input.source == Some(native::Source::Momentum)
+                    && input.phase != TouchPhase::Cancelled
+                    && state.motion.offset() == 0.0
+                    && let Some(at) = input.at
+                {
+                    let pending = state.momentum.pending();
+                    let (position, maximum) = driver.metrics();
+                    let destination = position + pending + f64::from(delta);
+                    let interior = maximum.is_finite()
+                        && maximum > 1.0
+                        && position < -0.5
+                        && position > -maximum + 0.5
+                        && destination < -0.5
+                        && destination > -maximum + 0.5;
+                    if interior
+                        && state
+                            .momentum
+                            .push(f64::from(delta), at, now, input.momentum_ended)
+                    {
+                        let expected = driver.metrics();
+                        state.momentum_expected = Some(expected);
+                        local.borrow_mut().expected_metrics = Some(expected);
+                        state.momentum_event = Some(event.clone());
+                        state.momentum_binding = Some(MomentumBinding::new(
+                            &driver,
+                            &local,
+                            on_logical_scroll.as_ref(),
+                            view,
+                            window,
+                        ));
+                        drop(state);
+                        schedule_momentum(&state_for_schedule, window);
+                        if let Some(on_scroll) = &on_scroll {
+                            on_scroll(event, window, cx);
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // At a boundary or invalid/stalled input, preserve the OS
+                    // endpoint through the ordinary clamp and spring route.
+                    delta += pending as f32;
+                    state.cancel_momentum();
+                } else if state.momentum.active() {
+                    // Lost clock metadata cannot silently discard accepted
+                    // travel from this otherwise uninterrupted momentum phase.
+                    if input.source == Some(native::Source::Momentum)
+                        && input.phase != TouchPhase::Cancelled
+                    {
+                        delta += state.momentum.pending() as f32;
+                    }
+                    state.cancel_momentum();
+                }
                 let remaining = state.motion.take_reversal(delta, now);
                 let consumed = driver.scroll_by(px(remaining));
                 if animate {

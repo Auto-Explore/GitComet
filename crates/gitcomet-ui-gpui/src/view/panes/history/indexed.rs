@@ -314,12 +314,14 @@ impl HistoryView {
     pub(super) fn ensure_indexed_history(&mut self, cx: &mut gpui::Context<Self>) {
         self.prune_retained_indexed_history();
         let Some(repo) = self.active_repo() else {
+            self.reset_history_scroll_motion();
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
             return;
         };
         let repo_id = repo.id;
         if let Some(previous_id) = self.indexed.repo_id().filter(|id| *id != repo_id) {
+            self.reset_history_scroll_motion();
             self.update_history_row_hover(None, None, cx);
             let mut state = std::mem::take(&mut self.indexed);
             state.cancel_pending_work();
@@ -351,6 +353,7 @@ impl HistoryView {
                     })
             })
         {
+            self.reset_history_scroll_motion();
             self.update_history_row_hover(None, None, cx);
             self.indexed = retained.state;
             self.scroll_interaction.borrow_mut().logical = retained.viewport;
@@ -370,6 +373,7 @@ impl HistoryView {
                 || shown.key.history_author_filter != repo.history_state.history_author_filter
                 || shown.key.history_focus != repo.history_state.history_focus
         }) {
+            self.reset_history_scroll_motion();
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
         }
@@ -748,6 +752,7 @@ impl HistoryView {
         {
             self.carry_history_find_matches(&old, &next.graph);
         }
+        self.reset_history_scroll_motion();
         self.indexed.presentation = Some(next.clone());
         self.store.dispatch(Msg::IndexedHistory(Event::Publish {
             repo_id: next.key.repo_id,
@@ -812,6 +817,9 @@ impl HistoryView {
             })
             .collect();
         let plan = HistoryListPlan::new(show_summary, anchors);
+        if self.indexed.plan.fingerprint() != plan.fingerprint() {
+            self.reset_history_scroll_motion();
+        }
         if let Some(logical) = &mut self.scroll_interaction.borrow_mut().logical {
             let next_top = match self.indexed.plan.row_at(logical.top) {
                 Some(HistoryListRow::Commit { visible_ix }) => {
@@ -1328,6 +1336,7 @@ impl HistoryView {
             cx,
         );
         let interaction = self.scroll_interaction.clone();
+        let elastic = self.scroll_elastic.clone();
         let shown_repo = self.indexed.presentation.as_ref().map(|p| p.key.repo_id);
         let view = cx.entity().downgrade();
         let measure = gpui::canvas(
@@ -1340,6 +1349,7 @@ impl HistoryView {
                 if let Some(logical) = &mut state.logical {
                     let height = f64::from(f32::from(bounds.size.height));
                     if logical.viewport != height || logical.height != row {
+                        elastic.reset();
                         let position = logical.top as f64 * row + logical.within.min(row);
                         logical.viewport = height;
                         logical.height = row;
@@ -1363,7 +1373,7 @@ impl HistoryView {
             .min_h(px(0.0))
             .overflow_hidden()
             .child(
-                crate::kit::elastic_scroll::ElasticScroll::new(
+                self.configure_history_elastic(crate::kit::elastic_scroll::ElasticScroll::new(
                     (
                         "history_elastic",
                         self.active_repo_id().map_or(0, |id| id.0),
@@ -1394,7 +1404,7 @@ impl HistoryView {
                         .children(rows),
                 )
                 .vertical_only()
-                .on_scroll(cx.listener(|this, _, _, cx| this.history_wheel_interaction(cx))),
+                .on_scroll(cx.listener(|this, _, _, cx| this.history_wheel_interaction(cx)))),
             )
             .child(
                 components::Scrollbar::new(
@@ -1446,6 +1456,7 @@ impl HistoryView {
         else {
             return false;
         };
+        self.reset_history_scroll_motion();
         self.store.dispatch(Msg::IndexedHistory(Event::Select {
             request_id: None,
             repo_id,
@@ -1457,6 +1468,7 @@ impl HistoryView {
     }
 
     pub(super) fn scroll_indexed_to(&mut self, row: usize, center: bool) {
+        self.reset_history_scroll_motion();
         if let Some(logical) = &mut self.scroll_interaction.borrow_mut().logical {
             let top = row as f64 * logical.height;
             let position = if center {

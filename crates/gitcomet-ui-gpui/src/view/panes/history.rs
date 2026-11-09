@@ -585,6 +585,7 @@ pub(in super::super) struct HistoryView {
     history_list_plan_cache: Option<HistoryListPlanCache>,
     presented_history: Option<viewport::PresentedHistory>,
     scroll_interaction: scroll::SharedScrollInteraction,
+    scroll_elastic: crate::kit::elastic_scroll::ElasticScrollState,
     pub(in crate::view) indexed: indexed::IndexedViewState,
     retained_indexed_tabs: FxHashMap<RepoId, indexed::RetainedTab>,
     pub(in crate::view) loading: loading::HistoryLoading,
@@ -857,6 +858,7 @@ impl HistoryView {
             let selection_ack_changed =
                 previous_repo.and_then(|repo| repo.history_state.selection_ack) != selection_ack;
             if switched_repo {
+                this.reset_history_scroll_motion();
                 this.history_find_repo_changed();
                 this.pending_history_selections.clear();
             } else if selection_ack_changed
@@ -988,6 +990,7 @@ impl HistoryView {
             history_list_plan_cache: None,
             presented_history: None,
             scroll_interaction: Default::default(),
+            scroll_elastic: Default::default(),
             indexed: Default::default(),
             retained_indexed_tabs: Default::default(),
             loading: Default::default(),
@@ -1306,6 +1309,7 @@ impl HistoryView {
         worktree_path: Option<PathBuf>,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.reset_history_scroll_motion();
         let next = PendingHistoryReveal {
             repo_id,
             commit_id,
@@ -1417,6 +1421,9 @@ impl HistoryView {
         metrics: crate::appearance::Appearance,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.appearance_metrics != metrics {
+            self.reset_history_scroll_motion();
+        }
         self.appearance_metrics = metrics;
         self.history_col_resize = None;
         self.sync_history_column_widths_from_design();
@@ -1446,6 +1453,7 @@ impl HistoryView {
         }
 
         debug_assert_eq!(self.ui_scale_percent, previous_percent);
+        self.reset_history_scroll_motion();
         self.sync_history_column_design_widths_from_pixels();
         self.ui_scale_percent = next_percent;
         self.history_col_resize = None;
@@ -1598,11 +1606,18 @@ impl HistoryView {
     }
 
     pub(in super::super) fn set_last_window_size(&mut self, size: Size<Pixels>) {
+        if self.last_window_size != size {
+            self.reset_history_scroll_motion();
+        }
         self.last_window_size = size;
     }
 
     pub(in super::super) fn set_history_content_width(&mut self, width: Pixels) {
-        self.history_content_width = history_columns_available_width(width);
+        let width = history_columns_available_width(width);
+        if self.history_content_width != width {
+            self.reset_history_scroll_motion();
+        }
+        self.history_content_width = width;
     }
 
     pub(in super::super) fn open_popover_at(
@@ -1845,6 +1860,7 @@ impl HistoryView {
                 );
             }
             self.dismiss_history_refs_hover(cx);
+            self.reset_history_scroll_motion();
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         } else if decision.load_more
