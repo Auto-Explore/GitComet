@@ -918,6 +918,7 @@ fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     };
     let effects = reduce(
         &mut repos,
@@ -972,6 +973,7 @@ fn set_active_repo_replays_stored_sidebar_data_request() {
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     };
     let repo1_state = state
         .repos
@@ -1021,6 +1023,7 @@ fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     };
     let repo1_state = state
         .repos

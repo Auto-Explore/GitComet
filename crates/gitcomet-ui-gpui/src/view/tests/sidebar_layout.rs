@@ -1403,6 +1403,39 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn collapsed_tags_popover_renders_tag_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
+        name: "v1.0".into(),
+        target: CommitId("abc123".into()),
+    }]));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Tags, cx);
+        });
+    });
+    finish_pane_transitions(cx, &view);
+
+    assert!(cx.debug_bounds("collapsed_sidebar_popover").is_some());
+    // The row index counts the section header and spacers before it.
+    assert!(
+        (0..8).any(|ix| cx
+            .debug_bounds(format!("tag_sidebar_row_{ix}").leak())
+            .is_some()),
+        "the Tags popover must paint its tag rows"
+    );
+}
+
+#[gpui::test]
 fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();

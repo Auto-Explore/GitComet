@@ -200,6 +200,83 @@ impl SidebarPaneView {
             .into_any_element()
     }
 
+    /// Tags section header, with a spinner while the list loads.
+    pub(super) fn sidebar_tags_header_row(
+        this: &Self,
+        ctx: &SidebarRowContext,
+        slot: SidebarRowSlot,
+        collapsed: bool,
+        collapse_key: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let SidebarRowSlot {
+            ix,
+            row_style,
+            row_surface,
+            ..
+        } = slot;
+        let theme = ctx.theme;
+        let repo_id = ctx.repo_id;
+        let is_collapsed_popover = ctx.is_collapsed_popover;
+        let show_tags_spinner = this.active_repo().is_some_and(|r| {
+            matches!(r.tags, Loadable::Loading)
+                || (!collapsed && matches!(r.tags, Loadable::NotLoaded))
+        });
+        let row_state = components::InteractiveRowState::default();
+
+        div()
+            .id(collapse_key.clone())
+            .debug_selector(move || format!("tags_section_{ix}"))
+            .relative()
+            .h(ctx.row_height())
+            .w_full()
+            .pl(ctx.header_indent_px())
+            .pr(ctx.trailing_pad())
+            .flex()
+            .items_center()
+            .gap(ctx.px(BRANCH_TREE_GAP_PX))
+            .interactive_row(row_style, row_state)
+            .when(is_collapsed_popover, |row| {
+                row.child(ctx.tree_toggle_slot(Some(collapsed)))
+            })
+            .child(ctx.tree_icon_slot("icons/tag.svg", ctx.icon_primary, 14.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(theme.ui_text(14.0))
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.colors.foreground.primary)
+                    .child("Tags"),
+            )
+            .when(show_tags_spinner, |d| {
+                d.child(
+                    div()
+                        .debug_selector(move || format!("tags_spinner_{}", repo_id.0))
+                        .child(ctx.svg_spinner(("tags_spinner", repo_id.0), ctx.icon_muted, 12.0)),
+                )
+            })
+            .gitcomet_tooltip(theme, "Tags".into())
+            .on_activate(
+                false,
+                ctx.header_activation,
+                cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() || e.click_count() != 1 {
+                        return;
+                    }
+                    if is_collapsed_popover {
+                        this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                    } else {
+                        this.navigate_sidebar_row(ix, cx);
+                    }
+                }),
+            )
+            .map(|row| ctx.paint_header(row.into_any_element(), row_surface))
+            .into_any_element()
+    }
+
     /// Worktrees section header, with a spinner while the list loads.
     pub(super) fn sidebar_worktrees_header_row(
         this: &Self,

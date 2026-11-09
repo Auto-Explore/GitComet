@@ -80,6 +80,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
                         &PopoverKind::TagMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            name: None,
                         },
                         cx,
                     )
@@ -120,6 +121,96 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
     });
 }
 
+#[gpui::test]
+fn tag_menu_with_name_is_scoped_to_that_tag(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(2);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let other_commit = CommitId("aaaaaaaaaaaaaaaa".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_tag_menu_named",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.log = Loadable::Ready(
+                gitcomet_core::domain::LogPage {
+                    commits: vec![gitcomet_core::domain::Commit {
+                        id: commit_id.clone(),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "Hello".into(),
+                        author: "Alice".into(),
+                        time: SystemTime::UNIX_EPOCH,
+                    }],
+                    next_cursor: None,
+                }
+                .into(),
+            );
+            repo.tags = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::Tag {
+                    name: "release".to_string(),
+                    target: commit_id.clone(),
+                },
+                gitcomet_core::domain::Tag {
+                    name: "v1.0.0".to_string(),
+                    target: commit_id.clone(),
+                },
+                gitcomet_core::domain::Tag {
+                    name: "other".to_string(),
+                    target: other_commit,
+                },
+            ]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::TagMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            name: Some("v1.0.0".into()),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected tag context menu model");
+
+        let has_label = |expected: &str| {
+            model.items.iter().any(|item| match item {
+                ContextMenuItem::Header(label) => label.as_ref() == expected,
+                ContextMenuItem::Entry { label, .. } => label.as_ref() == expected,
+                _ => false,
+            })
+        };
+        assert!(has_label("Tag v1.0.0 on 01234567"));
+        assert!(has_label("Delete tag v1.0.0"));
+        assert!(!has_label("Delete tag release"));
+    });
+}
 #[gpui::test]
 fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -183,6 +274,7 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
                         &PopoverKind::TagMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            name: None,
                         },
                         cx,
                     )

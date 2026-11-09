@@ -1246,6 +1246,7 @@ fn fill_set_active_repo_inline_impl(
         + usize::from(repo_state.sidebar_data_request.worktrees)
         + usize::from(repo_state.sidebar_data_request.submodules)
         + usize::from(repo_state.sidebar_data_request.stashes)
+        + usize::from(repo_state.sidebar_data_request.tags)
         + usize::from(changed);
     let base_effect_capacity = if use_full_refresh {
         refresh_full_effect_capacity()

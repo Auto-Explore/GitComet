@@ -17,6 +17,7 @@ fn branch_sidebar_expanded_default_items() -> BTreeSet<String> {
         branch_sidebar::worktrees_section_storage_key(),
         branch_sidebar::submodules_section_storage_key(),
         branch_sidebar::stash_section_storage_key(),
+        branch_sidebar::tags_section_storage_key(),
     ]
     .into_iter()
     .filter_map(branch_sidebar::expanded_default_section_storage_key)
@@ -583,6 +584,10 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
                 tooltip.len().hash(&mut h);
             }
+            BranchSidebarRow::TagItem { name, target } => {
+                name.hash(&mut h);
+                target.hash(&mut h);
+            }
             BranchSidebarRow::SectionSpacer
             | BranchSidebarRow::EmptyCard { .. }
             | BranchSidebarRow::WorktreesHeader { .. }
@@ -593,7 +598,9 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
             | BranchSidebarRow::AnnexPlaceholder { .. }
             | BranchSidebarRow::AnnexRepositoryItem { .. }
             | BranchSidebarRow::StashHeader { .. }
-            | BranchSidebarRow::StashPlaceholder { .. } => {}
+            | BranchSidebarRow::StashPlaceholder { .. }
+            | BranchSidebarRow::TagsHeader { .. }
+            | BranchSidebarRow::TagPlaceholder { .. } => {}
         }
     }
     h.finish()
