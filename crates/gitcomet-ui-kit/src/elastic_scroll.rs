@@ -336,7 +336,7 @@ struct LocalState {
     axis: OngoingScroll,
     expected_metrics: Option<(f64, f64)>,
     size: Option<gpui::Size<Pixels>>,
-    filtered_delta: gpui::Point<Pixels>,
+    captured_delta: Option<gpui::Point<Pixels>>,
 }
 
 /// Only the innermost wrapper under the pointer handles a scroll. Captures
@@ -572,10 +572,14 @@ impl Element for ElasticScroll {
                 if phase != DispatchPhase::Capture {
                     return;
                 }
-                if matches!(
-                    native::read(event).phase,
-                    TouchPhase::Ended | TouchPhase::Cancelled
-                ) && state.0.borrow().motion.touching()
+                // A live input predicate may change before Bubble. A prior
+                // packet's claim must never authorize replaying its delta.
+                local.borrow_mut().captured_delta = None;
+                if state.0.borrow().motion.touching()
+                    && matches!(
+                        native::read(event).phase,
+                        TouchPhase::Ended | TouchPhase::Cancelled
+                    )
                 {
                     state
                         .0
@@ -597,7 +601,6 @@ impl Element for ElasticScroll {
                         // through small diagonal packets later in the gesture.
                         local.axis.filter(&mut delta, event.touch_phase);
                     }
-                    local.filtered_delta = delta;
                     let accepts = match axis {
                         ScrollbarAxis::Vertical => delta.y.abs() >= delta.x.abs(),
                         ScrollbarAxis::Horizontal => {
@@ -605,6 +608,7 @@ impl Element for ElasticScroll {
                         }
                     };
                     if accepts {
+                        local.captured_delta = Some(delta);
                         cx.set_global(WheelClaim(Some((window_id, id.clone()))));
                     }
                 }
@@ -644,6 +648,9 @@ impl Element for ElasticScroll {
                 {
                     return;
                 }
+                let Some(delta) = local.borrow().captured_delta else {
+                    return;
+                };
                 if wheel_predicate
                     .as_ref()
                     .is_some_and(|predicate| !predicate(event, window, cx))
@@ -659,7 +666,6 @@ impl Element for ElasticScroll {
                     return;
                 }
                 let now = cx.background_executor().now();
-                let delta = local.borrow().filtered_delta;
                 let delta = match axis {
                     ScrollbarAxis::Vertical if delta.x.abs() > delta.y.abs() => return,
                     ScrollbarAxis::Vertical => delta.y,

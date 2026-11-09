@@ -6,6 +6,8 @@ use alacritty_terminal::vte::ansi::Processor;
 use gitcomet_ui_kit::elastic_scroll::ElasticScrollDriver;
 #[cfg(target_os = "macos")]
 use gpui::{ScrollDelta, ScrollWheelEvent, TouchPhase};
+#[cfg(target_os = "macos")]
+use std::{cell::Cell, rc::Rc};
 
 #[cfg(target_os = "macos")]
 fn wheel(position: Point<Pixels>, delta: ScrollDelta) -> ScrollWheelEvent {
@@ -261,6 +263,127 @@ fn newly_enabled_mouse_reporting_gets_the_original_packet_and_cancels_existing_b
             assert_eq!(
                 view.read_with(cx, |view, _| view.viewport_bounds.unwrap()),
                 initial
+            );
+        },
+    );
+}
+
+#[cfg(target_os = "macos")]
+struct ModeChangeDuringWheel {
+    viewport: Entity<TerminalViewportView>,
+    term: AlacrittyTermLock,
+    leave_mouse_mode: Rc<Cell<bool>>,
+    capture_changed_mode: Rc<Cell<bool>>,
+}
+
+#[cfg(target_os = "macos")]
+impl Render for ModeChangeDuringWheel {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        let term = self.term.clone();
+        let leave_mouse_mode = self.leave_mouse_mode.clone();
+        let capture_changed_mode = self.capture_changed_mode.clone();
+        div()
+            .relative()
+            .size_full()
+            .child(self.viewport.clone())
+            .child(
+                // Register after the viewport's Capture listener, just as a
+                // parser thread can change modes before Bubble reads them.
+                gpui::canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        let term = term.clone();
+                        let leave_mouse_mode = leave_mouse_mode.clone();
+                        let capture_changed_mode = capture_changed_mode.clone();
+                        window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, _| {
+                            if phase == gpui::DispatchPhase::Capture
+                                && leave_mouse_mode.replace(false)
+                            {
+                                let mut term = term.lock();
+                                assert!(terminal_live_modes(&term).mouse_mode());
+                                let mut parser: Processor = Processor::new();
+                                parser.advance(&mut *term, b"\x1b[?1000l\x1b[?1006l");
+                                capture_changed_mode.set(true);
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn leaving_mouse_reporting_during_dispatch_does_not_replay_an_old_scroll_packet(
+    cx: &mut gpui::TestAppContext,
+) {
+    gitcomet_ui_kit::ui_runtime::with_override(
+        gitcomet_ui_kit::ui_runtime::UiRuntime::live(),
+        || {
+            let term = test_term_with_lines(80);
+            let leave_mouse_mode = Rc::new(Cell::new(false));
+            let capture_changed_mode = Rc::new(Cell::new(false));
+            let (surface, cx) = cx.add_window_view(|window, cx| {
+                window.activate();
+                let viewport = cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    TerminalViewportView::with_backend(
+                        AppTheme::gitcomet_dark(),
+                        focus,
+                        Some(term.clone()),
+                        None,
+                        cx,
+                    )
+                });
+                ModeChangeDuringWheel {
+                    viewport,
+                    term: term.clone(),
+                    leave_mouse_mode: leave_mouse_mode.clone(),
+                    capture_changed_mode: capture_changed_mode.clone(),
+                }
+            });
+            cx.simulate_resize(size(px(200.0), px(120.0)));
+            gitcomet_ui_kit::test_support::refresh_and_draw(cx);
+            let view = surface.read_with(cx, |surface, _| surface.viewport.clone());
+            let (bounds, line_height) = view.read_with(cx, |view, _| {
+                (
+                    view.viewport_bounds.unwrap(),
+                    view.layout_cache.as_ref().unwrap().metrics.line_height,
+                )
+            });
+            // Seed a prior claim and a deliberately different filtered delta.
+            dispatch_wheel(
+                cx,
+                wheel(
+                    bounds.center(),
+                    ScrollDelta::Pixels(point(px(0.0), line_height * 4.0)),
+                ),
+            );
+            let before = term.lock().grid().display_offset();
+            assert_eq!(before, 4);
+            {
+                let mut term = term.lock();
+                let mut parser: Processor = Processor::new();
+                parser.advance(&mut *term, b"\x1b[?1000h\x1b[?1006h");
+            }
+            leave_mouse_mode.set(true);
+            dispatch_wheel(
+                cx,
+                wheel(
+                    bounds.center(),
+                    ScrollDelta::Pixels(point(px(0.0), px(1.0))),
+                ),
+            );
+            assert!(capture_changed_mode.get(), "mode changes inside dispatch");
+            assert!(!terminal_live_modes(&term.lock()).mouse_mode());
+            assert_eq!(
+                term.lock().grid().display_offset(),
+                before + 1,
+                "the declined packet uses its original one-row fallback, not the old four-row delta"
             );
         },
     );
