@@ -578,27 +578,15 @@ fn fsharp_xml_doc_injection_stays_under_the_match_limit_on_a_long_doc_comment() 
     lines.push("/// </summary>".to_string());
     let text = lines.join("\n");
 
-    let lang: tree_sitter::Language = tree_sitter_fsharp::LANGUAGE_FSHARP.into();
-    let query = tree_sitter::Query::new(&lang, tree_sitter_fsharp::INJECTIONS_QUERY)
-        .expect("fsharp injections.scm should compile");
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&lang).expect("fsharp grammar");
-    let tree = parser.parse(&text, None).expect("doc comment should parse");
-
-    let mut cursor = tree_sitter::QueryCursor::new();
-    cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
-    let mut matched = 0usize;
-    {
-        let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
-        tree_sitter::StreamingIterator::advance(&mut matches);
-        while matches.get().is_some() {
-            matched += 1;
-            tree_sitter::StreamingIterator::advance(&mut matches);
-        }
-    }
+    let (patterns, overflowed) = injection_matches(
+        tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+        tree_sitter_fsharp::INJECTIONS_QUERY,
+        &text,
+    );
+    let matched = patterns.len();
 
     assert!(
-        !cursor.did_exceed_match_limit(),
+        !overflowed,
         "the F# injection query overflowed the {TS_QUERY_MATCH_LIMIT}-match in-progress \
              pool on a {}-line doc comment; a combined group that loses ranges assembles a \
              different document, so the whole group is dropped when this happens",
