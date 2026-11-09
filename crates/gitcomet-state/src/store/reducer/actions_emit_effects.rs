@@ -331,26 +331,6 @@ pub(super) fn append_gitignore_patterns(repo_id: RepoId, patterns: Vec<String>) 
     )]
 }
 
-pub(super) fn commit(repo_id: RepoId, message: String, hooks: GitHooks) -> Vec<Effect> {
-    vec![Effect::Commit {
-        repo_id,
-        message,
-        identity: None,
-        hooks,
-        auth: None,
-    }]
-}
-
-pub(super) fn commit_amend(repo_id: RepoId, message: String, hooks: GitHooks) -> Vec<Effect> {
-    vec![Effect::CommitAmend {
-        repo_id,
-        message,
-        identity: None,
-        hooks,
-        auth: None,
-    }]
-}
-
 pub(super) fn safe_push_after_commit(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1103,7 +1083,6 @@ pub(super) fn commit_finished(
     handled_by_prompt: bool,
 ) -> Vec<Effect> {
     let label = if amend { "Amend" } else { "Commit" };
-    let mut succeeded = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -1115,7 +1094,6 @@ pub(super) fn commit_finished(
     match result {
         Ok(()) => {
             repo_state.feedback_mut().last_error = None;
-            succeeded = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
             repo_state.diff_state.clear_loads();
@@ -1148,15 +1126,6 @@ pub(super) fn commit_finished(
             );
         }
     }
-    if succeeded {
-        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-            return Vec::new();
-        };
-        return refresh_primary_effects(repo_state);
-    }
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
     refresh_primary_effects(repo_state)
 }
 

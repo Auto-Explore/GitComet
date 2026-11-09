@@ -44,7 +44,7 @@ pub(super) mod test_inputs;
 mod util;
 mod worktree_removal;
 
-use crate::model::{AppState, Loadable, RepoId};
+use crate::model::{AppState, Loadable, PendingCommitRetry, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
@@ -1976,13 +1976,31 @@ fn reduce_inner(
             message,
             push_after_commit,
             hooks,
-        } => auth::commit(state, repo_id, message, push_after_commit, hooks),
+        } => auth::commit(
+            state,
+            repo_id,
+            PendingCommitRetry {
+                message,
+                amend: false,
+                push_after_commit,
+                hooks,
+            },
+        ),
         Msg::CommitAmend {
             repo_id,
             message,
             push_after_commit,
             hooks,
-        } => auth::commit_amend(state, repo_id, message, push_after_commit, hooks),
+        } => auth::commit(
+            state,
+            repo_id,
+            PendingCommitRetry {
+                message,
+                amend: true,
+                push_after_commit,
+                hooks,
+            },
+        ),
         Msg::SafePushAfterCommit { repo_id, context } => {
             match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,

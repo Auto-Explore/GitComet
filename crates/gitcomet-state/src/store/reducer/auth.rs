@@ -18,8 +18,7 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, GitHooks, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision,
+    CommandOutput, CommitOperationOutcome, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -813,39 +812,31 @@ pub(super) fn clone_repo_finished(
 pub(super) fn commit(
     state: &mut AppState,
     repo_id: RepoId,
-    message: String,
-    push_after_commit: bool,
-    hooks: GitHooks,
+    request: PendingCommitRetry,
 ) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
+    let (message, amend, hooks) = (request.message.clone(), request.amend, request.hooks);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.pending.commit_retry = Some(PendingCommitRetry {
-            message: message.clone(),
-            amend: false,
-            push_after_commit,
-            hooks,
-        });
+        repo_state.pending.commit_retry = Some(request);
     }
-    actions_emit_effects::commit(repo_id, message, hooks)
-}
-
-pub(super) fn commit_amend(
-    state: &mut AppState,
-    repo_id: RepoId,
-    message: String,
-    push_after_commit: bool,
-    hooks: GitHooks,
-) -> Vec<Effect> {
-    begin_commit_action(state, repo_id);
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.pending.commit_retry = Some(PendingCommitRetry {
-            message: message.clone(),
-            amend: true,
-            push_after_commit,
+    let effect = if amend {
+        Effect::CommitAmend {
+            repo_id,
+            message,
+            identity: None,
             hooks,
-        });
-    }
-    actions_emit_effects::commit_amend(repo_id, message, hooks)
+            auth: None,
+        }
+    } else {
+        Effect::Commit {
+            repo_id,
+            message,
+            identity: None,
+            hooks,
+            auth: None,
+        }
+    };
+    vec![effect]
 }
 
 pub(super) fn commit_finished(
