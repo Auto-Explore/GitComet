@@ -1253,6 +1253,17 @@ fn rejected_auth_prompt_shows_what_git_printed(cx: &mut gpui::TestAppContext) {
         test_support::redraw(cx);
         assert!(cx.debug_bounds("auth_prompt_error").is_some());
         assert!(cx.debug_bounds("auth_prompt_details_scroll").is_none());
+
+        // Without output, a challenge still explains the prompt.
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation = 4;
+        prompt.challenge = Some(gitcomet_core::auth::AuthChallenge::from_prompt(
+            gitcomet_core::auth::GitAuthKind::UsernamePassword,
+            "Password for 'https://example.com':",
+        ));
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_details_scroll").is_some());
     }
 }
 

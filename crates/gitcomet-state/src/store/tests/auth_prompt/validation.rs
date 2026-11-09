@@ -229,8 +229,8 @@ fn rejected_validation_stays_inline_without_replaying_or_logging_a_failure() {
     assert!(
         matches!(&prompt.status, AuthPromptStatus::Rejected { message } if message.contains("could not unlock"))
     );
-    // The key was checked locally: the first run's "Permission denied"
-    // output does not explain this rejection.
+    // A first prompt's "Permission denied" output stays out of the pane
+    // when the key was rejected locally.
     assert_eq!(prompt.output, None);
     let rejected_prompt = prompt.clone();
     let effects = reduce(
@@ -574,6 +574,10 @@ fn security_key_pin_is_replayed_directly_and_its_rejection_says_pin() {
         AuthPromptStatus::Rejected {
             message: "The security key PIN was not accepted. Try again.".into()
         }
+    );
+    assert_eq!(
+        prompt.output.as_deref(),
+        Some("git pull --prune failed: git@github.com: Permission denied (publickey).")
     );
 }
 
