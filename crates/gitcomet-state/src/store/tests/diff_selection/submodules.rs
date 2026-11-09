@@ -378,11 +378,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
     assert_eq!(inline.diff_file_rev, 0);
 }
 
-#[test]
-fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remains() {
-    let mut repos: RepositoryRuntimes = Default::default();
-    let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::test_default();
+fn repo_with_open_inline_submodule_diff() -> (RepoState, PathBuf, DiffTarget, DiffTarget) {
     let parent_path = PathBuf::from("vendor/submodule");
     let parent_target = DiffTarget::working_tree(parent_path.clone(), DiffArea::Unstaged);
     let inline_target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
@@ -450,6 +446,15 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         )))),
         diff_file_image: Loadable::NotLoaded,
     });
+    (repo_state, parent_path, parent_target, inline_target)
+}
+
+#[test]
+fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remains() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let (repo_state, parent_path, parent_target, _) = repo_with_open_inline_submodule_diff();
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -507,6 +512,80 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
             },
         ]
     ));
+}
+
+#[test]
+fn parking_keeps_the_inline_selection_for_the_resumed_summary() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let (mut repo_state, _, parent_target, inline_target) = repo_with_open_inline_submodule_diff();
+    repo_state.set_open(Loadable::Ready(()));
+    repo_state.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    let summary = match &repo_state.diff_state.submodule_summary {
+        Loadable::Ready(summary) => SubmoduleDiffSummary::clone(summary),
+        _ => unreachable!("the fixture shows a loaded summary"),
+    };
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    crate::store::reducer::park_repository(&mut state.repos[0], &mut repos);
+    repos.release_retired();
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("parking keeps the inline selection");
+    assert_eq!(inline.target, inline_target);
+    assert!(matches!(inline.diff, Loadable::NotLoaded));
+    assert!(matches!(inline.diff_file, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+            preferences: None,
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+        }),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(effect,
+            Effect::LoadSubmoduleSummary { target, .. } if *target == parent_target)),
+        "status is not loaded yet, so the kept submodule list classifies the selection"
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: parent_target,
+            result: Ok(summary),
+        }),
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the summary restores the inline view");
+    assert_eq!(inline.target, inline_target);
+    assert_eq!(
+        inline.entries[inline.selected_ix].path,
+        PathBuf::from("src/lib.rs")
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadInlineSubmoduleSelectedDiff {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
 }
 
 #[test]

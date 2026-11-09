@@ -372,6 +372,7 @@ fn prepared_patch_admission_rejects_stale_origins_without_mutation_effects() {
                 state.repos.push(repo);
             }
             state.active_repo = Some(RepoId(1));
+            let ops_before = state.repos.first().map(|repo| repo.ops_rev);
             let effects = reduce(
                 &mut repos,
                 &AtomicU64::new(2),
@@ -412,6 +413,14 @@ fn prepared_patch_admission_rejects_stale_origins_without_mutation_effects() {
                 assert!(duplicate.is_empty());
             } else {
                 assert!(effects.is_empty(), "hosted={hosted} stale={stale}");
+                // A refusal still moves `ops_rev`, so waiters see it settle.
+                if let Some(before) = ops_before {
+                    assert_eq!(
+                        state.repos[0].ops_rev,
+                        before + 1,
+                        "hosted={hosted} stale={stale}"
+                    );
+                }
                 assert_eq!(
                     state
                         .notifications

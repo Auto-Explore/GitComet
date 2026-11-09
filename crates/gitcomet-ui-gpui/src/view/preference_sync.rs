@@ -805,6 +805,20 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
+    /// Mirrors the settings window's toggle, its only writer, into the pane.
+    pub(in crate::view) fn set_open_next_file_after_last_change(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.staging.open_next_file_after_last_change = next;
+        });
+        self.diff_renderer.update(cx, |pane, _cx| {
+            pane.set_open_next_file_after_last_change(next);
+        });
+    }
+
     fn dismiss_history_layout_popovers(&mut self, cx: &mut gpui::Context<Self>) {
         self.dismiss_history_refs_menus(cx);
         self.dismiss_commit_message_hover(cx);
@@ -1101,6 +1115,9 @@ impl GitCometView {
                 self.set_diff_show_line_numbers(next, cx)
             }
             PreferenceChange::AutoSaveFileEdits(next) => self.set_auto_save_file_edits(next, cx),
+            PreferenceChange::OpenNextFileAfterLastChange(next) => {
+                self.set_open_next_file_after_last_change(next, cx)
+            }
             PreferenceChange::RemoteMarkdownImagePolicy(next) => {
                 self.set_remote_markdown_image_policy(next, cx)
             }

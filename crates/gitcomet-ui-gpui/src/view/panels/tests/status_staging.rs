@@ -4,6 +4,8 @@ use gitcomet_core::services::GitBackend;
 use std::path::PathBuf;
 
 mod fixture;
+mod line_keys;
+mod next_file_advance;
 use fixture::{clean_repository_template, restore_repository};
 
 const REPO: RepoId = RepoId(791);
@@ -308,6 +310,9 @@ fn exercise_with_failure(
     cx.update(|_, app| {
         view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = false;
+            // These cases pin which diffs an action closes; opening the next
+            // file after one is `next_file_advance`'s.
+            pane.set_open_next_file_after_last_change(false);
         });
         view.read(app).details_pane.clone().update(app, |pane, cx| {
             pane.set_file_list_layout(

@@ -104,6 +104,7 @@ commands! {
     Blame => "blame",
     ShowReflog => "show-reflog",
     FileHistory => "file-history",
+    KeyboardShortcuts => "keyboard-shortcuts",
     LfsDownloadAll => "lfs-download-all",
     LfsFetchAll => "lfs-fetch-all",
     LfsPrune => "lfs-prune",
@@ -203,6 +204,7 @@ impl Command {
             | Self::Blame
             | Self::ShowReflog
             | Self::FileHistory
+            | Self::KeyboardShortcuts
             | Self::LfsFetchAll
             | Self::LfsPrune
             | Self::LfsFsck

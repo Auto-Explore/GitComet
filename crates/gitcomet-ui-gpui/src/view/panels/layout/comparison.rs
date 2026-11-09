@@ -441,14 +441,8 @@ impl DetailsPaneView {
                         ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection {
-                                request_id: None,
-                                repo_id,
-                            });
-                        }
-                        cx.notify();
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.close_review_details(window, cx);
                     })
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
@@ -663,6 +657,10 @@ impl DetailsPaneView {
                 ("range_files_container", repo_id.0),
                 ("range_files_scrollbar", repo_id.0),
                 &self.range_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::RangeFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::RangeFiles,
@@ -760,7 +758,17 @@ impl DetailsPaneView {
                                     .child(visible_bounds_probe())
                                     .child(range_filters)
                             })
-                            .child(files_body),
+                            .child(
+                                self.review_file_container(
+                                    crate::view::rows::FileListId::RangeFiles,
+                                    cx,
+                                )
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .child(files_body),
+                            ),
                     ),
             )
             .into_any_element()

@@ -869,7 +869,10 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
             }
 
-            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+            if let Some(row) = view
+                .read(cx)
+                .diff_focused_change_block_row(visible_ix, window)
+            {
                 let outline = Some(row.inline_outline());
                 paint_focused_change_block_marks(
                     window,
@@ -1187,7 +1190,10 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             }
 
-            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+            if let Some(row) = view
+                .read(cx)
+                .diff_focused_change_block_row(visible_ix, window)
+            {
                 for (column, old_side) in [(prepaint.left_col, true), (prepaint.right_col, false)] {
                     let outline = row.column_outline(old_side);
                     paint_focused_change_block_marks(
@@ -1523,7 +1529,10 @@ pub(super) fn patch_split_column_row_canvas(
                 );
             }
 
-            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+            if let Some(row) = view
+                .read(cx)
+                .diff_focused_change_block_row(visible_ix, window)
+            {
                 let outline = row.column_outline(region == DiffTextRegion::SplitLeft);
                 paint_focused_change_block_marks(
                     window,

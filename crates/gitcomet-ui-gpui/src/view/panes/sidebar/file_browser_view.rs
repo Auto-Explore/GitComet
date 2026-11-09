@@ -85,6 +85,7 @@ impl SidebarPaneView {
                         self.file_browser_scroll.clone(),
                     )
                     .auto_hide()
+                    .focus_on_press(self.explorer_focus.clone())
                     .render(theme),
                 )
                 .into_any_element()

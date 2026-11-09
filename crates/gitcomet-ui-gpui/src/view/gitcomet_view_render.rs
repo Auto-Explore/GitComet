@@ -1,3 +1,4 @@
+use super::gitcomet_view::NavKeyFocus;
 use super::*;
 use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
@@ -211,6 +212,21 @@ impl Render for GitCometView {
                     window,
                     cx,
                 );
+            }
+        }
+
+        // A child can open a dialog directly through the popover host. Retract
+        // background cards here too, including any timer armed before it opened.
+        if self.background_hovers_blocked(cx) {
+            self.dismiss_commit_message_hover(cx);
+            if !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+                self.close_history_refs_hover(cx);
+            }
+            if self.command_palette_open || self.reveal_commit_open || self.document_picker_open(cx)
+            {
+                self.tooltip_host.update(cx, |host, cx| {
+                    host.clear_tooltip(cx);
+                });
             }
         }
 
@@ -562,13 +578,29 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                     return;
                 }
-                let handled = this
+                // The search of the pane holding focus; the main pane's
+                // otherwise (history or diff).
+                let handled = if this.sidebar_pane.read(cx).contains_focus(window, cx) {
+                    this.sidebar_pane
+                        .update(cx, |pane, cx| pane.open_search(window, cx))
+                } else if this.details_pane.read(cx).contains_focus(window, cx) {
+                    this.details_pane
+                        .update(cx, |pane, cx| pane.open_review_search(window, cx))
+                } else {
+                    false
+                } || this
                     .main_pane
                     .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
                 if handled {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(
+                |this, action: &super::command_shortcuts::RunBuiltinCommand, window, cx| {
+                    this.run_builtin_shortcut(&action.id, window, cx);
+                    cx.stop_propagation();
+                },
+            ))
             .on_action(cx.listener(
                 |this, action: &super::extension_host::RunExtensionCommand, _window, cx| {
                     this.run_extension_command(&action.id, cx);
@@ -658,14 +690,22 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(
-                |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_search_match_navigation(false, cx);
+                |this, _: &TextInputDiffPrevSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(false, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.defer_search_match_navigation(false, NavKeyFocus::TextInput, cx);
                     cx.stop_propagation();
                 },
             ))
             .on_action(cx.listener(
-                |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_search_match_navigation(true, cx);
+                |this, _: &TextInputDiffNextSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(true, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.defer_search_match_navigation(true, NavKeyFocus::TextInput, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -681,6 +721,16 @@ impl Render for GitCometView {
                 this.defer_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|this, _: &FocusNextReviewPane, _window, cx| {
+                this.defer_review_cycle(false, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusPreviousReviewPane, _window, cx| {
+                    this.defer_review_cycle(true, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
                 if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
                     cx.stop_propagation();
@@ -694,14 +744,22 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(
-                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_search_match_navigation(false, cx);
+                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(false, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.defer_search_match_navigation(false, NavKeyFocus::Elsewhere, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_action(
-                cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_search_match_navigation(true, cx);
+                cx.listener(|this, _: &DiffNextSearchMatchOrChange, window, cx| {
+                    if this.step_focused_pane_search(true, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.defer_search_match_navigation(true, NavKeyFocus::Elsewhere, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -811,11 +869,11 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
+            .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(self.command_palette.clone())
             .child(self.document_picker.clone())
             .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
-            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
-            .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));

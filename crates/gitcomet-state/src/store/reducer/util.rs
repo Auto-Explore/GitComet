@@ -296,14 +296,20 @@ fn classify_diff_target(
 ) -> DiffTargetClassification {
     let is_submodule = match target {
         DiffTarget::WorkingTree { path, area, .. } => {
-            let first = repo_state
-                .status_entries_for_area(*area)
-                .into_iter()
-                .flatten()
-                .find(|entry| entry.path == *path);
-            match worktree_submodule_source_for_entry(repo_state, path, first) {
-                WorktreeSubmoduleSource::Known(value) => value,
-                WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
+            match repo_state.status_entries_for_area(*area) {
+                // A resumed tab plans its kept selection before status reloads.
+                None => matches!(
+                    &repo_state.submodules,
+                    Loadable::Ready(submodules)
+                        if submodules.iter().any(|submodule| submodule.path == *path)
+                ),
+                Some(entries) => {
+                    let first = entries.iter().find(|entry| entry.path == *path);
+                    match worktree_submodule_source_for_entry(repo_state, path, first) {
+                        WorktreeSubmoduleSource::Known(value) => value,
+                        WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
+                    }
+                }
             }
         }
         // A comparison has no submodule summary; its submodule rows keep the

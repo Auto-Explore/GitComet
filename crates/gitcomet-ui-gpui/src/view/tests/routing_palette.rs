@@ -525,6 +525,395 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn repository_shortcuts_toggle_layout_once_from_focused_and_detached_views(
+    cx: &mut gpui::TestAppContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+
+    for detached in [false, true] {
+        cx.update(|window, app| {
+            let root = view.read(app);
+            let focus = root.diff_renderer.read(app).diff_panel_focus_handle.clone();
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+        if detached {
+            focus_detached_window_focus(cx);
+        }
+        let before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+        cx.simulate_keystrokes("secondary-b");
+        test_support::redraw(cx);
+        cx.update(|_, app| assert_eq!(view.read(app).sidebar_collapsed, !before));
+
+        for chord in ["secondary-alt-b", "secondary-shift-b"] {
+            let before = cx.update(|_, app| view.read(app).details_collapsed);
+            cx.simulate_keystrokes(chord);
+            test_support::redraw(cx);
+            cx.update(|_, app| assert_eq!(view.read(app).details_collapsed, !before));
+        }
+    }
+}
+
+#[gpui::test]
+fn repository_shortcuts_open_commit_dialog_and_do_not_replace_it(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-alt-enter");
+    test_support::redraw(cx);
+    let sidebar_before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+    let details_before = cx.update(|_, app| view.read(app).details_collapsed);
+    cx.simulate_keystrokes(
+        "secondary-alt-n secondary-alt-c secondary-b secondary-alt-b secondary-shift-b",
+    );
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert!(matches!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::CommitPrompt { repo_id: RepoId(1) })
+        ));
+        assert_eq!(view.read(app).sidebar_collapsed, sidebar_before);
+        assert_eq!(view.read(app).details_collapsed, details_before);
+    });
+    assert!(cx.debug_bounds("modal_scrim").is_some());
+}
+
+#[gpui::test]
+fn repository_shortcuts_are_inactive_on_home_and_behind_the_palette(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("secondary-alt-n secondary-alt-c secondary-alt-enter");
+    test_support::redraw(cx);
+    cx.update(|_, app| assert!(test_support::popover_kind(view.read(app), app).is_none()));
+
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes("secondary-shift-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view));
+    let before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+    cx.simulate_keystrokes("secondary-b secondary-alt-enter");
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(view.read(app).sidebar_collapsed, before);
+        assert!(test_support::popover_kind(view.read(app), app).is_none());
+    });
+    assert!(command_palette_is_open(cx, &view));
+}
+
+#[gpui::test]
+fn repository_shortcuts_are_inactive_behind_the_document_picker(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    let bounds = Bounds::new(point(px(300.0), px(200.0)), gpui::size(px(180.0), px(30.0)));
+    cx.update(|window, app| {
+        view.update(app, |root, cx| {
+            root.toggle_document_picker(bounds, window, cx)
+        })
+    });
+    test_support::redraw(cx);
+    let before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+    let ops_before = test_support::repo_ops_rev(&view, cx, RepoId(1));
+    for chord in [
+        "secondary-b",
+        "secondary-alt-s",
+        "secondary-alt-up",
+        "secondary-alt-shift-p",
+        "secondary-/",
+    ] {
+        cx.simulate_keystrokes(chord);
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            let root = view.read(app);
+            assert!(root.document_picker_open(app), "{chord}");
+            assert_eq!(root.sidebar_collapsed, before, "{chord}");
+            assert!(!root.command_palette_open, "{chord}");
+            assert!(test_support::popover_kind(root, app).is_none(), "{chord}");
+        });
+    }
+    test_support::drain_store_worker(&view, cx);
+    assert_eq!(test_support::repo_ops_rev(&view, cx, RepoId(1)), ops_before);
+    cx.simulate_keystrokes("escape secondary-b");
+    test_support::redraw(cx);
+    cx.update(|_, app| assert_eq!(view.read(app).sidebar_collapsed, !before));
+}
+
+#[gpui::test]
+fn composed_characters_take_priority_over_repository_shortcuts(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.run_until_parked();
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    cx.update(|window, app| {
+        view.update(app, |root, cx| root.set_details_collapsed(false, cx));
+        let input = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .clone();
+        window.focus(&input.read(app).focus_handle(), app);
+    });
+    test_support::redraw(cx);
+    cx.update(|window, app| {
+        let input = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .clone();
+        input.update(app, |input, cx| {
+            assert!(gpui::EntityInputHandler::accepts_text_input(
+                input, window, cx
+            ));
+        });
+    });
+    // Windows sends AltGr+B as Ctrl+Alt+B carrying the character it typed.
+    let mut altgr = gpui::Keystroke::parse("secondary-alt-b").unwrap();
+    altgr.key_char = Some("β".into());
+    let press_altgr = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: altgr.clone(),
+            is_held: false,
+            prefer_character_input: true,
+        });
+        test_support::redraw(cx);
+    };
+    press_altgr(cx);
+    cx.update(|_, app| assert!(!view.read(app).details_collapsed));
+    // Outside a text input the character goes nowhere, but must not run the
+    // shortcut either: AltGr+S would otherwise stage everything.
+    #[cfg(not(target_os = "macos"))]
+    {
+        cx.update(|window, app| {
+            let history = view.read(app).main_pane.read(app).history_view.clone();
+            let focus = history.read(app).history_panel_focus_handle.clone();
+            window.focus(&focus, app);
+        });
+        test_support::redraw(cx);
+        press_altgr(cx);
+        cx.update(|_, app| assert!(!view.read(app).details_collapsed));
+    }
+    cx.simulate_keystrokes("secondary-alt-b");
+    test_support::redraw(cx);
+    cx.update(|_, app| assert!(view.read(app).details_collapsed));
+}
+
+fn shortcut_dialog_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> bool {
+    cx.update(|_, app| {
+        test_support::popover_kind(view.read(app), app) == Some(PopoverKind::KeyboardShortcuts)
+    })
+}
+
+#[gpui::test]
+fn shortcut_cheat_sheet_searches_dismisses_and_opens_from_the_palette(
+    cx: &mut gpui::TestAppContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    focus_detached_window_focus(cx);
+    for chord in [
+        "secondary-/",
+        "secondary-?",
+        "secondary-shift-/",
+        "secondary-shift-?",
+    ] {
+        cx.simulate_keystrokes(chord);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());
+        assert!(shortcut_dialog_is_open(cx, &view));
+        assert!(!command_palette_is_open(cx, &view));
+        let category = cx.debug_bounds("shortcut_help_category_2").unwrap();
+        cx.simulate_click(category.center(), gpui::Modifiers::default());
+        test_support::redraw(cx);
+        cx.simulate_keystrokes(chord);
+        test_support::redraw(cx);
+        assert!(
+            !shortcut_dialog_is_open(cx, &view),
+            "{chord} toggles it closed"
+        );
+    }
+    cx.simulate_keystrokes("secondary-/");
+    test_support::redraw(cx);
+    assert!(shortcut_dialog_is_open(cx, &view));
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(!shortcut_dialog_is_open(cx, &view));
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    let input = cx.update(|_, app| view.read(app).command_palette.read(app).query_input.clone());
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("Keyboard Shortcuts", cx)));
+    test_support::redraw(cx);
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());
+    assert!(!command_palette_is_open(cx, &view));
+    let input = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .keyboard_shortcuts_search_input()
+            .expect("search field")
+    });
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("no-such-shortcut-8321", cx)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_empty").is_some());
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("branch", cx)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_empty").is_none());
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    assert!(shortcut_dialog_is_open(cx, &view));
+    cx.simulate_keystrokes("secondary-shift-/");
+    test_support::redraw(cx);
+    assert!(!shortcut_dialog_is_open(cx, &view));
+}
+
+#[gpui::test]
+fn shortcut_dialog_keeps_inside_clicks_and_dismisses_outside(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        view.update(app, |view, cx| view.toggle_shortcut_help(window, cx));
+    });
+    test_support::redraw(cx);
+    let dialog = cx.debug_bounds("keyboard_shortcuts_dialog").unwrap();
+    for position in [
+        cx.debug_bounds("shortcut_help_row_1").unwrap().center(),
+        dialog.origin + point(px(12.0), px(12.0)),
+        point(dialog.center().x, dialog.bottom() - px(12.0)),
+    ] {
+        cx.simulate_click(position, gpui::Modifiers::default());
+        test_support::redraw(cx);
+        assert!(
+            shortcut_dialog_is_open(cx, &view),
+            "click inside the dialog closed it"
+        );
+    }
+    cx.simulate_click(point(px(4.0), px(4.0)), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(!shortcut_dialog_is_open(cx, &view));
+}
+
+#[gpui::test]
+fn shortcut_dialog_only_mounts_rows_near_the_viewport(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        view.update(app, |view, cx| view.toggle_shortcut_help(window, cx));
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_row_1").is_some());
+    let mounted = (0..300)
+        .filter(|index| {
+            cx.debug_bounds(Box::leak(
+                format!("shortcut_help_row_{index}").into_boxed_str(),
+            ))
+            .is_some()
+        })
+        .count();
+    assert!(
+        mounted < 40,
+        "mounted {mounted} shortcut rows for one viewport"
+    );
+    let first_row = cx.debug_bounds("shortcut_help_row_1").unwrap();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: first_row.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-20_000.0))),
+        ..Default::default()
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_row_1").is_none());
+    assert!(
+        (100..300).any(|index| cx
+            .debug_bounds(Box::leak(
+                format!("shortcut_help_row_{index}").into_boxed_str()
+            ))
+            .is_some()),
+        "scrolling must reach the later shortcut groups"
+    );
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+    test_support::redraw(cx);
+    let dialog = cx.debug_bounds("keyboard_shortcuts_dialog").unwrap();
+    let position = point(dialog.right() - px(80.0), dialog.center().y);
+    for delta in [20_000.0, -20_000.0] {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+            ..Default::default()
+        });
+        test_support::redraw(cx);
+        assert_eq!(
+            cx.debug_bounds("shortcut_help_row_1").is_some(),
+            delta > 0.0,
+            "resizing must preserve scrolling through the whole list"
+        );
+    }
+}
+
+#[gpui::test]
+fn shortcut_dialog_opens_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    test_support::redraw(cx);
+    let button = cx
+        .debug_bounds("bottom_keyboard_shortcuts")
+        .expect("keyboard button in bottom bar");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());
+    assert!(shortcut_dialog_is_open(cx, &view));
+}
+
+#[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();

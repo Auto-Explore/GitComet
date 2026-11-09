@@ -429,6 +429,16 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.preview_worktree_file_diff(repo_id, worktree_path, target);
+        self.focus_diff_panel(window, cx);
+    }
+
+    pub(in crate::view) fn preview_worktree_file_diff(
+        &mut self,
+        repo_id: RepoId,
+        worktree_path: &Path,
+        target: &DiffTarget,
+    ) {
         let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
             return;
         };
@@ -450,7 +460,6 @@ impl DetailsPaneView {
             branch: summary.branch.clone(),
             detached: summary.detached,
         };
-        self.focus_diff_panel(window, cx);
         self.store.dispatch(Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,

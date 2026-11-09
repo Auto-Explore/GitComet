@@ -175,12 +175,12 @@ gix-quote = "0.10.1"
 # in the graph through gix, so this adds no new compilation.
 gix-validate = "0.13.1"
 glob = "0.3.4"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf", default-features = false }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "4b3b9c54191be9762095dcdf7656d0d3ca30cecf" }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "c55d73659dd6560d3e70281056f841e6d366c0e5" }
 hashbrown = "0.17.1"
 humansize = "2.1.3"
 image = "0.25.10"
@@ -194,7 +194,7 @@ json5 = "1.3"
 lazy_static = "1.5.1"
 libc = "0.2"
 line-numbers = "0.4.0"
-log = "0.4.34"
+log = "0.4.35"
 lru = "0.19"
 mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
 roxmltree = "0.21"
@@ -219,8 +219,8 @@ resvg = { version = "0.49.0", default-features = false, features = ["text", "sys
 usvg = { version = "0.49.0", default-features = false }
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 rustc-hash = "2.1.3"
-rustfs-mimalloc = "0.7.2"
-rustfs-mimalloc-sys = "0.7.2"
+rustfs-mimalloc = "0.7.4"
+rustfs-mimalloc-sys = "0.7.4"
 rustix = { version = "1.1.6", default-features = false, features = ["std", "process"] }
 same-file = "1.0.6"
 semver = "1.0.28"
@@ -228,12 +228,12 @@ sha2 = "0.11.1"
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-signal-hook = "0.4.5"
+signal-hook = "0.4.6"
 shlex = "2"
 # Already in the tree via gpui-ce; glyph advances for the vendored Mermaid
 # renderer's text measurement.
 skrifa = "0.49"
-smallvec = "1.16.4"
+smallvec = "1.16.5"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 streaming-iterator = "0.1.9"
@@ -242,9 +242,9 @@ syn = "3"
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.27.1"
+tree-sitter = "0.27.2"
 typed-arena = "2.0.2"
-uuid = { version = "1.29.0", features = ["serde", "v4"] }
+uuid = { version = "1.29.1", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a
@@ -277,7 +277,7 @@ tree-sitter-clojure-orchard = "0.2.9"
 tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
 # Written here rather than vendored: no CIL or crontab grammar exists upstream.
 tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
-tree-sitter-cmake = "0.7.5"
+tree-sitter-cmake = "0.7.6"
 tree-sitter-commonlisp = "0.4.1"
 # Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
 # the grammar is the Docker one.
@@ -382,7 +382,7 @@ tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
 tree-sitter-scheme = "0.25.0"
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
-tree-sitter-sfapex = "3.0.1"
+tree-sitter-sfapex = "3.0.2"
 tree-sitter-smali = { path = "vendor/tree-sitter-smali" }
 # Vendored to fix its highlight query for the workspace tree-sitter. See
 # vendor/tree-sitter-solidity/Cargo.toml.
@@ -403,7 +403,7 @@ tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
 unicode-normalization = "0.1.26"
 unicode-segmentation = "1.13.3"
-ureq = { version = "3.5.0", default-features = false, features = ["rustls", "gzip"] }
+ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 wayland-client = "0.31.15"
 winapi-util = "0.1.11"

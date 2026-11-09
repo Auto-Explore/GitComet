@@ -1424,10 +1424,15 @@ impl PopoverHost {
                         "Patch is empty".to_string(),
                         cx,
                     );
-                } else if reverse {
-                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
                 } else {
-                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
+                    self.dispatch_open_file_change(
+                        if reverse {
+                            Msg::UnstageHunk { repo_id, patch }
+                        } else {
+                            Msg::StageHunk { repo_id, patch }
+                        },
+                        cx,
+                    );
                 }
             }
             ContextMenuAction::ApplyWorktreePatch {
@@ -1442,16 +1447,19 @@ impl PopoverHost {
                         cx,
                     );
                 } else {
-                    self.store.dispatch(Msg::ApplyWorktreePatch {
-                        repo_id,
-                        patch,
-                        reverse,
-                    });
+                    self.dispatch_open_file_change(
+                        Msg::ApplyWorktreePatch {
+                            repo_id,
+                            patch,
+                            reverse,
+                        },
+                        cx,
+                    );
                 }
             }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
                 if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
-                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
+                    self.dispatch_open_file_change(Msg::StageHunk { repo_id, patch }, cx);
                 } else {
                     self.push_toast(
                         components::ToastKind::Error,
@@ -1462,7 +1470,7 @@ impl PopoverHost {
             }
             ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
                 if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
-                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
+                    self.dispatch_open_file_change(Msg::UnstageHunk { repo_id, patch }, cx);
                 } else {
                     self.push_toast(
                         components::ToastKind::Error,

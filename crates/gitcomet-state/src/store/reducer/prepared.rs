@@ -809,6 +809,31 @@ fn capture_internal(
     inputs: &mut InputQueries,
 ) {
     match message {
+        InternalMsg::RepoOpenedOk {
+            repo_id,
+            repo: repository,
+            ..
+        } => {
+            if let Some(repo) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *repo_id && repo.resumes_parked_backend())
+            {
+                if let Some(target) = &repo.diff_state.diff_target {
+                    inputs.head(repos, repo, target, false);
+                    if util::selected_conflict_target(repo, target).is_none() {
+                        inputs.marker(repo, target);
+                    }
+                }
+                // The handle in this completion is not installed in the
+                // runtime map yet. Resolve HEAD facts against that handle.
+                for query in &mut inputs.head {
+                    if query.lifetime == repo.lifetime_id() {
+                        query.repository = Some(Arc::clone(repository));
+                    }
+                }
+            }
+        }
         InternalMsg::GitOperationFinished {
             repo_id,
             outer_outcome,

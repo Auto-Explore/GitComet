@@ -10,7 +10,6 @@ enum SidebarTabTarget {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SidebarTool {
-    Search,
     ExplorerSettings,
     LocateBranch,
     LocateFile,
@@ -20,12 +19,8 @@ impl SidebarTabTarget {
     /// The tools after the tabs while this tab is selected, in order.
     fn tools(self) -> &'static [SidebarTool] {
         match self {
-            Self::Branches => &[SidebarTool::Search, SidebarTool::LocateBranch],
-            Self::Files => &[
-                SidebarTool::Search,
-                SidebarTool::ExplorerSettings,
-                SidebarTool::LocateFile,
-            ],
+            Self::Branches => &[SidebarTool::LocateBranch],
+            Self::Files => &[SidebarTool::ExplorerSettings, SidebarTool::LocateFile],
             Self::History | Self::Extension(_) => &[],
         }
     }
@@ -135,10 +130,6 @@ impl SidebarPaneView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = ui_scale::scaler(ui_scale_percent);
         let (header, targets, active) = self.header(cx);
-        let mode = match active {
-            SidebarTabTarget::Files => SidebarMode::Files,
-            _ => SidebarMode::Branches,
-        };
         let bg = crate::theme::content_header_bg(theme);
         let bg = if active == SidebarTabTarget::Files
             && self
@@ -170,9 +161,6 @@ impl SidebarPaneView {
         let mut tools_row: Vec<AnyElement> = Vec::new();
         for tool in active.tools() {
             tools_row.push(match tool {
-                SidebarTool::Search => self
-                    .render_search_toggle(mode == SidebarMode::Files, "sidebar_search_toggle", cx)
-                    .into_any_element(),
                 SidebarTool::ExplorerSettings => {
                     let explorer_settings = explorer_settings.clone();
                     components::Button::new("sidebar_explorer_settings", "")

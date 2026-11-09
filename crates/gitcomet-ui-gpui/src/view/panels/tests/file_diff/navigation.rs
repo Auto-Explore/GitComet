@@ -693,6 +693,32 @@ fn assert_full_diff_focused_change_block_shows_accent_bar(
     draw_and_drain_test_window(cx);
     assert_focused_change_block_bar(cx, view, e0..e1 - 1, diff_view, "F2 back to block one");
 
+    // A file preview keeps its navigation position, but must not look focused
+    // while the user navigates another pane.
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .review_file_focus(crate::view::rows::FileListId::CommitFiles)
+            .clone();
+        window.focus(&focus, app);
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        painted_focused_change_block_marks(cx, view).is_empty(),
+        "an unfocused diff must not paint a selected block in {diff_view:?}"
+    );
+    focus_diff_panel(cx, view);
+    draw_and_drain_test_window(cx);
+    assert_focused_change_block_bar(
+        cx,
+        view,
+        e0..e1 - 1,
+        diff_view,
+        "restoring focus restores the same block",
+    );
+
     // Moving the selection elsewhere takes the marks away.
     set_diff_row_selection_for_test(cx, view, 0, (0, 0));
     assert!(

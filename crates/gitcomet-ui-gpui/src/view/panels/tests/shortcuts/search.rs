@@ -707,7 +707,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
-    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+    cx.simulate_resize(gpui::size(px(1600.0), px(640.0)));
 
     cx.update(|window, app| {
         app.clear_key_bindings();
@@ -858,7 +858,7 @@ fn open_diff_search_on_two_hunk_diff(
         two_hunk_diff(DiffTarget::working_tree(path.clone(), DiffArea::Unstaged)).into(),
     );
     apply_state(cx, view, app_state_with_active_repo(repo));
-    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+    cx.simulate_resize(gpui::size(px(1600.0), px(640.0)));
 
     cx.update(|window, app| {
         app.clear_key_bindings();
@@ -1089,9 +1089,17 @@ fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContex
     let single_line = cx
         .debug_bounds("diff_search_input_slot")
         .expect("expected diff search input slot for a single-line query");
+    let control_row = cx
+        .debug_bounds("diff_search_close")
+        .expect("expected the close button");
+    eprintln!(
+        "DBG slot={single_line:?} close={control_row:?} overlay={:?} icon={:?}",
+        cx.debug_bounds("diff_search_overlay"),
+        cx.debug_bounds("diff_search_icon")
+    );
     assert!(
-        single_line.size.height <= px(30.0),
-        "expected compact one-line diff search slot height; got {single_line:?}"
+        single_line.size.height <= control_row.size.height,
+        "expected a one-line slot no taller than the control row; got {single_line:?}"
     );
 
     cx.update(|window, app| {
@@ -1113,8 +1121,9 @@ fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContex
         multiline.size.width, single_line.size.width,
         "expected multiline diff search to preserve the input slot width"
     );
+    // One line sits centred in the control row; two lines grow past it.
     assert!(
-        multiline.size.height > single_line.size.height + px(8.0),
+        multiline.size.height > single_line.size.height,
         "expected multiline diff search slot to grow; single={single_line:?} multiline={multiline:?}"
     );
 }
@@ -1730,7 +1739,9 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::TestAppContext) {
+fn commit_message_text_input_secondary_f_opens_the_details_file_filter(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1769,33 +1780,35 @@ fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::Te
     cx.simulate_keystrokes("secondary-f");
     draw_and_drain_test_window(cx);
 
+    // The commit message sits in the details pane, which holds focus, so
+    // Cmd/Ctrl-F filters its file list; the diff's query is left alone.
     assert!(
-        diff_search_active(cx, &view),
-        "expected secondary-f from commit-message input to activate diff search when a diff is visible"
+        !diff_search_active(cx, &view),
+        "secondary-f from the commit message searches the details pane, not the diff"
     );
     assert!(
-        diff_search_input_is_focused(cx, &view),
-        "expected secondary-f from commit-message input to focus diff search when a diff is visible"
+        cx.debug_bounds("review_file_search").is_some(),
+        "expected secondary-f from commit-message input to open the details file filter"
     );
     assert!(
-        !commit_message_input_is_focused(cx, &view),
-        "expected secondary-f from commit-message input to move focus to diff search"
+        cx.update(|window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .review_search_input
+                .read(app)
+                .focus_handle()
+                .is_focused(window)
+        }),
+        "expected the file filter's input to take focus"
     );
-    cx.update(|_window, app| {
-        let pane = view.read(app).diff_renderer.read(app);
-        assert_eq!(
-            pane.diff_search_input.read(app).selected_range(),
-            0..query.len(),
-            "expected secondary-f to select the full existing diff search query"
-        );
-    });
+    assert!(!commit_message_input_is_focused(cx, &view));
 }
 
-/// With no diff visible the main pane shows the history list, so Cmd-F from
-/// the commit-message input opens the history find bar instead of the diff
-/// search.
+/// With no diff visible Cmd-F from the commit-message input still searches
+/// the details pane it sits in; neither main-pane search opens.
 #[gpui::test]
-fn commit_message_text_input_secondary_f_without_visible_diff_opens_history_find(
+fn commit_message_text_input_secondary_f_without_visible_diff_filters_details_files(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -1841,40 +1854,24 @@ fn commit_message_text_input_secondary_f_without_visible_diff_opens_history_find
         "expected secondary-f to avoid activating diff search when no diff is visible"
     );
     assert!(
-        cx.update(|_window, app| history_view.read(app).history_find_is_open()),
-        "expected secondary-f with no visible diff to open the history find bar"
+        !cx.update(|_window, app| history_view.read(app).history_find_is_open()),
+        "the history find bar stays closed: focus is in the details pane"
     );
     assert!(
-        cx.debug_bounds("history_find_input_slot").is_some(),
-        "expected the history find bar to be rendered"
+        cx.debug_bounds("review_file_search").is_some(),
+        "expected the details file filter to open"
     );
     assert!(
         !commit_message_input_is_focused(cx, &view),
         "expected secondary-f to move focus out of the commit-message input"
     );
-    cx.update(|window, app| {
-        let focus = &history_view.read(app).history_panel_focus_handle;
-        assert!(
-            focus.contains_focused(window, app) && !focus.is_focused(window),
-            "expected focus inside the history find bar, not on the list itself"
-        );
-    });
-
-    // Typing lands in the find input: the query matches the fixture's only
-    // commit ("Initial commit" by Alice).
-    cx.simulate_input("initial");
-    wait_until(cx, "the history find query to match the commit", |cx| {
-        cx.update(|_window, app| {
-            history_view.update(app, |history, _cx| {
-                history
-                    .history_find_matches()
-                    .is_some_and(|matches| matches.visible == [0])
-            })
-        })
-    });
     assert!(
-        !diff_search_active(cx, &view),
-        "typing in the history find bar must not open the diff search"
+        cx.update(|window, app| view
+            .read(app)
+            .details_pane
+            .read(app)
+            .contains_focus(window, app)),
+        "focus stays in the details pane, in its file filter"
     );
 }
 

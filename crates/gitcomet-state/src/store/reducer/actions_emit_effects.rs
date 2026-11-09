@@ -352,9 +352,13 @@ pub(super) fn commit_amend(repo_id: RepoId, message: String, hooks: GitHooks) ->
 }
 
 pub(super) fn safe_push_after_commit(
+    state: &mut AppState,
     repo_id: RepoId,
     context: gitcomet_core::services::SafePushAfterCommitContext,
 ) -> Vec<Effect> {
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo.push_preflights_in_flight = repo.push_preflights_in_flight.saturating_add(1);
+    }
     vec![Effect::RepoCommand(
         RepoCommandEffect::SafePushAfterCommit {
             repo_id,
@@ -1166,6 +1170,9 @@ pub(super) fn safe_push_after_commit_finished(
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
     handled_by_prompt: bool,
 ) -> Vec<Effect> {
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo.push_preflights_in_flight = repo.push_preflights_in_flight.saturating_sub(1);
+    }
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {

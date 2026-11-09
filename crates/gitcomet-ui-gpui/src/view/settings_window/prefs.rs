@@ -65,6 +65,7 @@ impl SettingsWindowView {
             remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
             check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
+            open_next_file_after_last_change: Some(self.open_next_file_after_last_change),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
             mergetool_auto_advance: None,
@@ -874,6 +875,21 @@ impl SettingsWindowView {
         self.auto_save_file_edits = next;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::AutoSaveFileEdits(next), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_open_next_file_after_last_change(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_next_file_after_last_change == next {
+            return;
+        }
+
+        self.open_next_file_after_last_change = next;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::OpenNextFileAfterLastChange(next), cx);
         cx.notify();
     }
 

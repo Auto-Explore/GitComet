@@ -136,43 +136,13 @@ actions!(
         ToggleRevealCommit,
         LocateFileInExplorer,
         OpenRemoteInBrowser,
+        FocusNextReviewPane,
+        FocusPreviousReviewPane,
     ]
 );
 
-/// A plain key that moves the open diff through its file list.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DiffFileStep {
-    Prev,
-    Next,
-    PageUp,
-    PageDown,
-    First,
-    Last,
-}
-
-impl DiffFileStep {
-    pub(crate) fn from_keystroke(keystroke: &gpui::Keystroke) -> Option<Self> {
-        let mods = keystroke.modifiers;
-        if mods.control || mods.alt || mods.platform || mods.function || mods.shift {
-            return None;
-        }
-        Some(match keystroke.key.as_str() {
-            "up" => Self::Prev,
-            "down" => Self::Next,
-            "pageup" => Self::PageUp,
-            "pagedown" => Self::PageDown,
-            "home" => Self::First,
-            "end" => Self::Last,
-            _ => return None,
-        })
-    }
-}
-
 /// Chords owned by a focused status section, including empty sections.
 pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
-    if DiffFileStep::from_keystroke(keystroke).is_some() {
-        return true;
-    }
     let mods = keystroke.modifiers;
     if mods.alt || mods.shift || mods.function {
         return false;
@@ -182,6 +152,11 @@ pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
     } else {
         keystroke.key == "space"
     }
+}
+
+/// Bare S or U: stage diff lines, or unstage / discard them.
+pub(crate) fn is_diff_line_key(keystroke: &gpui::Keystroke) -> bool {
+    panes::diff::diff_text::DiffLineAction::is_line_key(keystroke)
 }
 
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
@@ -197,10 +172,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.control
             && !mods.platform
             && !mods.function
-            && matches!(
-                key,
-                "e" | "i" | "s" | "w" | "up" | "down" | "left" | "right"
-            ))
+            && matches!(key, "e" | "i" | "s" | "w" | "up" | "down"))
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
@@ -284,12 +256,14 @@ pub(crate) mod clone_progress;
 mod close_guards;
 mod color;
 mod command_palette;
+pub(crate) mod command_shortcuts;
 mod commands;
 mod commit_message_hover;
 mod commit_message_text;
 mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
+mod review_navigation;
 pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
 mod conflict_style_cache;
 #[cfg(feature = "benchmarks")]

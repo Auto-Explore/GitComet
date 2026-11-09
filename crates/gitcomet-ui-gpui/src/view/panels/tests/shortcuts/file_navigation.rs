@@ -272,7 +272,7 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
 }
 
 #[gpui::test]
-fn commit_details_diff_panel_keys_step_through_files(cx: &mut gpui::TestAppContext) {
+fn commit_details_file_list_keys_preview_without_moving_focus(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -317,7 +317,13 @@ fn commit_details_diff_panel_keys_step_through_files(cx: &mut gpui::TestAppConte
     bind_app_keys_for_test(cx);
     cx.simulate_resize(gpui::size(px(1024.0), px(900.0)));
     draw_and_drain_test_window(cx);
-    focus_diff_panel(cx, &view);
+    cx.update(|window, app| {
+        view.read(app).details_pane.clone().update(app, |pane, cx| {
+            pane.file_list_layout = FileListLayout::Flat;
+            pane.focus_review_files(None, window, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
 
     // Presses `key` and waits for the store to open `files[expected]`.
     let press = |cx: &mut gpui::VisualTestContext, key: &str, expected: usize| {
@@ -373,11 +379,11 @@ fn commit_details_diff_panel_keys_step_through_files(cx: &mut gpui::TestAppConte
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .diff_renderer
+            .details_pane
             .read(app)
-            .diff_panel_focus_handle
+            .review_file_focus(crate::view::rows::FileListId::CommitFiles)
             .clone();
-        assert!(focus.is_focused(window), "the diff panel keeps focus");
+        assert!(focus.is_focused(window), "the file list keeps focus");
     });
 }
 
@@ -732,8 +738,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     draw_and_drain_test_window(cx);
     assert_eq!(
         diff_selection_anchor(cx, &view),
-        Some(first_change),
-        "expected Alt-Up from commit-message input to navigate to the previous diff change"
+        Some(second_change),
+        "Alt-Up in a text input must not navigate the diff"
     );
 
     set_diff_selection_anchor(cx, &view, None);
@@ -741,8 +747,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     draw_and_drain_test_window(cx);
     assert_eq!(
         diff_selection_anchor(cx, &view),
-        Some(first_change),
-        "expected Alt-Down from commit-message input to navigate to the next diff change"
+        None,
+        "Alt-Down in a text input must not navigate the diff"
     );
     assert!(
         commit_message_input_is_focused(cx, &view),
@@ -1364,16 +1370,16 @@ fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
     for (selector, expected) in [
         (
             "diff_prev_file",
-            format!("Previous file (F1 / {})", alt("Left")),
+            format!("Previous file (F1 / {})", alt("Up")),
         ),
         (
             "diff_next_file",
-            format!("Next file (F4 / {})", alt("Right")),
+            format!("Next file (F4 / {})", alt("Down")),
         ),
         ("diff_bar_stage", "Stage this file (Space)".to_string()),
         (
             "diff_prev_hunk",
-            format!("Previous change (F2 / Shift+F7 / {})", alt("Up")),
+            "Previous change (F2 / Shift+F7 / Up)".to_owned(),
         ),
         ("diff_split", format!("Split diff view ({})", alt("S"))),
         (

@@ -186,7 +186,8 @@ impl HistoryView {
                             interaction: self.scroll_interaction.clone(),
                         },
                     )
-                    .always_visible();
+                    .always_visible()
+                    .focus_on_press(self.history_panel_focus_handle.clone());
                     if self
                         .history_cache
                         .as_ref()
@@ -226,8 +227,18 @@ impl HistoryView {
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if !this.history_panel_focus_handle.is_focused(window) {
+                    return;
+                }
                 let key = e.keystroke.key.as_str();
                 let mods = e.keystroke.modifiers;
+
+                if key == "f10" && mods.shift && mods.number_of_modifiers() == 1 {
+                    if this.open_review_commit_menu(window, cx) {
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
 
                 let handled = !mods.control
                     && !mods.alt
@@ -249,9 +260,30 @@ impl HistoryView {
                         "end" if this.history_panel_focus_handle.is_focused(window) => {
                             this.history_select_edge(1, cx)
                         }
-                        "enter" => this.history_open_selected_worktree(window, cx),
+                        "enter" => {
+                            if !this.history_open_selected_worktree(window, cx) {
+                                crate::view::review_navigation::defer(
+                                    this.root_view.clone(),
+                                    crate::view::review_navigation::ReviewNavigation::Files {
+                                        from_graph: true,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            }
+                            true
+                        }
                         "escape" if this.history_find_is_open() => {
                             this.close_history_find(window, cx);
+                            true
+                        }
+                        "escape" => {
+                            crate::view::review_navigation::defer(
+                                this.root_view.clone(),
+                                crate::view::review_navigation::ReviewNavigation::WorkingCopy,
+                                window,
+                                cx,
+                            );
                             true
                         }
                         _ => false,
@@ -301,6 +333,52 @@ impl HistoryView {
             return false;
         };
         crate::app::open_repository_from_view(cx, window.window_handle().window_id(), path);
+        true
+    }
+
+    fn open_review_commit_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        let Some(commit_id) = repo.history_state.selected_commit.clone() else {
+            return false;
+        };
+        let Some(bounds) = self.history_viewport_bounds() else {
+            return false;
+        };
+        let repo_id = repo.id;
+        let y = self
+            .history_selected_list_index_cache
+            .as_ref()
+            .filter(|cache| {
+                cache.repo_id == repo_id && cache.selected_commit.as_ref() == Some(&commit_id)
+            })
+            .map(|cache| {
+                bounds.top()
+                    + crate::view::rows::history_row_height(self.ui_scale())
+                        * (cache.list_ix + 1) as f32
+                    - px(self.history_scroll_position() as f32)
+            })
+            .unwrap_or(bounds.center().y)
+            .max(bounds.top())
+            .min(bounds.bottom());
+        let invoker: SharedString =
+            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref()).into();
+        self.open_popover_at(
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs: CommitMenuRefs::All,
+            }
+            .invoked_by(invoker),
+            point(bounds.left() + self.ui_scale().px(24.0), y),
+            window,
+            cx,
+        );
         true
     }
 

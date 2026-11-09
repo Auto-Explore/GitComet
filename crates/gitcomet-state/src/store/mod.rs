@@ -22,6 +22,7 @@ mod reducer;
 mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
+mod repository_budget;
 mod repository_preferences;
 mod repository_registry;
 mod repository_requirement;
@@ -94,12 +95,24 @@ fn isolated_filesystem() -> &'static std::sync::Mutex<gitcomet_core::filesystem:
 /// so elsewhere only the active repository is watched.
 #[cfg(target_os = "macos")]
 const WARM_INACTIVE_REPO_MONITORS: usize = 2;
-#[cfg(not(target_os = "macos"))]
-const WARM_INACTIVE_REPO_MONITORS: usize = 0;
 
-/// The `count` most recently active open tabs that are neither active nor
-/// leased, most recent first.
-fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
+#[cfg(target_os = "macos")]
+fn warm_inactive_repo_monitors(warm_backends: usize) -> usize {
+    WARM_INACTIVE_REPO_MONITORS.min(warm_backends)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn warm_inactive_repo_monitors(_warm_backends: usize) -> usize {
+    0
+}
+
+/// The `count` most recent open tabs by `recency` that are neither active
+/// nor leased, most recent first.
+fn warm_inactive_repos(
+    state: &AppState,
+    count: usize,
+    recency: fn(&crate::model::RepoState) -> Option<std::time::SystemTime>,
+) -> Vec<RepoId> {
     if count == 0 {
         return Vec::new();
     }
@@ -110,10 +123,11 @@ fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
             state.active_repo != Some(repo.id)
                 && !state.watch_leases.contains_key(&repo.id)
                 && matches!(repo.open, crate::model::Loadable::Ready(()))
-                && repo.last_active_at.is_some()
+                && !repo.backend_parked
+                && recency(repo).is_some()
         })
         .collect();
-    recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
+    recent.sort_by_key(|repo| std::cmp::Reverse(recency(repo)));
     recent.truncate(count);
     recent.into_iter().map(|repo| repo.id).collect()
 }
@@ -434,6 +448,34 @@ impl WorkerLoopContext<'_> {
         drop(selections);
         drop(state);
         self.handle_effects(repos, effects);
+        self.park_cold_repositories(repos);
+    }
+
+    /// Runs once the pass's effects hold their backends: parking then
+    /// cancels that work instead of failing it on a missing handle.
+    fn park_cold_repositories(&mut self, repos: &mut RepositoryRuntimes) {
+        let now = std::time::SystemTime::now();
+        let cold = repository_budget::cold_repositories(
+            &self.thread_state.read().unwrap_or_else(|e| e.into_inner()),
+            repos,
+            now,
+        );
+        if cold.is_empty() {
+            return;
+        }
+        {
+            let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
+            let mutable = make_mut_state_with_diagnostics(&mut app_state);
+            repository_budget::park(mutable, repos, &cold);
+            repository_registry::update_repositories(
+                self.thread_msg_tx.store_id().get(),
+                mutable,
+                repos,
+            );
+            self.publication.fetch_add(1, Ordering::Relaxed);
+        }
+        repos.release_retired();
+        self.handle_effects(repos, std::iter::empty());
     }
 
     fn handle_effects<I>(&mut self, repos: &mut RepositoryRuntimes, effects: I)
@@ -463,7 +505,13 @@ impl WorkerLoopContext<'_> {
         // a refresh when nothing changed (`unchanged_since_inactive`).
         let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
-            let warm = warm_inactive_repos(&state, WARM_INACTIVE_REPO_MONITORS);
+            let warm = warm_inactive_repos(
+                &state,
+                warm_inactive_repo_monitors(
+                    repos.warm_repository_count(std::time::SystemTime::now()),
+                ),
+                |repo| repo.last_active_at,
+            );
             let watched = state
                 .repos
                 .iter()
@@ -1353,8 +1401,25 @@ impl AppStore {
     /// Reads a backend handle for this repository lifetime on a worker thread.
     /// This waits for the store worker; do not call from the UI thread or a reducer.
     /// An old handle never resolves to a reopened repository with the same id.
+    /// A parked tab is read through a handle opened for the caller, which
+    /// leaves the tab parked.
     pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
-        self.msg_tx.repository(repo_id, lifetime)
+        self.msg_tx.repository(repo_id, lifetime).or_else(|| {
+            let workdir = self
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| {
+                    repo.id == repo_id
+                        && repo.lifetime() == lifetime
+                        && repo.is_backend_parked()
+                        && matches!(repo.open, crate::model::Loadable::Ready(()))
+                })?
+                .spec
+                .workdir
+                .clone();
+            self.backend.open(&workdir).ok()
+        })
     }
 
     /// [`Self::snapshot`] without blocking: `None` while the reducer holds

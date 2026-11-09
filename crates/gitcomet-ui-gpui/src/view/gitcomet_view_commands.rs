@@ -65,6 +65,23 @@ impl GitCometView {
             return;
         }
         match command {
+            Command::KeyboardShortcuts => {
+                if let Some(window) = window {
+                    // Palette selection is still borrowing the palette view.
+                    // Reopen it in help mode after that callback returns.
+                    let handle = window.window_handle();
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(super::command_shortcuts::RunBuiltinCommand {
+                                    id: Command::KeyboardShortcuts.id().to_owned(),
+                                }),
+                                cx,
+                            );
+                        });
+                    });
+                }
+            }
             Command::NewWindow => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
             Command::OpenSettings => cx.defer(crate::view::open_settings_window),
             Command::Quit => cx.defer(crate::app::quit_app_or_warn),

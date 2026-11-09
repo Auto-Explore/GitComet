@@ -1,8 +1,8 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
-    Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, ListState, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ScrollHandle,
+    Bounds, CursorStyle, DispatchPhase, ElementId, FocusHandle, Hitbox, HitboxBehavior, ListState,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ScrollHandle,
     UniformListScrollHandle, canvas, div, point, px, size,
 };
 use std::sync::Arc;
@@ -181,6 +181,9 @@ pub struct Scrollbar {
     markers: Vec<ScrollbarMarker>,
     always_visible: bool,
     max_thumb_length: Option<Pixels>,
+    /// Focused by a press on the bar, which consumes the press before the
+    /// scrolled content could take focus itself.
+    focus_on_press: Option<FocusHandle>,
     #[cfg(any(test, feature = "test-support"))]
     debug_selector: Option<&'static str>,
 }
@@ -228,6 +231,7 @@ impl Scrollbar {
             markers: Vec::new(),
             always_visible: true,
             max_thumb_length: None,
+            focus_on_press: None,
             #[cfg(any(test, feature = "test-support"))]
             debug_selector: None,
         }
@@ -241,6 +245,7 @@ impl Scrollbar {
             markers: Vec::new(),
             always_visible: true,
             max_thumb_length: None,
+            focus_on_press: None,
             #[cfg(any(test, feature = "test-support"))]
             debug_selector: None,
         }
@@ -259,6 +264,13 @@ impl Scrollbar {
     /// Cap a provisional thumb without changing the scroll range it controls.
     pub fn max_thumb_length(mut self, length: Pixels) -> Self {
         self.max_thumb_length = Some(length.max(px(24.0)));
+        self
+    }
+
+    /// Focus `handle` (the list this bar scrolls) when the bar is pressed, as
+    /// a press on the list itself would.
+    pub fn focus_on_press(mut self, handle: FocusHandle) -> Self {
+        self.focus_on_press = Some(handle);
         self
     }
 
@@ -282,6 +294,7 @@ impl Scrollbar {
         let id = self.id.clone();
         let always_visible = self.always_visible;
         let max_thumb_length = self.max_thumb_length;
+        let focus_on_press = self.focus_on_press;
 
         let prepaint_driver = driver.clone();
         let paint = canvas(
@@ -547,6 +560,9 @@ impl Scrollbar {
 
                         crate::press_gesture::claim_press(cx);
                         crate::text_selection_owner::preserve(cx);
+                        if let Some(focus) = focus_on_press.as_ref() {
+                            window.focus(focus, cx);
+                        }
 
                         if thumb_hit_bounds.contains(&event.position) {
                             driver.drag_started(axis);

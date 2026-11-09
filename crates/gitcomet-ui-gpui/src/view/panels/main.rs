@@ -10,6 +10,7 @@ mod diff_view;
 mod diff_view_helpers;
 mod history;
 mod keep_delete_conflict;
+mod next_file_advance;
 mod status_nav;
 mod text_format_strip;
 

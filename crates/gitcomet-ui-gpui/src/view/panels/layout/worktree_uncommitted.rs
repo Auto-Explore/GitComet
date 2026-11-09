@@ -101,12 +101,8 @@ impl DetailsPaneView {
                         ui_scale.px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ClearCommitSelection {
-                            request_id: None,
-                            repo_id,
-                        });
-                        cx.notify();
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        this.close_review_details(window, cx);
                     })
                     .gitcomet_tooltip(theme, "Close".into()),
             );
@@ -171,6 +167,10 @@ impl DetailsPaneView {
                 ("worktree_files_container", repo_id.0),
                 ("worktree_files_scrollbar", repo_id.0),
                 &self.worktree_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::WorktreeFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::WorktreeFiles,
@@ -253,7 +253,17 @@ impl DetailsPaneView {
                             .border_t_1()
                             .border_color(theme.colors.stroke.subtle)
                             .pt_2()
-                            .child(files_body),
+                            .child(
+                                self.review_file_container(
+                                    crate::view::rows::FileListId::WorktreeFiles,
+                                    cx,
+                                )
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .child(files_body),
+                            ),
                     ),
             )
             .into_any_element()

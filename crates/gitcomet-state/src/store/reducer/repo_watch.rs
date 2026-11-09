@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
     // Only an open repository can be watched; a lease on a closed
     // one is a no-op, and so is its release.
+    let mut effects = Vec::new();
     if state
         .repos
         .iter()
@@ -18,8 +19,11 @@ pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64
         *Arc::make_mut(&mut state.watch_leases)
             .entry(repo_id)
             .or_default() += 1;
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
+        }
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn release_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
@@ -95,7 +99,11 @@ pub(super) fn watch_worktree(
             leases.remove(&key);
         }
     }
-    Vec::new()
+    let mut effects = Vec::new();
+    if watch && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
+    }
+    effects
 }
 
 pub(super) fn worktree_changed(

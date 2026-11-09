@@ -830,6 +830,88 @@ fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
 }
 
 #[gpui::test]
+fn releasing_an_inactive_index_drops_its_retained_ui_graph(cx: &mut gpui::TestAppContext) {
+    assert_releasing_the_inactive_tab_drops_its_graph(cx, |state| {
+        state.repos[0].history_state.indexed.reset_query();
+    });
+}
+
+#[gpui::test]
+fn parking_an_inactive_tab_drops_its_retained_ui_graph(cx: &mut gpui::TestAppContext) {
+    assert_releasing_the_inactive_tab_drops_its_graph(cx, |state| {
+        state.repos[0].set_backend_parked_for_test(true);
+    });
+}
+
+fn assert_releasing_the_inactive_tab_drops_its_graph(
+    cx: &mut gpui::TestAppContext,
+    release: impl FnOnce(&mut AppState),
+) {
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    let mut other = state.repos[0].clone();
+    other.id = RepoId(2);
+    other.spec.workdir = PathBuf::from("/tmp/history-warm-tab");
+    state.repos.push(other);
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let mut graph = None;
+    for id in [RepoId(1), RepoId(2)] {
+        state.active_repo = Some(id);
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+        wait_until(cx, "prepared indexed tab", |cx| {
+            cx.update(|_, app| {
+                history
+                    .read(app)
+                    .indexed
+                    .presentation
+                    .as_ref()
+                    .is_some_and(|shown| shown.key.repo_id == id)
+            })
+        });
+        if graph.is_none() {
+            graph = Some(cx.update(|_, app| {
+                Arc::downgrade(
+                    &history
+                        .read(app)
+                        .indexed
+                        .presentation
+                        .as_ref()
+                        .unwrap()
+                        .graph,
+                )
+            }));
+        }
+    }
+    let graph = graph.unwrap();
+    cx.update(|_, app| {
+        assert!(
+            history
+                .read(app)
+                .retained_indexed_tabs
+                .contains_key(&RepoId(1))
+        );
+    });
+    release(&mut state);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    cx.update(|_, app| {
+        view.read(app).ui_model.clone().update(app, |model, cx| {
+            model.set_state(Arc::new(state), cx);
+        });
+    });
+    cx.update(|_, app| {
+        history.read_with(app, |history, _| {
+            assert!(history.retained_indexed_tabs.is_empty());
+            assert!(
+                graph.upgrade().is_none(),
+                "UI retention must release the cold tab's topology"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn indexed_regression_displayed_rows_remain_selectable_during_range_handoff(
     cx: &mut gpui::TestAppContext,
 ) {

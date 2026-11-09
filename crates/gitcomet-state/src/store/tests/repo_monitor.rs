@@ -1122,9 +1122,9 @@ fn warm_inactive_repos_keeps_the_most_recently_active_tabs() {
     Arc::make_mut(&mut state.watch_leases).insert(RepoId(5), 1);
 
     assert_eq!(
-        warm_inactive_repos(&state, 2),
+        warm_inactive_repos(&state, 2, |repo| repo.last_active_at),
         vec![RepoId(3), RepoId(4)],
         "the least recently active tab is evicted"
     );
-    assert!(warm_inactive_repos(&state, 0).is_empty());
+    assert!(warm_inactive_repos(&state, 0, |repo| repo.last_active_at).is_empty());
 }

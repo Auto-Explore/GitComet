@@ -649,6 +649,53 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
     });
 }
 
+#[gpui::test]
+fn open_next_file_toggle_reaches_the_diff_pane(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let pane_value = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            main_view
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .open_next_file_after_last_change
+        })
+    };
+    assert!(pane_value(cx), "on until it is turned off");
+
+    cx.update(|_window, app| {
+        main_view.update(app, |_view, cx| {
+            let _ = settings_window.update(cx, |settings, _window, cx| {
+                settings.set_open_next_file_after_last_change(false, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(!pane_value(cx), "the diff pane must see the new value");
+    cx.update(|_window, app| {
+        assert!(
+            !settings_window
+                .read_with(app, |settings, _cx| settings
+                    .open_next_file_after_last_change)
+                .expect("settings window should remain readable")
+        );
+    });
+}
+
 /// Every layout and sort is offered, under the label the lists' own menus use.
 #[test]
 fn changed_file_list_options_cover_every_layout_and_sort() {

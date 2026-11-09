@@ -54,16 +54,27 @@ impl DetailsPaneView {
         let list = restrict_scroll_to_vertical_axis(
             list.w_full().h_full().min_h(px(0.0)).track_scroll(scroll),
         );
-        Self::vertical_scroll_frame_content(theme, container_id, scrollbar_id, scroll, list)
+        Self::vertical_scroll_frame_content(theme, container_id, scrollbar_id, scroll, None, list)
     }
 
+    /// `focus` is the list's own focus handle: a press on the scrollbar
+    /// focuses the list, as a press on its rows does.
     fn vertical_scroll_frame_content(
         theme: AppTheme,
         container_id: impl Into<ElementId>,
         scrollbar_id: impl Into<ElementId>,
         scroll: &UniformListScrollHandle,
+        focus: Option<FocusHandle>,
         list: impl IntoElement,
     ) -> Stateful<Div> {
+        let mut scrollbar = components::Scrollbar::new(scrollbar_id, scroll.clone());
+        if let Some(focus) = focus {
+            scrollbar = scrollbar.focus_on_press(focus);
+            #[cfg(test)]
+            {
+                scrollbar = scrollbar.debug_selector("review_list_scrollbar");
+            }
+        }
         let scrollbar_gutter = components::Scrollbar::visible_gutter(
             scroll.clone(),
             components::ScrollbarAxis::Vertical,
@@ -87,7 +98,7 @@ impl DetailsPaneView {
                     .pr(scrollbar_gutter)
                     .child(list),
             )
-            .child(components::Scrollbar::new(scrollbar_id, scroll.clone()).render(theme))
+            .child(scrollbar.render(theme))
     }
 }
 

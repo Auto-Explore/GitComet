@@ -274,6 +274,7 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
         repo_state.load_epoch,
         repo_state.spec.workdir.display()
     );
+    let opening = repo_state.open.is_loading();
     clear_cancelled_repo_loading(repo_state);
     effects.extend(std::iter::once(Effect::Control(
         ControlEffect::CancelRepoLoads {
@@ -281,6 +282,13 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
             load_epoch,
         },
     )));
+    if opening {
+        effects.extend(super::diff_session::settle_awaiting_backend(
+            state,
+            repo_id,
+            &Error::new(ErrorKind::Cancelled),
+        ));
+    }
 }
 
 /// Cancels the loads of the tab being switched away from, except a dropped
@@ -301,17 +309,164 @@ fn append_cancel_loads_for_deactivated_repo(
     }
 }
 
-fn append_open_repo_effect_if_not_loaded(
+pub(super) fn append_open_repo_effect_if_not_loaded(
     repo_state: &mut RepoState,
     effects: &mut impl Extend<Effect>,
 ) {
-    if matches!(repo_state.open, Loadable::NotLoaded) {
+    if matches!(repo_state.open, Loadable::NotLoaded)
+        || (repo_state.backend_parked && !repo_state.open.is_loading())
+    {
         repo_state.set_open(Loadable::Loading);
         effects.extend(std::iter::once(Effect::OpenRepo {
             repo_id: repo_state.id,
             path: repo_state.spec.workdir.clone(),
         }));
     }
+}
+
+/// Release reloadable state without closing the tab or changing its lifetime.
+/// Editable documents and mutations must be excluded by the caller.
+pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut RepositoryRuntimes) {
+    // These are shared payloads and bounded index-range maps. Hold them until
+    // outside the state lock, including the last owner of index buffers.
+    repos.defer_data_release((
+        repo.history_state.indexed.clone(),
+        repo.history_state.find.clone(),
+        repo.history_state.commit_signatures.clone(),
+        repo.log.clone(),
+        repo.history_state.retained_log_while_loading.clone(),
+        repo.history_state.file_history.clone(),
+        repo.history_state.commit_details.clone(),
+        repo.history_state.range_files.clone(),
+        repo.diff_state.clone(),
+        repo.file_browser.entries.clone(),
+        repo.status.clone(),
+        repo.worktree_status.clone(),
+        repo.staged_status.clone(),
+        repo.branches.clone(),
+        repo.tags.clone(),
+        repo.remote_tags.clone(),
+        repo.remote_branches.clone(),
+        repo.stashes.clone(),
+        repo.reflog.clone(),
+        repo.ref_metadata.clone(),
+        repo.uncommitted_line_stats.clone(),
+    ));
+    repo.bump_load_epoch();
+    clear_cancelled_repo_loading(repo);
+    repo.backend_parked = repo.repository_mode.is_some() || repos.has_repository(&repo.id);
+    repo.history_state.indexed.reset_query();
+    repo.history_state.find.close();
+    repo.clear_commit_signatures();
+    repo.set_log(Loadable::NotLoaded);
+    repo.history_state.retained_log_while_loading = None;
+    repo.history_state.file_history = Loadable::NotLoaded;
+    repo.set_commit_details(Loadable::NotLoaded);
+    if repo.history_state.range_selection.is_some() || repo.history_state.range_files_in_flight {
+        repo.release_range_files();
+    }
+    repo.diff_state.blame = Loadable::NotLoaded;
+    repo.clear_retained_blame();
+    repo.diff_state.clear_loads();
+    if let Some(inline) = repo.diff_state.inline_submodule_diff.as_mut() {
+        inline.diff = Loadable::NotLoaded;
+        inline.diff_file = Loadable::NotLoaded;
+        inline.diff_file_image = Loadable::NotLoaded;
+        inline.diff_rev = inline.diff_rev.wrapping_add(1);
+        inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+        repo.diff_state.inline_submodule_diff_rev =
+            repo.diff_state.inline_submodule_diff_rev.wrapping_add(1);
+    }
+    repo.bump_diff_state_rev();
+    repo.file_browser.entries = Loadable::NotLoaded;
+    repo.file_browser.stale = true;
+    repo.file_browser.file_browser_rev = repo.file_browser.file_browser_rev.wrapping_add(1);
+    repo.set_status(Loadable::NotLoaded);
+    repo.set_worktree_status(Loadable::NotLoaded);
+    repo.set_staged_status(Loadable::NotLoaded);
+    repo.set_uncommitted_line_stats(Loadable::NotLoaded);
+    repo.set_branches(Loadable::NotLoaded);
+    repo.set_tags(Loadable::NotLoaded);
+    repo.set_remote_tags(Loadable::NotLoaded);
+    repo.set_remote_branches(Loadable::NotLoaded);
+    repo.set_stashes(Loadable::NotLoaded);
+    repo.set_reflog(Loadable::NotLoaded);
+    repo.set_ref_metadata(Loadable::NotLoaded);
+    repos.retire(&repo.id);
+    repo_load_trace::trace!(
+        "park_repository repo_id={:?} load_epoch={}",
+        repo.id,
+        repo.load_epoch
+    );
+}
+
+/// The resumed refresh reloads what parking released. A streamed log is
+/// accepted only while the log is loading.
+fn mark_parked_reads_loading(repo: &mut RepoState) {
+    if matches!(repo.log, Loadable::NotLoaded) {
+        repo.set_log(Loadable::Loading);
+    }
+    if matches!(repo.status, Loadable::NotLoaded) {
+        repo.set_status(Loadable::Loading);
+    }
+    if matches!(repo.branches, Loadable::NotLoaded) {
+        repo.set_branches(Loadable::Loading);
+    }
+    if matches!(repo.remote_branches, Loadable::NotLoaded) {
+        repo.set_remote_branches(Loadable::Loading);
+    }
+}
+
+/// A read failure may discard idle resources and reopen once. The shared
+/// cooldown also covers the retry's replies, so persistent EMFILE reaches the
+/// existing error UI rather than recursively starting more refreshes.
+pub(super) fn recover_descriptor_exhaustion(
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Option<Vec<Effect>> {
+    let now = inputs.now();
+    if !state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && repo.descriptor_retry_epoch != Some(repo.load_epoch))
+        || !repos.begin_descriptor_recovery(now)
+    {
+        return None;
+    }
+    super::super::repository_budget::park_inactive(state, repos, now);
+    let active = state.active_repo == Some(repo_id);
+    if state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && super::super::repository_budget::is_pinned(state, repo))
+    {
+        return None;
+    }
+    let repo = state.repos.iter_mut().find(|repo| repo.id == repo_id)?;
+    // An inactive repository may already have been parked by the sweep.
+    if !repo.backend_parked || repos.has_repository(&repo_id) {
+        park_repository(repo, repos);
+    }
+    repo.descriptor_retry_epoch = Some(repo.load_epoch);
+    repo_load_trace::trace!(
+        "descriptor_recovery repo_id={:?} active={} load_epoch={}",
+        repo_id,
+        active,
+        repo.load_epoch
+    );
+    if !active {
+        if repo.open.is_loading() {
+            repo.set_open(Loadable::NotLoaded);
+        }
+        return Some(Vec::new());
+    }
+    repo.set_open(Loadable::Loading);
+    Some(vec![Effect::OpenRepo {
+        repo_id,
+        path: repo.spec.workdir.clone(),
+    }])
 }
 
 pub(in crate::store::reducer) enum SelectedHistoryReload {
@@ -446,6 +601,9 @@ fn open_repo_with_mode(
         if mode == OpenRepoMode::DocumentBackground {
             let mut effects = vec![];
             if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                // A document request is use too. Keep the handle warm until
+                // its presenter can acquire the document's watch lease.
+                repo.last_background_use_at = Some(now);
                 append_open_repo_effect_if_not_loaded(repo, &mut effects);
             }
             return effects;
@@ -1031,6 +1189,7 @@ fn fill_set_active_repo_inline_impl(
         // and as HEAD when the worktree is clean. `set_selected_commit` also
         // retires multi/range and linked-worktree selections.
         repo_state.set_selected_commit(None);
+        repo_state.descriptor_retry_epoch = None;
         repo_state.set_commit_details(Loadable::NotLoaded);
         // Before `file_browser_load_for_active_files_mode` below reads the
         // source, so the one load it emits already carries the live tree.
@@ -1047,7 +1206,7 @@ fn fill_set_active_repo_inline_impl(
     // Session-restore placeholders and repos still opening do not have a backend handle yet.
     // Defer handle-dependent refreshes until RepoOpenedOk installs the handle and schedules the
     // initial refresh for the active repo.
-    if !matches!(repo_state.open, Loadable::Ready(())) {
+    if repo_state.backend_parked || !matches!(repo_state.open, Loadable::Ready(())) {
         repo_state.last_active_at = Some(now);
         append_open_repo_effect_if_not_loaded(repo_state, effects);
         if let Some(effect) = persist_effect {
@@ -1390,11 +1549,19 @@ pub(super) fn repo_opened_ok(
 
     let common_dir = repo.common_dir().map(Arc::<std::path::Path>::from);
     repos.opened(repo_id, lifetime, repo);
+    let resuming = state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && repo.resumes_parked_backend());
+    if resuming {
+        repo_load_trace::trace!("repo_opened_ok resuming_parked repo_id={:?}", repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
+    }
     let git_log_settings = state.git_log_settings;
     let maintenance_settings = state.maintenance_settings;
 
     let mut committed_external_drop = None;
-    let should_refresh_worktrees = state.active_repo == Some(repo_id);
+    let should_refresh_worktrees = state.active_repo == Some(repo_id) || resuming;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.common_dir = common_dir;
@@ -1427,10 +1594,14 @@ pub(super) fn repo_opened_ok(
             ));
         }
         repo_state.set_open(Loadable::Ready(()));
+        repo_state.backend_parked = false;
         repo_state.feedback_mut().missing_on_disk = false;
-        if !should_refresh_worktrees {
+        if !should_refresh_worktrees || resuming {
             clear_cancelled_repo_loading(repo_state);
             repo_state.feedback_mut().last_error = None;
+            if resuming {
+                mark_parked_reads_loading(repo_state);
+            }
         } else {
             repo_state.set_head_branch(Loadable::Loading);
             repo_state.set_detached_head_commit(None);
@@ -1486,12 +1657,49 @@ pub(super) fn repo_opened_ok(
     }
 
     if !should_refresh_worktrees {
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            super::diff_session::resume_queued_loads(repo, &mut effects);
+        }
         return effects;
     }
     let sidebar_mode = state.sidebar_mode;
     let follow_selection = state.file_browser_settings.follow_selected_commit;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         effects.extend(refresh_full_effects(repo_state, git_log_settings));
+        if resuming {
+            let reloads = selected_history_reloads_for_activation(repo_state);
+            append_selected_history_reload_effects(repo_id, repo_state, reloads, &mut effects);
+            if let Some(range) = repo_state.history_state.range_selection.clone() {
+                repo_state.set_range_files(Loadable::Loading);
+                effects.push(Effect::LoadRangeFiles {
+                    repo_id,
+                    from: range.from,
+                    to: range.to,
+                    options: range.options,
+                    request: repo_state.begin_range_files_load(),
+                });
+            }
+            if let Some(target) = repo_state.diff_state.diff_target.clone() {
+                match selected_conflict_target(repo_state, &target) {
+                    Some(SelectedConflictTarget::Current) => {
+                        append_start_current_conflict_target_reload(&mut effects, repo_state);
+                    }
+                    Some(SelectedConflictTarget::Path(path)) => {
+                        let path = path.to_path_buf();
+                        append_start_conflict_target_reload(&mut effects, repo_state, &path);
+                    }
+                    None => {
+                        effects.extend(super::util::diff_reload_effects(
+                            inputs, repo_state, repo_id, target,
+                        ));
+                    }
+                }
+                // A file selected while the backend was reopening may still
+                // be waiting for attributes before its editor can decode it.
+                effects.extend(super::util::reload_selected_text_attributes(repo_state));
+            }
+        }
+        super::diff_session::resume_queued_loads(repo_state, &mut effects);
         if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
             effects.push(effect);
         }
@@ -1623,7 +1831,12 @@ pub(super) fn repo_opened_err(
     spec: RepoSpec,
     error: Error,
 ) -> Vec<Effect> {
-    let Some((provisional_external_drop, previous_active_repo)) = state
+    if error.is_file_descriptor_exhaustion()
+        && let Some(effects) = recover_descriptor_exhaustion(inputs, repos, state, repo_id)
+    {
+        return effects;
+    }
+    let Some((provisional_external_drop, previous_active_repo, resuming)) = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
@@ -1631,6 +1844,7 @@ pub(super) fn repo_opened_err(
             (
                 repo.is_provisional_external_drop_open(),
                 repo.external_drop_previous_active_repo(),
+                repo.resumes_parked_backend(),
             )
         })
     else {
@@ -1650,8 +1864,9 @@ pub(super) fn repo_opened_err(
     state.repo_open_failure_revision += 1;
     Arc::make_mut(&mut state.repo_open_failures)
         .insert(spec.workdir.clone(), state.repo_open_failure_revision);
-    let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository);
-    if not_a_repository || provisional_external_drop {
+    // A tab that was open keeps its place and navigation; activation retries.
+    let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository) && !resuming;
+    if not_a_repository || (provisional_external_drop && !error.is_file_descriptor_exhaustion()) {
         let message = if not_a_repository {
             format!(
                 "No valid Git repository was found at {}.",
@@ -1682,6 +1897,11 @@ pub(super) fn repo_opened_err(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
+        if error.is_file_descriptor_exhaustion() {
+            // Explicit activation can retry even if the first open never
+            // installed a backend. It is still an initial open, not a resume.
+            repo_state.backend_parked = true;
+        }
         repo_state.feedback_mut().missing_on_disk = is_missing_repo_error(&error);
         if repo_state.feedback.missing_on_disk {
             repo_state.feedback_mut().last_error = None;
@@ -1690,7 +1910,7 @@ pub(super) fn repo_opened_err(
             push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.to_string());
         }
     }
-    Vec::new()
+    super::diff_session::settle_awaiting_backend(state, repo_id, &error)
 }
 
 #[cfg(test)]

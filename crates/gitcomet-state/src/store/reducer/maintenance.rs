@@ -78,6 +78,7 @@ pub(super) fn request_check_for(
 }
 
 pub(super) fn checked(state: &mut AppState, repo_id: RepoId, needed: bool) -> Vec<Effect> {
+    let mut effects = Vec::new();
     // A check already running when the user turned recommendations off.
     if needed
         && state.maintenance_settings.recommend
@@ -86,8 +87,10 @@ pub(super) fn checked(state: &mut AppState, repo_id: RepoId, needed: bool) -> Ve
         && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
     {
         repo.maintenance.recommended = true;
+        // The card's Start runs without activating the tab, so it needs a backend.
+        super::repo_management::append_open_repo_effect_if_not_loaded(repo, &mut effects);
     }
-    Vec::new()
+    effects
 }
 
 /// Turning recommendations off withdraws every card already shown.

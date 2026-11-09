@@ -47,6 +47,26 @@ impl Error {
         &self.data.kind
     }
 
+    /// Classify the OS cause, including wrapped I/O failures, without matching
+    /// localized text. Both per-process and system-wide exhaustion qualify.
+    pub fn is_file_descriptor_exhaustion(&self) -> bool {
+        #[cfg(unix)]
+        {
+            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(self);
+            while let Some(error) = cause {
+                if let Some(error) = error.downcast_ref::<std::io::Error>()
+                    && let Some(code) = error.raw_os_error()
+                    && (code == rustix::io::Errno::MFILE.raw_os_error()
+                        || code == rustix::io::Errno::NFILE.raw_os_error())
+                {
+                    return true;
+                }
+                cause = error.source();
+            }
+        }
+        false
+    }
+
     /// Retains a concrete cause without making state snapshots clone it.
     pub fn with_source(
         mut self,
@@ -328,6 +348,25 @@ mod tests {
     use super::{Error, ErrorKind, GitFailure, GitFailureId};
     use std::error::Error as _;
     use std::path::Path;
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_exhaustion_uses_os_causes_including_wrapped_errors() {
+        for code in [rustix::io::Errno::MFILE, rustix::io::Errno::NFILE] {
+            let io = std::io::Error::from_raw_os_error(code.raw_os_error());
+            let inner = Error::from(io).with_context("spawn git", None);
+            let outer = Error::new(ErrorKind::Backend("wrapped read".into())).with_source(inner);
+            assert!(outer.is_file_descriptor_exhaustion());
+        }
+        assert!(
+            !Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                .is_file_descriptor_exhaustion()
+        );
+        assert!(
+            !Error::new(ErrorKind::Backend("Too many open files".into()))
+                .is_file_descriptor_exhaustion()
+        );
+    }
 
     #[test]
     fn backend_error_kind_display_is_human_readable() {

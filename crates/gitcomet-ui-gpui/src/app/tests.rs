@@ -1254,6 +1254,8 @@ fn check_provisional_drop_window_locality(cx: &mut gpui::TestAppContext, succeed
         },
     );
     repo.open = gitcomet_state::model::Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.last_active_at = Some(std::time::SystemTime::now());
     store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
@@ -1991,6 +1993,11 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
             .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
             .on_action(record_action_listener!(crate::view::OpenRemoteInBrowser))
+            .on_action(cx.listener(
+                |this, action: &crate::view::command_shortcuts::RunBuiltinCommand, _, _| {
+                    this.record_action(&format!("command:{}", action.id));
+                },
+            ))
             .on_action(record_action_listener!(NewWindow))
             .on_action(record_action_listener!(OpenSettings))
             .on_action(record_action_listener!(OpenInCodeEditor))
@@ -2027,6 +2034,97 @@ impl Render for KeyBindingProbe {
             Some(outer) => gpui::ParentElement::child(div().size_full().key_context(outer), root),
             None => root,
         }
+    }
+}
+
+#[gpui::test]
+fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui::TestAppContext) {
+    let cases = [
+        ("secondary-alt-enter", "commit"),
+        ("secondary-alt-s", "stage-all"),
+        ("secondary-alt-u", "unstage-all"),
+        ("secondary-alt-n", "create-branch"),
+        ("secondary-alt-c", "checkout-branch"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-down", "pull"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-up", "push"),
+        ("secondary-shift-s", "stash"),
+        ("secondary-r", "reload-repository"),
+        ("f5", "reload-repository"),
+        ("secondary-shift-f", "fetch-all"),
+        #[cfg(target_os = "macos")]
+        ("cmd-alt-t", "open-external-terminal"),
+        ("secondary-b", "toggle-sidebar"),
+        ("secondary-alt-b", "toggle-details"),
+        ("secondary-shift-b", "toggle-details"),
+        ("secondary-j", "toggle-terminal"),
+        ("secondary-/", "keyboard-shortcuts"),
+        ("secondary-?", "keyboard-shortcuts"),
+        ("secondary-shift-/", "keyboard-shortcuts"),
+        ("secondary-shift-?", "keyboard-shortcuts"),
+    ];
+    for context in [None, Some("TextInput")] {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| KeyBindingProbe::new(context, Arc::clone(&observed), cx));
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            bind_text_input_keys(app);
+            window.focus(&view.read(app).focus_handle(), app);
+            let _ = window.draw(app);
+        });
+        for (chord, id) in cases {
+            observed.lock().unwrap().clear();
+            cx.simulate_keystrokes(chord);
+            assert_eq!(
+                *observed.lock().unwrap(),
+                vec![format!("command:{id}")],
+                "{chord} in {context:?} must dispatch exactly once"
+            );
+        }
+        observed.lock().unwrap().clear();
+        cx.simulate_keystrokes("secondary-shift-p");
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![crate::view::ToggleCommandPalette.name().to_owned()]
+        );
+        #[cfg(not(target_os = "macos"))]
+        {
+            observed.lock().unwrap().clear();
+            cx.simulate_keystrokes("ctrl-alt-up ctrl-alt-down ctrl-alt-t ctrl-alt-shift-up ctrl-alt-shift-down ctrl-alt-shift-l ctrl-alt-shift-p ctrl-alt-shift-t");
+            assert!(
+                observed.lock().unwrap().is_empty(),
+                "reserved keys in {context:?}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn repository_command_shortcuts_leave_terminal_and_nested_prompt_inputs_alone(
+    cx: &mut gpui::TestAppContext,
+) {
+    for outer in ["Terminal", "PopoverPrompt", "ContextMenu"] {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            KeyBindingProbe::nested(outer, "TextInput", Arc::clone(&observed), cx)
+        });
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            window.focus(&view.read(app).focus_handle(), app);
+            let _ = window.draw(app);
+        });
+        cx.simulate_keystrokes(
+            "secondary-r f5 secondary-b secondary-alt-b secondary-shift-b secondary-alt-n secondary-alt-c secondary-alt-enter secondary-alt-s secondary-alt-up secondary-alt-shift-p",
+        );
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Vec::<String>::new(),
+            "context {outer}"
+        );
     }
 }
 
@@ -2118,8 +2216,6 @@ fn text_input_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext
         ),
         ("shift-f7", crate::view::TextInputDiffPrevChange.name()),
         ("f7", crate::view::TextInputDiffNextChange.name()),
-        ("alt-up", crate::view::TextInputDiffPrevChange.name()),
-        ("alt-down", crate::view::TextInputDiffNextChange.name()),
         ("left", crate::kit::Left.name()),
         ("right", crate::kit::Right.name()),
         ("up", crate::kit::Up.name()),
@@ -2275,8 +2371,6 @@ fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
     let cases = [
         ("f1", crate::view::TextInputDiffPrevFile.name()),
         ("f4", crate::view::TextInputDiffNextFile.name()),
-        ("alt-up", crate::view::TextInputDiffPrevChange.name()),
-        ("alt-down", crate::view::TextInputDiffNextChange.name()),
         ("alt-left", crate::kit::WordLeft.name()),
         ("alt-right", crate::kit::WordRight.name()),
         (
@@ -2566,10 +2660,6 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-q", Quit.name()),
         ("f1", crate::view::DiffPrevFile.name()),
         ("f4", crate::view::DiffNextFile.name()),
-        ("alt-left", crate::view::DiffPrevFile.name()),
-        ("alt-right", crate::view::DiffNextFile.name()),
-        ("alt-up", crate::view::DiffPrevChange.name()),
-        ("alt-down", crate::view::DiffNextChange.name()),
         ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
         ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
     ];

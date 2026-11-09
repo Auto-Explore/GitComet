@@ -1,5 +1,4 @@
 use super::*;
-use crate::view::rows::FileListId;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -104,6 +103,8 @@ pub(super) struct StatusNavigationContext<'a> {
     section: StatusSection,
     entries: Vec<&'a gitcomet_core::domain::FileStatus>,
     current_ix: usize,
+    /// False once the open file left the list; `current_ix` is then 0.
+    open_file_listed: bool,
 }
 
 /// The index `delta` rows from `current`, clamped to the list. `None` when the
@@ -125,6 +126,10 @@ impl<'a> StatusNavigationContext<'a> {
 
     fn adjacent_ix(&self, delta: isize) -> Option<usize> {
         step_ix(self.current_ix, self.entries.len(), delta)
+    }
+
+    pub(super) fn section(&self) -> StatusSection {
+        self.section
     }
 
     pub(super) fn next_or_prev_path(&self) -> Option<std::path::PathBuf> {
@@ -198,6 +203,7 @@ pub(super) fn status_navigation_context<'a>(
         section,
         entries,
         current_ix,
+        open_file_listed: true,
     })
 }
 
@@ -227,6 +233,25 @@ pub(super) fn status_navigation_section(
     })
 }
 
+/// The section F1/F4 step through: the open file's, or once its last change
+/// was staged or discarded and it left the list, the list it was in. The
+/// split view cannot tell which that was, so tracked changes come first.
+fn status_step_section(
+    repo: &RepoState,
+    path: &std::path::Path,
+    area: DiffArea,
+    change_tracking_view: ChangeTrackingView,
+) -> Option<StatusSection> {
+    status_navigation_section(repo, path, area, change_tracking_view).or_else(|| {
+        [StatusSection::Unstaged, StatusSection::Untracked]
+            .into_iter()
+            .find(|section| {
+                StatusSectionEntries::from_repo(repo, *section)
+                    .is_some_and(|entries| entries.len() > 0)
+            })
+    })
+}
+
 /// `section_order` is the section's display order in the backing slice's index
 /// space. `None` falls back to source order, which is only correct where the
 /// caller does not care about position (it is what picks a *neighbouring* file).
@@ -253,6 +278,39 @@ pub(super) fn status_navigation_context_for_repo<'a>(
         section,
         entries,
         current_ix,
+        open_file_listed: true,
+    })
+}
+
+/// The list the open working-tree file was in, after its last change was
+/// staged or discarded and it left the list. `None` while it is still listed
+/// or the status is not loaded.
+fn status_navigation_context_without_open_file<'a>(
+    repo: &'a RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    section_order: Option<&[usize]>,
+) -> Option<StatusNavigationContext<'a>> {
+    let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
+        return None;
+    };
+    if repo.status_entry_for_path(*area, path).is_some() {
+        return None;
+    }
+    let section = status_step_section(repo, path, *area, change_tracking_view)?;
+    let entries: Vec<_> = match section_order {
+        Some(order) => StatusSectionEntries::from_repo_with_order(repo, section, order.into())?
+            .iter()
+            .collect(),
+        None => StatusSectionEntries::from_repo(repo, section)?
+            .iter()
+            .collect(),
+    };
+    (!entries.is_empty()).then_some(StatusNavigationContext {
+        section,
+        entries,
+        current_ix: 0,
+        open_file_listed: false,
     })
 }
 
@@ -472,13 +530,27 @@ pub(super) fn adjacent_diff_file_target_for_repo(
 
     match diff_target {
         DiffTarget::WorkingTree { .. } => {
-            let navigation = status_navigation_context_for_repo(
+            let navigation = match status_navigation_context_for_repo(
                 repo,
                 diff_target,
                 change_tracking_view,
                 status_section_order,
-            )?;
-            let target_ix = navigation.adjacent_ix(delta)?;
+            ) {
+                Some(navigation) => navigation,
+                None => status_navigation_context_without_open_file(
+                    repo,
+                    diff_target,
+                    change_tracking_view,
+                    status_section_order,
+                )?,
+            };
+            let target_ix = if navigation.open_file_listed {
+                navigation.adjacent_ix(delta)?
+            } else if delta == isize::MAX {
+                navigation.entries.len().checked_sub(1)?
+            } else {
+                0
+            };
             let entry = navigation.entries.get(target_ix)?;
             let path = entry.path.clone();
             let area = navigation.section.diff_area();
@@ -550,7 +622,7 @@ impl DiffRenderer {
         else {
             return None;
         };
-        let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
+        let section = status_step_section(repo, path.as_path(), *area, change_tracking_view)?;
         self.commands
             .navigation
             .as_ref()?
@@ -693,6 +765,7 @@ impl DiffRenderer {
         repo_id: RepoId,
         delta: isize,
         focus_diff_panel: bool,
+        review_landing: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
@@ -723,6 +796,14 @@ impl DiffRenderer {
             };
             if focus_diff_panel {
                 window.focus(&self.diff_panel_focus_handle, cx);
+            }
+            if review_landing
+                && let Some(target) = self
+                    .active_inline_submodule_diff()
+                    .and_then(|inline| inline.entries.get(next_ix))
+                    .map(|entry| entry.target.clone())
+            {
+                self.prepare_review_file_jump(repo_id, target, delta < 0);
             }
             self.store.dispatch(Msg::SelectInlineSubmoduleDiff {
                 repo_id,
@@ -755,6 +836,9 @@ impl DiffRenderer {
         }
         match target {
             AdjacentDiffFileTarget::Range { target, target_ix } => {
+                if review_landing {
+                    self.prepare_review_file_jump(repo_id, target.clone(), delta < 0);
+                }
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
                 self.scroll_range_file_to_ix(target_ix, cx);
             }
@@ -765,17 +849,14 @@ impl DiffRenderer {
                 path,
                 is_conflicted,
             } => {
-                self.clear_status_multi_selection(repo_id, cx);
-                self.scroll_status_section_to_path(section, &path, cx);
-                if is_conflicted {
-                    self.store
-                        .dispatch(Msg::SelectConflictDiff { repo_id, path });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
+                if review_landing {
+                    self.prepare_review_file_jump(
                         repo_id,
-                        target: DiffTarget::working_tree(path, area),
-                    });
+                        DiffTarget::working_tree(path.clone(), area),
+                        delta < 0,
+                    );
                 }
+                self.open_status_file(repo_id, section, area, path, is_conflicted, cx);
             }
             AdjacentDiffFileTarget::Commit {
                 commit_id,
@@ -783,15 +864,39 @@ impl DiffRenderer {
                 path,
                 old_path,
             } => {
-                self.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::commit(commit_id, path).with_old_path(old_path),
-                });
+                let target = DiffTarget::commit(commit_id, path).with_old_path(old_path);
+                if review_landing {
+                    self.prepare_review_file_jump(repo_id, target.clone(), delta < 0);
+                }
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
                 self.scroll_commit_details_file_to_ix(target_ix, cx);
             }
         }
 
         true
+    }
+
+    /// Opens a file of a status list, revealing its row.
+    pub(super) fn open_status_file(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+        area: DiffArea,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.clear_status_multi_selection(repo_id, cx);
+        self.scroll_status_section_to_path(section, &path, cx);
+        if is_conflicted {
+            self.store
+                .dispatch(Msg::SelectConflictDiff { repo_id, path });
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::working_tree(path, area),
+            });
+        }
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file(
@@ -801,7 +906,14 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, true, window, cx)
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            true,
+            false,
+            window,
+            cx,
+        )
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
@@ -811,71 +923,31 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            false,
+            false,
+            window,
+            cx,
+        )
     }
 
-    /// The list the open diff came from, to size a page step.
-    fn open_diff_file_list(&self, cx: &mut gpui::Context<Self>) -> Option<FileListId> {
-        if let Some(inline) = self.active_inline_submodule_diff() {
-            return matches!(
-                inline.origin,
-                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
-            )
-            .then_some(FileListId::WorktreeFiles);
-        }
-        let repo = self.active_repo()?;
-        Some(match self.bound_diff_state(repo).diff_target.as_ref()? {
-            DiffTarget::Commit { .. } => FileListId::CommitFiles,
-            DiffTarget::CommitRange { .. } => FileListId::RangeFiles,
-            DiffTarget::WorkingTree { path, area, .. } => {
-                let view = self.active_change_tracking_view(cx);
-                FileListId::Status(status_navigation_section(
-                    repo,
-                    path.as_path(),
-                    *area,
-                    view,
-                )?)
-            }
-        })
-    }
-
-    /// Steps the open diff through its file list without moving focus. Does
-    /// nothing in the conflict resolver, so a stray key cannot leave a
-    /// half-resolved file.
-    pub(in crate::view) fn try_step_diff_file(
+    pub(in crate::view) fn try_select_review_file(
         &mut self,
         repo_id: RepoId,
-        step: DiffFileStep,
+        direction: i8,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if self.is_conflict_resolver_active() {
-            return false;
-        }
-        let delta = match step {
-            DiffFileStep::Prev => -1,
-            DiffFileStep::Next => 1,
-            _ if self.hosted_decor.is_some() => return false,
-            DiffFileStep::First => isize::MIN,
-            DiffFileStep::Last => isize::MAX,
-            DiffFileStep::PageUp | DiffFileStep::PageDown => {
-                let page = self
-                    .open_diff_file_list(cx)
-                    .and_then(|list| {
-                        self.commands
-                            .navigation
-                            .as_ref()?
-                            .page_rows(repo_id, list, cx)
-                    })
-                    .unwrap_or(1) as isize;
-                if step == DiffFileStep::PageUp {
-                    -page
-                } else {
-                    page
-                }
-            }
-        };
-        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            false,
+            true,
+            window,
+            cx,
+        )
     }
 }
 
@@ -900,20 +972,6 @@ mod tests {
             kind,
             conflict: None,
         }
-    }
-
-    #[test]
-    fn diff_file_step_maps_only_plain_navigation_keys() {
-        let step = |s: &str| DiffFileStep::from_keystroke(&gpui::Keystroke::parse(s).unwrap());
-        assert_eq!(step("up"), Some(DiffFileStep::Prev));
-        assert_eq!(step("down"), Some(DiffFileStep::Next));
-        assert_eq!(step("pageup"), Some(DiffFileStep::PageUp));
-        assert_eq!(step("pagedown"), Some(DiffFileStep::PageDown));
-        assert_eq!(step("home"), Some(DiffFileStep::First));
-        assert_eq!(step("end"), Some(DiffFileStep::Last));
-        assert_eq!(step("alt-up"), None);
-        assert_eq!(step("shift-down"), None);
-        assert_eq!(step("a"), None);
     }
 
     #[test]
@@ -991,6 +1049,88 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Once the open file's last change is staged or discarded it leaves its
+    /// list; F1/F4 then open the list's first file (End its last) instead of
+    /// doing nothing.
+    #[test]
+    fn a_step_from_a_file_that_left_its_list_opens_the_first_file() {
+        use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::new(vec![
+                    file_status("s1.txt", Added),
+                    file_status("s2.txt", Modified),
+                ]),
+                unstaged: std::sync::Arc::new(vec![
+                    file_status("a.txt", Untracked),
+                    file_status("b.txt", Modified),
+                    file_status("c.txt", Modified),
+                ]),
+            }
+            .into(),
+        );
+        let opened = |target: Option<AdjacentDiffFileTarget>| match target {
+            Some(AdjacentDiffFileTarget::WorkingTree { path, .. }) => Some(path),
+            _ => None,
+        };
+        for (view, area, order, first, last) in [
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Unstaged,
+                None,
+                "a.txt",
+                "c.txt",
+            ),
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Unstaged,
+                Some(&[2, 0, 1][..]),
+                "c.txt",
+                "b.txt",
+            ),
+            // The split view tries the tracked list first.
+            (
+                ChangeTrackingView::SplitUntracked,
+                DiffArea::Unstaged,
+                None,
+                "b.txt",
+                "c.txt",
+            ),
+            (
+                ChangeTrackingView::Combined,
+                DiffArea::Staged,
+                None,
+                "s1.txt",
+                "s2.txt",
+            ),
+        ] {
+            let gone = DiffTarget::working_tree("gone.txt".into(), area);
+            let case = format!("{view:?} {area:?} {order:?}");
+            for delta in [-1, 1, isize::MIN] {
+                assert_eq!(
+                    opened(adjacent_diff_file_target_for_repo(
+                        &repo, &gone, view, delta, None, order
+                    )),
+                    Some(first.into()),
+                    "{case} {delta}"
+                );
+            }
+            assert_eq!(
+                opened(adjacent_diff_file_target_for_repo(
+                    &repo,
+                    &gone,
+                    view,
+                    isize::MAX,
+                    None,
+                    order
+                )),
+                Some(last.into()),
+                "{case} End"
+            );
         }
     }
 

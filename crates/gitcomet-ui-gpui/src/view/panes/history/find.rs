@@ -24,6 +24,8 @@ const FIND_BAR_RIGHT_GAP_PX: f32 = 8.0;
 
 pub(in crate::view) struct HistoryFind {
     pub(in crate::view) input: Entity<components::TextInput>,
+    /// The bar's own layout: its width tier and overflow menu.
+    bar: Rc<components::QuickSearchState>,
     pub(in crate::view) open: bool,
     /// Match case, whole word and regex, for this session.
     options: TextSearchOptions,
@@ -258,8 +260,8 @@ impl HistoryView {
             let input = cx.new(|cx| {
                 components::TextInput::new(
                     components::TextInputOptions {
-                        placeholder: "find commit".into(),
-                        leading_icon: Some("icons/zoom.svg"),
+                        placeholder: "Find commits".into(),
+                        chromeless: true,
                         ..Default::default()
                     },
                     window,
@@ -271,6 +273,7 @@ impl HistoryView {
             });
             HistoryFind {
                 input,
+                bar: components::QuickSearchState::new(),
                 open: false,
                 options: TextSearchOptions::default(),
                 query: None,
@@ -337,7 +340,15 @@ impl HistoryView {
             return;
         }
         if escape_pressed {
-            self.close_history_find(window, cx);
+            if self
+                .find
+                .as_ref()
+                .is_some_and(|find| find.bar.dismiss_menu())
+            {
+                cx.notify();
+            } else {
+                self.close_history_find(window, cx);
+            }
             return;
         }
         let text = input.read_with(cx, |input, _| input.text().to_owned());
@@ -884,7 +895,7 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let find = self.find.as_ref().filter(|find| find.open)?;
-        let (input, options) = (find.input.clone(), find.options);
+        let (input, options, bar) = (find.input.clone(), find.options, find.bar.clone());
         let theme = self.theme;
         let ui_scale =
             ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);
@@ -899,7 +910,8 @@ impl HistoryView {
             }
         };
 
-        let panel = components::QuickSearchBar::<Self>::new("history_find", status)
+        let panel = components::QuickSearchBar::<Self>::new("history_find", &bar, status)
+            .floating()
             .input(input)
             .options(
                 components::search_toggles(options),
@@ -916,7 +928,6 @@ impl HistoryView {
             .on_action(cx.listener(|this, _: &HistoryFindPrevious, _window, cx| {
                 this.history_find_step(false, cx);
             }))
-            .occlude()
             .with_animation(
                 "history_find_mount",
                 Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
@@ -932,6 +943,7 @@ impl HistoryView {
                 .debug_selector(|| "history_find".to_string())
                 .absolute()
                 .top(header_height + ui_scale.px(FIND_BAR_TOP_GAP_PX))
+                .left(ui_scale.px(FIND_BAR_RIGHT_GAP_PX))
                 .right(right_gutter + ui_scale.px(FIND_BAR_RIGHT_GAP_PX))
                 .child(panel)
                 .into_any_element(),

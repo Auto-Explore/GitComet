@@ -1227,7 +1227,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         "collapsed popover must render a scrollbar thumb for overflowing rows"
     );
     let surface = cx.debug_bounds("file_browser_scroll_container").unwrap();
-    let search_toggle = cx.debug_bounds("collapsed_popover_filter_toggle").unwrap();
+    let section_menu = cx.debug_bounds("collapsed_popover_section_menu").unwrap();
     let before = scroll.offset();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: surface.center(),
@@ -1237,8 +1237,8 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
     test_support::redraw(cx);
     assert!(scroll.offset().y < before.y);
     assert_eq!(
-        cx.debug_bounds("collapsed_popover_filter_toggle").unwrap(),
-        search_toggle
+        cx.debug_bounds("collapsed_popover_section_menu").unwrap(),
+        section_menu
     );
 }
 
@@ -1276,39 +1276,34 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
 
     assert!(
         cx.debug_bounds("sidebar_branches_search").is_none(),
-        "the popover filter must stay hidden until its header toggle is used"
+        "the popover filter must stay hidden until Cmd/Ctrl-F opens it"
     );
-    let toggle = cx
-        .debug_bounds("collapsed_popover_filter_toggle")
-        .expect("expected a filter toggle in the branch popover header");
-    let section_menu = cx
+    assert!(
+        cx.debug_bounds("collapsed_popover_filter_toggle").is_none(),
+        "the popover header has no search button"
+    );
+    let header_menu = cx
         .debug_bounds("collapsed_popover_section_menu")
         .expect("expected a section menu button in the branch popover header");
+
+    // A press anywhere in the popover moves focus into the sidebar, so
+    // Cmd/Ctrl-F opens its search.
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
         .expect("expected the collapsed branch popover");
-    assert!(
-        section_menu.left() >= toggle.right() && section_menu.right() <= panel.right(),
-        "the header's two buttons must sit side by side inside the panel \
-         (filter={toggle:?}, menu={section_menu:?}, panel={panel:?})"
-    );
-
-    cx.simulate_mouse_move(toggle.center(), None, gpui::Modifiers::default());
-    cx.simulate_mouse_down(
-        toggle.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
-    );
-    cx.simulate_mouse_up(
-        toggle.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
-    );
+    let header_gap = gpui::point(panel.left() + px(4.0), header_menu.center().y);
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::bind_text_input_keys_for_test(app);
+    });
+    cx.simulate_click(header_gap, gpui::Modifiers::default());
+    cx.simulate_keystrokes("secondary-f");
     test_support::redraw(cx);
 
     let filter_bar = cx
         .debug_bounds("sidebar_branches_search")
-        .expect("expected the toggle to reveal the popover filter");
+        .expect("expected Cmd/Ctrl-F to reveal the popover filter");
     // The branch sits under a `feature/` group header, so it is not row zero.
     let first_row = ["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"]
         .into_iter()
@@ -1320,7 +1315,7 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
          (filter={filter_bar:?}, first row={first_row:?})"
     );
     assert!(
-        filter_bar.top() > toggle.top(),
+        filter_bar.top() > header_menu.top(),
         "the filter box must sit below the popover header"
     );
 

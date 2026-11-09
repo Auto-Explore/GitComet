@@ -77,6 +77,7 @@ impl PopoverKind {
             Self::Hosted { .. }
             | Self::HookActivity { .. }
             | Self::ErrorDetails { .. }
+            | Self::KeyboardShortcuts
             | Self::RepoPicker { .. }
             | Self::BranchPicker {
                 purpose: BranchPickerPurpose::Delete,

@@ -1447,13 +1447,10 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
         "precondition: the input is focused"
     );
 
-    // The branch sidebar: a real surface that takes no focus of its own, so
-    // without an explicit blur the input stays focused behind the user's back.
-    let size = cx.update(|window, _app| window.viewport_size());
-    let sidebar = gpui::point(size.width * 0.05, size.height * 0.5);
-    cx.simulate_mouse_move(sidebar, None, gpui::Modifiers::default());
+    let heading = cx.debug_bounds("commit_details_heading").unwrap().center();
+    cx.simulate_mouse_move(heading, None, gpui::Modifiers::default());
     cx.simulate_event(gpui::MouseDownEvent {
-        position: sidebar,
+        position: heading,
         modifiers: gpui::Modifiers::default(),
         button: gpui::MouseButton::Left,
         click_count: 1,
@@ -1465,13 +1462,15 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
         cx.update(|window, app| !input.read(app).focus_handle().is_focused(window)),
         "a press on a surface that takes no focus must still blur the input"
     );
-    // Deliberately nothing focused rather than a fallback surface: the press
-    // landed on something that is not a pane, so handing focus to one would
-    // silently redirect the user's next keystroke. Global bindings still
-    // resolve at the window root.
+    // The press lands in the details pane, which takes focus itself, so
+    // Cmd/Ctrl-F opens this pane's file filter rather than the main pane's.
     assert!(
-        cx.update(|window, app| window.focused(app).is_none()),
-        "blur leaves no element focused"
+        cx.update(|window, app| view
+            .read(app)
+            .details_pane
+            .read(app)
+            .contains_focus(window, app)),
+        "the details pane holds focus after the press"
     );
 }
 

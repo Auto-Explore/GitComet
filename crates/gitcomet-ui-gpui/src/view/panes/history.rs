@@ -865,6 +865,7 @@ impl HistoryView {
                 this.pending_history_selections.drain(..=ix);
             }
             this.state = next;
+            this.prune_retained_indexed_history();
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
             }
@@ -918,7 +919,7 @@ impl HistoryView {
             }
         });
 
-        let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let default_design_widths = default_history_column_design_widths();
         let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
         let default_widths = scaled_history_column_widths(default_design_widths, scale);

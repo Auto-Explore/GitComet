@@ -935,7 +935,12 @@ impl GitCometView {
     /// The main area for the active repository, as [`Self::main_slot`] says.
     pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
         match self.main_slot() {
-            MainSlot::Document => stable_cached_fill_view(self.documents.clone()),
+            // Review cycling lands keyboard focus on this scope.
+            MainSlot::Document => div()
+                .size_full()
+                .track_focus(&self.repository_view_focus)
+                .child(stable_cached_fill_view(self.documents.clone()))
+                .into_any_element(),
             // The view behind stays built and is drawn again once uncovered;
             // until the overlay's first build, the slot stays empty.
             MainSlot::Overlay(index) => {
@@ -972,7 +977,7 @@ impl GitCometView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        let router = self.details_tabs.as_ref()?;
+        self.details_tabs.as_ref()?;
         let details = || {
             div()
                 .flex_1()
@@ -980,22 +985,13 @@ impl GitCometView {
                 .child(stable_cached_fill_view(self.details_pane.clone()))
                 .into_any_element()
         };
-        let Some(repo) = self.active_repo() else {
+        if self.active_repo().is_none() {
             return Some(details());
-        };
+        }
         let listing = self.details_listing()?;
         // A view whose tabs replace Details shows one of them; the tab that
         // opens with it is selected when it opens.
-        let active = router.active_view(repo).or_else(|| {
-            (!listing.own)
-                .then(|| {
-                    listing
-                        .tabs
-                        .iter()
-                        .find_map(|(index, ..)| router.built(repo, *index))
-                })
-                .flatten()
-        });
+        let active = self.active_details_view();
         let (header, targets) = Self::details_header(&listing, cx);
         let theme = self.theme;
         let strip = header
@@ -1025,6 +1021,22 @@ impl GitCometView {
                 .child(body)
                 .into_any_element(),
         )
+    }
+
+    pub(in crate::view) fn active_details_view(&self) -> Option<gpui::AnyView> {
+        let router = self.details_tabs.as_ref()?;
+        let repo = self.active_repo()?;
+        let listing = self.details_listing()?;
+        router.active_view(repo).or_else(|| {
+            (!listing.own)
+                .then(|| {
+                    listing
+                        .tabs
+                        .iter()
+                        .find_map(|(index, ..)| router.built(repo, *index))
+                })
+                .flatten()
+        })
     }
 
     /// Extension sections for the active repository below the sidebar's

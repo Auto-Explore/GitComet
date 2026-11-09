@@ -184,6 +184,8 @@ impl TextInput {
             return;
         }
         self.placeholder = placeholder;
+        // The empty input shapes the placeholder into its cached layout.
+        self.invalidate_layout_caches();
         cx.notify();
     }
 

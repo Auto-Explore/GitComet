@@ -78,23 +78,75 @@ fn keycaps(label: &str, scale: UiScale, chip_height: gpui::Pixels, style: Keycap
         .flex()
         .items_center()
         .flex_shrink_0()
-        .gap(scale.px(4.0))
-        .children(label.split('+').map(move |key| {
+        .gap(scale.px(10.0))
+        .children(keycap_chords(label).into_iter().map(move |chord| {
             div()
-                .min_w(chip_height)
-                .h(chip_height)
-                .px(scale.px(pad))
                 .flex()
                 .items_center()
-                .justify_center()
-                .rounded(scale.px(4.0))
-                .bg(bg)
-                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                .text_size(scale.ui_text(text))
-                .line_height(scale.px(line))
-                .text_color(fg)
-                .child(key.to_owned())
+                .gap(scale.px(4.0))
+                .children(chord.into_iter().map(move |key| {
+                    div()
+                        .min_w(chip_height)
+                        .h(chip_height)
+                        .px(scale.px(pad))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(scale.px(4.0))
+                        .bg(bg)
+                        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                        .text_size(scale.ui_text(text))
+                        .line_height(scale.px(line))
+                        .text_color(fg)
+                        .child(key)
+                }))
         }))
+}
+
+/// Keep the visual modifier order consistent in palettes, menus and tooltips.
+/// This changes labels only, never the keys an action is bound to.
+pub fn ordered_shortcut_label(label: &str) -> String {
+    fn priority(key: &str) -> Option<u8> {
+        match key.to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "super" | "win" | "meta" | "⌘" => Some(0),
+            "ctrl" | "control" | "⌃" => Some(1),
+            "alt" | "option" | "opt" | "⌥" => Some(2),
+            "shift" | "⇧" => Some(3),
+            "fn" => Some(4),
+            _ => None,
+        }
+    }
+    label
+        .split_whitespace()
+        .map(|chord| {
+            let mut parts = chord.split('+').collect::<Vec<_>>();
+            let modifiers = parts
+                .iter()
+                .take_while(|part| priority(part).is_some())
+                .count();
+            parts[..modifiers].sort_by_key(|part| priority(part));
+            parts.join("+")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn keycap_chords(label: &str) -> Vec<Vec<String>> {
+    ordered_shortcut_label(label)
+        .split_whitespace()
+        .map(|chord| {
+            if chord == "+" {
+                return vec!["+".to_owned()];
+            }
+            if let Some(prefix) = chord.strip_suffix("++") {
+                let mut parts = prefix.split('+').map(str::to_owned).collect::<Vec<_>>();
+                parts.push("+".to_owned());
+                parts
+            } else {
+                chord.split('+').map(str::to_owned).collect()
+            }
+        })
+        .collect()
 }
 
 /// Format GPUI keystrokes for the current platform.
@@ -106,11 +158,17 @@ pub fn keystrokes_label_for(source: &str, is_macos: bool) -> String {
     let chords: Vec<String> = source
         .split_whitespace()
         .map(|chord| {
-            let Ok(keystroke) = gpui::Keystroke::parse(chord) else {
+            // Resolve `secondary` for the requested platform, including when
+            // rendering a cross-platform reference on a different host OS.
+            let source = chord.replace("secondary-", if is_macos { "cmd-" } else { "ctrl-" });
+            let Ok(keystroke) = gpui::Keystroke::parse(&source) else {
                 return chord.to_string();
             };
             let modifiers = keystroke.modifiers;
             let mut parts: Vec<String> = Vec::new();
+            if modifiers.platform {
+                parts.push(if is_macos { "Cmd" } else { "Super" }.into());
+            }
             if modifiers.control {
                 parts.push("Ctrl".into());
             }
@@ -120,8 +178,8 @@ pub fn keystrokes_label_for(source: &str, is_macos: bool) -> String {
             if modifiers.shift {
                 parts.push("Shift".into());
             }
-            if modifiers.platform {
-                parts.push(if is_macos { "Cmd" } else { "Super" }.into());
+            if modifiers.function {
+                parts.push("Fn".into());
             }
             let mut key = keystroke.key.chars();
             parts.push(match key.next() {
@@ -141,11 +199,11 @@ pub fn secondary_shortcut(suffix: &str) -> String {
 }
 
 fn secondary_shortcut_for(suffix: &str, is_macos: bool) -> String {
-    if is_macos {
+    ordered_shortcut_label(&if is_macos {
         format!("Cmd+{suffix}")
     } else {
         format!("Ctrl+{suffix}")
-    }
+    })
 }
 
 /// Label for a shortcut bound with the `alt` modifier. macOS calls this key
@@ -155,11 +213,11 @@ pub fn alt_shortcut(suffix: &str) -> String {
 }
 
 fn alt_shortcut_for(suffix: &str, is_macos: bool) -> String {
-    if is_macos {
+    ordered_shortcut_label(&if is_macos {
         format!("Option+{suffix}")
     } else {
         format!("Alt+{suffix}")
-    }
+    })
 }
 
 /// A displayable shortcut attached to a command-palette entry.
@@ -179,7 +237,7 @@ pub enum Shortcut {
     },
     /// A binding that is only registered on macOS.
     MacOs(&'static str),
-    /// An extension's binding in GPUI keystroke syntax, like `secondary-shift-k`.
+    /// A binding in GPUI keystroke syntax, like `secondary-shift-k`.
     Keystrokes(&'static str),
 }
 
@@ -189,7 +247,7 @@ impl Shortcut {
     }
 
     fn label_for(&self, is_macos: bool) -> Option<String> {
-        match self {
+        let label = match self {
             Shortcut::None => None,
             Shortcut::Secondary(suffix) => Some(secondary_shortcut_for(suffix, is_macos)),
             Shortcut::Alt(suffix) => Some(alt_shortcut_for(suffix, is_macos)),
@@ -198,7 +256,8 @@ impl Shortcut {
             }
             Shortcut::MacOs(label) => is_macos.then(|| (*label).to_string()),
             Shortcut::Keystrokes(source) => Some(keystrokes_label_for(source, is_macos)),
-        }
+        };
+        label.map(|label| ordered_shortcut_label(&label))
     }
 }
 
@@ -220,7 +279,7 @@ mod tests {
             macos: "Ctrl+Cmd+F",
             other: "F11",
         };
-        assert_eq!(platform.label_for(true).as_deref(), Some("Ctrl+Cmd+F"));
+        assert_eq!(platform.label_for(true).as_deref(), Some("Cmd+Ctrl+F"));
         assert_eq!(platform.label_for(false).as_deref(), Some("F11"));
 
         let macos_only = Shortcut::MacOs("Cmd+M");
@@ -234,5 +293,43 @@ mod tests {
         assert_eq!(label.as_deref(), Some("Ctrl+Shift+K Alt+F5"));
         let label = Shortcut::Keystrokes("alt-f5").label_for(true);
         assert_eq!(label.as_deref(), Some("Option+F5"));
+    }
+
+    #[test]
+    fn modifiers_follow_priority_for_every_label_source_and_platform() {
+        assert_eq!(
+            ordered_shortcut_label("Shift+Option+Ctrl+Cmd+K"),
+            "Cmd+Ctrl+Option+Shift+K"
+        );
+        assert_eq!(
+            ordered_shortcut_label("Alt+Shift+Ctrl+K"),
+            "Ctrl+Alt+Shift+K"
+        );
+        assert_eq!(
+            keystrokes_label_for("secondary-alt-shift-b", true),
+            "Cmd+Option+Shift+B"
+        );
+        assert_eq!(
+            keystrokes_label_for("secondary-alt-shift-b", false),
+            "Ctrl+Alt+Shift+B"
+        );
+        assert_eq!(
+            Shortcut::MacOs("Option+Cmd+H").label_for(true).as_deref(),
+            Some("Cmd+Option+H")
+        );
+        assert_eq!(
+            ordered_shortcut_label("Shift+Ctrl+K Alt+Cmd+S"),
+            "Ctrl+Shift+K Cmd+Alt+S"
+        );
+    }
+
+    #[test]
+    fn keycaps_preserve_plus_keys_and_separate_chords() {
+        assert_eq!(keycap_chords("Cmd++"), vec![vec!["Cmd", "+"]]);
+        assert_eq!(keycap_chords("+"), vec![vec!["+"]]);
+        assert_eq!(
+            keycap_chords("Ctrl+K Ctrl+C"),
+            vec![vec!["Ctrl", "K"], vec!["Ctrl", "C"]]
+        );
     }
 }

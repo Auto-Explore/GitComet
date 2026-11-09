@@ -178,19 +178,27 @@ impl DiffRenderer {
         sides
     }
 
+    /// The change block navigation outlined, while the selection and row
+    /// layout it was captured with still hold: the block on screen.
+    pub(in crate::view) fn live_focused_change_block(&self) -> Option<&DiffFocusedChangeBlock> {
+        self.diff_focused_change_block.as_ref().filter(|focus| {
+            self.diff_selection_anchor == Some(focus.anchor)
+                && focus.layout == self.diff_visible_layout_key()
+        })
+    }
+
     /// How visual row `visible_ix` paints its part of the focused change
     /// block's marks, while the selection and row layout they were captured
     /// with still hold.
     pub(in crate::view) fn diff_focused_change_block_row(
         &self,
         visible_ix: usize,
+        window: &Window,
     ) -> Option<FocusedChangeBlockRow> {
-        let focus = self.diff_focused_change_block.as_ref()?;
-        if self.diff_selection_anchor != Some(focus.anchor)
-            || focus.layout != self.diff_visible_layout_key()
-        {
+        if !self.diff_panel_focus_handle.is_focused(window) {
             return None;
         }
+        let focus = self.live_focused_change_block()?;
         let in_block = |visible_ix: usize| {
             self.diff_source_visible_ix_for_visible_ix(visible_ix)
                 .filter(|source_visible_ix| focus.rows.contains(source_visible_ix))
