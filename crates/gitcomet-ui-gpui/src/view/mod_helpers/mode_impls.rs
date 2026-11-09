@@ -398,7 +398,7 @@ pub(crate) enum PopoverKind {
         is_three_way: bool,
         selected_choices: Vec<conflict_resolver::ConflictChoice>,
         output_line_ix: Option<usize>,
-        /// section 30 split: row count of a valid split selection in this block, or
+        /// Split: row count of a valid split selection in this block, or
         /// `None` when there is no splittable selection (hides the entry).
         split_selection_rows: Option<usize>,
         /// Revision-bound target for joining this chunk with its previous

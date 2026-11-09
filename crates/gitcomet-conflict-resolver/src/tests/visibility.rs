@@ -1578,7 +1578,7 @@ fn aligned_map_pads_short_sides_and_maps_both_directions() {
     assert_eq!(map.aligned_range_for_side_range(0, 3..3), 5..5);
     assert_eq!(map.aligned_range_for_side_range(1, 4..4), 4..4);
 
-    // section 30 split boundaries: a boundary at a real row maps to that side line;
+    // Split boundaries: a boundary at a real row maps to that side line;
     // a padding row rounds up to the next real line on that side.
     assert_eq!(map.side_line_lower_bound(1, 2), 2); // ours line 2 at row 2
     assert_eq!(map.side_line_lower_bound(0, 2), 2); // base line 2 at row 2

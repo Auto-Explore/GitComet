@@ -1350,7 +1350,7 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
     },
-    /// section 30 split: rewrite one in-memory conflict block into 2–3 blocks
+    /// Split: rewrite one in-memory conflict block into 2–3 blocks
     /// at block-local line boundaries.
     ConflictSplitRegion {
         repo_id: RepoId,
@@ -1377,7 +1377,7 @@ pub enum Msg {
         path: RepoPath,
         expected_conflict_rev: u64,
     },
-    /// section 30 join: merge conflict blocks `region_index` and `region_index + 1`,
+    /// Join: merge conflict blocks `region_index` and `region_index + 1`,
     /// absorbing the context between them into every side.
     ConflictJoinRegions {
         repo_id: RepoId,

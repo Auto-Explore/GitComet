@@ -265,7 +265,7 @@ pub fn conflict_quick_pick_choice_for_key(
     conflict_pick_choices(view_mode).get(index).copied()
 }
 
-/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (section 30 keyboard model).
+/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (keyboard model).
 ///
 /// Unlike the single-letter picks these also work while the output editor is
 /// focused, since they cannot collide with text input.

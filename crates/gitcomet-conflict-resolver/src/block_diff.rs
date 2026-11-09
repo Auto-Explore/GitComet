@@ -64,7 +64,7 @@ pub fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
 }
 
 /// Whether computing the three-way alignment is practical for these sides
-/// (section 30 aligned row space).
+/// (aligned row space).
 ///
 /// The alignment diff is O(size × dissimilarity): a whole-file conflict on a
 /// large file makes Myers effectively quadratic. Small files always align;
@@ -79,7 +79,7 @@ pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) ->
     )
 }
 
-/// Whether computing the direct two-way alignment is practical (section 30 aligned
+/// Whether computing the direct two-way alignment is practical (aligned
 /// row space, no-base fallback). Same rationale as
 /// [`three_way_alignment_is_practical`], with ours standing in for the base
 /// as the similarity anchor.

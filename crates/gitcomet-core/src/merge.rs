@@ -322,7 +322,7 @@ impl AlignedRun {
     }
 }
 
-/// Compute the three-way alignment of base/ours/theirs (section 30 aligned row
+/// Compute the three-way alignment of base/ours/theirs (aligned row
 /// space). This projects the shared KDiff3-compatible plan into per-side line
 /// ranges. The runs partition each input exactly.
 pub fn align_three_way(
@@ -339,7 +339,7 @@ pub fn align_three_way(
     aligned_plan_to_runs(&plan)
 }
 
-/// Compute a direct two-way alignment of ours/theirs (section 30 aligned row space,
+/// Compute a direct two-way alignment of ours/theirs (aligned row space,
 /// two-way full mode without a base version — e.g. both-added conflicts).
 ///
 /// Runs carry empty base ranges. A replaced region pairs its lines 1:1
@@ -1379,7 +1379,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Three-way alignment (section 30 aligned row space)
+    // Three-way alignment (aligned row space)
     // -----------------------------------------------------------------------
 
     fn run_lens(runs: &[AlignedRun]) -> (usize, usize, usize) {
@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Two-way alignment (section 30 aligned row space, no-base fallback)
+    // Two-way alignment (aligned row space, no-base fallback)
     // -----------------------------------------------------------------------
 
     fn assert_two_way_partitions(runs: &[AlignedRun], ours: &str, theirs: &str) {

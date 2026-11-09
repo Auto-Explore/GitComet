@@ -199,7 +199,7 @@ impl Default for ConflictModeState {
     }
 }
 
-/// section 30 split: a drag selection of aligned rows within one conflict block.
+/// Split: a drag selection of aligned rows within one conflict block.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ConflictRowSelection {
     /// Visible conflict block the selection is anchored in.
@@ -271,11 +271,11 @@ pub(crate) struct ConflictResolverUiState {
     /// Marker-backed geometry used for reset and source-region rendering.
     pub(crate) current: Option<std::sync::Arc<str>>,
     pub(crate) marker_segments: Vec<conflict_resolver::ConflictSegment>,
-    /// section 30 collapsed context mode: fold unchanged runs in the source columns.
+    /// Collapsed context mode: fold unchanged runs in the source columns.
     pub(crate) collapse_context: bool,
     /// Per-fold reveal state for collapsed context mode, keyed by fold id.
     pub(crate) context_fold_reveals: FxHashMap<usize, conflict_resolver::ConflictFoldReveal>,
-    /// section 30 collapsed context mode for the resolved output pane: fold
+    /// Collapsed context mode for the resolved output pane: fold
     /// projection in output line space. `None` ⇒ pass-through (one row per
     /// line). Rebuilt lazily after its inputs change.
     pub(crate) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
@@ -300,7 +300,7 @@ pub(crate) struct ConflictResolverUiState {
     /// manual/automatic resolutions are materialized into plain display text.
     pub(crate) original_region_aligned_ranges: Vec<Option<Range<usize>>>,
     pub(crate) hovered_conflict: Option<(usize, ThreeWayColumn)>,
-    /// section 30 split: in-progress or completed drag selection of aligned rows
+    /// Split: in-progress or completed drag selection of aligned rows
     /// inside one conflict block, used to split that block at the selection
     /// boundary. Cleared whenever the conflict source rebuilds.
     pub(crate) row_selection: Option<ConflictRowSelection>,
@@ -316,7 +316,7 @@ pub(crate) struct ConflictResolverUiState {
     /// Per-side line start offsets into `three_way_text`, materialized lazily.
     pub(crate) three_way_line_starts: ThreeWaySides<DeferredLineStarts>,
     pub(crate) three_way_len: usize,
-    /// section 30 aligned row space: maps visual rows to per-side lines. Identity
+    /// Aligned row space: maps visual rows to per-side lines. Identity
     /// (row == line) when alignment is unavailable.
     pub(crate) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
     /// kdiff3-style minimap column bands, in visible-row space. Empty when no
@@ -834,7 +834,7 @@ impl ConflictResolverUiState {
         )
     }
 
-    /// The side line rendered at an aligned visual row (section 30 aligned row
+    /// The side line rendered at an aligned visual row (aligned row
     /// space), or `None` for padding rows.
     pub(crate) fn three_way_side_line_for_row(
         &self,
@@ -852,7 +852,7 @@ impl ConflictResolverUiState {
         self.three_way_line_text(side, line_ix)
     }
 
-    /// section 30 R11 (kdiff3 change colours): whether the side columns can tint
+    /// kdiff3 change colours: whether the side columns can tint
     /// rows by their own change vs base — needs a real base and a
     /// non-identity alignment (both-added and unaligned files keep the
     /// marker-region tint).
@@ -860,7 +860,7 @@ impl ConflictResolverUiState {
         !self.three_way_aligned.is_identity() && !self.three_way_text.base.is_empty()
     }
 
-    /// section 30 R11: whether `column`'s line at aligned `row` differs from the
+    /// whether `column`'s line at aligned `row` differs from the
     /// base line paired at the same row. A line on one side of a padding row
     /// counts as a change; the base column itself is never "changed".
     pub(crate) fn three_way_row_differs_from_base(
@@ -880,7 +880,7 @@ impl ConflictResolverUiState {
             .row_for_side_line(side.side_index(), line)
     }
 
-    /// section 30 split: whether row selection / split is available for the current
+    /// Split: whether row selection / split is available for the current
     /// conflict. Requires a real aligned row space (so rows map consistently
     /// across columns) and a full-text resolver strategy on non-binary data.
     pub(crate) fn conflict_row_selection_enabled(&self) -> bool {
@@ -890,7 +890,7 @@ impl ConflictResolverUiState {
                 == Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
     }
 
-    /// section 30 split: whether aligned `row` is inside the current row selection
+    /// Split: whether aligned `row` is inside the current row selection
     /// (highlighted in every source column since rows are shared).
     pub(crate) fn conflict_row_is_selected(&self, row: usize) -> bool {
         self.row_selection
@@ -990,7 +990,7 @@ impl ConflictResolverUiState {
         ))
     }
 
-    /// section 30 split: the shared aligned-row range of conflict block `conflict_ix`
+    /// Split: the shared aligned-row range of conflict block `conflict_ix`
     /// (all source columns share it after `rebuild_three_way_visible_state`).
     pub(crate) fn three_way_block_aligned_range(
         &self,
@@ -1001,7 +1001,7 @@ impl ConflictResolverUiState {
             .cloned()
     }
 
-    /// section 30 split: clamp aligned `row` into conflict block `conflict_ix`.
+    /// Split: clamp aligned `row` into conflict block `conflict_ix`.
     pub(crate) fn clamp_row_to_conflict_block(&self, conflict_ix: usize, row: usize) -> usize {
         match self.three_way_block_aligned_range(conflict_ix) {
             Some(range) if !range.is_empty() => row.clamp(range.start, range.end - 1),
@@ -1009,7 +1009,7 @@ impl ConflictResolverUiState {
         }
     }
 
-    /// section 30 split: convert a normalized row selection inside a conflict block
+    /// Split: convert a normalized row selection inside a conflict block
     /// into block-local per-side split boundaries and the target region index.
     /// Returns `None` when selection/split is unavailable, the selection is
     /// degenerate (covers the whole block or nothing), or the block maps to a
@@ -1270,7 +1270,7 @@ impl ConflictResolverUiState {
 
     // ----- Two-way split dispatch (giant vs eager) -----
 
-    /// section 30 aligned row space: whether the two-way view renders the shared
+    /// Aligned row space: whether the two-way view renders the shared
     /// aligned whole-file rows (full mode) instead of the block-local
     /// `ConflictSplitRowIndex` rows (giant files / sides not loaded).
     pub(crate) fn two_way_uses_aligned_rows(&self) -> bool {

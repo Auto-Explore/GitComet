@@ -226,7 +226,7 @@ impl DiffRenderer {
     }
 
     /// Un-resolve the active conflict regardless of how it was resolved
-    /// (section 30: one keypress reverts a pick or auto-resolution).
+    /// (one keypress reverts a pick or auto-resolution).
     pub(in crate::view) fn conflict_resolver_unresolve_active_conflict(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -960,7 +960,7 @@ impl DiffRenderer {
     }
 
     /// Confidence tier of the auto-resolve rule applied to a conflict, when
-    /// its session region is `AutoResolved` (section 30 gutter badges).
+    /// its session region is `AutoResolved` (gutter badges).
     pub(in crate::view) fn conflict_autosolve_confidence_for_ix(
         &self,
         conflict_ix: usize,

@@ -4,7 +4,7 @@
 use super::*;
 
 impl DiffRenderer {
-    /// section 30 split: begin a drag selection of aligned rows at `aligned_row`
+    /// Split: begin a drag selection of aligned rows at `aligned_row`
     /// inside conflict block `conflict_ix`. Also selects the block so the
     /// pick affordances follow. No-op when split is unavailable.
     pub(in crate::view) fn conflict_resolver_begin_row_selection(
@@ -93,7 +93,7 @@ impl DiffRenderer {
         cx.notify();
     }
 
-    /// section 30 split: finish the drag (keeps the selected range for the menu).
+    /// Split: finish the drag (keeps the selected range for the menu).
     pub(in crate::view) fn conflict_resolver_end_row_selection(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -109,7 +109,7 @@ impl DiffRenderer {
         cx.notify();
     }
 
-    /// section 30 split: split the active row selection into its own conflict(s).
+    /// Split: split the active row selection into its own conflict(s).
     /// Dispatches `Msg::ConflictSplitRegion`; the state round-trip rebuilds
     /// the resolver (which also clears the selection).
     pub(in crate::view) fn conflict_resolver_split_selection(

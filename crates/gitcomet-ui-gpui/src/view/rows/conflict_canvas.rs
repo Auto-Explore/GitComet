@@ -368,7 +368,7 @@ pub(super) fn single_column_conflict_canvas(
     is_three_way: bool,
     semantic_nav_target: Option<usize>,
     active_conflict_marker: bool,
-    // section 30 split: `Some(selected)` enables drag selection on this row
+    // Split: `Some(selected)` enables drag selection on this row
     // (`selected` paints the highlight); `None` disables it.
     row_selection: Option<bool>,
     // kdiff3 manual diff help: `Some` enables Alt+click marking on this row.
@@ -401,7 +401,7 @@ pub(super) fn single_column_conflict_canvas(
 
             window.paint_quad(PaintQuad::new(bounds).background(bg));
 
-            // section 30 split: highlight rows in the drag selection.
+            // Split: highlight rows in the drag selection.
             if row_selected {
                 window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
                     theme.colors.accent.foreground,
@@ -419,7 +419,7 @@ pub(super) fn single_column_conflict_canvas(
                 )));
             }
 
-            // section 30: mark the active conflict's rows with an accent bar so a
+            // Mark the active conflict's rows with an accent bar so a
             // click/keyboard selection is visible in the source columns.
             if active_conflict_marker {
                 let bar = gpui::Bounds::new(

@@ -364,7 +364,7 @@ pub enum ThreeWayVisibleItem {
     Line(usize),
     /// A collapsed summary row for a resolved conflict block (by conflict index).
     CollapsedBlock(usize),
-    /// A folded run of unchanged context lines (section 30 collapsed context mode).
+    /// A folded run of unchanged context lines (collapsed context mode).
     CollapsedContext {
         source_line_start: usize,
         len: usize,
@@ -374,7 +374,7 @@ pub enum ThreeWayVisibleItem {
     },
 }
 
-/// kdiff3-style aligned row space over base/ours/theirs (section 30).
+/// kdiff3-style aligned row space over base/ours/theirs.
 ///
 /// Maps between visual rows (shared by all columns) and per-side line
 /// indices. Sides shorter than a run are padded: their rows map to `None`.
@@ -465,7 +465,7 @@ impl ThreeWayAlignedMap {
         }
     }
 
-    /// section 30 split: the side line index a split boundary at aligned `row` maps
+    /// Split: the side line index a split boundary at aligned `row` maps
     /// to — i.e. the first side line at or after `row` (padding rows round up
     /// to the next real line; rows past the aligned end clamp to the side
     /// length). Use with `row` and `row_end + 1` to bracket a selection.
@@ -505,7 +505,7 @@ impl ThreeWayAlignedMap {
     }
 }
 
-/// section 30 R11: cap on aligned rows that receive word-level highlights, bounding
+/// cap on aligned rows that receive word-level highlights, bounding
 /// the per-row word-diff work on files with huge change counts.
 pub const ALIGNED_WORD_HIGHLIGHT_MAX_ROWS: usize = 4_000;
 
@@ -531,7 +531,7 @@ pub fn merge_word_highlight_ranges(
     *entry = merged;
 }
 
-/// section 30 R11 (kdiff3 change colours): word highlights over the aligned row
+/// kdiff3 change colours: word highlights over the aligned row
 /// space. For each aligned row where a side's line differs from the base line
 /// paired at the same row, word-diff the pair and record ranges keyed by each
 /// side's own line index (the renderer's cache key space). Padding rows
@@ -593,7 +593,7 @@ pub fn compute_aligned_three_way_word_highlights(
     (wh_base, wh_ours, wh_theirs)
 }
 
-/// section 30 R11: aligned two-way (ours↔theirs) word highlights, precomputed
+/// aligned two-way (ours↔theirs) word highlights, precomputed
 /// once per conflict-source rebuild and shared by both diff columns (Ours and
 /// Theirs). Keyed by aligned row — the renderer's row space. Only rows where
 /// both sides have a line and the two lines differ byte-wise get an entry; the
@@ -1070,7 +1070,7 @@ pub fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Ve
 /// All lines in every conflict block are included (no preview gaps).
 /// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
 /// Context lines kept visible on each side of a conflict when collapsed
-/// context mode is active (section 30).
+/// context mode is active.
 pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
 
 /// Runs shorter than this stay expanded — a fold row would not be
@@ -1096,7 +1096,7 @@ pub struct ConflictFoldReveal {
 #[derive(Clone, Copy, Default)]
 pub struct ThreeWayVisibleOptions<'a> {
     pub hide_resolved: bool,
-    /// section 30 collapsed context mode: fold unchanged runs beyond
+    /// Collapsed context mode: fold unchanged runs beyond
     /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
     pub collapse_context: bool,
     /// Per-fold reveal state, keyed by fold identity (pre-reveal start line).

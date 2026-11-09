@@ -57,7 +57,7 @@ impl DiffRenderer {
         choice: conflict_resolver::ConflictChoice,
         cx: &mut gpui::Context<Self>,
     ) {
-        // `line_ix` arrives from input-row menus in aligned-row space (section 30).
+        // `line_ix` arrives from input-row menus in aligned-row space.
         let side = match choice {
             conflict_resolver::ConflictChoice::Base => ThreeWayColumn::Base,
             conflict_resolver::ConflictChoice::Ours => ThreeWayColumn::Ours,
@@ -409,7 +409,7 @@ impl DiffRenderer {
     }
 
     /// Rebuild the resolved-output fold projection for collapsed context mode
-    /// (section 30). Output line space; derived from the outline's conflict markers.
+    ///. Output line space; derived from the outline's conflict markers.
     /// Streamed outputs stay unfolded (their row space is already projected).
     pub(in crate::view) fn ensure_resolved_output_visible_projection(&mut self) {
         if !self.conflict_resolver.resolved_output_visible_dirty {

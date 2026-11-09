@@ -997,7 +997,7 @@ impl DiffRenderer {
                 self.conflict_resolver_pick_active_conflict(choice, cx);
                 handled = true;
             } else if key == "u" {
-                // section 30: U un-resolves the active conflict (pick or auto-solve).
+                // U un-resolves the active conflict (pick or auto-solve).
                 self.conflict_resolver_unresolve_active_conflict(cx);
                 handled = true;
             }
@@ -1021,7 +1021,7 @@ impl DiffRenderer {
             handled = true;
         }
 
-        // section 30: kdiff3-compatible Ctrl+1/2/3 pick aliases. When the output
+        // Kdiff3-compatible Ctrl+1/2/3 pick aliases. When the output
         // editor is focused these are handled by the carve-out at the top of this
         // fn; this block covers the case where focus is elsewhere.
         if !handled
@@ -2119,7 +2119,7 @@ impl DiffRenderer {
 
         {
             // The full text resolver gets its own settings menu under the cog
-            // (section 30); everything else keeps the diff actions menu.
+            //; everything else keeps the diff actions menu.
             let resolver_settings_active =
                 is_conflict_resolver && !self.conflict_resolver_is_simple_strategy();
             let (cog_id, cog_kind, cog_tooltip): (&'static str, PopoverKind, &'static str) =

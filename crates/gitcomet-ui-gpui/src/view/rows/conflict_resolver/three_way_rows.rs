@@ -61,7 +61,7 @@ impl DiffRenderer {
             else {
                 continue;
             };
-            // section 30 aligned row space: syntax documents, word highlights, and
+            // Aligned row space: syntax documents, word highlights, and
             // the styled-text cache are all keyed by the side's own line.
             let Some(ix) = this
                 .conflict_resolver
@@ -178,7 +178,7 @@ impl DiffRenderer {
             if theme.is_dark { 0.16 } else { 0.12 },
         );
         let conflict_choices = this.conflict_resolver.conflict_choices.as_slice();
-        // section 30 R11 (kdiff3 change colours): with a real base alignment, the
+        // kdiff3 change colours: with a real base alignment, the
         // side columns tint only rows whose own line differs from base; the
         // base column keeps the marker-region tint as the pickable-conflict
         // locator. Without alignment all columns fall back to region tints.
@@ -285,7 +285,7 @@ impl DiffRenderer {
                         .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // section 30: clicking a conflict block body selects it.
+                                // Clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
@@ -330,7 +330,7 @@ impl DiffRenderer {
                     ));
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-                    // section 30 aligned row space: `ix` is the shared visual row;
+                    // Aligned row space: `ix` is the shared visual row;
                     // each column renders its own line (or padding) there.
                     let side_line = this
                         .conflict_resolver
@@ -469,7 +469,7 @@ impl DiffRenderer {
                         || this
                             .conflict_resolver
                             .selected_nav_target_contains_aligned_row(ix);
-                    // section 30 split: highlight rows in the drag selection; the
+                    // Split: highlight rows in the drag selection; the
                     // begin/extend handlers only fire when split is available.
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(ix);
                     let row_selection_enabled =
@@ -624,7 +624,7 @@ impl DiffRenderer {
                             cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                    // section 30: clicking a conflict block body selects it.
+                                    // Clicking a conflict block body selects it.
                                     this.conflict_resolver_select_conflict(conflict_ix, cx);
                                 }),
                             );

@@ -1,4 +1,4 @@
-//! section 30 mergetool split/join: byte-range surgery on conflict-marker text.
+//! Mergetool split/join: byte-range surgery on conflict-marker text.
 //!
 //! Splitting rewrites one `<<<<<<<`/`>>>>>>>` block into 2–3 adjacent blocks
 //! at block-local line boundaries; joining merges two neighbouring blocks,

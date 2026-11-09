@@ -96,7 +96,7 @@ impl DiffRenderer {
         cx.notify();
     }
 
-    /// Toggle section 30 collapsed context mode: fold unchanged runs beyond the
+    /// Toggle collapsed context mode: fold unchanged runs beyond the
     /// per-conflict context window in the source columns.
     pub(in crate::view) fn conflict_resolver_toggle_collapse_context(
         &mut self,

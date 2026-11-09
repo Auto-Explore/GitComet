@@ -569,7 +569,7 @@ impl DiffRenderer {
         self.mark_conflict_resolved_output_saved(cx);
     }
 
-    /// Footer bar for the text conflict resolver (section 30): live resolution
+    /// Footer bar for the text conflict resolver: live resolution
     /// status line plus the leftover-marker indicator. The saves live in the
     /// bottom bar; merge abort lives in the action bar's "Abort merge" button.
     fn conflict_resolver_footer(
@@ -1993,7 +1993,7 @@ impl DiffRenderer {
                                 })
                                 .child(output_header)
                                 .when_some(autosolve_summary, |d, summary| {
-                                    // section 30: make the autosolve pass visible on
+                                    // Make the autosolve pass visible on
                                     // open — accent chip, not a muted footnote.
                                     d.child(
                                         div()
@@ -2341,7 +2341,7 @@ impl DiffRenderer {
                                     bottom_section
                                 })
                                 .child(self.conflict_resolver_footer(theme, has_current, cx))
-                                // section 30 split: ends a row-drag on mouse-up anywhere.
+                                // Split: ends a row-drag on mouse-up anywhere.
                                 .child(ConflictRowSelectionTracker { view: cx.entity() })
                                 .into_any_element()
                             }
