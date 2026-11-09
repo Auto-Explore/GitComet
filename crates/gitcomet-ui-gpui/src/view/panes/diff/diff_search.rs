@@ -2706,6 +2706,27 @@ fn conflict_resolver_visible_match_indices_with_matcher(
     out
 }
 
+/// Line `line_ix` of `text` without its newline; empty past the end.
+fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
+    if text.is_empty() {
+        return "";
+    }
+    let text_len = text.len();
+    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
+    if start >= text_len {
+        return "";
+    }
+    let mut end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
+        end = end.saturating_sub(1);
+    }
+    text.get(start..end).unwrap_or("")
+}
+
 /// Search three-way source texts by iterating projection spans directly.
 ///
 /// This avoids the per-visible-item O(log spans) projection lookup by walking
@@ -2716,26 +2737,6 @@ fn search_three_way_via_spans(
     query: AsciiCaseInsensitiveNeedle<'_>,
     out: &mut Vec<usize>,
 ) {
-    fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
-        if text.is_empty() {
-            return "";
-        }
-        let text_len = text.len();
-        let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-        if start >= text_len {
-            return "";
-        }
-        let mut end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text_len)
-            .min(text_len);
-        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-            end = end.saturating_sub(1);
-        }
-        text.get(start..end).unwrap_or("")
-    }
-
     for span in projection.spans() {
         match *span {
             conflict_resolver::ThreeWayVisibleSpan::Lines {
@@ -2790,26 +2791,6 @@ fn search_three_way_via_spans_with_matcher(
     matcher: &DiffSearchMatcher,
     out: &mut Vec<usize>,
 ) {
-    fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
-        if text.is_empty() {
-            return "";
-        }
-        let text_len = text.len();
-        let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-        if start >= text_len {
-            return "";
-        }
-        let mut end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text_len)
-            .min(text_len);
-        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-            end = end.saturating_sub(1);
-        }
-        text.get(start..end).unwrap_or("")
-    }
-
     let mut base_rows = Vec::new();
     let mut ours_rows = Vec::new();
     let mut theirs_rows = Vec::new();
@@ -2907,26 +2888,6 @@ fn three_way_visible_item_matches_query(
     ctx: &ConflictResolverSearchContext<'_>,
     query: &str,
 ) -> bool {
-    fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
-        if text.is_empty() {
-            return "";
-        }
-        let text_len = text.len();
-        let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-        if start >= text_len {
-            return "";
-        }
-        let mut end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text_len)
-            .min(text_len);
-        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-            end = end.saturating_sub(1);
-        }
-        text.get(start..end).unwrap_or("")
-    }
-
     match item {
         conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
             // `ix` is an aligned row; translate per side.
