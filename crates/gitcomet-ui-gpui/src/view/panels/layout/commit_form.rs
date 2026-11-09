@@ -65,22 +65,26 @@ impl CommitOptions {
     }
 }
 
-impl DetailsPaneView {
-    fn repo_has_head_commit(repo: &RepoState) -> bool {
-        if repo.detached_head_commit.is_some() {
-            return true;
-        }
-
-        match &repo.head_branch {
-            Loadable::Ready(head) if head == "HEAD" => true,
-            Loadable::Ready(head) => match &repo.branches {
-                Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
-                _ => true,
-            },
-            _ => true,
-        }
+/// Whether HEAD has a commit to amend: no merge or rebase is in progress and
+/// HEAD is detached, or its branch exists (an unloaded list counts as yes).
+pub(in crate::view::panels) fn amend_allowed(repo: &RepoState) -> bool {
+    if merge_active(Some(repo)) || matches!(repo.rebase_in_progress, Loadable::Ready(true)) {
+        return false;
     }
+    if repo.detached_head_commit.is_some() {
+        return true;
+    }
+    match &repo.head_branch {
+        Loadable::Ready(head) if head == "HEAD" => true,
+        Loadable::Ready(head) => match &repo.branches {
+            Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
+            _ => true,
+        },
+        _ => true,
+    }
+}
 
+impl DetailsPaneView {
     pub(super) fn can_submit_commit(&self, message: &str) -> bool {
         let Some(repo) = self.active_repo() else {
             return false;
@@ -95,9 +99,7 @@ impl DetailsPaneView {
             return false;
         }
         if self.commit_amend_enabled {
-            return !merge_active(Some(repo))
-                && !matches!(repo.rebase_in_progress, Loadable::Ready(true))
-                && Self::repo_has_head_commit(repo);
+            return amend_allowed(repo);
         }
         let staged_count = repo
             .staged_status_entries()
