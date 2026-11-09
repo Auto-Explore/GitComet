@@ -154,15 +154,8 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
     let (store, event_rx) = AppStore::new_test(backend);
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-store-open-repo-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&base).expect("temporary repo path should be creatable");
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
     let expected_workdir = canonicalize_or_original(base.clone());
 
     store.dispatch(Msg::OpenRepo(base));

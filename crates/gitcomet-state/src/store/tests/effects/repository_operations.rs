@@ -656,8 +656,8 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let src = base.join("src");
     let dest = base.join("dest");
@@ -938,8 +938,8 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("dir/out.txt");
     std::fs::create_dir(base.join("dir")).unwrap();
@@ -1794,8 +1794,8 @@ fn load_stashes_effect_truncates_results_to_limit() {
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let stashes = (0..5)
         .map(|i| StashEntry {

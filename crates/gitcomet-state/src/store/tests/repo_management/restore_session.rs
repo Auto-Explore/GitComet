@@ -90,8 +90,8 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
-    let dir_dir = tempfile::tempdir().expect("create tempdir");
-    let dir = dir_dir.path().to_path_buf();
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
 
     let repo_a = dir.join("repo-a");
     let repo_b = dir.join("repo-b");

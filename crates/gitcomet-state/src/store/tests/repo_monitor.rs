@@ -255,17 +255,6 @@ impl GitRepository for RepoActivationRecordingRepo {
     }
 }
 
-fn unique_repo_monitor_test_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "gitcomet-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ))
-}
-
 fn active_ready_repo_state(repo_id: RepoId, workdir: PathBuf) -> AppState {
     let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir });
     repo.set_open(Loadable::Ready(()));
@@ -410,8 +399,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
     // schedule duplicate status/log/branch loads. Seed every lane the full refresh touches as
     // in-flight (the primary batch does not include branches/remote branches).
     let repo_id = RepoId(21);
-    let workdir = unique_repo_monitor_test_path("activation-coalesce");
-    std::fs::create_dir_all(&workdir).expect("create activation coalesce workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
@@ -454,8 +443,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
 #[test]
 fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     let repo_id = RepoId(22);
-    let workdir = unique_repo_monitor_test_path("activation-fallback");
-    std::fs::create_dir_all(&workdir).expect("create activation fallback workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = active_ready_repo_state(repo_id, workdir.clone());
     let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));

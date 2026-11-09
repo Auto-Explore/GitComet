@@ -469,8 +469,8 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("conflict.txt");
     let current = "a\n<<<<<<<\nours\n=======\ntheirs\n>>>>>>>\nb\n";
@@ -680,8 +680,8 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.txt");
     let base_text = "base\n";
@@ -917,8 +917,8 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         }
     }
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.bin");
     let base_bytes = vec![0xff, 0x00, 0x01];
@@ -1171,8 +1171,8 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
 
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("removed.txt");
     let base_text = "base\n";
@@ -1425,8 +1425,8 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
-    let base_dir = tempfile::tempdir().expect("create tempdir");
-    let base = base_dir.path().to_path_buf();
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("trace_conflict.html");
     let base_text = "<div>base</div>\n<section>common</section>\n<footer>end</footer>\n";
