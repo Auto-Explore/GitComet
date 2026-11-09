@@ -1135,7 +1135,12 @@ fn git_numstat_counts(
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
-    command.arg("--no-optional-locks").arg("diff");
+    // Without autoRefreshIndex=false, git writes refreshed stats to the index.
+    command
+        .arg("--no-optional-locks")
+        .arg("-c")
+        .arg("diff.autoRefreshIndex=false")
+        .arg("diff");
     if cached {
         command.arg("--cached");
     }
@@ -2158,6 +2163,42 @@ mod tests {
             submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
                 .unwrap();
         assert_eq!(pointer_counts(&staged), (None, None));
+    }
+
+    /// Stale stats would make `git diff --numstat` write refreshed ones back to
+    /// the submodule's index, which its watcher reports as an index change.
+    #[test]
+    fn live_lists_do_not_write_the_submodule_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        std::fs::write(dir.join("touched.txt"), "unchanged\n").unwrap();
+        std::fs::write(dir.join("edited.txt"), "one\ntwo\n").unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "seed"]);
+        std::fs::write(dir.join("edited.txt"), "one\n2\n").unwrap();
+        let stale =
+            filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 120, 0);
+        for name in ["touched.txt", "edited.txt"] {
+            filetime::set_file_mtime(dir.join(name), stale).unwrap();
+        }
+        let index = dir.join(".git/index");
+        let before = std::fs::read(&index).unwrap();
+
+        let repo = open_repo(dir).repo();
+        let (_, unstaged) =
+            submodule_live_inner_changes(dir, Some(&repo), &CancellationToken::new()).unwrap();
+
+        let listed: Vec<_> = unstaged
+            .iter()
+            .map(|change| (change.path.as_path(), change.additions, change.deletions))
+            .collect();
+        assert_eq!(listed, vec![(Path::new("edited.txt"), Some(1), Some(1))]);
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "the live lists refreshed index stat metadata"
+        );
     }
 
     /// numstat still counts a gitlink replaced by a file, submodules ignored
