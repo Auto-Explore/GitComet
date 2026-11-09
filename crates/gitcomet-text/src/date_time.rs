@@ -55,45 +55,60 @@ pub enum Timezone {
     Fixed(i32),
 }
 
-/// `(offset seconds, label, example cities)` for each fixed-offset choice.
-const FIXED_ZONES: [(i32, &str, &str); 37] = [
-    (-12 * 3600, "UTC\u{2212}12", "Baker Island"),
-    (-11 * 3600, "UTC\u{2212}11", "Pago Pago"),
-    (-10 * 3600, "UTC\u{2212}10", "Honolulu"),
-    (-9 * 3600 - 30 * 60, "UTC\u{2212}9:30", "Marquesas Islands"),
-    (-9 * 3600, "UTC\u{2212}9", "Anchorage"),
-    (-8 * 3600, "UTC\u{2212}8", "Los Angeles, Vancouver"),
-    (-7 * 3600, "UTC\u{2212}7", "Denver, Phoenix"),
-    (-6 * 3600, "UTC\u{2212}6", "Chicago, Mexico City"),
-    (-5 * 3600, "UTC\u{2212}5", "New York, Toronto"),
-    (-4 * 3600, "UTC\u{2212}4", "Santiago, Halifax"),
-    (-3 * 3600 - 30 * 60, "UTC\u{2212}3:30", "St. John's"),
-    (-3 * 3600, "UTC\u{2212}3", "São Paulo, Buenos Aires"),
-    (-2 * 3600, "UTC\u{2212}2", "South Georgia"),
-    (-3600, "UTC\u{2212}1", "Azores, Cape Verde"),
-    (3600, "UTC+1", "Berlin, Paris, Lagos"),
-    (2 * 3600, "UTC+2", "Helsinki, Cairo, Kyiv"),
-    (3 * 3600, "UTC+3", "Moscow, Istanbul, Nairobi"),
-    (3 * 3600 + 30 * 60, "UTC+3:30", "Tehran"),
-    (4 * 3600, "UTC+4", "Dubai, Baku"),
-    (4 * 3600 + 30 * 60, "UTC+4:30", "Kabul"),
-    (5 * 3600, "UTC+5", "Karachi, Tashkent"),
-    (5 * 3600 + 30 * 60, "UTC+5:30", "Mumbai, Delhi, Colombo"),
-    (5 * 3600 + 45 * 60, "UTC+5:45", "Kathmandu"),
-    (6 * 3600, "UTC+6", "Dhaka, Almaty"),
-    (6 * 3600 + 30 * 60, "UTC+6:30", "Yangon"),
-    (7 * 3600, "UTC+7", "Bangkok, Jakarta, Hanoi"),
-    (8 * 3600, "UTC+8", "Singapore, Beijing, Taipei"),
-    (8 * 3600 + 45 * 60, "UTC+8:45", "Eucla"),
-    (9 * 3600, "UTC+9", "Tokyo, Seoul"),
-    (9 * 3600 + 30 * 60, "UTC+9:30", "Adelaide"),
-    (10 * 3600, "UTC+10", "Sydney, Melbourne"),
-    (10 * 3600 + 30 * 60, "UTC+10:30", "Lord Howe Island"),
-    (11 * 3600, "UTC+11", "Noumea, Solomon Islands"),
-    (12 * 3600, "UTC+12", "Auckland, Fiji"),
-    (12 * 3600 + 45 * 60, "UTC+12:45", "Chatham Islands"),
-    (13 * 3600, "UTC+13", "Apia, Tongatapu"),
-    (14 * 3600, "UTC+14", "Kiritimati"),
+/// A fixed-offset timezone choice.
+struct FixedZone {
+    /// Seconds east of UTC.
+    offset: i32,
+    label: &'static str,
+    cities: &'static str,
+}
+
+const fn zone(offset: i32, label: &'static str, cities: &'static str) -> FixedZone {
+    FixedZone {
+        offset,
+        label,
+        cities,
+    }
+}
+
+const FIXED_ZONES: [FixedZone; 37] = [
+    zone(-12 * 3600, "UTC\u{2212}12", "Baker Island"),
+    zone(-11 * 3600, "UTC\u{2212}11", "Pago Pago"),
+    zone(-10 * 3600, "UTC\u{2212}10", "Honolulu"),
+    zone(-9 * 3600 - 30 * 60, "UTC\u{2212}9:30", "Marquesas Islands"),
+    zone(-9 * 3600, "UTC\u{2212}9", "Anchorage"),
+    zone(-8 * 3600, "UTC\u{2212}8", "Los Angeles, Vancouver"),
+    zone(-7 * 3600, "UTC\u{2212}7", "Denver, Phoenix"),
+    zone(-6 * 3600, "UTC\u{2212}6", "Chicago, Mexico City"),
+    zone(-5 * 3600, "UTC\u{2212}5", "New York, Toronto"),
+    zone(-4 * 3600, "UTC\u{2212}4", "Santiago, Halifax"),
+    zone(-3 * 3600 - 30 * 60, "UTC\u{2212}3:30", "St. John's"),
+    zone(-3 * 3600, "UTC\u{2212}3", "São Paulo, Buenos Aires"),
+    zone(-2 * 3600, "UTC\u{2212}2", "South Georgia"),
+    zone(-3600, "UTC\u{2212}1", "Azores, Cape Verde"),
+    zone(3600, "UTC+1", "Berlin, Paris, Lagos"),
+    zone(2 * 3600, "UTC+2", "Helsinki, Cairo, Kyiv"),
+    zone(3 * 3600, "UTC+3", "Moscow, Istanbul, Nairobi"),
+    zone(3 * 3600 + 30 * 60, "UTC+3:30", "Tehran"),
+    zone(4 * 3600, "UTC+4", "Dubai, Baku"),
+    zone(4 * 3600 + 30 * 60, "UTC+4:30", "Kabul"),
+    zone(5 * 3600, "UTC+5", "Karachi, Tashkent"),
+    zone(5 * 3600 + 30 * 60, "UTC+5:30", "Mumbai, Delhi, Colombo"),
+    zone(5 * 3600 + 45 * 60, "UTC+5:45", "Kathmandu"),
+    zone(6 * 3600, "UTC+6", "Dhaka, Almaty"),
+    zone(6 * 3600 + 30 * 60, "UTC+6:30", "Yangon"),
+    zone(7 * 3600, "UTC+7", "Bangkok, Jakarta, Hanoi"),
+    zone(8 * 3600, "UTC+8", "Singapore, Beijing, Taipei"),
+    zone(8 * 3600 + 45 * 60, "UTC+8:45", "Eucla"),
+    zone(9 * 3600, "UTC+9", "Tokyo, Seoul"),
+    zone(9 * 3600 + 30 * 60, "UTC+9:30", "Adelaide"),
+    zone(10 * 3600, "UTC+10", "Sydney, Melbourne"),
+    zone(10 * 3600 + 30 * 60, "UTC+10:30", "Lord Howe Island"),
+    zone(11 * 3600, "UTC+11", "Noumea, Solomon Islands"),
+    zone(12 * 3600, "UTC+12", "Auckland, Fiji"),
+    zone(12 * 3600 + 45 * 60, "UTC+12:45", "Chatham Islands"),
+    zone(13 * 3600, "UTC+13", "Apia, Tongatapu"),
+    zone(14 * 3600, "UTC+14", "Kiritimati"),
 ];
 
 /// Every choice in picker order: system local, UTC, then fixed offsets west to east.
@@ -102,7 +117,7 @@ const ALL_TIMEZONES: [Timezone; FIXED_ZONES.len() + 2] = {
     all[1] = Timezone::Utc;
     let mut ix = 0;
     while ix < FIXED_ZONES.len() {
-        all[ix + 2] = Timezone::Fixed(FIXED_ZONES[ix].0);
+        all[ix + 2] = Timezone::Fixed(FIXED_ZONES[ix].offset);
         ix += 1;
     }
     all
@@ -113,15 +128,15 @@ impl Timezone {
         &ALL_TIMEZONES
     }
 
-    fn fixed_zone(seconds: i32) -> Option<&'static (i32, &'static str, &'static str)> {
-        FIXED_ZONES.iter().find(|zone| zone.0 == seconds)
+    fn fixed_zone(seconds: i32) -> Option<&'static FixedZone> {
+        FIXED_ZONES.iter().find(|zone| zone.offset == seconds)
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Timezone::SystemLocal => "System local",
             Timezone::Utc => "UTC",
-            Timezone::Fixed(s) => Self::fixed_zone(s).map_or("UTC+?", |zone| zone.1),
+            Timezone::Fixed(s) => Self::fixed_zone(s).map_or("UTC+?", |zone| zone.label),
         }
     }
 
@@ -149,7 +164,7 @@ impl Timezone {
         match self {
             Timezone::SystemLocal => "This device's timezone",
             Timezone::Utc => "London, Reykjavik",
-            Timezone::Fixed(s) => Self::fixed_zone(s).map_or("", |zone| zone.2),
+            Timezone::Fixed(s) => Self::fixed_zone(s).map_or("", |zone| zone.cities),
         }
     }
 
