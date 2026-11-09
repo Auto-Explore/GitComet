@@ -461,7 +461,7 @@ fn programmatic_selection_reveals_and_scrolls_a_folded_file(cx: &mut gpui::TestA
         .is_some()
     );
     cx.update(|_, app| {
-        list.set_filter("another-file".into(), app);
+        list.set_filter("another-file".into(), Default::default(), app);
         assert!(!list.select_path(Path::new("dir_190/file.rs"), app));
     });
 }
@@ -489,4 +489,64 @@ fn file_rows_open_the_native_context_menu(cx: &mut gpui::TestAppContext) {
         cx.update(|_, app| list.selected(app)).is_none(),
         "opening a menu does not change the diff selection"
     );
+}
+
+/// The filter's options change how its query matches: case-insensitive
+/// substring by default, then match case, whole word and regex; a query
+/// that is not a valid regex shows nothing.
+#[gpui::test]
+fn filter_options_set_how_the_query_matches(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_search::TextSearchOptions;
+    let (list, _entity, cx) = mount_list(
+        cx,
+        ["src/Main.rs", "src/main_test.rs", "docs/domain.md"].map(String::from),
+    );
+    let filter = |cx: &mut gpui::VisualTestContext, query: &str, options: TextSearchOptions| {
+        cx.update(|_, app| {
+            list.set_filter(query.into(), options, app);
+        });
+        shown(cx, &list)
+    };
+    assert_eq!(
+        filter(cx, "main", TextSearchOptions::default()),
+        ["docs/domain.md", "src/Main.rs", "src/main_test.rs"]
+    );
+    let match_case = TextSearchOptions {
+        match_case: true,
+        ..Default::default()
+    };
+    assert_eq!(filter(cx, "Main", match_case), ["src/Main.rs"]);
+    let whole_word = TextSearchOptions {
+        whole_word: true,
+        ..Default::default()
+    };
+    assert_eq!(filter(cx, "main", whole_word), ["src/Main.rs"]);
+    let regex = TextSearchOptions {
+        regex: true,
+        ..Default::default()
+    };
+    assert_eq!(filter(cx, r"\.md$", regex), ["docs/domain.md"]);
+    assert!(filter(cx, "(", regex).is_empty());
+}
+
+/// A query chip matches its text as written, whatever options the filter
+/// it replaces had: `C++` is not read as a regex.
+#[gpui::test]
+fn a_query_chip_matches_its_text_as_written(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_search::TextSearchOptions;
+    let (list, entity, cx) = mount_list(cx, ["src/C++/a.cc", "src/CC/b.cc"].map(String::from));
+    let id = list_id(cx, &entity);
+    cx.update(|_, app| {
+        list.set_filter_chips(vec![FileListFilterChip::query("C++", "c++")], app);
+        let regex = TextSearchOptions {
+            regex: true,
+            ..Default::default()
+        };
+        list.set_filter("b".into(), regex, app);
+    });
+    draw(cx);
+    assert_eq!(shown(cx, &list), ["src/CC/b.cc"]);
+    click_debug_selector(cx, selector(format!("file_filter_{id}_0")));
+    draw(cx);
+    assert_eq!(shown(cx, &list), ["src/C++/a.cc"]);
 }

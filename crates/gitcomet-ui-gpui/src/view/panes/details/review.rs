@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::search_keys::OpenActiveViewSearch;
 use crate::view::review_navigation::{self, ReviewNavigation};
 use crate::view::rows::{FileListId, FileListPlan, FileListRow, RowIx};
 

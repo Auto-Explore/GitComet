@@ -333,8 +333,19 @@ impl FileListController {
         self.files_rev = rev;
     }
 
+    /// The query, matched as a case-insensitive substring.
     pub(in crate::view) fn set_query(&mut self, query: SharedString) {
+        self.set_filter(query, Default::default());
+    }
+
+    /// The query and how it matches, as a quick search bar's toggles set it.
+    pub(in crate::view) fn set_filter(
+        &mut self,
+        query: SharedString,
+        options: gitcomet_core::text_search::TextSearchOptions,
+    ) {
         self.query = query;
+        self.search_options = options;
     }
 
     pub(in crate::view) fn set_sort(&mut self, sort: CommitFileSort) {

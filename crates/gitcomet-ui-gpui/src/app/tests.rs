@@ -1967,10 +1967,10 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::view::DiffPrevChange))
             .on_action(record_action_listener!(crate::view::DiffNextChange))
             .on_action(record_action_listener!(
-                crate::view::DiffPrevSearchMatchOrChange
+                crate::kit::search_keys::DiffPrevSearchMatchOrChange
             ))
             .on_action(record_action_listener!(
-                crate::view::DiffNextSearchMatchOrChange
+                crate::kit::search_keys::DiffNextSearchMatchOrChange
             ))
             .on_action(record_action_listener!(crate::view::TextInputCommitSubmit))
             .on_action(record_action_listener!(
@@ -1979,10 +1979,10 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
             .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
             .on_action(record_action_listener!(
-                crate::view::TextInputDiffPrevSearchMatchOrChange
+                crate::kit::search_keys::TextInputDiffPrevSearchMatchOrChange
             ))
             .on_action(record_action_listener!(
-                crate::view::TextInputDiffNextSearchMatchOrChange
+                crate::kit::search_keys::TextInputDiffNextSearchMatchOrChange
             ))
             .on_action(record_action_listener!(
                 crate::view::TextInputDiffPrevChange
@@ -1990,7 +1990,9 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(
                 crate::view::TextInputDiffNextChange
             ))
-            .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
+            .on_action(record_action_listener!(
+                crate::kit::search_keys::OpenActiveViewSearch
+            ))
             .on_action(record_action_listener!(crate::view::HistoryFindPrevious))
             .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
             .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
@@ -2215,11 +2217,11 @@ fn text_input_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext
         ("f4", crate::view::TextInputDiffNextFile.name()),
         (
             "f2",
-            crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            crate::kit::search_keys::TextInputDiffPrevSearchMatchOrChange.name(),
         ),
         (
             "f3",
-            crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            crate::kit::search_keys::TextInputDiffNextSearchMatchOrChange.name(),
         ),
         ("shift-f7", crate::view::TextInputDiffPrevChange.name()),
         ("f7", crate::view::TextInputDiffNextChange.name()),
@@ -2382,11 +2384,11 @@ fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
         ("alt-right", crate::kit::WordRight.name()),
         (
             "f2",
-            crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            crate::kit::search_keys::TextInputDiffPrevSearchMatchOrChange.name(),
         ),
         (
             "f3",
-            crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            crate::kit::search_keys::TextInputDiffNextSearchMatchOrChange.name(),
         ),
         ("secondary-shift-a", SwitchRepository.name()),
         // No text-input binding (an Emacs kill-line, say) may shadow it.
@@ -2648,7 +2650,10 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-o", OpenRepository.name()),
         ("secondary-shift-o", SwitchRepository.name()),
         ("secondary-shift-a", SwitchRepository.name()),
-        ("secondary-f", crate::view::OpenActiveViewSearch.name()),
+        (
+            "secondary-f",
+            crate::kit::search_keys::OpenActiveViewSearch.name(),
+        ),
         ("secondary-p", crate::view::ToggleCommandPalette.name()),
         ("secondary-g", crate::view::ToggleRevealCommit.name()),
         (
@@ -2667,8 +2672,14 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-q", Quit.name()),
         ("f1", crate::view::DiffPrevFile.name()),
         ("f4", crate::view::DiffNextFile.name()),
-        ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
-        ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
+        (
+            "f2",
+            crate::kit::search_keys::DiffPrevSearchMatchOrChange.name(),
+        ),
+        (
+            "f3",
+            crate::kit::search_keys::DiffNextSearchMatchOrChange.name(),
+        ),
     ];
 
     #[cfg(target_os = "macos")]

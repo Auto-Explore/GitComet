@@ -42,7 +42,8 @@ pub enum FileListFilter {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum FileListFilterChip {
-    /// Filters by path text, like [`crate::FileList::set_filter`].
+    /// Filters by path text, like [`crate::FileList::set_filter`] with the
+    /// default options: a case-insensitive substring.
     #[non_exhaustive]
     Query {
         label: SharedString,

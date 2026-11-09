@@ -630,6 +630,8 @@ pub trait DiffPaneImpl {
     fn selection(&self, cx: &App) -> Option<DiffLineRange>;
     /// Scrolls `line` of `side` into view.
     fn reveal(&self, side: DiffLineSide, line: u32, cx: &mut App);
+    /// Gives the pane the keyboard, now or once its diff is first drawn.
+    fn focus(&self, window: &mut gitcomet_ui_kit::gpui::Window, cx: &mut App);
     /// Highlights rows containing `query`; empty clears it. Ignored when the
     /// policy disallows search.
     fn set_search(&self, query: SharedString, cx: &mut App);
@@ -718,6 +720,16 @@ impl DiffPane {
 
     pub fn reveal(&self, side: DiffLineSide, line: u32, cx: &mut App) {
         self.0.reveal(side, line, cx)
+    }
+
+    /// Gives the pane the keyboard, as picking a file in History gives its
+    /// diff: Up/Down then step between changes and on into the previous or
+    /// next file, Alt+Up/Down between files, and the F-keys work as there.
+    /// Keys bound in a context of the extension's view around the pane
+    /// still reach it. Before the diff is first drawn, it takes the keyboard
+    /// when it is.
+    pub fn focus(&self, window: &mut gitcomet_ui_kit::gpui::Window, cx: &mut App) {
+        self.0.focus(window, cx)
     }
 
     pub fn set_search(&self, query: impl Into<SharedString>, cx: &mut App) {
@@ -820,8 +832,13 @@ pub trait FileListImpl {
     fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App);
     fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
     fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
-    /// Shows only files whose path contains `query` (case-insensitive).
-    fn set_filter(&self, query: SharedString, cx: &mut App);
+    /// Shows only files whose path matches `query` as `options` say.
+    fn set_filter(
+        &self,
+        query: SharedString,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    );
     /// The files as shown: sorted, filtered.
     fn files(&self, cx: &App) -> Vec<CommitFileChange>;
     fn selected(&self, cx: &App) -> Option<CommitFileChange>;
@@ -901,8 +918,18 @@ impl FileList {
         self.0.set_mode(mode, cx)
     }
 
-    pub fn set_filter(&self, query: impl Into<SharedString>, cx: &mut App) {
-        self.0.set_filter(query.into(), cx)
+    /// Shows only files whose path matches `query`, matched as a quick
+    /// search bar's match case, whole word and regex toggles say;
+    /// `TextSearchOptions::default()` is a case-insensitive substring. A
+    /// query that is not a valid regex shows no files. A filter chip's query
+    /// replaces it, matched with the default options.
+    pub fn set_filter(
+        &self,
+        query: impl Into<SharedString>,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) {
+        self.0.set_filter(query.into(), options, cx)
     }
 
     pub fn files(&self, cx: &App) -> Vec<CommitFileChange> {

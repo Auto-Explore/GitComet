@@ -558,3 +558,100 @@ fn switching_views_focuses_the_selected_view_once(cx: &mut gpui::TestAppContext)
             .is_focused(window)
     }));
 }
+
+/// An extension's details tab with a search of its own, answering the
+/// search keys through the kit while it has one and leaving them to the
+/// host otherwise.
+struct SearchingView {
+    focus: gpui::FocusHandle,
+    input: gpui::Entity<components::TextInput>,
+    probe: SearchProbe,
+}
+
+#[derive(Clone, Default)]
+struct SearchProbe {
+    answers: Rc<Cell<bool>>,
+    heard: Rc<std::cell::RefCell<Vec<crate::kit::search_keys::SearchKey>>>,
+}
+
+impl gpui::Render for SearchingView {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let root = div()
+            .size_full()
+            .debug_selector(|| "searching_view".into())
+            .track_focus(&self.focus)
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)),
+            )
+            .child(self.input.clone());
+        crate::kit::search_keys::on_search_keys(root, cx, |this, key, _, _| {
+            this.probe.heard.borrow_mut().push(key);
+            this.probe.answers.get()
+        })
+    }
+}
+
+struct SearchingViews(SearchProbe);
+impl Extension for SearchingViews {
+    fn id(&self) -> ExtensionId {
+        ExtensionId::new("com.example.searching").unwrap()
+    }
+    fn register(&self, registrar: &mut Registrar) {
+        let probe = self.0.clone();
+        registrar.details_tab(
+            "searching",
+            DetailsTabDescriptor::new("Searching", move |_, window, app| {
+                let probe = probe.clone();
+                app.new(|cx| SearchingView {
+                    focus: cx.focus_handle(),
+                    input: cx.new(|cx| components::TextInput::new(Default::default(), window, cx)),
+                    probe,
+                })
+                .into()
+            }),
+        );
+    }
+}
+
+/// Cmd/Ctrl+F and F2/F3 pressed in an extension's view reach the view first,
+/// in its text input as well as elsewhere, and a key the view does not take
+/// goes on to the host: Cmd/Ctrl+F then opens History's find.
+#[gpui::test]
+fn an_extension_view_answers_the_search_keys_first(cx: &mut gpui::TestAppContext) {
+    use crate::kit::search_keys::SearchKey;
+    let probe = SearchProbe::default();
+    probe.answers.set(true);
+    let registry = Registry::build(vec![Box::new(SearchingViews(probe.clone()))]).unwrap();
+    let (view, cx) = open_view(cx, registry, Path::new("/tmp/extension-search-keys"));
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |view, cx| {
+            view.select_routed_view(
+                crate::view::repository_views::RoutedArea::Details,
+                Some(0),
+                window,
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    click_debug_selector(cx, "searching_view");
+    cx.simulate_keystrokes("secondary-f f2");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("history_find").is_none());
+
+    let step = |forward| SearchKey::Step { forward };
+    assert_eq!(*probe.heard.borrow(), [SearchKey::Open, step(false)]);
+
+    probe.answers.set(false);
+    click_debug_selector(cx, "searching_view");
+    cx.simulate_keystrokes("secondary-f");
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("history_find").is_some(),
+        "the host had the key the view left"
+    );
+}
