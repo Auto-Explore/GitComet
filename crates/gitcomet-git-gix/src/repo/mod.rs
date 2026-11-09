@@ -80,6 +80,7 @@ mod patch_action;
 mod porcelain;
 mod pull;
 mod remotes;
+mod remotes_push;
 mod shared;
 mod shared_ranges;
 mod signatures;
