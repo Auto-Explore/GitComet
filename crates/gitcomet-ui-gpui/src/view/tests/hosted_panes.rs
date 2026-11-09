@@ -5342,3 +5342,72 @@ fn list_observers_follow_sort_layout_and_filter(cx: &mut gpui::TestAppContext) {
     assert_eq!(seen.borrow().last(), Some(&vec![PathBuf::from("a.rs")]));
     drop(subscription);
 }
+
+/// `DiffPane::focus` asked for before the diff is drawn gives it the
+/// keyboard once it is, and Up/Down then step as in History: through the
+/// changes, then on into the next or previous file.
+#[gpui::test]
+fn a_focused_pane_steps_through_changes_into_the_next_file(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{DiffFileNavigation, HostedAction};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (host, repository) = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let steps = Rc::new(RefCell::new(Vec::new()));
+    let step = |name: &'static str| {
+        let steps = Rc::clone(&steps);
+        Some(HostedAction::new(name, move |_| {
+            steps.borrow_mut().push(name)
+        }))
+    };
+    let pane = cx.update(|_, app| {
+        host.create_diff_pane(
+            &repository,
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            DiffPaneOptions {
+                file_navigation: DiffFileNavigation {
+                    previous: step("previous"),
+                    next: step("next"),
+                },
+                ..DiffPaneOptions::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    settle(cx, &view, &store, "the diff", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let (_holder, cx) = cx.add_window_view(|_, _| PaneHolder(pane.view()));
+    cx.update(|window, app| pane.focus(window, app));
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            cx.run_until_parked();
+            crate::view::test_support::redraw(cx);
+        }
+    };
+    draw(cx);
+    for _ in 0..4 {
+        cx.simulate_keystrokes("down");
+        draw(cx);
+    }
+    assert_eq!(
+        steps.borrow().first(),
+        Some(&"next"),
+        "on past the last change"
+    );
+    steps.borrow_mut().clear();
+    for _ in 0..4 {
+        cx.simulate_keystrokes("up");
+        draw(cx);
+    }
+    assert_eq!(
+        steps.borrow().first(),
+        Some(&"previous"),
+        "back past the first"
+    );
+}

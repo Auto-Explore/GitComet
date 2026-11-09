@@ -630,6 +630,8 @@ pub trait DiffPaneImpl {
     fn selection(&self, cx: &App) -> Option<DiffLineRange>;
     /// Scrolls `line` of `side` into view.
     fn reveal(&self, side: DiffLineSide, line: u32, cx: &mut App);
+    /// Gives the pane the keyboard, now or once its diff is first drawn.
+    fn focus(&self, window: &mut gitcomet_ui_kit::gpui::Window, cx: &mut App);
     /// Highlights rows containing `query`; empty clears it. Ignored when the
     /// policy disallows search.
     fn set_search(&self, query: SharedString, cx: &mut App);
@@ -718,6 +720,16 @@ impl DiffPane {
 
     pub fn reveal(&self, side: DiffLineSide, line: u32, cx: &mut App) {
         self.0.reveal(side, line, cx)
+    }
+
+    /// Gives the pane the keyboard, as picking a file in History gives its
+    /// diff: Up/Down then step between changes and on into the previous or
+    /// next file, Alt+Up/Down between files, and the F-keys work as there.
+    /// Keys bound in a context of the extension's view around the pane
+    /// still reach it. Before the diff is first drawn, it takes the keyboard
+    /// when it is.
+    pub fn focus(&self, window: &mut gitcomet_ui_kit::gpui::Window, cx: &mut App) {
+        self.0.focus(window, cx)
     }
 
     pub fn set_search(&self, query: impl Into<SharedString>, cx: &mut App) {

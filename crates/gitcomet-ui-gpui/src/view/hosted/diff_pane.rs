@@ -32,6 +32,8 @@ pub(crate) struct DiffPaneView {
     engaged: u64,
     _focus_in: Option<gpui::Subscription>,
     focus_window: Option<gpui::WindowId>,
+    /// `DiffPane::focus` came before the renderer existed.
+    focus_pending: bool,
     renderer: Option<Entity<DiffRenderer>>,
     renderer_subscription: Option<gpui::Subscription>,
     preferences_subscription: Option<gpui::Subscription>,
@@ -95,6 +97,7 @@ impl DiffPaneView {
             engaged: next_engaged(),
             _focus_in: None,
             focus_window: None,
+            focus_pending: false,
             renderer: None,
             renderer_subscription: None,
             preferences_subscription: None,
@@ -350,6 +353,12 @@ impl DiffPaneView {
                 this.engaged = next_engaged();
             }));
             self.focus_window = Some(window.window_handle().window_id());
+        }
+        if std::mem::take(&mut self.focus_pending)
+            && let Some(renderer) = &self.renderer
+        {
+            let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
         }
     }
 
@@ -1258,6 +1267,18 @@ impl DiffPaneImpl for HostedDiffPane {
             pane.options.file_navigation = navigation;
             pane.sync_decor(cx);
             cx.notify();
+        });
+    }
+    fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| match &pane.renderer {
+            Some(renderer) => {
+                let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+            }
+            None => {
+                pane.focus_pending = true;
+                cx.notify();
+            }
         });
     }
     fn set_bar(&self, bar: gitcomet_extension_api::DiffBar, cx: &mut App) {
