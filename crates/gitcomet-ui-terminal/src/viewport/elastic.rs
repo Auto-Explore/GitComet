@@ -1,6 +1,6 @@
 use super::*;
 use gitcomet_ui_kit::elastic_scroll::{ElasticScrollDriver, ElasticScrollState};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,18 +50,31 @@ impl Position {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+pub(super) enum WheelAttempt {
+    #[default]
+    Declined,
+    Owned,
+}
+
 /// Alacritty renders complete rows. Keep sub-row wheel intent in the logical
 /// model instead of reporting its rounding remainder as elastic edge travel.
 #[derive(Clone, Default)]
 pub(super) struct TerminalElasticScroll {
     pub(super) motion: ElasticScrollState,
     position: Rc<RefCell<Position>>,
+    wheel_attempt: Rc<Cell<WheelAttempt>>,
 }
 
 impl TerminalElasticScroll {
     pub(super) fn reset(&self) {
         self.motion.reset();
         self.position.borrow_mut().snapshot = None;
+        self.wheel_attempt.set(WheelAttempt::Declined);
+    }
+
+    pub(super) fn take_wheel_attempt(&self) -> WheelAttempt {
+        self.wheel_attempt.replace(WheelAttempt::Declined)
     }
 
     pub(super) fn driver(
@@ -81,6 +94,7 @@ impl TerminalElasticScroll {
         TerminalScrollDriver {
             term_lock,
             position: self.position.clone(),
+            wheel_attempt: self.wheel_attempt.clone(),
             fallback,
         }
     }
@@ -107,6 +121,7 @@ impl TerminalElasticScroll {
 pub(super) struct TerminalScrollDriver {
     term_lock: Option<AlacrittyTermLock>,
     position: Rc<RefCell<Position>>,
+    wheel_attempt: Rc<Cell<WheelAttempt>>,
     fallback: Snapshot,
 }
 
@@ -133,6 +148,7 @@ impl ElasticScrollDriver for TerminalScrollDriver {
     }
 
     fn scroll_by(&self, delta: Pixels) -> Pixels {
+        self.wheel_attempt.set(WheelAttempt::Declined);
         let Some(lock) = &self.term_lock else {
             return px(0.0);
         };
@@ -144,6 +160,9 @@ impl ElasticScrollDriver for TerminalScrollDriver {
         if !snapshot.normal_buffer || !f32::from(delta).is_finite() {
             return px(0.0);
         }
+        // Record ownership under the same lock as the mode check and scroll.
+        // Even a clamped or sub-row delta belongs to this normal-buffer route.
+        self.wheel_attempt.set(WheelAttempt::Owned);
         let old = position.pixels;
         let next = (old + f64::from(f32::from(delta))).clamp(-snapshot.max(), 0.0);
         let rows_from_top = (-next / snapshot.line_height()).floor() as usize;

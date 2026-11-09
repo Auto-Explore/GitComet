@@ -21,7 +21,7 @@ use palette::IntoColor;
 use std::time::{Duration, Instant};
 
 mod elastic;
-use elastic::TerminalElasticScroll;
+use elastic::{TerminalElasticScroll, WheelAttempt};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TerminalTextMetrics {
@@ -958,6 +958,24 @@ impl TerminalViewportView {
         self.scroll_elastic.reset();
         cx.notify();
         true
+    }
+
+    fn finish_elastic_scroll_wheel(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // A parser mode change after scroll_by releases its lock cannot turn
+        // an already owned packet into a second terminal-application input.
+        match self.scroll_elastic.take_wheel_attempt() {
+            WheelAttempt::Declined => self.handle_scroll_wheel(event, window, cx),
+            WheelAttempt::Owned => {
+                if self.selecting && event.delta.pixel_delta(window.line_height()).y != px(0.0) {
+                    self.selection_drag_moved = true;
+                }
+            }
+        }
     }
 
     pub(super) fn handle_scroll_wheel(
@@ -1899,24 +1917,7 @@ impl Render for TerminalViewportView {
                                     }
                                     accepts
                                 })
-                                .on_scroll(cx.listener(
-                                    |this, event, window, cx| {
-                                        // A mode can change between the gate and the
-                                        // driver locking the backend. Preserve the
-                                        // terminal application's original packet.
-                                        if !this
-                                            .scroll_elastic
-                                            .accepts_wheel(this.term_lock.as_ref(), event)
-                                        {
-                                            this.handle_scroll_wheel(event, window, cx);
-                                        } else if this.selecting
-                                            && event.delta.pixel_delta(window.line_height()).y
-                                                != px(0.0)
-                                        {
-                                            this.selection_drag_moved = true;
-                                        }
-                                    },
-                                ))
+                                .on_scroll(cx.listener(Self::finish_elastic_scroll_wheel))
                             }),
                     )
                     .child({

@@ -78,6 +78,24 @@ fn precise_scrollback_metrics_keep_fractional_progress_while_the_parser_is_busy(
     );
 }
 
+#[test]
+fn normal_scroll_attempt_owns_clamped_and_fractional_deltas() {
+    let term = test_term_with_lines(30);
+    let elastic = TerminalElasticScroll::default();
+    let driver = elastic.driver(Some(term), px(TEST_LINE_H), None);
+    assert_eq!(driver.scroll_by(px(-1.0)), px(0.0));
+    assert_eq!(elastic.take_wheel_attempt(), WheelAttempt::Owned);
+    assert_eq!(driver.scroll_by(px(0.25)), px(0.25));
+    assert_eq!(elastic.take_wheel_attempt(), WheelAttempt::Owned);
+    assert_eq!(
+        elastic.take_wheel_attempt(),
+        WheelAttempt::Declined,
+        "an attempt result is consumed once"
+    );
+    assert_eq!(driver.scroll_by(px(f32::NAN)), px(0.0));
+    assert_eq!(elastic.take_wheel_attempt(), WheelAttempt::Declined);
+}
+
 #[cfg(target_os = "macos")]
 fn live_viewport(
     term: AlacrittyTermLock,
@@ -266,6 +284,88 @@ fn newly_enabled_mouse_reporting_gets_the_original_packet_and_cancels_existing_b
             );
         },
     );
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn reporting_enabled_after_a_successful_scroll_does_not_receive_the_owned_packet(
+    cx: &mut gpui::TestAppContext,
+) {
+    let term = test_term_with_lines(80);
+    let (sender, receiver) = PtySender::recording();
+    let (view, cx) = live_viewport(term.clone(), Some(sender), cx);
+    written_bytes(&receiver);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            let metrics = view.layout_cache.as_ref().unwrap().metrics;
+            let event = wheel(
+                view.viewport_bounds.unwrap().center(),
+                ScrollDelta::Pixels(point(px(0.0), metrics.line_height * 4.0)),
+            );
+            assert!(view.scroll_elastic.accepts_wheel(view.term_lock.as_ref(), &event));
+            let driver = view.scroll_elastic.driver(
+                view.term_lock.clone(),
+                metrics.line_height,
+                view.last_content.as_ref(),
+            );
+            assert_eq!(driver.scroll_by(metrics.line_height * 4.0), metrics.line_height * 4.0);
+            let after = term.lock().grid().display_offset();
+            assert_eq!(after, 4);
+            // Deterministically model the parser acquiring the released lock
+            // between the successful driver attempt and its on_scroll callback.
+            {
+                let mut term = term.lock();
+                let mut parser: Processor = Processor::new();
+                parser.advance(&mut *term, b"\x1b[?1000h\x1b[?1006h");
+            }
+            view.finish_elastic_scroll_wheel(&event, window, cx);
+            assert_eq!(term.lock().grid().display_offset(), after);
+            assert!(
+                written_bytes(&receiver).is_empty(),
+                "one owned packet must not also produce a mouse report after the parser changes modes"
+            );
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn a_mode_change_before_the_scroll_attempt_forwards_the_original_packet_once(
+    cx: &mut gpui::TestAppContext,
+) {
+    let term = test_term_with_lines(80);
+    let (sender, receiver) = PtySender::recording();
+    let (view, cx) = live_viewport(term.clone(), Some(sender), cx);
+    written_bytes(&receiver);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            let metrics = view.layout_cache.as_ref().unwrap().metrics;
+            let bounds = view.viewport_bounds.unwrap();
+            let event = wheel(
+                bounds.origin + point(metrics.cell_width * 1.5, metrics.line_height * 2.5),
+                ScrollDelta::Pixels(point(px(0.0), px(1.0))),
+            );
+            assert!(
+                view.scroll_elastic
+                    .accepts_wheel(view.term_lock.as_ref(), &event)
+            );
+            let driver = view.scroll_elastic.driver(
+                view.term_lock.clone(),
+                metrics.line_height,
+                view.last_content.as_ref(),
+            );
+            {
+                let mut term = term.lock();
+                let mut parser: Processor = Processor::new();
+                parser.advance(&mut *term, b"\x1b[?1000h\x1b[?1006h");
+            }
+            let before = term.lock().grid().display_offset();
+            assert_eq!(driver.scroll_by(px(1.0)), px(0.0));
+            view.finish_elastic_scroll_wheel(&event, window, cx);
+            assert_eq!(term.lock().grid().display_offset(), before);
+            assert_eq!(written_bytes(&receiver), vec![b"\x1b[<64;2;3M".to_vec()]);
+        });
+    });
 }
 
 #[cfg(target_os = "macos")]
