@@ -871,3 +871,52 @@ fn authentication_prompt_waits_while_the_commit_message_is_being_typed(
         });
     }
 }
+
+/// Ctrl/Cmd+Shift+Enter, the key the Commit & Push tooltip shows, commits from
+/// the message input like Ctrl/Cmd+Enter does.
+#[gpui::test]
+fn commit_message_secondary_shift_enter_commits_staged_changes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(705316);
+    let commit_id = CommitId("8899aabbccddef11".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_push_shortcut",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: "src/lib.rs".into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: std::sync::Arc::new(vec![]),
+        }
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_commit_message_input(cx, &view);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("commit and push".to_string(), cx);
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    cx.simulate_keystrokes("secondary-shift-enter");
+    draw_and_drain_test_window(cx);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+        "expected secondary-shift-enter from the commit message input to dispatch a commit"
+    );
+}

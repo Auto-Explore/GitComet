@@ -1124,7 +1124,7 @@ fn submit_commit_box(cx: &mut gpui::VisualTestContext, view: &CommitView) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                assert!(pane.handle_commit_submit_shortcut(window, cx));
+                assert!(pane.handle_commit_submit_shortcut(false, window, cx));
             });
         });
     });

@@ -9,10 +9,10 @@ use crate::view::{
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose,
     PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev,
     SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,
-    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, WorkspaceBootstrap,
-    is_diff_shortcut_candidate,
+    TextInputCommitAndPushSubmit, TextInputCommitSubmit, TextInputDiffNextChange,
+    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
+    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
+    WorkspaceBootstrap, is_diff_shortcut_candidate,
 };
 use gitcomet_core::identity::{self, WindowKind};
 use gitcomet_core::path_utils::canonicalize_or_original;

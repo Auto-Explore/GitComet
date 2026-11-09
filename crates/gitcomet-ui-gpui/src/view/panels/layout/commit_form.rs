@@ -154,10 +154,11 @@ impl DetailsPaneView {
 
     pub(in crate::view) fn handle_commit_submit_shortcut(
         &mut self,
+        push_after_commit: bool,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if self.handle_commit_reword_submit_shortcut(window, cx) {
+        if !push_after_commit && self.handle_commit_reword_submit_shortcut(window, cx) {
             return true;
         }
         if !self
@@ -169,7 +170,7 @@ impl DetailsPaneView {
             return false;
         }
 
-        let _ = self.submit_commit(false, cx);
+        let _ = self.submit_commit(push_after_commit, cx);
         true
     }
 
@@ -234,7 +235,11 @@ impl DetailsPaneView {
                 let _ = this.submit_commit(false, cx);
             })
             .debug_selector(|| "commit_button".to_string())
-            .gitcomet_tooltip(theme, commit_tooltip.into());
+            .gitcomet_tooltip_keyed(
+                theme,
+                commit_tooltip.into(),
+                vec![components::secondary_shortcut("Enter").into()],
+            );
         let commit_and_push = components::Button::new("commit_and_push", push_label)
             .start_slot(start_slot(
                 "commit_push_spinner",
@@ -246,7 +251,11 @@ impl DetailsPaneView {
                 let _ = this.submit_commit(true, cx);
             })
             .debug_selector(|| "commit_and_push_button".to_string())
-            .gitcomet_tooltip(theme, push_tooltip.into());
+            .gitcomet_tooltip_keyed(
+                theme,
+                push_tooltip.into(),
+                vec![components::secondary_shortcut("Shift+Enter").into()],
+            );
         // The frame and raised fill the old split Commit button used.
         let framed = |frame_selector: &'static str, button: gpui::Stateful<gpui::Div>| {
             components::filled_action_frame(

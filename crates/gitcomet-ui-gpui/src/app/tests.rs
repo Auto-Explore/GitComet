@@ -1973,6 +1973,9 @@ impl Render for KeyBindingProbe {
                 crate::view::DiffNextSearchMatchOrChange
             ))
             .on_action(record_action_listener!(crate::view::TextInputCommitSubmit))
+            .on_action(record_action_listener!(
+                crate::view::TextInputCommitAndPushSubmit
+            ))
             .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
             .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
             .on_action(record_action_listener!(
@@ -2204,6 +2207,10 @@ fn text_input_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext
         ("enter", crate::kit::Enter.name()),
         ("shift-enter", crate::kit::ShiftEnter.name()),
         ("secondary-enter", crate::view::TextInputCommitSubmit.name()),
+        (
+            "secondary-shift-enter",
+            crate::view::TextInputCommitAndPushSubmit.name(),
+        ),
         ("f1", crate::view::TextInputDiffPrevFile.name()),
         ("f4", crate::view::TextInputDiffNextFile.name()),
         (
