@@ -51,23 +51,12 @@ fn model_for_web_link(url: &str, load_remote_image_url: Option<&str>) -> Context
 mod tests {
     use super::*;
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn model_offers_opening_and_copying_the_link() {
         let model = model_for_web_link("https://example.com/page", None);
 
         assert_eq!(
-            entry_labels(&model),
+            model.entry_labels(),
             vec!["Open in web browser", "Copy link address"]
         );
         // The destination is shown so a link's text cannot disguise where it goes.
@@ -132,7 +121,7 @@ mod tests {
         );
 
         assert_eq!(
-            entry_labels(&model),
+            model.entry_labels(),
             vec!["Load image", "Open in web browser", "Copy link address"]
         );
         let load = model

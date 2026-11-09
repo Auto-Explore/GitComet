@@ -173,17 +173,6 @@ mod tests {
         }));
     }
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<&str> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn whitespace_options_mirror_the_diff_view_and_drive_its_settings() {
         let model = model_for_mergetool_settings(
@@ -231,11 +220,12 @@ mod tests {
         for three_way_view in [true, false] {
             let model = model(three_way_view);
             assert!(
-                !entry_labels(&model)
+                !model
+                    .entry_labels()
                     .iter()
                     .any(|label| label.contains("for all")),
                 "{:?}",
-                entry_labels(&model)
+                model.entry_labels()
             );
         }
     }

@@ -52,24 +52,13 @@ fn model_for_commit_sha_link(
 mod tests {
     use super::*;
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn model_offers_revealing_and_browsing() {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, true);
 
         assert_eq!(
-            entry_labels(&model),
+            model.entry_labels(),
             vec!["Reveal commit", "Start file browsing"]
         );
         // The id is shown so a reference in prose can be checked before acting.
@@ -84,7 +73,7 @@ mod tests {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, false);
 
-        assert_eq!(entry_labels(&model), vec!["Start file browsing"]);
+        assert_eq!(model.entry_labels(), vec!["Start file browsing"]);
     }
 
     #[test]
