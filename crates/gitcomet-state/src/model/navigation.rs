@@ -116,7 +116,7 @@ pub struct ViewHistoryEntry {
 /// is a full-content preview, the selected commit, and any active two-point
 /// comparison. Replaying a snapshot only restores view/selection state; it never
 /// re-runs operations like a checkout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MainViewSnapshot {
     pub diff_target: Option<DiffTarget>,
     pub content_preview: bool,
@@ -139,6 +139,30 @@ pub struct MainViewSnapshot {
     /// others. Without it, selecting a worktree row reads as "selection cleared"
     /// and back/forward can neither leave the row nor return to it.
     pub worktree_selection: Option<PathBuf>,
+}
+
+impl PartialEq for MainViewSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.diff_target == other.diff_target
+            && self.content_preview == other.content_preview
+            && self.edit_mode == other.edit_mode
+            && self.selected_commit == other.selected_commit
+            && same_range_view(
+                self.range_selection.as_ref(),
+                other.range_selection.as_ref(),
+            )
+            && self.worktree_selection == other.worktree_selection
+    }
+}
+
+/// Whether two comparisons show the same view. What started one does not
+/// count: a step back restores a selection's comparison as an explicit one.
+fn same_range_view(a: Option<&RangeSelection>, b: Option<&RangeSelection>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.same_comparison(b) && a.base == b.base,
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
 }
 
 /// Browser-style back/forward stack. `cursor` indexes the currently shown entry
@@ -334,7 +358,10 @@ impl RepoState {
             && self.diff_state.content_preview == other.content_preview
             && self.diff_state.edit_mode == other.edit_mode
             && self.history_state.selected_commit == other.selected_commit
-            && self.history_state.range_selection == other.range_selection
+            && same_range_view(
+                self.history_state.range_selection.as_ref(),
+                other.range_selection.as_ref(),
+            )
             && self.history_state.worktree_selection == other.worktree_selection
     }
 }

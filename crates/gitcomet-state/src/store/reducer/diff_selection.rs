@@ -405,8 +405,23 @@ pub(super) fn global_nav(
 
     let mut effects: Vec<Effect> = Vec::new();
 
+    // A step within a live comparison keeps its selection: a plain select would
+    // collapse the selection that started it.
+    let keeps_comparison = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .is_some_and(|repo| {
+            repo.history_state.selected_commit == snapshot.selected_commit
+                && matches!(
+                    (&repo.history_state.range_selection, &snapshot.range_selection),
+                    (Some(current), Some(saved)) if current.same_comparison(saved)
+                )
+        });
+
     // Restore the selected commit (history-log selection / commit details).
     match snapshot.selected_commit {
+        Some(_) if keeps_comparison => {}
         Some(commit_id) => {
             let sel_effects = super::effects::select_commit(state, repo_id, commit_id.clone());
             // `select_commit` no-ops when this commit is already selected, but a

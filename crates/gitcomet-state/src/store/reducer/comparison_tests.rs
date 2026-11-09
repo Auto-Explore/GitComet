@@ -879,3 +879,77 @@ fn leaving_the_editor_after_the_comparison_ended_does_not_reopen_its_diff() {
         Some(gitcomet_core::domain::DiffTarget::CommitRange { .. })
     ));
 }
+
+fn open_range_file(state: &mut AppState, repo_id: RepoId, path: &str) {
+    dispatch_effects(
+        state,
+        Msg::SelectDiff {
+            repo_id,
+            target: gitcomet_core::domain::DiffTarget::commit_range(
+                CommitId("c1".into()),
+                Some(CommitId("c3".into())),
+                Some(path.into()),
+            ),
+        },
+    );
+}
+
+/// Back/Forward between two files of a live pair keeps the pair.
+#[test]
+fn stepping_back_between_a_pairs_files_keeps_the_pair() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    open_range_file(&mut state, repo_id, "a.txt");
+    open_range_file(&mut state, repo_id, "b.txt");
+
+    let effects = dispatch_effects(&mut state, Msg::GlobalNavBack { repo_id });
+
+    let history = &repo(&state, repo_id).history_state;
+    assert_eq!(history.multi_selection.commits.len(), 2);
+    assert_eq!(
+        history.range_selection.as_ref().map(|range| range.source),
+        Some(ComparisonSource::SelectedPair)
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "the unchanged pair must not reload its list"
+    );
+    assert_eq!(
+        repo(&state, repo_id)
+            .diff_state
+            .diff_target
+            .as_ref()
+            .and_then(|target| target.file_path()),
+        Some(std::path::Path::new("a.txt"))
+    );
+}
+
+/// A pair restored by Back comes back as an explicit comparison; the history
+/// entry it was restored from must still describe the view.
+#[test]
+fn a_restored_pair_matches_its_history_entry() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    open_range_file(&mut state, repo_id, "a.txt");
+    dispatch_effects(
+        &mut state,
+        Msg::CompareWithWorkingTree {
+            repo_id,
+            from: CommitId("c2".into()),
+            from_label: "c2".into(),
+        },
+    );
+
+    dispatch_effects(&mut state, Msg::GlobalNavBack { repo_id });
+
+    let repo = repo(&state, repo_id);
+    let nav = &repo.navigation.main_history;
+    assert!(repo.main_view_snapshot_matches(&nav.entries[nav.cursor]));
+    assert!(nav.cursor + 1 < nav.entries.len(), "Forward is still there");
+}
