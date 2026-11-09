@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{LogPage, LogScope, RepoSpec};
 use gitcomet_core::history_index::{HistoryIndexBuilder, HistoryRange};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot};
-use gitcomet_state::model::{CommitMultiSelection, RangeSelection};
+use gitcomet_state::model::{CommitMultiSelection, ComparisonSource, RangeSelection};
 
 fn fixture(selected: &[usize]) -> (RepoState, Vec<Commit>) {
     fixture_with_count(selected, 600)
@@ -65,6 +65,11 @@ fn fixture_with_count(selected: &[usize], count: u32) -> (RepoState, Vec<Commit>
         to_label: "tip".into(),
         options: Default::default(),
         base: None,
+        source: if selected.len() >= 2 {
+            ComparisonSource::MergedSelection
+        } else {
+            ComparisonSource::Explicit
+        },
     });
     (repo, commits)
 }
@@ -229,6 +234,7 @@ fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_c
             .map(|commit| commit.id.clone())
             .collect(),
     );
+    repo.history_state.range_selection.as_mut().unwrap().source = ComparisonSource::MergedSelection;
     let (store, events) =
         gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
     let (view, cx) =

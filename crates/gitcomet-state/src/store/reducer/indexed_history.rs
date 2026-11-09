@@ -152,42 +152,12 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     history.index = Some(index.clone());
                     history.rev = history.rev.wrapping_add(1);
                     history.status_rev = history.status_rev.wrapping_add(1);
-                    let reveal = repo.history_state.reveal_target.clone();
-                    let reword_target = repo
-                        .history_state
-                        .selected_commit
-                        .as_ref()
-                        .filter(|id| repo.reword.retains_selected_commit(id))
-                        .cloned();
-                    let survives = |id: &gitcomet_core::domain::CommitId| {
-                        reveal.as_ref() == Some(id)
-                            || reword_target.as_ref() == Some(id)
-                            || index.position(id.as_ref()).is_some()
+                    let Some(pruned) = effects::prune_multi_selection(repo, |id| {
+                        index.position(id.as_ref()).is_some()
+                    }) else {
+                        return Vec::new();
                     };
-                    let mut selection = repo.history_state.multi_selection.clone();
-                    if selection.commits.iter().any(|id| !survives(id)) {
-                        Arc::make_mut(&mut selection.commits).retain(&survives);
-                    }
-                    if selection.anchor.as_ref().is_some_and(|id| !survives(id)) {
-                        selection.anchor = None;
-                    }
-                    selection.anchor_index = None;
-                    selection.anchor_log_rev = None;
-                    let missing_focus = repo
-                        .history_state
-                        .selected_commit
-                        .as_ref()
-                        .is_some_and(|id| !survives(id));
-                    let fallback = selection.commits.last().cloned();
-                    repo.set_commit_multi_selection(selection);
-                    if missing_focus {
-                        if let Some(id) = fallback {
-                            return effects::select_commit_and_load_details(repo, repo_id, id);
-                        }
-                        repo.set_selected_commit(None);
-                        repo.set_commit_details(Loadable::NotLoaded);
-                    }
-                    return Vec::new();
+                    return effects::apply_pruned_selection(state, repo_id, pruned, Some(&index));
                 }
                 Ok(Some(_)) => {
                     history.requested = None;
@@ -818,7 +788,20 @@ mod tests {
 
         select(&mut state, 10_000, CommitSelectMode::Single);
         select(&mut state, 10_002, CommitSelectMode::Toggle);
-        assert!(state.repos[0].history_state.multi_selection.is_multi());
+        let pair = state.repos[0]
+            .history_state
+            .range_selection
+            .as_ref()
+            .expect("two commits compare directly");
+        assert_eq!(pair.source, crate::model::ComparisonSource::SelectedPair);
+        assert_eq!(pair.to, index.commit_id(10_000));
+        assert_eq!(pair.from, index.commit_id(10_002).unwrap());
+
+        select(&mut state, 10_003, CommitSelectMode::Toggle);
+        assert_eq!(
+            state.repos[0].history_state.multi_selection.commits.len(),
+            3
+        );
         assert_eq!(state.repos[0].history_state.range_selection, None);
 
         select(&mut state, 10_001, CommitSelectMode::Toggle);
@@ -827,8 +810,180 @@ mod tests {
             .range_selection
             .as_ref()
             .expect("consecutive commits open a comparison");
+        assert_eq!(
+            range.source,
+            crate::model::ComparisonSource::MergedSelection
+        );
         assert_eq!(range.to, index.commit_id(10_000));
-        assert_eq!(range.from, index.commit_id(10_003).unwrap());
+        assert_eq!(range.from, index.commit_id(10_004).unwrap());
+    }
+
+    /// Rebuilds the index with only rows `0..2`, dropping the selected row 2,
+    /// over a comparison of `source`; returns what is left of the comparison
+    /// and the rebuild's effects.
+    fn rebuild_dropping_a_compared_commit(
+        source: crate::model::ComparisonSource,
+    ) -> (
+        Option<crate::model::RangeSelection>,
+        Vec<Effect>,
+        Option<gitcomet_core::domain::DiffTarget>,
+    ) {
+        let (mut state, index) = fixture();
+        let [newest, oldest] = [0, 2].map(|row| index.commit_id(row).unwrap());
+        let repo = &mut state.repos[0];
+        repo.history_state.multi_selection = crate::model::CommitMultiSelection {
+            commits: vec![newest.clone(), oldest.clone()].into(),
+            ..Default::default()
+        };
+        repo.history_state.selected_commit = Some(newest.clone());
+        repo.history_state.range_selection = Some(crate::model::RangeSelection {
+            source,
+            ..crate::model::RangeSelection::new(
+                oldest.clone(),
+                Some(newest.clone()),
+                "a".into(),
+                "b".into(),
+            )
+        });
+        repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit_range(
+            oldest,
+            Some(newest),
+            Some("a.txt".into()),
+        ));
+        repo.history_state.indexed = Default::default();
+        let snapshot = repo.history_state.log_snapshot.clone().unwrap();
+        let work = reduce(&mut state, Event::Ensure { repo_id: RepoId(1) });
+        let Some(Effect::IndexedHistory(Work::Build { seq, .. })) = work.first() else {
+            panic!("expected a build");
+        };
+        let mut builder = HistoryIndexBuilder::new(snapshot, LogScope::AllBranches, 20).unwrap();
+        for row in 0..2u32 {
+            let mut id = [0u8; 20];
+            id[..4].copy_from_slice(&row.to_be_bytes());
+            let mut parent = [0u8; 20];
+            parent[..4].copy_from_slice(&(row + 1).to_be_bytes());
+            builder.push(&id, [parent.as_slice()], false).unwrap();
+        }
+        let built = builder.finish(&CancellationToken::new()).unwrap();
+        let effects = reduce(
+            &mut state,
+            Event::Built {
+                repo_id: RepoId(1),
+                seq: *seq,
+                result: Ok(Some(built)),
+            },
+        );
+        (
+            state.repos[0].history_state.range_selection.clone(),
+            effects,
+            state.repos[0].diff_state.diff_target.clone(),
+        )
+    }
+
+    /// Rebuilds the fixture's index with only rows `0..rows` while `state`
+    /// holds its selection; returns the rebuild's effects.
+    fn rebuild_with_rows(state: &mut AppState, rows: u32) -> Vec<Effect> {
+        let repo = &mut state.repos[0];
+        repo.history_state.indexed = Default::default();
+        let snapshot = repo.history_state.log_snapshot.clone().unwrap();
+        let work = reduce(state, Event::Ensure { repo_id: RepoId(1) });
+        let Some(Effect::IndexedHistory(Work::Build { seq, .. })) = work.first() else {
+            panic!("expected a build");
+        };
+        let mut builder = HistoryIndexBuilder::new(snapshot, LogScope::AllBranches, 20).unwrap();
+        for row in 0..rows {
+            let mut id = [0u8; 20];
+            id[..4].copy_from_slice(&row.to_be_bytes());
+            let mut parent = [0u8; 20];
+            parent[..4].copy_from_slice(&(row + 1).to_be_bytes());
+            builder.push(&id, [parent.as_slice()], false).unwrap();
+        }
+        let built = builder.finish(&CancellationToken::new()).unwrap();
+        reduce(
+            state,
+            Event::Built {
+                repo_id: RepoId(1),
+                seq: *seq,
+                result: Ok(Some(built)),
+            },
+        )
+    }
+
+    #[test]
+    fn a_rebuild_that_leaves_two_commits_of_a_gap_compares_them() {
+        let (mut state, index) = fixture();
+        let [a, b, c] = [0, 2, 5].map(|row| index.commit_id(row).unwrap());
+        let repo = &mut state.repos[0];
+        repo.history_state.multi_selection = crate::model::CommitMultiSelection {
+            commits: vec![a.clone(), b.clone(), c].into(),
+            ..Default::default()
+        };
+        repo.history_state.selected_commit = Some(a.clone());
+
+        rebuild_with_rows(&mut state, 4);
+
+        let range = state.repos[0]
+            .history_state
+            .range_selection
+            .clone()
+            .expect("the surviving pair compares");
+        assert_eq!(range.from, b);
+        assert_eq!(range.to, Some(a));
+        assert_eq!(range.source, crate::model::ComparisonSource::SelectedPair);
+    }
+
+    /// An explicit comparison empties the multi-selection but keeps the commit
+    /// clicked before it; that commit vanishing is no reason to end it.
+    #[test]
+    fn a_rebuild_that_drops_the_stray_selected_commit_keeps_an_explicit_comparison() {
+        let (mut state, index) = fixture();
+        let [tip, base, stray] = [0, 1, 5].map(|row| index.commit_id(row).unwrap());
+        let repo = &mut state.repos[0];
+        repo.history_state.multi_selection = crate::model::CommitMultiSelection::default();
+        repo.history_state.selected_commit = Some(stray);
+        repo.history_state.range_selection = Some(crate::model::RangeSelection::new(
+            base,
+            Some(tip),
+            "base".into(),
+            "tip".into(),
+        ));
+
+        rebuild_with_rows(&mut state, 4);
+
+        assert!(state.repos[0].history_state.range_selection.is_some());
+    }
+
+    #[test]
+    fn a_rebuild_that_drops_a_compared_commit_leaves_the_selection_comparison() {
+        use crate::model::ComparisonSource;
+        for source in [
+            ComparisonSource::SelectedPair,
+            ComparisonSource::MergedSelection,
+        ] {
+            let (range, effects, diff_target) = rebuild_dropping_a_compared_commit(source);
+            assert_eq!(range, None, "{source:?}");
+            assert_eq!(
+                diff_target, None,
+                "the comparison's open diff goes too ({source:?})"
+            );
+            assert!(
+                effects.iter().any(|e| matches!(
+                    e,
+                    Effect::LoadCommitDetails { commit_id, .. } if commit_id.as_ref() == "0000000000000000000000000000000000000000"
+                )),
+                "the details pane goes back to the still-selected commit ({source:?})"
+            );
+        }
+        let (range, _, diff_target) =
+            rebuild_dropping_a_compared_commit(ComparisonSource::Explicit);
+        assert!(
+            range.is_some(),
+            "an explicit comparison does not come from the selection"
+        );
+        assert!(
+            diff_target.is_some(),
+            "an explicit comparison keeps its open diff"
+        );
     }
 
     #[test]

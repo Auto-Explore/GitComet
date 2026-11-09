@@ -276,13 +276,13 @@ pub(super) fn send_unavailable_git_effect_result(
             repo_id,
             from,
             to,
-            request,
+            load,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,
             to,
-            request,
+            request: load.request,
             result: Err(git_unavailable_error(runtime)),
         })),
         Effect::LoadSquashMessagePreview {

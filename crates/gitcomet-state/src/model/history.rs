@@ -169,6 +169,9 @@ pub struct HistoryState {
     /// The worktree moved again while a load was in flight; re-run once it
     /// lands, so the list still ends up describing the final state.
     pub range_files_refresh_queued: bool,
+    /// Stops the outstanding range-file load once a newer one or leaving the
+    /// comparison makes its reply unread.
+    pub(crate) range_files_cancellation: gitcomet_core::services::CancellationToken,
     pub squash_preview: Loadable<SquashPreview>,
     pub squash_preview_rev: u64,
     /// The `(oldest, head)` range whose message preview is currently being
@@ -312,6 +315,7 @@ impl Default for HistoryState {
             range_files_request: 0,
             range_files_in_flight: false,
             range_files_refresh_queued: false,
+            range_files_cancellation: Default::default(),
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
@@ -462,6 +466,13 @@ fn commit_selection_entry_index(
         .or_else(|| entries.iter().position(|id| id == target))
 }
 
+/// A claimed range-file load: the id its reply carries, and what stops it.
+#[derive(Clone, Debug)]
+pub struct RangeFilesLoad {
+    pub request: u64,
+    pub cancellation: gitcomet_core::services::CancellationToken,
+}
+
 /// A "compare two points" selection. `from` is the base/older side and `to`
 /// the newer side, so `git diff from to` reads as "what `to` adds". A `to` of
 /// `None` compares `from` against the live working tree. The labels are what the
@@ -478,6 +489,22 @@ pub struct RangeSelection {
     /// The commit the loaded list was measured from: the merge base of a
     /// merge-base comparison. `None` until the list loads.
     pub base: Option<CommitId>,
+    pub source: ComparisonSource,
+}
+
+/// What started a comparison, which decides whether the history multi-selection
+/// describes it and how the UI names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComparisonSource {
+    /// Consecutive selected commits: `from` is the oldest one's parent, so the
+    /// diff is their combined changes.
+    MergedSelection,
+    /// Exactly two selected commits that are not consecutive: the direct diff
+    /// between them, older (lower in the log) to newer.
+    SelectedPair,
+    /// Mark/compare, a branch, a tag, or the working tree. Any multi-selection
+    /// left over from earlier clicks describes something else and is dropped.
+    Explicit,
 }
 
 impl RangeSelection {
@@ -498,6 +525,17 @@ impl RangeSelection {
             to_label,
             options: Default::default(),
             base: None,
+            source: ComparisonSource::Explicit,
+        }
+    }
+
+    /// [`Self::same_comparison`] over optional comparisons: both absent, or the
+    /// same request. What started one and its loaded base do not count.
+    pub fn same_optional(a: Option<&Self>, b: Option<&Self>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => a.same_comparison(b),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
         }
     }
 
@@ -760,12 +798,13 @@ impl RepoState {
             self.history_state.selected_commit_rev.wrapping_add(1);
     }
 
-    /// Leave comparison mode: drop the endpoints and the file list, and retire
-    /// any load still in flight so its reply cannot repopulate the list of a
-    /// comparison the user has already left. Returns whether there was anything
-    /// to leave — a plain commit click runs through here on every selection, and
-    /// bumping the revs for a comparison that was never active would invalidate
-    /// the range-file row cache for nothing.
+    /// Leave comparison mode: drop the endpoints and the file list, close a file
+    /// diff opened from it, and retire any load still in flight so its reply
+    /// cannot repopulate the list of a comparison the user has already left.
+    /// Returns whether there was anything to leave — a plain commit click runs
+    /// through here on every selection, and bumping the revs for a comparison
+    /// that was never active would invalidate the range-file row cache for
+    /// nothing.
     pub(crate) fn clear_range_comparison(&mut self) -> bool {
         if self.history_state.range_selection.is_none() && !self.history_state.range_files_in_flight
         {
@@ -773,6 +812,25 @@ impl RepoState {
         }
         self.set_range_selection(None);
         self.release_range_files();
+        // Only a comparison opens range diffs, so one open is this comparison's,
+        // as is an editor's way back to one.
+        let is_range = |target: &gitcomet_core::domain::DiffTarget| {
+            matches!(
+                target,
+                gitcomet_core::domain::DiffTarget::CommitRange { .. }
+            )
+        };
+        if self.diff_state.diff_target.as_ref().is_some_and(is_range) {
+            self.close_diff();
+        }
+        if self
+            .diff_state
+            .edit_return_view
+            .as_ref()
+            .is_some_and(|view| is_range(&view.target))
+        {
+            self.diff_state.edit_return_view = None;
+        }
         true
     }
 
@@ -784,16 +842,23 @@ impl RepoState {
             self.history_state.range_files_request.wrapping_add(1);
         self.history_state.range_files_in_flight = false;
         self.history_state.range_files_refresh_queued = false;
+        self.history_state.range_files_cancellation.cancel();
     }
 
     /// Claim the next range-file load. Returns the request id to carry through
     /// the effect and back on the reply; anything older is stale by definition.
-    pub(crate) fn begin_range_files_load(&mut self) -> u64 {
+    pub(crate) fn begin_range_files_load(&mut self) -> RangeFilesLoad {
         self.history_state.range_files_request =
             self.history_state.range_files_request.wrapping_add(1);
         self.history_state.range_files_in_flight = true;
         self.history_state.range_files_refresh_queued = false;
-        self.history_state.range_files_request
+        self.history_state.range_files_cancellation.cancel();
+        self.history_state.range_files_cancellation =
+            gitcomet_core::services::CancellationToken::new();
+        RangeFilesLoad {
+            request: self.history_state.range_files_request,
+            cancellation: self.history_state.range_files_cancellation.clone(),
+        }
     }
 
     /// Raise a refresh of the current comparison's file list. `Some(request)`
@@ -804,7 +869,7 @@ impl RepoState {
     /// refresh but forgot to claim would leave `range_files_in_flight` false
     /// forever, and every later change would start its own pair of full-tree
     /// `git diff` calls.
-    pub(crate) fn request_range_files_refresh(&mut self) -> Option<u64> {
+    pub(crate) fn request_range_files_refresh(&mut self) -> Option<RangeFilesLoad> {
         if self.history_state.range_files_in_flight {
             self.history_state.range_files_refresh_queued = true;
             return None;

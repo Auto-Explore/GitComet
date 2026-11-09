@@ -9,6 +9,7 @@ enum Removal {
     Empty,
     HostClear,
     RemoveSignature,
+    ClearComparisonMark,
     HideGraph,
 }
 
@@ -52,6 +53,12 @@ fn tooltip_is_retracted_after_row_removal(
         .collect(),
     );
     repo.history_state.commit_signatures_rev = 1;
+    if matches!(removal, Removal::ClearComparisonMark) {
+        repo.navigation.comparison_mark = Some(gitcomet_state::model::ComparisonMark {
+            commit_id: CommitId("c00".into()),
+            label: "main".into(),
+        });
+    }
     let state = Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
@@ -116,6 +123,14 @@ fn tooltip_is_retracted_after_row_removal(
                 history.set_history_column_preferences(false, true, true, true, cx);
             });
         }),
+        Removal::ClearComparisonMark => {
+            let mut next = (*state).clone();
+            next.repos[0].navigation.comparison_mark = None;
+            cx.update(|_, app| {
+                let ui_model = view.read(app).ui_model.clone();
+                ui_model.update(app, |model, cx| model.set_state(Arc::new(next), cx));
+            });
+        }
         Removal::RemoveSignature => {
             let mut next = (*state).clone();
             next.repos[0].history_state.commit_signatures = Arc::default();
@@ -242,5 +257,16 @@ fn removing_a_signature_badge_retracts_its_tooltip_without_mouse_movement(
         cx,
         HistoryRowHoverArea::Signature,
         Removal::RemoveSignature,
+    );
+}
+
+#[gpui::test]
+fn clearing_the_comparison_mark_retracts_its_tooltip_without_mouse_movement(
+    cx: &mut gpui::TestAppContext,
+) {
+    tooltip_is_retracted_after_row_removal(
+        cx,
+        HistoryRowHoverArea::ComparisonMark,
+        Removal::ClearComparisonMark,
     );
 }

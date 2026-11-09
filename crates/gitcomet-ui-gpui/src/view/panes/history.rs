@@ -610,6 +610,7 @@ pub(in super::super) struct HistoryView {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum HistoryRowHoverArea {
     Signature,
+    ComparisonMark,
     Date,
     Author,
 }
@@ -783,6 +784,7 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.indexed.rev.hash(&mut hasher);
+            repo.navigation.comparison_mark.hash(&mut hasher);
             // The browsed commit's mark. Not `file_browser_rev`: that moves on
             // every sidebar search keystroke.
             repo.file_browser.source.hash(&mut hasher);
@@ -842,6 +844,9 @@ impl HistoryView {
             let signatures_changed = previous_repo
                 .map(|repo| repo.history_state.commit_signatures_rev)
                 != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
+            let comparison_mark_changed = previous_repo
+                .map(|repo| &repo.navigation.comparison_mark)
+                != next_repo.map(|repo| &repo.navigation.comparison_mark);
             let index_status_changed = previous_repo
                 .map(|repo| repo.history_state.indexed.status_rev)
                 != next_repo.map(|repo| repo.history_state.indexed.status_rev);
@@ -899,11 +904,14 @@ impl HistoryView {
                 }
             }
 
-            if signatures_changed
-                && matches!(this.row_hover, Some((_, HistoryRowHoverArea::Signature)))
-            {
-                // Verification can remove or replace a badge under a resting
-                // pointer. Its old verdict must not survive in the tooltip.
+            let hovered_badge_changed = match this.row_hover {
+                Some((_, HistoryRowHoverArea::Signature)) => signatures_changed,
+                Some((_, HistoryRowHoverArea::ComparisonMark)) => comparison_mark_changed,
+                Some((_, HistoryRowHoverArea::Date | HistoryRowHoverArea::Author)) | None => false,
+            };
+            if hovered_badge_changed {
+                // A badge can be removed or replaced under a resting pointer.
+                // Its old text must not survive in the tooltip.
                 this.update_history_row_hover(None, None, cx);
             }
             if changed {

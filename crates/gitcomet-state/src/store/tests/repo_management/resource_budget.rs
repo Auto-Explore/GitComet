@@ -1199,7 +1199,7 @@ fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
         "Working tree".into(),
     )));
     repo.set_range_files(Loadable::Loading);
-    let stranded = repo.begin_range_files_load();
+    let stranded = repo.begin_range_files_load().request;
     let failure = Msg::Internal(InternalMsg::RepoLoadFinished {
         repo_id: id,
         load_epoch: repo.load_epoch,
@@ -1226,7 +1226,7 @@ fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
     );
     let history = &state.repos[0].history_state;
     let reissued = effects.iter().find_map(|effect| match effect {
-        Effect::LoadRangeFiles { request, .. } => Some(*request),
+        Effect::LoadRangeFiles { load, .. } => Some(load.request),
         _ => None,
     });
     assert_eq!(reissued, Some(history.range_files_request));

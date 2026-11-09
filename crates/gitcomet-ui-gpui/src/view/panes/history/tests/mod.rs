@@ -388,6 +388,7 @@ pub(super) fn install_index(
 mod base_cache;
 mod branch_names;
 mod columns;
+mod comparison_mark;
 mod find;
 mod graph_gradient;
 mod host_reveal;

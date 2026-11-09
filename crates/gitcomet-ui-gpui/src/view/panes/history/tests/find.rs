@@ -2657,6 +2657,7 @@ fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::Test
         to_label: "tip".into(),
         options: Default::default(),
         base: None,
+        source: gitcomet_state::model::ComparisonSource::Explicit,
     });
     let (view, store, cx) = mount_find_fixture(cx, repo);
     open_find_with_shortcut(cx, &view);

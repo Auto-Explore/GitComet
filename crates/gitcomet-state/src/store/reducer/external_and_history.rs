@@ -1,6 +1,8 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
 use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
-use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
+use super::effects::{
+    append_ensure_sidebar_data_effects, apply_pruned_selection, prune_multi_selection,
+};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
     selected_history_reloads_for_activation,
@@ -369,7 +371,7 @@ pub(super) fn repo_externally_changed(
         // storm must not stack them up. One in flight absorbs the rest and is
         // re-run once when it lands, the same coalescing the status and tag
         // reloads above get from `RepoLoadsInFlight`.
-        && let Some(request) = repo_state.request_range_files_refresh()
+        && let Some(load) = repo_state.request_range_files_refresh()
     {
         // Keep the current list visible until the refresh lands (no flicker
         // to a loading state on every debounced save).
@@ -378,7 +380,7 @@ pub(super) fn repo_externally_changed(
             from,
             to: None,
             options,
-            request,
+            load,
         });
     }
 
@@ -953,69 +955,21 @@ pub(super) fn log_loaded(
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
             && repo_state.history_state.indexed.index.is_none()
-            && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
             // One set over the page: the selection can hold thousands of ids
             // and the page tens of thousands of commits, so a scan per id was
             // quadratic on every reload, and reloads arrive in bursts.
             let page_ids: FxHashSet<&str> = page.commits.iter().map(|c| c.id.as_ref()).collect();
-            let reveal_target = repo_state.history_state.reveal_target.clone();
-            let reword_target = repo_state
-                .history_state
-                .selected_commit
-                .as_ref()
-                .filter(|id| repo_state.reword.retains_selected_commit(id))
-                .cloned();
-            let survives = |id: &gitcomet_core::domain::CommitId| {
-                reveal_target.as_ref() == Some(id)
-                    || reword_target.as_ref() == Some(id)
-                    || page_ids.contains(id.as_ref())
-            };
-
-            let mut next = repo_state.history_state.multi_selection.clone();
-            Arc::make_mut(&mut next.commits).retain(&survives);
-            if let Some(anchor) = &next.anchor
-                && !survives(anchor)
+            if let Some(pruned) =
+                prune_multi_selection(repo_state, |id| page_ids.contains(id.as_ref()))
             {
-                next.anchor = None;
-            }
-            next.anchor_index = None;
-            next.anchor_log_rev = None;
-
-            // The focused commit (which drives the details pane) may itself
-            // have vanished — an external amend/rebase can replace exactly the
-            // focused commit. Re-point focus at a surviving selected commit so
-            // the details pane never trails a commit that no longer exists.
-            //
-            // A reveal's target is exempt: it is deliberately selected ahead of
-            // the page that will contain it, and a scope switch mid-reveal
-            // restarts the log from its first page.
-            // An owned reword's target also survives until continuation settles;
-            // signing a later descendant may pause after replacing that target.
-            let focus_gone = repo_state
-                .history_state
-                .selected_commit
-                .as_ref()
-                .is_some_and(|id| !survives(id));
-            let refocus = focus_gone.then(|| next.commits.last().cloned()).flatten();
-
-            repo_state.set_commit_multi_selection(next);
-
-            if focus_gone {
-                match refocus {
-                    Some(commit_id) => {
-                        effects.extend(select_commit_and_load_details(
-                            repo_state, repo_id, commit_id,
-                        ));
-                    }
-                    None => {
-                        repo_state.set_selected_commit(None);
-                        repo_state.set_commit_details(Loadable::NotLoaded);
-                    }
-                }
+                effects.extend(apply_pruned_selection(state, repo_id, pruned, None));
             }
         }
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return effects;
+        };
 
         if is_load_more {
             repo_state.set_log_loading_more(false);

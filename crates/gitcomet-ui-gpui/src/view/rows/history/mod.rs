@@ -320,6 +320,7 @@ impl HistoryView {
                         this.active_context_menu_invoker.as_ref(),
                         this.history_row(repo, commit, cx),
                         worktree_chips,
+                        comparison_mark_label(repo, &commit.id),
                         cx,
                     ))
                 })()
@@ -502,6 +503,15 @@ pub(in crate::view) fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels
     ui_scale.row_height(HISTORY_ROW_HEIGHT_PX, 36.0)
 }
 
+/// The comparison mark's label when `commit_id` is the marked commit.
+fn comparison_mark_label(repo: &RepoState, commit_id: &CommitId) -> Option<SharedString> {
+    repo.navigation
+        .comparison_mark
+        .as_ref()
+        .filter(|mark| &mark.commit_id == commit_id)
+        .map(|mark| mark.label.clone().into())
+}
+
 fn history_scope_shows_graph_color_marker(scope: gitcomet_core::domain::LogScope) -> bool {
     !matches!(scope, gitcomet_core::domain::LogScope::FirstParent)
 }
@@ -555,6 +565,7 @@ fn history_table_row(
     row: crate::view::panes::history::annotations::RowAnnotation,
     // Other worktrees that have this commit checked out and no changes.
     worktree_chips: SmallVec<[HistoryWorktreeChip; 1]>,
+    comparison_mark: Option<SharedString>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
     let crate::view::panes::history::annotations::RowAnnotation {
@@ -616,6 +627,7 @@ fn history_table_row(
         active_context_menu_invoker.cloned(),
         row_paint.clone(),
         annotation.clone(),
+        comparison_mark,
         worktree_chips_left.clone(),
         mark_menus,
         mark_menus

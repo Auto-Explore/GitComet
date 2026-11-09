@@ -672,6 +672,17 @@ impl RepoState {
         self.diff_state.text_override_rev = self.diff_state.text_override_rev.wrapping_add(1);
     }
 
+    /// Empty the diff pane: no target, no loads, no inline submodule or editor.
+    pub(crate) fn close_diff(&mut self) {
+        self.diff_state.inline_submodule_diff = None;
+        self.diff_state.content_preview = false;
+        self.diff_state.edit_mode = false;
+        self.diff_state.edit_return_view = None;
+        self.set_diff_target(None);
+        self.diff_state.clear_loads();
+        self.bump_diff_state_rev();
+    }
+
     pub(crate) fn bump_diff_state_rev(&mut self) {
         self.diff_state.diff_state_rev = self.diff_state.diff_state_rev.wrapping_add(1);
     }

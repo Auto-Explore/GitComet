@@ -681,11 +681,11 @@ pub(super) fn schedule_effect(
             from,
             to,
             options,
-            request,
+            load,
         } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 repo_load::schedule_load_range_files(
-                    executor, repos, msg_tx, repo_id, from, to, options, request,
+                    executor, repos, msg_tx, repo_id, from, to, options, load,
                 );
             }
         }

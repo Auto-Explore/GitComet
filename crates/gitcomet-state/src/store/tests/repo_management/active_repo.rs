@@ -1280,6 +1280,7 @@ fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() 
         to_label: "stale".to_string(),
         options: Default::default(),
         base: None,
+        source: crate::model::ComparisonSource::SelectedPair,
     });
     target.history_state.worktree_selection = Some(PathBuf::from("/tmp/repo1-linked"));
     target.history_state.commit_details = Loadable::Error("stale details".to_string());
