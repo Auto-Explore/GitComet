@@ -337,19 +337,22 @@ impl DetailsPaneView {
             cx,
         );
 
-        let top = div()
+        // The author block asks for its natural width, so a narrow pane wraps
+        // the badges onto the next line instead of truncating name and date.
+        let author = div()
+            .debug_selector(|| "commit_card_author".to_string())
             .flex()
+            .flex_auto()
             .items_center()
             .gap_2()
-            .w_full()
             .min_w(px(0.0))
             .child(components::author_avatar(theme, ui_scale, &display_name))
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(0.0))
                     .flex()
+                    .flex_auto()
                     .flex_col()
+                    .min_w(px(0.0))
                     .child(
                         div()
                             .text_size(theme.ui_text(14.0))
@@ -369,11 +372,25 @@ impl DetailsPaneView {
                             .whitespace_nowrap()
                             .child(when),
                     ),
-            )
+            );
+        let badges = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
             .when_some(signature, |row, signature| {
                 row.child(commit_details_signature_badge(theme, signature))
             })
             .child(sha_chip);
+        let top = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .min_w(px(0.0))
+            .child(author)
+            .child(badges);
 
         let pills = self.commit_ref_pills(&details.id);
         let hidden = pills.len().saturating_sub(MAX_REF_PILLS);

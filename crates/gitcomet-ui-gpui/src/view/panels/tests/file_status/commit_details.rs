@@ -1243,6 +1243,7 @@ fn commit_card_chip_fixture(
     gpui::Entity<crate::view::GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1261,7 +1262,7 @@ fn commit_card_chip_fixture(
                 Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into()),
                     message: "subject".into(),
-                    author_name: "Alice".into(),
+                    author_name: "Alice Example-Lastname".into(),
                     author_email: String::new(),
                     authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
@@ -2477,5 +2478,40 @@ fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
             .commit_reword
             .is_some()),
         "a failure keeps the edit"
+    );
+}
+
+/// A narrow pane moves the badges under the author rather than squeezing
+/// the name and date out of view; a wide one keeps them on one row.
+#[gpui::test]
+fn commit_card_badges_wrap_below_the_author_when_narrow(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let mut layout_at = |width: f32| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.details_width = px(width);
+                cx.notify();
+            });
+        });
+        draw_and_drain_test_window(cx);
+        let author = cx
+            .debug_bounds("commit_card_author")
+            .expect("expected the author block");
+        let sha = cx
+            .debug_bounds("commit_card_sha")
+            .expect("expected the SHA chip");
+        (author, sha)
+    };
+
+    let (author, sha) = layout_at(700.0);
+    assert!(
+        sha.top() < author.bottom(),
+        "wide: the SHA chip shares the author's row, author {author:?}, sha {sha:?}"
+    );
+
+    let (author, sha) = layout_at(260.0);
+    assert!(
+        sha.top() >= author.bottom(),
+        "narrow: the SHA chip moves below the author, author {author:?}, sha {sha:?}"
     );
 }
