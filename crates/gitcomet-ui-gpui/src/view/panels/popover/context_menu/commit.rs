@@ -428,37 +428,14 @@ fn model_with_header(
             label: short.to_string(),
         }),
     });
-    if let Some(mark) = comparison_mark.filter(|mark| mark.commit_id != *commit_id) {
-        items.push(ContextMenuItem::Entry {
-            label: format!("Compare with {}", mark.label).into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::CompareWithMarked {
-                repo_id,
-                commit_id: commit_id.clone(),
-                label: short.to_string(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Compare with merge base".into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::CompareWithMergeBase {
-                repo_id,
-                commit_id: commit_id.clone(),
-                label: short.to_string(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Clear comparison mark".into(),
-            icon: Some("icons/generic_close.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
-        });
-    }
+    items.extend(super::marked_comparison_entries(
+        repo_id,
+        commit_id,
+        short.as_ref(),
+        comparison_mark
+            .as_ref()
+            .map(|mark| (&mark.commit_id, mark.label.as_str())),
+    ));
     items.extend(super::ref_menu::entries(
         this,
         repo_id,

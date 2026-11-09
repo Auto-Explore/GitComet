@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{AppState, Loadable, RepoState};
+use crate::model::{AppState, ComparisonSource, Loadable, RepoState};
 use crate::msg::{CommitSelectMode, Effect};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
@@ -90,6 +90,7 @@ fn selecting_two_commits_enters_ordered_range_comparison() {
     // click order, so the merged diff includes that commit's own changes.
     assert_eq!(range.from, c1);
     assert_eq!(range.to, Some(c3.clone()));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
 
     // The diff pane stays empty: the comparison presents the file
     // side-selection first, and the user opens a file to view its diff.
@@ -117,7 +118,7 @@ fn range_files_loaded_populates_only_the_current_comparison() {
     let request = effects
         .iter()
         .find_map(|e| match e {
-            Effect::LoadRangeFiles { request, .. } => Some(*request),
+            Effect::LoadRangeFiles { load, .. } => Some(load.request),
             _ => None,
         })
         .expect("a range-file load should be issued");
@@ -393,6 +394,7 @@ fn mark_then_compare_with_marked_builds_the_range() {
     assert_eq!(range.to, Some(c3.clone()));
     assert_eq!(range.from_label, "main");
     assert_eq!(range.to_label, "feature");
+    assert_eq!(range.source, ComparisonSource::Explicit);
 }
 
 #[test]
@@ -476,9 +478,9 @@ fn external_worktree_changes_refresh_a_worktree_comparison_one_at_a_time() {
             Effect::LoadRangeFiles {
                 from: f,
                 to: None,
-                request,
+                load,
                 ..
-            } if *f == from => Some(*request),
+            } if *f == from => Some(load.request),
             _ => None,
         })
     };
@@ -577,41 +579,42 @@ fn external_change_does_not_refresh_a_commit_comparison() {
     );
 }
 
-/// `c3` and `c1` with `c2` between them: no diff holds exactly their changes,
-/// as `c0..c3` would add `c2`'s. The selection stays a plain list until it
-/// closes the gap.
+/// Two commits with a gap between them compare directly, `c1..c3`, the way
+/// `git diff c1 c3` does, rather than claiming to be their merged diff.
 #[test]
-fn selecting_commits_with_a_gap_between_them_shows_no_merged_diff() {
+fn selecting_two_commits_with_a_gap_compares_them_directly() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
+    let c1 = CommitId("c1".into());
+    let c3 = CommitId("c3".into());
 
-    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    let effects = select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
 
     let history = &repo(&state, repo_id).history_state;
     assert!(history.multi_selection.is_multi());
-    assert_eq!(history.range_selection, None);
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
-        "a selection with a gap must not load a merged diff"
-    );
-
-    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
-    let range = repo(&state, repo_id)
-        .history_state
+    let range = history
         .range_selection
-        .clone()
-        .expect("closing the gap starts the comparison");
-    assert_eq!(range.from, CommitId("c0".into()));
-    assert_eq!(range.to, Some(CommitId("c3".into())));
+        .as_ref()
+        .expect("two selected commits start a comparison");
+    assert_eq!(range.from, c1);
+    assert_eq!(range.to, Some(c3.clone()));
+    assert_eq!(range.source, ComparisonSource::SelectedPair);
+    assert_eq!(range.from_label, "c1");
+    assert_eq!(range.to_label, "c3");
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRangeFiles { from, to, .. } if *from == c1 && *to == Some(c3.clone())
+        )),
+        "a LoadRangeFiles effect for c1->c3 should be issued"
+    );
 }
 
-/// Two branch tips listed next to each other are not consecutive commits: the
-/// diff from one's parent to the other is the difference between branches.
+/// Two branch tips are the usual reason to pick two commits: the lower one in
+/// the log is the base, whichever was clicked first.
 #[test]
-fn selecting_commits_on_different_branches_shows_no_merged_diff() {
+fn selecting_two_branch_tips_compares_them_directly() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
@@ -623,17 +626,64 @@ fn selecting_commits_on_different_branches_shows_no_merged_diff() {
         next_cursor: None,
     }));
 
-    select(&mut state, repo_id, "a1", CommitSelectMode::Single);
-    let effects = select(&mut state, repo_id, "b1", CommitSelectMode::Toggle);
+    for [first, second] in [["a1", "b1"], ["b1", "a1"]] {
+        select(&mut state, repo_id, first, CommitSelectMode::Single);
+        select(&mut state, repo_id, second, CommitSelectMode::Toggle);
+
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("two branch tips start a comparison");
+        assert_eq!(range.from, CommitId("b1".into()), "{first} then {second}");
+        assert_eq!(
+            range.to,
+            Some(CommitId("a1".into())),
+            "{first} then {second}"
+        );
+        assert_eq!(range.source, ComparisonSource::SelectedPair);
+    }
+}
+
+/// Three or more commits with a gap have no single diff holding exactly their
+/// changes, so they stay a plain list until the gap closes.
+#[test]
+fn selecting_three_commits_with_a_gap_shows_no_diff_until_the_gap_closes() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![
+            commit("c4", "c3"),
+            commit("c3", "c2"),
+            commit("c2", "c1"),
+            commit("c1", "c0"),
+        ],
+        next_cursor: None,
+    }));
+
+    select(&mut state, repo_id, "c4", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
 
     let history = &repo(&state, repo_id).history_state;
-    assert!(history.multi_selection.is_multi());
+    assert_eq!(history.multi_selection.commits.len(), 3);
     assert_eq!(history.range_selection, None);
     assert!(
         !effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadRangeFiles { .. }))
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "a selection with a gap must not load a diff"
     );
+
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("closing the gap starts the comparison");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("c4".into())));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
 }
 
 /// The list landing again can change the selected file's change: deleted on
@@ -648,7 +698,7 @@ fn comparison_list_refresh_replans_a_file_that_lost_a_side() {
     select(&mut state, repo_id, "c2", CommitSelectMode::Single);
     select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
     let land = |state: &mut AppState, kind: FileStatusKind| {
-        let request = state.repos[0].begin_range_files_load();
+        let request = state.repos[0].begin_range_files_load().request;
         dispatch_effects(
             state,
             Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
@@ -705,5 +755,234 @@ fn comparison_list_refresh_replans_a_file_that_lost_a_side() {
             .iter()
             .any(|effect| matches!(effect, Effect::LoadDiffPreviewTextFile { .. })),
         "{effects:?}"
+    );
+}
+
+/// A comparison of `c3`/`c2` with one of its files open.
+fn state_with_comparison_file_open(repo_id: RepoId) -> AppState {
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
+    dispatch_effects(
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: gitcomet_core::domain::DiffTarget::commit_range(
+                CommitId("c1".into()),
+                Some(CommitId("c3".into())),
+                Some("a.txt".into()),
+            ),
+        },
+    );
+    assert!(repo(&state, repo_id).diff_state.diff_target.is_some());
+    state
+}
+
+/// A file diff opened from the comparison belongs to it, so leaving the
+/// comparison for a single commit closes it.
+#[test]
+fn collapsing_to_one_commit_closes_the_comparisons_file_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+}
+
+#[test]
+fn clearing_the_commit_selection_closes_the_comparisons_file_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    dispatch_effects(
+        &mut state,
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        },
+    );
+    assert_eq!(repo(&state, repo_id).history_state.range_selection, None);
+    assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+}
+
+/// A right-click keeps the selection, so the same pair must not reload its list.
+#[test]
+fn refocusing_within_a_pair_keeps_its_loaded_comparison() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    state.repos[0].history_state.range_files = Loadable::Ready(Arc::new(Vec::new()));
+    let rev = state.repos[0].history_state.range_files_rev;
+
+    let effects = select(
+        &mut state,
+        repo_id,
+        "c1",
+        CommitSelectMode::PreserveIfSelected,
+    );
+
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "the unchanged pair must not reload"
+    );
+    let history = &repo(&state, repo_id).history_state;
+    assert!(matches!(history.range_files, Loadable::Ready(_)));
+    assert_eq!(history.range_files_rev, rev);
+    assert_eq!(history.selected_commit, Some(CommitId("c1".into())));
+}
+
+/// Commit-time order can list a parent above its child (date skew in a
+/// shallow clone). The pair is still a chain, newest being the child.
+#[test]
+fn a_parent_listed_above_its_child_still_gets_the_merged_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![commit("parent", "c0"), commit("child", "parent")],
+        next_cursor: None,
+    }));
+
+    select(&mut state, repo_id, "parent", CommitSelectMode::Single);
+    select(&mut state, repo_id, "child", CommitSelectMode::Toggle);
+
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("a parent and its child compare");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("child".into())));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
+}
+
+/// An editor opened from the comparison's diff returns to it on exit; once the
+/// comparison has ended, exiting must not reopen that dead diff.
+#[test]
+fn leaving_the_editor_after_the_comparison_ended_does_not_reopen_its_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    dispatch_effects(
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: "a.txt".into(),
+        },
+    );
+    assert!(repo(&state, repo_id).diff_state.edit_mode);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+
+    dispatch_effects(&mut state, Msg::ExitDiffEditMode { repo_id });
+
+    assert!(!matches!(
+        repo(&state, repo_id).diff_state.diff_target,
+        Some(gitcomet_core::domain::DiffTarget::CommitRange { .. })
+    ));
+}
+
+fn open_range_file(state: &mut AppState, repo_id: RepoId, path: &str) {
+    dispatch_effects(
+        state,
+        Msg::SelectDiff {
+            repo_id,
+            target: gitcomet_core::domain::DiffTarget::commit_range(
+                CommitId("c1".into()),
+                Some(CommitId("c3".into())),
+                Some(path.into()),
+            ),
+        },
+    );
+}
+
+/// Back/Forward between two files of a live pair keeps the pair.
+#[test]
+fn stepping_back_between_a_pairs_files_keeps_the_pair() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    open_range_file(&mut state, repo_id, "a.txt");
+    open_range_file(&mut state, repo_id, "b.txt");
+
+    let effects = dispatch_effects(&mut state, Msg::GlobalNavBack { repo_id });
+
+    let history = &repo(&state, repo_id).history_state;
+    assert_eq!(history.multi_selection.commits.len(), 2);
+    assert_eq!(
+        history.range_selection.as_ref().map(|range| range.source),
+        Some(ComparisonSource::SelectedPair)
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "the unchanged pair must not reload its list"
+    );
+    assert_eq!(
+        repo(&state, repo_id)
+            .diff_state
+            .diff_target
+            .as_ref()
+            .and_then(|target| target.file_path()),
+        Some(std::path::Path::new("a.txt"))
+    );
+}
+
+/// A pair restored by Back comes back as an explicit comparison; the history
+/// entry it was restored from must still describe the view.
+#[test]
+fn a_restored_pair_matches_its_history_entry() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    open_range_file(&mut state, repo_id, "a.txt");
+    dispatch_effects(
+        &mut state,
+        Msg::CompareWithWorkingTree {
+            repo_id,
+            from: CommitId("c2".into()),
+            from_label: "c2".into(),
+        },
+    );
+
+    dispatch_effects(&mut state, Msg::GlobalNavBack { repo_id });
+
+    let repo = repo(&state, repo_id);
+    let nav = &repo.navigation.main_history;
+    assert!(repo.main_view_snapshot_matches(&nav.entries[nav.cursor]));
+    assert!(nav.cursor + 1 < nav.entries.len(), "Forward is still there");
+}
+
+fn range_load_cancellation(effects: &[Effect]) -> gitcomet_core::services::CancellationToken {
+    effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::LoadRangeFiles { load, .. } => Some(load.cancellation.clone()),
+            _ => None,
+        })
+        .expect("a range-file load")
+}
+
+/// A load nobody will read is stopped rather than left to run to the end.
+#[test]
+fn a_superseded_or_abandoned_range_load_is_cancelled() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    let first =
+        range_load_cancellation(&select(&mut state, repo_id, "c3", CommitSelectMode::Toggle));
+    let second =
+        range_load_cancellation(&select(&mut state, repo_id, "c2", CommitSelectMode::Toggle));
+    assert!(
+        first.is_cancelled(),
+        "a newer comparison supersedes the pair's load"
+    );
+    assert!(!second.is_cancelled());
+
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    assert!(
+        second.is_cancelled(),
+        "leaving the comparison abandons its load"
     );
 }

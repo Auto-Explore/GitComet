@@ -1676,7 +1676,7 @@ pub(super) fn repo_opened_ok(
                     from: range.from,
                     to: range.to,
                     options: range.options,
-                    request: repo_state.begin_range_files_load(),
+                    load: repo_state.begin_range_files_load(),
                 });
             }
             if let Some(target) = repo_state.diff_state.diff_target.clone() {

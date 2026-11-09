@@ -116,7 +116,7 @@ pub struct ViewHistoryEntry {
 /// is a full-content preview, the selected commit, and any active two-point
 /// comparison. Replaying a snapshot only restores view/selection state; it never
 /// re-runs operations like a checkout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MainViewSnapshot {
     pub diff_target: Option<DiffTarget>,
     pub content_preview: bool,
@@ -139,6 +139,28 @@ pub struct MainViewSnapshot {
     /// others. Without it, selecting a worktree row reads as "selection cleared"
     /// and back/forward can neither leave the row nor return to it.
     pub worktree_selection: Option<PathBuf>,
+}
+
+impl PartialEq for MainViewSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            diff_target,
+            content_preview,
+            edit_mode,
+            selected_commit,
+            range_selection,
+            worktree_selection,
+        } = self;
+        *diff_target == other.diff_target
+            && *content_preview == other.content_preview
+            && *edit_mode == other.edit_mode
+            && *selected_commit == other.selected_commit
+            && RangeSelection::same_optional(
+                range_selection.as_ref(),
+                other.range_selection.as_ref(),
+            )
+            && *worktree_selection == other.worktree_selection
+    }
 }
 
 /// Browser-style back/forward stack. `cursor` indexes the currently shown entry
@@ -306,7 +328,7 @@ pub struct RepoNavigationState {
 /// A point marked for comparison via the "Mark for comparison" context-menu
 /// action. `commit_id` is the resolved commit (branch/tag tips resolve to their
 /// target); `label` is what the menu shows (short sha, branch, or tag name).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ComparisonMark {
     pub commit_id: CommitId,
     pub label: String,
@@ -330,11 +352,22 @@ impl RepoState {
     /// nav-history reconcile can skip cloning a `MainViewSnapshot` (which owns a
     /// `PathBuf`) on the common path where the view did not move.
     pub(crate) fn main_view_snapshot_matches(&self, other: &MainViewSnapshot) -> bool {
-        self.diff_state.diff_target == other.diff_target
-            && self.diff_state.content_preview == other.content_preview
-            && self.diff_state.edit_mode == other.edit_mode
-            && self.history_state.selected_commit == other.selected_commit
-            && self.history_state.range_selection == other.range_selection
-            && self.history_state.worktree_selection == other.worktree_selection
+        let MainViewSnapshot {
+            diff_target,
+            content_preview,
+            edit_mode,
+            selected_commit,
+            range_selection,
+            worktree_selection,
+        } = other;
+        self.diff_state.diff_target == *diff_target
+            && self.diff_state.content_preview == *content_preview
+            && self.diff_state.edit_mode == *edit_mode
+            && self.history_state.selected_commit == *selected_commit
+            && RangeSelection::same_optional(
+                self.history_state.range_selection.as_ref(),
+                range_selection.as_ref(),
+            )
+            && self.history_state.worktree_selection == *worktree_selection
     }
 }

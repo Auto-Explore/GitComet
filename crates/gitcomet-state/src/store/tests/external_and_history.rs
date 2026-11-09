@@ -133,6 +133,7 @@ fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retain
         assert_eq!(count(&reduce(&mut repos, &ids, &mut state, complete())), 0);
     }
 }
+mod history_focus;
 mod refresh;
 
 /// Production always reaches `LogLoaded` through `request_log`, which records the
@@ -2548,6 +2549,114 @@ fn log_loaded_reconciles_commit_multi_selection() {
     assert_eq!(sel.anchor, None);
     assert_eq!(sel.anchor_index, None);
     assert_eq!(sel.anchor_log_rev, None);
+}
+
+/// Reloads the log without `gone` while `kept`/`gone` are compared as `source`
+/// with a file of it open; returns the comparison left, the reload's effects
+/// and the open diff.
+fn reload_dropping_a_compared_commit(
+    source: crate::model::ComparisonSource,
+) -> (
+    Option<crate::model::RangeSelection>,
+    Vec<Effect>,
+    Option<gitcomet_core::domain::DiffTarget>,
+) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "s".into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+    let kept = CommitId("kept".into());
+    let gone = CommitId("gone".into());
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
+        commits: vec![kept.clone(), gone.clone()].into(),
+        ..Default::default()
+    };
+    repo_state.history_state.selected_commit = Some(kept.clone());
+    repo_state.history_state.range_selection = Some(crate::model::RangeSelection {
+        source,
+        ..crate::model::RangeSelection::new(
+            gone.clone(),
+            Some(kept.clone()),
+            "gone".into(),
+            "kept".into(),
+        )
+    });
+    repo_state.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit_range(
+        gone,
+        Some(kept),
+        Some(PathBuf::from("a.txt")),
+    ));
+
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(std::sync::Arc::new(LogPage {
+                commits: vec![commit("kept"), commit("other")],
+                next_cursor: None,
+            })
+            .into()),
+        }),
+    );
+    (
+        state.repos[0].history_state.range_selection.clone(),
+        effects,
+        state.repos[0].diff_state.diff_target.clone(),
+    )
+}
+
+#[test]
+fn log_reload_that_drops_a_compared_commit_leaves_the_selection_comparison() {
+    use crate::model::ComparisonSource;
+    for source in [
+        ComparisonSource::SelectedPair,
+        ComparisonSource::MergedSelection,
+    ] {
+        let (range, effects, diff_target) = reload_dropping_a_compared_commit(source);
+        assert_eq!(range, None, "{source:?}");
+        assert_eq!(
+            diff_target, None,
+            "the comparison's open diff goes too ({source:?})"
+        );
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::LoadCommitDetails { commit_id, .. } if commit_id.as_ref() == "kept"
+            )),
+            "the details pane goes back to the still-selected commit ({source:?})"
+        );
+    }
+    let (range, _, diff_target) = reload_dropping_a_compared_commit(ComparisonSource::Explicit);
+    assert!(
+        range.is_some(),
+        "an explicit comparison does not come from the selection"
+    );
+    assert!(
+        diff_target.is_some(),
+        "an explicit comparison keeps its open diff"
+    );
 }
 
 fn lookup_commit(id: &CommitId, summary: &str) -> Commit {
@@ -5027,11 +5136,11 @@ fn a_merge_base_comparison_loads_with_its_options_and_diffs_from_the_base() {
         .find_map(|effect| match effect {
             Effect::LoadRangeFiles {
                 options: sent,
-                request,
+                load,
                 ..
             } => {
                 assert_eq!(*sent, options);
-                Some(*request)
+                Some(load.request)
             }
             _ => None,
         })
@@ -5071,7 +5180,15 @@ fn a_merge_base_comparison_loads_with_its_options_and_diffs_from_the_base() {
     assert_eq!(range.diff_from(), &fork);
 }
 
-fn repo_state_for_focus_tests() -> AppState {
+/// Selects `selected` over a log of `log` (each `(id, parent)`, newest first),
+/// then reloads it as `reloaded`; returns the comparison left.
+fn reload_selection(
+    log: &[(&str, &str)],
+    selected: &[&str],
+    reloaded: &[(&str, &str)],
+) -> Option<crate::model::RangeSelection> {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
@@ -5080,395 +5197,83 @@ fn repo_state_for_focus_tests() -> AppState {
         },
     ));
     state.active_repo = Some(RepoId(1));
-    state
-}
-
-fn branch_named(name: &str) -> gitcomet_core::domain::Branch {
-    gitcomet_core::domain::Branch {
-        name: name.to_string(),
-        target: CommitId("a".repeat(40).into()),
-        upstream: None,
-        divergence: None,
-    }
-}
-
-/// Focusing restarts the walk with the focus attached and writes it to the
-/// session, the same contract the author filter has.
-#[test]
-fn toggling_a_focus_restarts_the_walk_and_persists_it() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let scope = state.repos[0].history_state.history_scope;
-    let unfocused = expect_log_reply(&mut state.repos[0], scope, None, None);
-    let target = gitcomet_core::domain::HistoryFocus::local_branch("feature");
-    let expected = HistoryFocusSet::from_iter([target.clone()]);
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::ToggleHistoryFocus {
-            repo_id: RepoId(1),
-            target: target.clone(),
-        },
-    );
-
-    assert_eq!(state.repos[0].history_state.history_focus, expected);
-    assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadLog { focus, cursor: None, .. } if *focus == expected
-        )),
-        "expected the focus to start its own first-page walk, got {effects:?}"
-    );
-    assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::Persistence(PersistenceEffect::PersistRepoHistoryFocus { focus, .. }) if *focus == expected
-        )),
-        "expected the focus to be persisted, got {effects:?}"
-    );
-    assert!(
-        !state.repos[0]
-            .loads_in_flight
-            .is_active_log_reply(unfocused),
-        "the unfocused walk it replaced is no longer the active one"
-    );
-}
-
-/// Toggling the same ref again takes it back out, which is the only way the
-/// per-ref menu entry can clear what it set.
-#[test]
-fn toggling_a_focused_ref_again_removes_just_that_ref() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let feature = gitcomet_core::domain::HistoryFocus::local_branch("feature");
-    let main = gitcomet_core::domain::HistoryFocus::local_branch("main");
-    state.repos[0].history_state.history_focus =
-        HistoryFocusSet::from_iter([feature.clone(), main.clone()]);
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::ToggleHistoryFocus {
-            repo_id: RepoId(1),
-            target: feature,
-        },
-    );
-
-    assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([main]),
-        "the other focused ref must survive"
-    );
-}
-
-/// A branch group's menu entry and eye focus all of its members in one message,
-/// which restarts the walk and persists the set once rather than per member.
-#[test]
-fn focusing_a_groups_refs_adds_them_all_in_one_step() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let main = gitcomet_core::domain::HistoryFocus::local_branch("main");
-    let feat_a = gitcomet_core::domain::HistoryFocus::local_branch("feat/a");
-    let feat_b = gitcomet_core::domain::HistoryFocus::local_branch("feat/b");
-    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([main.clone()]);
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::FocusHistoryRefs {
-            repo_id: RepoId(1),
-            targets: vec![feat_a.clone(), feat_b.clone()],
-            focused: true,
-        },
-    );
-    let expected = HistoryFocusSet::from_iter([main.clone(), feat_a.clone(), feat_b.clone()]);
-    assert_eq!(state.repos[0].history_state.history_focus, expected);
-    assert_eq!(
-        effects
-            .iter()
-            .filter(|effect| matches!(
-                effect,
-                Effect::Persistence(PersistenceEffect::PersistRepoHistoryFocus { .. })
-            ))
-            .count(),
-        1,
-        "expected one persist for the whole group, got {effects:?}"
-    );
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::FocusHistoryRefs {
-            repo_id: RepoId(1),
-            targets: vec![feat_a, feat_b],
-            focused: false,
-        },
-    );
-    assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([main]),
-        "unfocusing the group leaves refs outside it focused"
-    );
-}
-
-/// A branch under a focused remote reads as focused, so toggling it takes it
-/// out — and the rest of the remote stays focused through the branch list.
-#[test]
-fn toggling_a_branch_its_focused_remote_covers_unfocuses_just_that_branch() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let remote_branch = |name: &str| gitcomet_core::domain::RemoteBranch {
-        remote: "origin".to_string(),
-        name: name.to_string(),
-        target: CommitId("a".repeat(40).into()),
+    let page = |commits: &[(&str, &str)]| {
+        std::sync::Arc::new(LogPage {
+            commits: commits
+                .iter()
+                .map(|(id, parent)| Commit {
+                    id: CommitId((*id).into()),
+                    parent_ids: [CommitId((*parent).into())].into_iter().collect(),
+                    summary: "s".into(),
+                    author: "a".into(),
+                    time: SystemTime::UNIX_EPOCH,
+                })
+                .collect(),
+            next_cursor: None,
+        })
     };
-    state.repos[0].set_remote_branches(Loadable::Ready(vec![
-        remote_branch("main"),
-        remote_branch("feature"),
-    ]));
-    state.repos[0].history_state.history_focus =
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::remote("origin")]);
-
+    state.repos[0].history_state.history_scope = LogScope::CurrentBranch;
+    state.repos[0].history_state.log = Loadable::Ready(page(log));
+    for (ix, id) in selected.iter().enumerate() {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SelectCommitMulti {
+                request_id: None,
+                repo_id: RepoId(1),
+                commit_id: CommitId((*id).into()),
+                mode: if ix == 0 {
+                    crate::msg::CommitSelectMode::Single
+                } else {
+                    crate::msg::CommitSelectMode::Toggle
+                },
+                clicked_index: None,
+                visible_order: None,
+            },
+        );
+    }
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ToggleHistoryFocus {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
-            target: gitcomet_core::domain::HistoryFocus::remote_branch("origin", "feature"),
-        },
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(page(reloaded).into()),
+        }),
     );
+    state.repos[0].history_state.range_selection.clone()
+}
 
+#[test]
+fn a_reload_that_shortens_a_chain_keeps_the_survivors_merged_diff() {
+    let range = reload_selection(
+        &[("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+        &["c3", "c2", "c1"],
+        &[("c3x", "c2"), ("c2", "c1"), ("c1", "c0")],
+    )
+    .expect("the surviving chain keeps a comparison");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("c2".into())));
     assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::remote_branch(
-            "origin", "main"
-        )]),
+        range.source,
+        crate::model::ComparisonSource::MergedSelection
     );
 }
 
-/// Setting the set the repository already has must not restart the walk.
 #[test]
-fn setting_the_focus_already_in_effect_changes_nothing() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let focus = HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::remote_branch(
-        "origin", "main",
-    )]);
-    state.repos[0].history_state.history_focus = focus.clone();
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetHistoryFocus {
-            repo_id: RepoId(1),
-            focus,
-        },
-    );
-
-    assert!(effects.is_empty(), "expected no effects, got {effects:?}");
-}
-
-/// "Stop focus" empties the set in one message and returns the normal walk.
-#[test]
-fn clearing_the_focus_set_restarts_the_unfocused_walk() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
-        gitcomet_core::domain::HistoryFocus::local_branch("feature"),
-        gitcomet_core::domain::HistoryFocus::remote("origin"),
-    ]);
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetHistoryFocus {
-            repo_id: RepoId(1),
-            focus: HistoryFocusSet::default(),
-        },
-    );
-
-    assert!(state.repos[0].history_state.history_focus.is_empty());
-    assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadLog { focus, cursor: None, .. } if focus.is_empty()
-        )),
-        "expected the normal walk to be restarted, got {effects:?}"
-    );
-}
-
-/// A focused branch that is deleted would otherwise leave the history empty with
-/// nothing on screen to explain it, so the branch list clears the focus.
-#[test]
-fn a_branch_list_without_the_focused_branch_clears_the_focus() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
-        gitcomet_core::domain::HistoryFocus::local_branch("feature"),
-        gitcomet_core::domain::HistoryFocus::local_branch("main"),
-    ]);
-
-    // Still there: the focus survives.
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(vec![branch_named("main"), branch_named("feature")]),
-        }),
-    );
-    assert_eq!(state.repos[0].history_state.history_focus.len(), 2);
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(vec![branch_named("main")]),
-        }),
-    );
-
-    // Only the deleted branch drops out; `main` is still focused.
-    assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::local_branch("main")]),
-    );
-    assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadLog { focus, cursor: None, .. } if focus.len() == 1
-        )),
-        "expected the surviving focus to be reloaded, got {effects:?}"
-    );
-}
-
-/// A failed branch load says nothing about whether the branch exists, so it
-/// must not be read as a deletion.
-#[test]
-fn a_failed_branch_load_leaves_the_focus_alone() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let focus =
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::local_branch("feature")]);
-    state.repos[0].history_state.history_focus = focus.clone();
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
-            repo_id: RepoId(1),
-            result: Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::Backend("no".into()),
-            )),
-        }),
-    );
-
-    assert_eq!(state.repos[0].history_state.history_focus, focus);
-}
-
-/// The bug this guards: a repository finishing its startup loads dropped the
-/// user's focus on its own. Only the list that governs a target may retire it.
-#[test]
-fn other_ref_lists_loading_never_clear_a_focus() {
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let focus =
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::local_branch("feature")]);
-    state.repos[0].history_state.history_focus = focus.clone();
-    state.repos[0].branches = Loadable::Ready(Arc::new(vec![branch_named("feature")]));
-
-    // A remote list arriving says nothing about a local branch.
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(Vec::new()),
-        }),
-    );
-    assert_eq!(state.repos[0].history_state.history_focus, focus);
-
-    // Nor does a remote-branch list.
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(Vec::new()),
-        }),
-    );
-    assert_eq!(state.repos[0].history_state.history_focus, focus);
-}
-
-/// A successful empty list is a real answer: removing the last remote, or
-/// pruning the last remote-tracking branch, leaves exactly that. Focus on what
-/// it lost would otherwise hold the history empty until cleared by hand.
-#[test]
-fn a_successful_empty_list_clears_the_focus_it_governs() {
-    use gitcomet_core::domain::HistoryFocus;
-
-    let mut repos = RepositoryRuntimes::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = repo_state_for_focus_tests();
-    let feature = HistoryFocus::local_branch("feature");
-    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
-        feature.clone(),
-        HistoryFocus::remote("origin"),
-        HistoryFocus::remote_branch("upstream", "main"),
-    ]);
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(Vec::new()),
-        }),
-    );
-    assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([
-            feature.clone(),
-            HistoryFocus::remote_branch("upstream", "main"),
-        ]),
-        "an empty remote list retires the focused remote, and only that"
-    );
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
-            repo_id: RepoId(1),
-            result: Ok(Vec::new()),
-        }),
-    );
-    assert_eq!(
-        state.repos[0].history_state.history_focus,
-        HistoryFocusSet::from_iter([feature]),
-        "an empty remote-branch list retires the focused remote branch"
-    );
+fn a_reload_that_leaves_two_commits_of_a_gap_compares_them() {
+    let range = reload_selection(
+        &[("c4", "c3"), ("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+        &["c4", "c3", "c1"],
+        &[("c4x", "c3"), ("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+    )
+    .expect("the surviving pair compares");
+    assert_eq!(range.from, CommitId("c1".into()));
+    assert_eq!(range.to, Some(CommitId("c3".into())));
+    assert_eq!(range.source, crate::model::ComparisonSource::SelectedPair);
 }

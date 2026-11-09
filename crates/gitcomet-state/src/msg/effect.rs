@@ -180,8 +180,9 @@ pub enum Effect {
         to: Option<CommitId>,
         options: gitcomet_core::services::ComparisonOptions,
         /// Echoed back on the reply so a completion that lost a race against a
-        /// newer load can be dropped. See `HistoryState::range_files_request`.
-        request: u64,
+        /// newer load can be dropped (see `HistoryState::range_files_request`),
+        /// and the token that stops it.
+        load: crate::model::RangeFilesLoad,
     },
     LoadSquashMessagePreview {
         repo_id: RepoId,

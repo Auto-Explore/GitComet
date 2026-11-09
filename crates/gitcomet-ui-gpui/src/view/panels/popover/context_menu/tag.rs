@@ -153,40 +153,14 @@ fn tag_names_model(
             label: compare_label.clone(),
         }),
     });
-    if let Some(mark_label) = comparison_mark
-        .filter(|(mark_commit, _)| mark_commit != commit_id)
-        .map(|(_, label)| label)
-    {
-        items.push(ContextMenuItem::Entry {
-            label: format!("Compare with {mark_label}").into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::CompareWithMarked {
-                repo_id,
-                commit_id: commit_id.clone(),
-                label: compare_label.clone(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Compare with merge base".into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::CompareWithMergeBase {
-                repo_id,
-                commit_id: commit_id.clone(),
-                label: compare_label.clone(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Clear comparison mark".into(),
-            icon: Some("icons/generic_close.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
-        });
-    }
+    items.extend(super::marked_comparison_entries(
+        repo_id,
+        commit_id,
+        &compare_label,
+        comparison_mark
+            .as_ref()
+            .map(|(mark_commit, mark_label)| (mark_commit, mark_label.as_str())),
+    ));
     items.push(ContextMenuItem::Separator);
     for (tag_ix, name) in tag_names.into_iter().enumerate() {
         if tag_ix > 0 {

@@ -8,9 +8,9 @@ use super::util::{
     diff_target_preview_flags, error_loadable, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
-    AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
-    InlineSubmoduleDiffState, Loadable, RepoId, RepoState, ViewHistoryEntry,
-    submodule_inline_diff_entries,
+    AppState, ComparisonSource, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView,
+    InlineSubmoduleDiffEntry, InlineSubmoduleDiffState, Loadable, RangeSelection, RepoId,
+    RepoState, ViewHistoryEntry, submodule_inline_diff_entries,
 };
 use crate::msg::Effect;
 use crate::msg::RepoCommandEffect;
@@ -405,8 +405,21 @@ pub(super) fn global_nav(
 
     let mut effects: Vec<Effect> = Vec::new();
 
+    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // A step within a live comparison keeps its selection: a plain select would
+    // collapse the selection that started it.
+    let keeps_comparison = snapshot.range_selection.is_some()
+        && RangeSelection::same_optional(
+            repo.history_state.range_selection.as_ref(),
+            snapshot.range_selection.as_ref(),
+        )
+        && repo.history_state.selected_commit == snapshot.selected_commit;
+
     // Restore the selected commit (history-log selection / commit details).
     match snapshot.selected_commit {
+        Some(_) if keeps_comparison => {}
         Some(commit_id) => {
             let sel_effects = super::effects::select_commit(state, repo_id, commit_id.clone());
             // `select_commit` no-ops when this commit is already selected, but a
@@ -474,19 +487,17 @@ pub(super) fn global_nav(
     // the snapshot, so `compare_range` drops it and the restored view names
     // itself after the endpoints instead of "N commits selected". The files it
     // lists are the same either way — the endpoints are what the comparison is.
-    let restore_range = {
-        let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
-            return effects;
-        };
-        match (
-            &repo_state.history_state.range_selection,
-            &snapshot.range_selection,
-        ) {
-            (Some(current), Some(saved)) => !current.same_comparison(saved),
-            (None, None) => false,
-            _ => true,
-        }
-    };
+    // Measured again: restoring the commit above may have ended the comparison.
+    let restore_range = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .is_some_and(|repo| {
+            !RangeSelection::same_optional(
+                repo.history_state.range_selection.as_ref(),
+                snapshot.range_selection.as_ref(),
+            )
+        });
     if restore_range {
         match snapshot.range_selection {
             Some(range) => effects.extend(super::effects::compare_range_with_options(
@@ -497,7 +508,7 @@ pub(super) fn global_nav(
                 range.from_label,
                 range.to_label,
                 range.options,
-                super::effects::ComparisonSource::Explicit,
+                ComparisonSource::Explicit,
             )),
             None => {
                 if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -803,18 +814,9 @@ pub(super) fn clear_diff_selection_for_status_action(
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-
-    clear_inline_submodule_diff_state(repo_state);
-    repo_state.diff_state.content_preview = false;
-    repo_state.diff_state.edit_mode = false;
-    repo_state.diff_state.edit_return_view = None;
-
-    repo_state.set_diff_target(None);
-    repo_state.diff_state.clear_loads();
-    repo_state.bump_diff_state_rev();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.close_diff();
+    }
     Vec::new()
 }
 

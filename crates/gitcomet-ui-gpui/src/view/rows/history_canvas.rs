@@ -26,6 +26,11 @@ const HISTORY_BRANCH_CHIP_TEXT_ICON_GAP_PX: f32 = 3.0;
 const HISTORY_BRANCH_CHIP_ICON_GAP_PX: f32 = 2.0;
 const HISTORY_REF_CONNECTOR_DOT_PX: f32 = 1.5;
 const HISTORY_REF_CONNECTOR_PITCH_PX: f32 = 4.0;
+const COMPARISON_MARK_CHIP_TEXT: &str = "Compare base";
+const COMPARISON_MARK_CHIP_ICON: &str = "icons/git_compare.svg";
+// The chip never takes more than half the message cell from the subject: the
+// labelled chip (~105px) fits a default cell (~330px), else only its icon shows.
+const COMPARISON_MARK_CHIP_MAX_CELL_FRACTION: f32 = 0.5;
 
 const HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 8_192;
 
@@ -945,6 +950,151 @@ impl LaidMark {
     }
 }
 
+/// Sizes shared by a row's mark chips.
+struct MarkChipStyle {
+    icon_size: Pixels,
+    // Between an icon and the text after it.
+    icon_gap: Pixels,
+    pad: Pixels,
+    // Between a leading chip and the subject after it.
+    gap: Pixels,
+    height: Pixels,
+    radius: Pixels,
+    border_width: Pixels,
+    font_size: Pixels,
+    line_height: Pixels,
+}
+
+impl MarkChipStyle {
+    fn width(&self, mark: &LaidMark) -> Pixels {
+        mark.content() + self.pad * 2.0
+    }
+
+    /// The chip for `mark` starting at `x`, centred in `row`.
+    fn bounds(&self, mark: &LaidMark, x: Pixels, row: Bounds<Pixels>) -> Bounds<Pixels> {
+        Bounds::new(
+            point(x, row.top() + (row.size.height - self.height) * 0.5),
+            size(self.width(mark), self.height),
+        )
+    }
+
+    /// The outline of a chip whose menu is not open.
+    fn paint_closed_outline(&self, chip: Bounds<Pixels>, color: gpui::Rgba, window: &mut Window) {
+        self.paint_outline(
+            chip,
+            gpui::rgba(0x00000000),
+            with_alpha(color, 0.45),
+            window,
+        );
+    }
+
+    fn paint_outline(
+        &self,
+        chip: Bounds<Pixels>,
+        fill: gpui::Rgba,
+        border: gpui::Rgba,
+        window: &mut Window,
+    ) {
+        super::history_shapes::paint_rounded_rect(
+            chip,
+            self.radius,
+            fill,
+            self.border_width,
+            border,
+            window,
+        );
+    }
+
+    /// The icon, then the text, from `x` and centred in `row`.
+    fn paint_content(
+        &self,
+        mark: &LaidMark,
+        x: Pixels,
+        row: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let center_y = |height: Pixels| super::canvas_text::center_text_y(row, height);
+        let content_x = x + self.pad;
+        if let Some(path) = &mark.icon {
+            super::diff_canvas::paint_centered_svg_icon(
+                path.clone(),
+                Bounds::new(
+                    point(content_x, center_y(self.icon_size)),
+                    size(self.icon_size, self.icon_size),
+                ),
+                self.icon_size,
+                mark.color,
+                window,
+                cx,
+            );
+        }
+        if let Some(text) = &mark.text {
+            let _ = text.paint(
+                point(content_x + mark.icon_width, center_y(self.line_height)),
+                self.line_height,
+                gpui::TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+        }
+    }
+}
+
+/// Paints the comparison mark's chip at the start of a message cell `cell_width`
+/// wide; `None` when even its icon and gap would take more than half the cell.
+fn paint_comparison_mark_chip(
+    theme: AppTheme,
+    style: &MarkChipStyle,
+    base_style: &gpui::TextStyle,
+    x: Pixels,
+    cell_width: Pixels,
+    row: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Bounds<Pixels>> {
+    let color = theme.colors.accent.foreground;
+    let text = shape_truncated_line_cached(
+        window,
+        base_style,
+        style.font_size,
+        &SharedString::new_static(COMPARISON_MARK_CHIP_TEXT),
+        fx_hash_str(COMPARISON_MARK_CHIP_TEXT),
+        Pixels::MAX,
+        color,
+        None,
+    );
+    let mut mark = LaidMark {
+        icon: Some(COMPARISON_MARK_CHIP_ICON.into()),
+        icon_width: style.icon_size + style.icon_gap,
+        text: Some(text),
+        color,
+    };
+    let budget = cell_width * COMPARISON_MARK_CHIP_MAX_CELL_FRACTION;
+    let fits = |mark: &LaidMark| style.width(mark) + style.gap <= budget;
+    if !fits(&mark) {
+        mark.text = None;
+        mark.icon_width = style.icon_size;
+    }
+    if !fits(&mark) {
+        return None;
+    }
+    let chip = style.bounds(&mark, x, row);
+    style.paint_closed_outline(chip, color, window);
+    style.paint_content(&mark, chip.left(), row, window, cx);
+    Some(chip)
+}
+
+fn comparison_mark_tooltip(label: &str) -> SharedString {
+    format!(
+        "{label} is marked for comparison. Right-click another commit, branch or tag \
+         and choose \"{}\".",
+        crate::view::panels::compare_with_mark_label(label)
+    )
+    .into()
+}
+
 /// A mark's icon, and its text: a text glyph shapes with the label.
 fn mark_content(mark: &RowMark) -> (Option<SharedString>, Option<SharedString>) {
     match &mark.glyph {
@@ -1591,6 +1741,8 @@ pub(super) fn history_commit_row_canvas(
     // The same resolver paints the row and its graph-node cutouts.
     row_paint: InteractionPaint,
     annotation: gitcomet_extension_api::HistoryRowAnnotation,
+    // The comparison mark's label, on the marked commit's row.
+    comparison_mark: Option<SharedString>,
     // Left edge of the worktree chips laid over the end of the message cell.
     worktree_chips_left: Option<std::rc::Rc<std::cell::Cell<Option<Pixels>>>>,
     // For each mark (leading, trailing), the annotator whose menu it opens.
@@ -1786,7 +1938,6 @@ pub(super) fn history_commit_row_canvas(
             // The hosted file list's glyph size, so a review's state icon
             // reads the same on History as in its changed files.
             let icon_size = scaled_px(ROW_MARK_ICON_PX).min(bounds.size.height);
-            let mark_pad = scaled_px(4.0);
             let mark_gap = scaled_px(3.0);
             let chip_height = scaled_px(theme.metrics.row_height(
                 HISTORY_TAG_CHIP_HEIGHT_PX,
@@ -1794,6 +1945,38 @@ pub(super) fn history_commit_row_canvas(
             ))
             .min(bounds.size.height);
             let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
+            let inset = scaled_px(4.0);
+            let chip_style = MarkChipStyle {
+                icon_size,
+                icon_gap: scaled_px(2.0),
+                pad: scaled_px(4.0),
+                gap: inset,
+                height: chip_height,
+                radius: chip_radius,
+                border_width: scaled_px(1.0),
+                font_size: xxs_font,
+                line_height: xxs_line_height,
+            };
+            // The comparison mark leads the message, ahead of extension marks.
+            let comparison_mark_hover = comparison_mark.as_ref().and_then(|label| {
+                let lead = border_lead + inset;
+                paint_comparison_mark_chip(
+                    theme,
+                    &chip_style,
+                    &base_style,
+                    message_left + lead,
+                    summary_bounds.size.width,
+                    bounds,
+                    window,
+                    cx,
+                )
+                .map(|chip| (chip, label.clone()))
+            });
+            if let Some((chip, _)) = &comparison_mark_hover {
+                summary_bounds.origin.x += chip.size.width + chip_style.gap;
+                summary_bounds.size.width -= chip.size.width + chip_style.gap;
+                leading_marks_right = chip.right();
+            }
             for (edge, marks, owner) in [
                 (MarkEdge::Leading, &annotation.leading, mark_menus[0]),
                 (MarkEdge::Trailing, &annotation.trailing, mark_menus[1]),
@@ -1822,7 +2005,7 @@ pub(super) fn history_commit_row_canvas(
                     let color: gpui::Rgba = mark.color.into_color();
                     let (icon, text) = mark_content(mark);
                     let icon_width = if icon.is_some() {
-                        icon_size + scaled_px(2.0)
+                        icon_size + chip_style.icon_gap
                     } else {
                         px(0.0)
                     };
@@ -1830,7 +2013,7 @@ pub(super) fn history_commit_row_canvas(
                         shape(
                             window,
                             &text,
-                            available - icon_width - mark_pad * 2.0,
+                            available - icon_width - chip_style.pad * 2.0,
                             color,
                         )
                     });
@@ -1845,7 +2028,7 @@ pub(super) fn history_commit_row_canvas(
                 let marks_width = |laid: &[LaidMark], shown: usize| -> Pixels {
                     let marks: Pixels = laid[..shown]
                         .iter()
-                        .map(|mark| mark.content() + mark_pad * 2.0)
+                        .map(|mark| chip_style.width(mark))
                         .sum();
                     marks + mark_gap * (shown.saturating_sub(1) as f32)
                 };
@@ -1867,7 +2050,7 @@ pub(super) fn history_commit_row_canvas(
                 let more_width = |hidden: usize| {
                     more.get(hidden)
                         .and_then(Option::as_ref)
-                        .map_or(px(0.0), |text| mark_gap + text.width + mark_pad * 2.0)
+                        .map_or(px(0.0), |text| mark_gap + text.width + chip_style.pad * 2.0)
                 };
                 let group = |laid: &[LaidMark], shown: usize| {
                     marks_width(laid, shown) + more_width(laid.len() - shown)
@@ -1882,8 +2065,10 @@ pub(super) fn history_commit_row_canvas(
                     && let Some(text) = mark_content(&marks[0]).1
                 {
                     let first = &laid[0];
-                    let room =
-                        available - more_width(laid.len() - 1) - first.icon_width - mark_pad * 2.0;
+                    let room = available
+                        - more_width(laid.len() - 1)
+                        - first.icon_width
+                        - chip_style.pad * 2.0;
                     let color = first.color;
                     laid[0].text = Some(shape(window, &text, room, color));
                 }
@@ -1891,51 +2076,49 @@ pub(super) fn history_commit_row_canvas(
                 let total = group(&laid, shown);
                 // Marks that would not fit the message cell are not drawn
                 // over its neighbours.
-                let inset = scaled_px(4.0);
                 let lead = match edge {
                     MarkEdge::Leading => border_lead + inset,
                     MarkEdge::Trailing => inset,
                 };
-                if total <= mark_pad * 2.0 || total + lead > summary_bounds.size.width {
+                if total <= chip_style.pad * 2.0 || total + lead > summary_bounds.size.width {
                     continue;
                 }
                 let start = match edge {
-                    MarkEdge::Leading => message_left + lead,
+                    MarkEdge::Leading => summary_bounds.left() + lead,
                     MarkEdge::Trailing => summary_bounds.right() - inset - total,
                 };
                 let mut x = start;
-                let chip_y = bounds.top() + (bounds.size.height - chip_height) * 0.5;
-                let more_text = more.get(hidden).cloned().flatten();
-                let pieces = laid[..shown]
-                    .iter()
+                // The "+2" is a text-only mark in the secondary colour.
+                let more_mark = more.get(hidden).cloned().flatten().map(|text| LaidMark {
+                    icon: None,
+                    icon_width: px(0.0),
+                    text: Some(text),
+                    color: secondary,
+                });
+                let pieces = laid
+                    .drain(..shown)
                     .enumerate()
-                    .map(|(ix, mark)| (ix..ix + 1, Some(mark), None))
-                    .chain(more_text.map(|text| (shown..laid.len(), None, Some(text))));
-                for (marks_here, mark, more_text) in pieces {
-                    let content = mark.map_or_else(
-                        || more_text.as_ref().map_or(px(0.0), |text| text.width),
-                        LaidMark::content,
-                    );
-                    let chip_width = content + mark_pad * 2.0;
+                    .map(|(ix, mark)| (ix..ix + 1, mark))
+                    .chain(more_mark.map(|mark| (shown..marks.len(), mark)));
+                for (marks_here, mark) in pieces {
+                    let chip_width = chip_style.width(&mark);
                     let keys = marks[marks_here.clone()]
                         .iter()
                         .filter_map(|mark| mark.key.clone());
                     let target = MarkTarget::new(edge, marks_here).with_keys(keys);
                     if let Some(owner) = owner {
                         let open = open_chip == Some(history_mark_chip(&target));
-                        let color = mark.map_or(secondary, |mark| mark.color);
-                        super::history_shapes::paint_rounded_rect(
-                            Bounds::new(point(x, chip_y), size(chip_width, chip_height)),
-                            chip_radius,
-                            if open {
-                                crate::kit::components::control_open_background(theme)
-                            } else {
-                                gpui::rgba(0x00000000)
-                            },
-                            scaled_px(1.0),
-                            if open { color } else { with_alpha(color, 0.45) },
-                            window,
-                        );
+                        let chip = chip_style.bounds(&mark, x, bounds);
+                        if open {
+                            chip_style.paint_outline(
+                                chip,
+                                crate::kit::components::control_open_background(theme),
+                                mark.color,
+                                window,
+                            );
+                        } else {
+                            chip_style.paint_closed_outline(chip, mark.color, window);
+                        }
                         mark_chips.push((
                             target,
                             owner,
@@ -1945,41 +2128,7 @@ pub(super) fn history_commit_row_canvas(
                             ),
                         ));
                     }
-                    let content_x = x + mark_pad;
-                    if let Some(mark) = mark {
-                        if let Some(path) = &mark.icon {
-                            super::diff_canvas::paint_centered_svg_icon(
-                                path.clone(),
-                                Bounds::new(
-                                    point(content_x, center_y(icon_size)),
-                                    size(icon_size, icon_size),
-                                ),
-                                icon_size,
-                                mark.color,
-                                window,
-                                cx,
-                            );
-                        }
-                        if let Some(text) = &mark.text {
-                            let _ = text.paint(
-                                point(content_x + mark.icon_width, center_y(xxs_line_height)),
-                                xxs_line_height,
-                                gpui::TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
-                        }
-                    } else if let Some(text) = &more_text {
-                        let _ = text.paint(
-                            point(content_x, center_y(xxs_line_height)),
-                            xxs_line_height,
-                            gpui::TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
-                    }
+                    chip_style.paint_content(&mark, x, bounds, window, cx);
                     x += chip_width + mark_gap;
                 }
                 summary_bounds.size.width -= total + inset;
@@ -2210,7 +2359,16 @@ pub(super) fn history_commit_row_canvas(
             let message_hover_bounds = if branch_names == HistoryBranchNamesMode::Inline {
                 summary_text_bounds
             } else {
-                summary_bounds
+                // Starts past the leading marks, so the chip's tooltip and the
+                // message card never answer the same pointer.
+                let left = summary_bounds.left().max(leading_marks_right);
+                Bounds::new(
+                    point(left, summary_bounds.top()),
+                    size(
+                        (summary_bounds.right() - left).max(px(0.0)),
+                        summary_bounds.size.height,
+                    ),
+                )
             };
             if !summary.is_empty() {
                 let shaped = shape_highlighted_line_cached(
@@ -2457,6 +2615,7 @@ pub(super) fn history_commit_row_canvas(
                 let ref_items = Arc::clone(&ref_items);
                 let hitbox = hitbox.clone();
                 let signature_hover = signature_hover.clone();
+                let comparison_mark_hover = comparison_mark_hover.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
                         return;
@@ -2477,6 +2636,11 @@ pub(super) fn history_commit_row_canvas(
                     // host's delay timer.
                     let hovered_area = if !pointer_on_row {
                         None
+                    } else if comparison_mark_hover
+                        .as_ref()
+                        .is_some_and(|(bounds, _)| bounds.contains(&event.position))
+                    {
+                        Some(HistoryRowHoverArea::ComparisonMark)
                     } else if signature_hover
                         .as_ref()
                         .is_some_and(|(bounds, _)| bounds.contains(&event.position))
@@ -2515,6 +2679,9 @@ pub(super) fn history_commit_row_canvas(
                                 Some(HistoryRowHoverArea::Signature) => signature
                                     .as_ref()
                                     .map(crate::view::commit_signature::signature_tooltip),
+                                Some(HistoryRowHoverArea::ComparisonMark) => comparison_mark_hover
+                                    .as_ref()
+                                    .map(|(_, label)| comparison_mark_tooltip(label)),
                                 Some(HistoryRowHoverArea::Date) => {
                                     Some(this.full_commit_time_text(commit_time))
                                 }
