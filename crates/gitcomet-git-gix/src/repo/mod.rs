@@ -1601,19 +1601,9 @@ impl GitRepository for GixRepo {
         self.preview_tag_push_impl(request, cancellation)
     }
 
-    fn push(&self) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_impl()
-    }
-
     fn push_with_output(&self) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.push_with_output_impl()
-    }
-
-    fn push_force(&self) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_force_impl()
     }
 
     fn push_force_with_output(&self) -> Result<CommandOutput> {
@@ -1830,11 +1820,6 @@ impl GitRepository for GixRepo {
     ) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.set_remote_url_with_output_impl(name, url, kind, remote_url_policy)
-    }
-
-    fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_set_upstream_impl(remote, branch)
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {

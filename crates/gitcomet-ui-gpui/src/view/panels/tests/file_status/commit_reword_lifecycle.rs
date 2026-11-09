@@ -250,8 +250,8 @@ impl GitRepository for ControlledRewordRepo {
     fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
         self.fallback.pull(mode)
     }
-    fn push(&self) -> Result<()> {
-        self.fallback.push()
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.fallback.push_with_output()
     }
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
         self.fallback.discard_worktree_changes(paths)

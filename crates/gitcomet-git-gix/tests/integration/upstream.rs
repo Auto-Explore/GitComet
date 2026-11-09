@@ -115,7 +115,7 @@ fn push_without_upstream_sets_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    opened.push().unwrap();
+    opened.push_with_output().unwrap();
 
     let upstream = run_git_capture(
         &work_repo,

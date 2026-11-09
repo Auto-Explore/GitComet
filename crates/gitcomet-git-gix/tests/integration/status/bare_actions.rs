@@ -389,7 +389,8 @@ fn bare_fetch_and_push_use_local_remotes_without_a_checkout() {
         RemoteUrlPolicy::default(),
     )
     .unwrap();
-    repo.push_set_upstream("origin", "main").unwrap();
+    repo.push_set_upstream_with_output("origin", "main")
+        .unwrap();
     assert_eq!(
         run_git_output(remote.path(), &["rev-parse", "main"]),
         repo.head_commit_id().unwrap().unwrap().as_ref()
@@ -418,7 +419,7 @@ fn bare_fetch_and_push_use_local_remotes_without_a_checkout() {
         ),
         next
     );
-    repo.push().unwrap();
+    repo.push_with_output().unwrap();
     assert!(!dir.path().join("index").exists());
 }
 

@@ -948,8 +948,8 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
             self.inner.pull(mode)
         }
-        fn push(&self) -> Result<()> {
-            self.inner.push()
+        fn push_with_output(&self) -> Result<CommandOutput> {
+            self.inner.push_with_output()
         }
         fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
             self.inner.discard_worktree_changes(paths)

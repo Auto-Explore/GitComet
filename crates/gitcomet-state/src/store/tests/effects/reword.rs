@@ -136,7 +136,7 @@ impl GitRepository for RecordingRewordRepo {
     fn pull(&self, _: PullMode) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _: &[&Path]) -> Result<()> {

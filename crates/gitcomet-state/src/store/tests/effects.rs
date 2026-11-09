@@ -273,7 +273,7 @@ impl GitRepository for UnsupportedRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -504,7 +504,7 @@ impl GitRepository for MetadataSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -706,7 +706,7 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -925,7 +925,7 @@ impl GitRepository for RecordingLogRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1193,7 +1193,7 @@ impl GitRepository for RecordingCheckoutRepo {
     fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         self.remote_call("pull")
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

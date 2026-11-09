@@ -940,7 +940,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1207,7 +1207,7 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1431,7 +1431,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1620,7 +1620,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1815,7 +1815,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -2012,7 +2012,7 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -2207,7 +2207,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -2401,7 +2401,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -2593,7 +2593,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -2783,7 +2783,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -3945,7 +3945,7 @@ fn pull_releases_the_object_store_before_its_refresh() {
             };
             result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

@@ -16,7 +16,7 @@ use crate::domain::{
     RemoteBranch, RepoSpec, RepoStatus, StashEntry,
 };
 use crate::error::{Error, ErrorKind};
-use crate::services::{GitRepository, PullMode, Result};
+use crate::services::{CommandOutput, GitRepository, PullMode, Result};
 use std::path::{Path, PathBuf};
 
 pub mod child_test;
@@ -177,11 +177,11 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<crate::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<CommandOutput> {
         unsupported()
     }
 
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported()
     }
 

@@ -1271,7 +1271,7 @@ fn push_force_without_output_updates_remote_head_after_rewrite() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened.push_force().expect("force push");
+    opened.push_force_with_output().expect("force push");
 
     let remote_head_after = run_git_capture(&remote_repo, &["rev-parse", "refs/heads/main"])
         .trim()
@@ -1572,7 +1572,7 @@ fn push_without_origin_uses_first_remote_name_for_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened.push().expect("push branch");
+    opened.push_with_output().expect("push branch");
 
     let upstream = run_git_capture(
         &work_repo,

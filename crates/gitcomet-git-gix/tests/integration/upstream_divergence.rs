@@ -178,7 +178,7 @@ fn upstream_divergence_reflects_new_upstream_without_reopen() {
     );
 
     opened
-        .push_set_upstream("origin", "feature")
+        .push_set_upstream_with_output("origin", "feature")
         .expect("push branch and configure upstream");
 
     assert_eq!(

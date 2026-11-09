@@ -511,8 +511,8 @@ impl GitRepository for TrackingRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> Result<()> {
-        Ok(())
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        Ok(CommandOutput::empty_success("git push"))
     }
 
     fn run_large_file_command(

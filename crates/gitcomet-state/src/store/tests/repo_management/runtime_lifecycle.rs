@@ -133,8 +133,8 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.pull(_mode)
     }
 
-    fn push(&self) -> Result<()> {
-        self.inner.push()
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.inner.push_with_output()
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

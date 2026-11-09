@@ -252,9 +252,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     assert_unsupported(repo.push_with_output());
     assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
     assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
-    assert_unsupported(repo.push_force());
     assert_unsupported(repo.push_force_with_output());
-    assert_unsupported(repo.push_set_upstream("origin", "main"));
     assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
     assert_unsupported(repo.set_upstream_branch_with_output(
         "main",
@@ -577,7 +575,7 @@ impl GitRepository for RecordingHistoryModeRepo {
         result.map(|()| CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> super::Result<()> {
+    fn push_with_output(&self) -> super::Result<CommandOutput> {
         unsupported()
     }
 

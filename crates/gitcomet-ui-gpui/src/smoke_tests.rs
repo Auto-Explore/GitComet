@@ -3,7 +3,7 @@ use crate::view::test_support::TestBackend;
 use crate::{theme::AppTheme, ui_scale, view};
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
+use gitcomet_core::services::{CommandOutput, GitBackend, GitRepository, PullMode, Result};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::model::RepoId;
 use gitcomet_state::model::SidebarDataRequest;
@@ -365,7 +365,7 @@ impl GitRepository for SubmoduleTestRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         Self::unsupported()
     }
 
@@ -556,7 +556,7 @@ impl GitRepository for StashTestRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         Self::unsupported()
     }
 

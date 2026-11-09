@@ -1485,7 +1485,7 @@ impl GitRepository for IndexedFindRepo {
         fn commit(&self, message: &str) -> ();
 
 
-        fn push(&self) -> ();
+        fn push_with_output(&self) -> gitcomet_core::services::CommandOutput;
         fn discard_worktree_changes(&self, paths: &[&Path]) -> ();
     }
 }

@@ -566,7 +566,9 @@ fn list_branches_reflects_new_upstream_without_reopen() {
         .expect("feature branch present");
     assert_eq!(feature_before.upstream, None);
 
-    opened.push_set_upstream("origin", "feature").unwrap();
+    opened
+        .push_set_upstream_with_output("origin", "feature")
+        .unwrap();
 
     let after = opened
         .list_branches(&gitcomet_core::services::CancellationToken::new())

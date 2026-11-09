@@ -2024,10 +2024,6 @@ impl GixRepo {
         run_git_with_output(cmd, "git push")
     }
 
-    pub(super) fn push_impl(&self) -> Result<()> {
-        self.push_with_output_impl().map(|_| ())
-    }
-
     pub(super) fn push_force_with_output_impl(&self) -> Result<CommandOutput> {
         if let Some(branch) = self.current_branch_name()?
             && let Some(upstream) = self.branch_upstream(&branch)?
@@ -2044,10 +2040,6 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push").arg("--force-with-lease");
         run_git_with_output(cmd, "git push --force-with-lease")
-    }
-
-    pub(super) fn push_force_impl(&self) -> Result<()> {
-        self.push_force_with_output_impl().map(|_| ())
     }
 
     pub(super) fn push_force_with_lease_with_output_impl(
@@ -2226,11 +2218,6 @@ impl GixRepo {
         }
         cmd.arg("--").arg(name).arg(url);
         run_git_with_output(cmd, &remote_set_url_label(name, url, kind))
-    }
-
-    pub(super) fn push_set_upstream_impl(&self, remote: &str, branch: &str) -> Result<()> {
-        self.push_set_upstream_with_output_impl(remote, branch)
-            .map(|_| ())
     }
 
     pub(super) fn set_upstream_branch_with_output_impl(

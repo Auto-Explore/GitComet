@@ -464,7 +464,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -685,7 +685,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -932,7 +932,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1191,7 +1191,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1444,7 +1444,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
