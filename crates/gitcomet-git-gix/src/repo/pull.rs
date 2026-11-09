@@ -187,7 +187,7 @@ impl GixRepo {
                 },
             );
         }
-        self.run_integrating_git(command, &label, true)
+        self.run_integrating_git(command, &label)
     }
 
     pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {

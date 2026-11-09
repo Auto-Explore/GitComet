@@ -405,39 +405,6 @@ fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
 
-fn run_git_command<S, O>(
-    cmd: Command,
-    label: &str,
-    capture_output: bool,
-    run_simple: S,
-    run_with_output: O,
-) -> Result<CommandOutput>
-where
-    S: FnOnce(Command, &str) -> Result<()>,
-    O: FnOnce(Command, &str) -> Result<CommandOutput>,
-{
-    if capture_output {
-        return run_with_output(cmd, label);
-    }
-
-    run_simple(cmd, label)?;
-    Ok(CommandOutput::empty_success(label))
-}
-
-fn run_git_command_with_optional_output(
-    cmd: Command,
-    label: &str,
-    capture_output: bool,
-) -> Result<CommandOutput> {
-    run_git_command(
-        cmd,
-        label,
-        capture_output,
-        run_git_simple,
-        run_git_with_output,
-    )
-}
-
 /// `Some(is_rebase)` while a merge or rebase is in progress. An unreadable ref
 /// store counts as neither.
 fn integration_in_progress(repo: &gix::Repository) -> Option<bool> {
@@ -1280,11 +1247,10 @@ impl GixRepo {
         &self,
         remotes: &FetchRemotes,
         prune: bool,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         if remotes.explicit && remotes.names.len() > 1 && self.names_a_remote_group(&remotes.names)
         {
-            return self.fetch_remotes_one_by_one(remotes, prune, capture_output);
+            return self.fetch_remotes_one_by_one(remotes, prune);
         }
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch").arg("--progress");
@@ -1324,7 +1290,7 @@ impl GixRepo {
         if remotes.explicit {
             label = format!("{label} -- {}", remotes.names.join(" "));
         }
-        run_git_command_with_optional_output(cmd, &label, capture_output)
+        run_git_with_output(cmd, &label)
     }
 
     /// `git fetch --multiple` resolves a remote group before a remote of the
@@ -1345,7 +1311,6 @@ impl GixRepo {
         &self,
         remotes: &FetchRemotes,
         prune: bool,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         let label = format!(
             "git fetch {} --no-prune-tags -- {}",
@@ -1362,7 +1327,7 @@ impl GixRepo {
                 names: vec![name.clone()],
                 explicit: true,
             };
-            match self.fetch_remotes_command_impl(&one, prune, capture_output) {
+            match self.fetch_remotes_command_impl(&one, prune) {
                 Ok(output) => {
                     stdout.extend_from_slice(output.stdout.as_bytes());
                     stderr.extend_from_slice(output.stderr.as_bytes());
@@ -1401,14 +1366,13 @@ impl GixRepo {
         Err(Error::new(ErrorKind::Git(failure)))
     }
 
-    fn fetch_remotes_command_with_optional_output_impl(
+    fn fetch_remotes_command_with_output_impl(
         &self,
         remotes: &FetchRemotes,
         prune: bool,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         if !prune {
-            return self.fetch_remotes_command_impl(remotes, false, capture_output);
+            return self.fetch_remotes_command_impl(remotes, false);
         }
 
         // `--prune` deletes every destination the remote's own refspecs map, so
@@ -1422,17 +1386,12 @@ impl GixRepo {
                 .unwrap_or(false)
         });
         if !needs_scoped_prune {
-            return self.fetch_remotes_command_impl(remotes, true, capture_output);
+            return self.fetch_remotes_command_impl(remotes, true);
         }
 
-        let mut outputs = vec![self.fetch_remotes_command_impl(remotes, false, capture_output)?];
+        let mut outputs = vec![self.fetch_remotes_command_impl(remotes, false)?];
         for remote in &remotes.names {
-            outputs.push(
-                self.prune_remote_tracking_refs_command_with_optional_output_impl(
-                    remote,
-                    capture_output,
-                )?,
-            );
+            outputs.push(self.prune_remote_tracking_refs_command_with_output_impl(remote)?);
         }
         Ok(CommandOutput::combine(
             format!("{} && git fetch --prune per remote", outputs[0].command),
@@ -1440,11 +1399,10 @@ impl GixRepo {
         ))
     }
 
-    fn fetch_all_with_optional_output_impl(
+    pub(super) fn fetch_all_with_output_impl(
         &self,
         prune: bool,
         skipped: &[String],
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
@@ -1454,14 +1412,13 @@ impl GixRepo {
             remotes.names.retain(|name| !skipped.contains(name));
             remotes.explicit = true;
         }
-        self.fetch_remotes_with_optional_output_impl(&remotes, prune, capture_output)
+        self.fetch_remotes_with_output_impl(&remotes, prune)
     }
 
-    fn fetch_remotes_with_optional_output_impl(
+    fn fetch_remotes_with_output_impl(
         &self,
         remotes: &FetchRemotes,
         prune: bool,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         let tracked_before_fetch = if prune {
             let configured =
@@ -1470,11 +1427,7 @@ impl GixRepo {
         } else {
             Vec::new()
         };
-        let output = match self.fetch_remotes_command_with_optional_output_impl(
-            remotes,
-            prune,
-            capture_output,
-        ) {
+        let output = match self.fetch_remotes_command_with_output_impl(remotes, prune) {
             Ok(output) => output,
             Err(error) => {
                 self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_fetch);
@@ -1513,13 +1466,12 @@ impl GixRepo {
             .arg("--")
             .arg(remote)
             .args(refspecs);
-        run_git_command_with_optional_output(cmd, &label, true)
+        run_git_with_output(cmd, &label)
     }
 
-    fn prune_remote_tracking_refs_command_with_optional_output_impl(
+    fn prune_remote_tracking_refs_command_with_output_impl(
         &self,
         remote: &str,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(remote, "remote name")?;
         let label = format!("git fetch {remote} --prune --no-prune-tags");
@@ -1540,15 +1492,7 @@ impl GixRepo {
         for refspec in refspecs {
             cmd.arg(refspec);
         }
-        run_git_command_with_optional_output(cmd, &label, capture_output)
-    }
-
-    pub(super) fn fetch_all_with_output_impl(
-        &self,
-        prune: bool,
-        skipped: &[String],
-    ) -> Result<CommandOutput> {
-        self.fetch_all_with_optional_output_impl(prune, skipped, true)
+        run_git_with_output(cmd, &label)
     }
 
     pub(super) fn fetch_remote_with_output_impl(
@@ -1561,14 +1505,13 @@ impl GixRepo {
             names: vec![remote.to_owned()],
             explicit: true,
         };
-        self.fetch_remotes_with_optional_output_impl(&remotes, prune, true)
+        self.fetch_remotes_with_output_impl(&remotes, prune)
     }
 
-    fn push_set_upstream_with_optional_output_impl(
+    pub(super) fn push_set_upstream_with_output_impl(
         &self,
         remote: &str,
         branch: &str,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
@@ -1580,7 +1523,7 @@ impl GixRepo {
             .arg("--")
             .arg(remote)
             .arg(format!("HEAD:refs/heads/{branch}"));
-        let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
+        let output = run_git_with_output(cmd, &command_label)?;
         if let Ok(Some(local_branch)) = self.current_branch_name() {
             self.clear_pending_upstream_if_matches(
                 &local_branch,
@@ -1593,12 +1536,11 @@ impl GixRepo {
         Ok(output)
     }
 
-    fn push_head_to_branch_with_optional_output_impl(
+    fn push_head_to_branch_with_output_impl(
         &self,
         remote: &str,
         branch: &str,
         force_with_lease: bool,
-        capture_output: bool,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
@@ -1617,7 +1559,7 @@ impl GixRepo {
         cmd.arg("--")
             .arg(remote)
             .arg(format!("HEAD:refs/heads/{branch}"));
-        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+        run_git_with_output(cmd, &command_label)
     }
 
     fn push_head_to_branch_with_oid_lease_with_output_impl(
@@ -1709,11 +1651,10 @@ impl GixRepo {
         Ok(())
     }
 
-    fn push_after_commit_target_with_optional_output_impl(
+    fn push_after_commit_target_with_output_impl(
         &self,
         target: &SafePushAfterCommitTarget,
         set_upstream: bool,
-        capture_output: bool,
         hooks: GitHooks,
     ) -> Result<CommandOutput> {
         self.validate_push_after_commit_target(target)?;
@@ -1721,7 +1662,7 @@ impl GixRepo {
         // skips that hook too. Upload them first, as the hook would have, so
         // the pushed commits never point at objects the server lacks.
         if !hooks.skipped() || !skips_lfs_upload(&self.reopen_repo()?, target)? {
-            return self.push_after_commit_target_once(target, set_upstream, capture_output, hooks);
+            return self.push_after_commit_target_once(target, set_upstream, hooks);
         }
         // Both commands answer the same credentials prompt.
         crate::util::with_shared_git_auth(|| {
@@ -1731,9 +1672,8 @@ impl GixRepo {
                 .arg(&target.remote)
                 .arg(&local_head);
             let label = format!("git lfs push {} {local_head}", target.remote);
-            let uploaded = run_git_command_with_optional_output(cmd, &label, capture_output)?;
-            let pushed =
-                self.push_after_commit_target_once(target, set_upstream, capture_output, hooks)?;
+            let uploaded = run_git_with_output(cmd, &label)?;
+            let pushed = self.push_after_commit_target_once(target, set_upstream, hooks)?;
             let label = format!("{label} && {}", pushed.command);
             Ok(super::lfs::combine(&label, vec![uploaded, pushed]))
         })
@@ -1743,7 +1683,6 @@ impl GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
         set_upstream: bool,
-        capture_output: bool,
         hooks: GitHooks,
     ) -> Result<CommandOutput> {
         let source = target.local_head.to_string();
@@ -1760,7 +1699,7 @@ impl GixRepo {
             cmd.arg("--no-verify");
         }
         cmd.arg("--").arg(&target.remote).arg(refspec);
-        let mut output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
+        let mut output = run_git_with_output(cmd, &command_label)?;
         let upstream = Upstream {
             remote: target.remote.clone(),
             branch: target.branch.clone(),
@@ -1793,14 +1732,14 @@ impl GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, false, true, GitHooks::Run)
+        self.push_after_commit_target_with_output_impl(target, false, GitHooks::Run)
     }
 
     pub(super) fn push_after_commit_set_upstream_with_output_impl(
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, true, true, GitHooks::Run)
+        self.push_after_commit_target_with_output_impl(target, true, GitHooks::Run)
     }
 
     pub(super) fn push_after_commit_with_hooks_impl(
@@ -1809,7 +1748,7 @@ impl GixRepo {
         set_upstream: bool,
         hooks: GitHooks,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, set_upstream, true, hooks)
+        self.push_after_commit_target_with_output_impl(target, set_upstream, hooks)
     }
 
     fn fetch_remote_branch_tip_with_output(
@@ -2068,50 +2007,40 @@ impl GixRepo {
         )
     }
 
-    fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+    pub(super) fn push_with_output_impl(&self) -> Result<CommandOutput> {
         if let Some(branch) = self.current_branch_name()? {
             if let Some(upstream) = self.configured_branch_upstream(&branch)? {
-                let output = self.push_head_to_branch_with_optional_output_impl(
+                let output = self.push_head_to_branch_with_output_impl(
                     &upstream.remote,
                     &upstream.branch,
                     false,
-                    capture_output,
                 )?;
                 self.clear_pending_upstream_if_matches(&branch, &upstream);
                 return Ok(output);
             }
 
             if let Some(remote) = self.preferred_remote_name()? {
-                return self.push_set_upstream_with_optional_output_impl(
-                    &remote,
-                    &branch,
-                    capture_output,
-                );
+                return self.push_set_upstream_with_output_impl(&remote, &branch);
             }
         }
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push");
-        run_git_command_with_optional_output(cmd, "git push", capture_output)
+        run_git_with_output(cmd, "git push")
     }
 
     pub(super) fn push_impl(&self) -> Result<()> {
-        self.push_with_optional_output_impl(false).map(|_| ())
+        self.push_with_output_impl().map(|_| ())
     }
 
-    pub(super) fn push_with_output_impl(&self) -> Result<CommandOutput> {
-        self.push_with_optional_output_impl(true)
-    }
-
-    fn push_force_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+    pub(super) fn push_force_with_output_impl(&self) -> Result<CommandOutput> {
         if let Some(branch) = self.current_branch_name()?
             && let Some(upstream) = self.branch_upstream(&branch)?
         {
-            let output = self.push_head_to_branch_with_optional_output_impl(
+            let output = self.push_head_to_branch_with_output_impl(
                 &upstream.remote,
                 &upstream.branch,
                 true,
-                capture_output,
             )?;
             self.clear_pending_upstream_if_matches(&branch, &upstream);
             return Ok(output);
@@ -2119,15 +2048,11 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push").arg("--force-with-lease");
-        run_git_command_with_optional_output(cmd, "git push --force-with-lease", capture_output)
+        run_git_with_output(cmd, "git push --force-with-lease")
     }
 
     pub(super) fn push_force_impl(&self) -> Result<()> {
-        self.push_force_with_optional_output_impl(false).map(|_| ())
-    }
-
-    pub(super) fn push_force_with_output_impl(&self) -> Result<CommandOutput> {
-        self.push_force_with_optional_output_impl(true)
+        self.push_force_with_output_impl().map(|_| ())
     }
 
     pub(super) fn push_force_with_lease_with_output_impl(
@@ -2149,20 +2074,15 @@ impl GixRepo {
             .arg("--no-edit")
             .arg("--")
             .arg(reference);
-        self.run_integrating_git(cmd, &command_str, true)
+        self.run_integrating_git(cmd, &command_str)
     }
 
     /// Runs a pull or merge. A failure that leaves a new merge or rebase
     /// stopped at conflicts says so, instead of echoing git's fetch output.
-    pub(super) fn run_integrating_git(
-        &self,
-        cmd: Command,
-        label: &str,
-        capture_output: bool,
-    ) -> Result<CommandOutput> {
+    pub(super) fn run_integrating_git(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
         // A merge or rebase already in progress makes git refuse; that stays a failure.
         let integrating_before = integration_in_progress(&self.repo()).is_some();
-        run_git_command_with_optional_output(cmd, label, capture_output).map_err(|error| {
+        run_git_with_output(cmd, label).map_err(|error| {
             if integrating_before {
                 error
             } else {
@@ -2314,16 +2234,8 @@ impl GixRepo {
     }
 
     pub(super) fn push_set_upstream_impl(&self, remote: &str, branch: &str) -> Result<()> {
-        self.push_set_upstream_with_optional_output_impl(remote, branch, false)
+        self.push_set_upstream_with_output_impl(remote, branch)
             .map(|_| ())
-    }
-
-    pub(super) fn push_set_upstream_with_output_impl(
-        &self,
-        remote: &str,
-        branch: &str,
-    ) -> Result<CommandOutput> {
-        self.push_set_upstream_with_optional_output_impl(remote, branch, true)
     }
 
     pub(super) fn set_upstream_branch_with_output_impl(
@@ -2561,8 +2473,7 @@ impl GixRepo {
         // been selected: that command intentionally uses a missing upstream as
         // one of its deletion criteria. Surviving branches are unlinked below.
         let remotes = self.fetch_all_remotes()?;
-        let fetch_output =
-            self.fetch_remotes_command_with_optional_output_impl(&remotes, true, true)?;
+        let fetch_output = self.fetch_remotes_command_with_output_impl(&remotes, true)?;
 
         let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd
@@ -2795,10 +2706,8 @@ pub(super) fn hidden_remote_tracking_refs(
 
 #[cfg(test)]
 mod tests {
-    use super::{branches_to_prune, normalize_remote_url, parse_refname_set, run_git_command};
-    use gitcomet_core::services::CommandOutput;
+    use super::{branches_to_prune, normalize_remote_url, parse_refname_set};
     use rustc_hash::FxHashSet;
-    use std::cell::Cell;
 
     #[test]
     fn parse_refname_set_trims_and_deduplicates_lines() {
@@ -2861,64 +2770,6 @@ feature/no-upstream\t\n";
             normalize_remote_url(r"file://D:\Users\example\repo.git"),
             "file:///D:/Users/example/repo.git"
         );
-    }
-
-    #[test]
-    fn run_git_command_discard_mode_uses_simple_runner_and_returns_empty_success() {
-        let simple_called = Cell::new(false);
-        let with_output_called = Cell::new(false);
-
-        let output = run_git_command(
-            gitcomet_core::test_support::git_fixture::git_command(),
-            "git push",
-            false,
-            |_, label| {
-                simple_called.set(true);
-                assert_eq!(label, "git push");
-                Ok(())
-            },
-            |_, _| {
-                with_output_called.set(true);
-                Ok(CommandOutput::empty_success("unexpected"))
-            },
-        )
-        .expect("discard mode should execute the simple runner");
-
-        assert!(simple_called.get());
-        assert!(!with_output_called.get());
-        assert_eq!(output, CommandOutput::empty_success("git push"));
-    }
-
-    #[test]
-    fn run_git_command_capture_mode_uses_output_runner() {
-        let simple_called = Cell::new(false);
-        let with_output_called = Cell::new(false);
-        let expected = CommandOutput {
-            command: "git push".to_string(),
-            stdout: "stdout".to_string(),
-            stderr: "stderr".to_string(),
-            exit_code: Some(0),
-        };
-
-        let output = run_git_command(
-            gitcomet_core::test_support::git_fixture::git_command(),
-            "git push",
-            true,
-            |_, _| {
-                simple_called.set(true);
-                Ok(())
-            },
-            |_, label| {
-                with_output_called.set(true);
-                assert_eq!(label, "git push");
-                Ok(expected.clone())
-            },
-        )
-        .expect("capture mode should execute the output runner");
-
-        assert!(!simple_called.get());
-        assert!(with_output_called.get());
-        assert_eq!(output, expected);
     }
 }
 
