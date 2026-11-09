@@ -407,6 +407,21 @@ pub struct ConflictFile {
 }
 
 impl ConflictFile {
+    /// A conflict file at `path` with no stage or current content loaded.
+    pub fn empty(path: impl Into<RepoPath>) -> Self {
+        Self {
+            path: path.into(),
+            base_bytes: None,
+            ours_bytes: None,
+            theirs_bytes: None,
+            current_bytes: None,
+            base: None,
+            ours: None,
+            theirs: None,
+            current: None,
+        }
+    }
+
     /// Build a conflict file from stage/current parts, canonicalizing UTF-8
     /// payloads down to text-only storage.
     pub fn from_loaded_stage_parts(

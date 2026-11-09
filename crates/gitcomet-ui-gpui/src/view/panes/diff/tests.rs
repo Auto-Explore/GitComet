@@ -427,29 +427,20 @@ fn historical_browse_content_ignores_plain_diffs_and_live_state() {
 
 fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf().into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
         base: Some(Arc::<str>::from("base\n")),
         ours: Some(Arc::<str>::from("ours\n")),
         theirs: Some(Arc::<str>::from("theirs\n")),
         current: Some(Arc::<str>::from(current)),
+        ..ConflictFile::empty(path.to_path_buf())
     }
 }
 
 fn binary_conflict_file(path: &Path) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf().into(),
         base_bytes: Some(Arc::from(&b"base"[..])),
         ours_bytes: Some(Arc::from(&b"ours"[..])),
         theirs_bytes: Some(Arc::from(&b"theirs"[..])),
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(path.to_path_buf())
     }
 }
 
@@ -457,15 +448,8 @@ fn binary_conflict_file(path: &Path) -> ConflictFile {
 fn current_only_non_utf8_payload_is_detected_as_binary() {
     let path = PathBuf::from("asset.bin");
     let file = ConflictFile {
-        path: path.into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
         current_bytes: Some(Arc::from(&b"\xff\xfe"[..])),
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(path)
     };
 
     assert!(conflict_file_is_binary(&file));

@@ -139,17 +139,7 @@ fn conflicted_status(path: &Path, conflict: FileConflictKind) -> RepoStatus {
 }
 
 fn empty_conflict_file(path: &Path) -> ConflictFile {
-    ConflictFile {
-        path: path.to_path_buf().into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
-    }
+    ConflictFile::empty(path.to_path_buf())
 }
 
 fn new_state_with_repo(repo_id: RepoId) -> AppState {
@@ -876,11 +866,6 @@ fn conflict_file_loaded_builds_session_from_merged_markers() {
     }
 
     let file = ConflictFile {
-        path: path.clone().into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
         base: Some("base\n".to_string().into()),
         ours: Some("ours\n".to_string().into()),
         theirs: Some("theirs\n".to_string().into()),
@@ -889,6 +874,7 @@ fn conflict_file_loaded_builds_session_from_merged_markers() {
                 .to_string()
                 .into(),
         ),
+        ..ConflictFile::empty(path.clone())
     };
 
     conflict_file_loaded(
@@ -931,15 +917,10 @@ fn conflict_file_loaded_uses_synthetic_session_for_non_marker_payloads() {
     }
 
     let file = ConflictFile {
-        path: path.clone().into(),
         base_bytes: Some(vec![0xff, 0x00].into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(path.clone())
     };
 
     conflict_file_loaded(

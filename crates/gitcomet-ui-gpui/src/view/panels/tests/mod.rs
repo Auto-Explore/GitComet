@@ -206,15 +206,10 @@ fn shows_diff_file_navigation_only_in_normal_mode() {
 #[test]
 fn conflict_side_output_bytes_prefers_original_bytes_and_falls_back_to_text() {
     let file = gitcomet_state::model::ConflictFile {
-        path: std::path::PathBuf::from("conflict.txt").into(),
         base_bytes: Some(Arc::from(&b"base-bytes"[..])),
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
         base: Some(Arc::from("ignored base text")),
         ours: Some(Arc::from("ours text")),
-        theirs: None,
-        current: None,
+        ..gitcomet_state::model::ConflictFile::empty(std::path::PathBuf::from("conflict.txt"))
     };
 
     assert_eq!(
@@ -1348,15 +1343,11 @@ pub(super) fn set_test_conflict_file(
     repo.conflict_state.conflict_file_path = Some(path.clone());
     repo.conflict_state.conflict_file =
         gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-            path: path.into(),
-            base_bytes: None,
-            ours_bytes: None,
-            theirs_bytes: None,
-            current_bytes: None,
             base: Some(base.into()),
             ours: Some(ours.into()),
             theirs: Some(theirs.into()),
             current: Some(current.into()),
+            ..gitcomet_state::model::ConflictFile::empty(path)
         }));
 }
 

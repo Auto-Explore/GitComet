@@ -1876,15 +1876,11 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
         let content: Arc<str> = Arc::from("conflict contents");
         repo1_state.conflict_state.conflict_file =
             Loadable::Ready(Some(crate::model::ConflictFile {
-                path: conflict_path.clone().into(),
-                base_bytes: None,
-                ours_bytes: None,
-                theirs_bytes: None,
-                current_bytes: None,
                 base: Some(Arc::clone(&content)),
                 ours: Some(Arc::clone(&content)),
                 theirs: Some(Arc::clone(&content)),
                 current: Some(content),
+                ..crate::model::ConflictFile::empty(conflict_path.clone())
             }));
         repo1_state.conflict_state.conflict_rev = 41;
         repo1_state.conflict_state.conflict_rev

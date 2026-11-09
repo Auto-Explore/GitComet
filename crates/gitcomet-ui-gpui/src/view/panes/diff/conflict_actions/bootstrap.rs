@@ -896,17 +896,15 @@ mod tests {
     #[test]
     fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {
         let make_file = || gitcomet_state::model::ConflictFile {
-            path: std::path::PathBuf::from("index.html").into(),
             base_bytes: Some(std::sync::Arc::<[u8]>::from(b"base\nbytes\n".as_slice())),
-            ours_bytes: None,
             theirs_bytes: Some(std::sync::Arc::<[u8]>::from(b"theirs\nbytes\n".as_slice())),
-            current_bytes: None,
             base: Some(std::sync::Arc::<str>::from("base\ntext\n")),
             ours: Some(std::sync::Arc::<str>::from("ours\ntext\n")),
             theirs: Some(std::sync::Arc::<str>::from("theirs\ntext\n")),
             current: Some(std::sync::Arc::<str>::from(
                 "<<<<<<< ours\nbody\n=======\nbody\n>>>>>>> theirs\n",
             )),
+            ..gitcomet_state::model::ConflictFile::empty(std::path::PathBuf::from("index.html"))
         };
 
         let left = make_file();
