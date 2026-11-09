@@ -2,6 +2,7 @@
 //! use the real `git-lfs` filter (installed on every CI lane); annex fixtures
 //! are built by hand so they need no git-annex binary.
 
+use crate::git_cli::{git_cmd, git_command, git_stdout_raw as git};
 use crate::test_git_env;
 
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus};
@@ -20,25 +21,8 @@ mod bare;
 const ANNEX_KEY: &str =
     "SHA256E-s5--2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.bin";
 
-fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
 fn git_lfs_available() -> bool {
-    let available = gitcomet_core::test_support::git_fixture::git_command()
+    let available = git_command()
         .args(["lfs", "version"])
         .output()
         .is_ok_and(|output| output.status.success());
@@ -522,11 +506,7 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
             let id = git(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
             index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.trim()));
         }
-        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-        test_git_env::apply(&mut cmd);
-        let mut child = cmd
-            .arg("-C")
-            .arg(&repo)
+        let mut child = git_cmd(&repo)
             .args(["update-index", "--index-info"])
             .stdin(std::process::Stdio::piped())
             .spawn()

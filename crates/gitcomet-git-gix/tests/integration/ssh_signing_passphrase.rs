@@ -1,5 +1,6 @@
 //! End-to-end coverage for session reuse of an SSH signing-key passphrase.
 
+use crate::git_cli::{git_stdout, run_git};
 use gitcomet_core::auth::{
     AuthOutcome, GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth,
     clear_session_passphrase, clear_staged_git_auth, load_session_passphrases,
@@ -16,27 +17,6 @@ use std::process::Command;
 use crate::{auth_test_lock, test_git_env};
 
 const PASSPHRASE: &str = "correct horse battery staple";
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 fn ssh_signing_available() -> bool {
     Command::new("ssh-keygen")

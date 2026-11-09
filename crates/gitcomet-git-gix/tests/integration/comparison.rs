@@ -2,6 +2,7 @@
 //! ranges (listing and loading), merge-base comparisons, ancestry, and
 //! opt-in untracked files.
 
+use crate::git_cli::git_stdout as git;
 use crate::test_git_env;
 use gitcomet_core::domain::{
     CommitFileChange, CommitId, DiffTarget, FileMode, FileStatusKind, ObjectHash,
@@ -11,23 +12,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git runs");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
 
 fn init(repo: &Path) {
     fs::create_dir_all(repo).unwrap();

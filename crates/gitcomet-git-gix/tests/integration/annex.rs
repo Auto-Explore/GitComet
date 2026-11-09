@@ -1,8 +1,7 @@
 //! git-annex operations against real repositories. Skipped when git-annex is
 //! not installed; a `directory` special remote stands in for a server.
 
-use crate::test_git_env;
-
+use crate::git_cli::{git_command, git_output, git_stdout_raw as git};
 use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
 };
@@ -13,23 +12,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-
-fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
 
 /// Confirms an enabled special remote through GitComet, as the user does
 /// before git-annex 10.20261026+ uses a remote someone else configured.
@@ -55,7 +37,7 @@ fn verify_special_remote(repo: &Path, name: &str) {
 }
 
 fn git_annex_available() -> bool {
-    gitcomet_core::test_support::git_fixture::git_command()
+    git_command()
         .args(["annex", "version", "--raw"])
         .output()
         .is_ok_and(|output| output.status.success())
@@ -2509,15 +2491,7 @@ fn a_special_remote_someone_else_configured_waits_for_confirmation() {
             .annex
             .unverified_remotes
     };
-    let tracked = Command::new("git")
-        .args([
-            "-C",
-            clone.to_str().unwrap(),
-            "config",
-            "remote.backup.annex-verified",
-        ])
-        .output()
-        .unwrap();
+    let tracked = git_output(&clone, &["config", "remote.backup.annex-verified"]);
     if !tracked.status.success() {
         assert!(pending().is_empty(), "older git-annex verifies nothing");
         return;

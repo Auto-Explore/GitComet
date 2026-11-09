@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, git_no_editor, git_stdout, run_checked};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{GitBackend, GitRepository, InteractiveRebaseAction};
 use gitcomet_core::test_support::git_fixture::append_config;
@@ -11,36 +11,11 @@ fn run_git(repo: &Path, args: &[&str]) {
     run_git_with_env(repo, args, &[]);
 }
 
+// Fixture commits and rebases must never wait on an editor.
 fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let cmd = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true");
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    let status = cmd.status().expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git command to run");
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    let mut cmd = git_no_editor(repo);
+    cmd.envs(envs.iter().copied());
+    run_checked(&mut cmd, args);
 }
 
 fn init_repo(repo: &Path) {
@@ -896,17 +871,11 @@ fn interactive_rebase_keeps_the_configured_comment_char_when_no_planned_line_col
 /// Captures an expected Git failure while preparing a paused rebase.
 #[cfg(unix)]
 fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let cmd = cmd
-        .arg("-C")
-        .arg(repo)
+    let output = git_cmd(repo)
         .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0");
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    let output = cmd.output().expect("git command to run");
+        .envs(envs.iter().copied())
+        .output()
+        .expect("git command to run");
     assert!(
         !output.status.success(),
         "git {:?} unexpectedly succeeded:\n{}\n{}",

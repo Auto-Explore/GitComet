@@ -1,28 +1,8 @@
-use crate::test_git_env;
+use crate::git_cli::git_stdout as git;
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn git(repo: &Path, args: &[&str]) -> String {
-    let mut command = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut command);
-    let output = command
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run fixture git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .expect("fixture git output")
-        .trim()
-        .to_owned()
-}
 
 fn repository(root: &Path, name: &str) -> PathBuf {
     let path = root.join(name);

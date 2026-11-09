@@ -1,3 +1,4 @@
+use crate::git_cli::{git_cmd, run_checked, stdout_text};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_core::tag_push::{TagPushMode, TagPushRequest};
@@ -6,26 +7,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args([
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "tag.gpgsign=false",
-            "-c",
-            "protocol.file.allow=always",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    let mut cmd = git_cmd(repo);
+    cmd.args([
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "tag.gpgsign=false",
+        "-c",
+        "protocol.file.allow=always",
+    ]);
+    stdout_text(run_checked(&mut cmd, args)).trim().to_string()
 }
 
 fn git_bare(repo: &Path, args: &[&str]) -> String {

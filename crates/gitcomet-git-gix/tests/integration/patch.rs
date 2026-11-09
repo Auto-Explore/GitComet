@@ -1,43 +1,8 @@
-use crate::test_git_env;
+use crate::git_cli::{git_stdout_raw as run_git_capture, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
-use std::path::Path;
-use std::process::Command;
-
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    // Keep tests deterministic by isolating from host git config.
-    test_git_env::apply(&mut cmd);
-    cmd
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
-fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 #[test]
 fn export_patch_and_apply_patch_round_trip() {

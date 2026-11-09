@@ -1,6 +1,7 @@
 //! Non-UTF-8 content through the real backend: attributes, detection,
 //! transcoded file-diff sides and decoded patches.
 
+use crate::git_cli::{git_cmd, run_checked};
 use crate::test_git_env;
 use gitcomet_core::domain::{
     CommitId, Diff, DiffArea, DiffLineKind, DiffTarget, FileDiffText, FileDiffTextSource,
@@ -13,20 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn git(repo: &Path, args: &[&str]) -> Vec<u8> {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    run_checked(&mut git_cmd(repo), args).stdout
 }
 
 fn init_repo() -> tempfile::TempDir {
@@ -781,11 +769,7 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
     )
     .unwrap();
     commit_all(repo_dir, "ours");
-    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut merge);
-    let status = merge
-        .arg("-C")
-        .arg(repo_dir)
+    let status = git_cmd(repo_dir)
         .args(["merge", "-q", "theirs"])
         .output()
         .unwrap()
@@ -847,12 +831,8 @@ fn mixed_encoding_conflict_can_save_either_decoded_stage() {
     )
     .unwrap();
     commit_all(root, "latin1");
-    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut merge);
     assert!(
-        !merge
-            .arg("-C")
-            .arg(root)
+        !git_cmd(root)
             .args(["merge", "-q", "theirs"])
             .output()
             .unwrap()
@@ -954,12 +934,8 @@ fn review_conflict_stages_share_legacy_detection_evidence() {
         fs::write(root.join("menu.txt"), bytes).unwrap();
         commit_all(root, branch);
     }
-    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut merge);
     assert!(
-        !merge
-            .arg("-C")
-            .arg(root)
+        !git_cmd(root)
             .args(["merge", "-q", "theirs"])
             .output()
             .unwrap()

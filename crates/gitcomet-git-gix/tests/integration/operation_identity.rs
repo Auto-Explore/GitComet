@@ -1,23 +1,8 @@
 //! Per-operation overrides must never change another repository's config.
+use crate::git_cli::git_stdout as git;
 use gitcomet_core::commit_identity::CommitIdentity;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
-use std::path::Path;
-
-use crate::test_git_env;
-
-fn git(path: &Path, args: &[&str]) -> String {
-    let mut command = gitcomet_core::test_support::git_fixture::git_command();
-    command.arg("-C").arg(path).args(args);
-    test_git_env::apply(&mut command);
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
-}
 
 #[test]
 fn identity_is_scoped_to_the_commit_and_amend_keeps_the_original_author() {

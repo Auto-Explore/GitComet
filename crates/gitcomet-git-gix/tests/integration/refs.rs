@@ -1,36 +1,12 @@
+use crate::git_cli::{git_cmd, git_output, git_stdout_raw as run_git_capture, run_git};
 use gitcomet_core::domain::{HistoryMode, Upstream, UpstreamDivergence};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, LinearCommit, append_config, import_linear_history,
+    LinearCommit, append_config, import_linear_history,
 };
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    // Concurrent local transports can leave Git-for-Windows shell children
-    // stuck after receive-pack exits when they share the test runner's console.
-    // Pipe their output instead, retaining diagnostics for failed commands.
-    run_git_capture(repo, args);
-}
-
-fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 fn initialize_repo_with_commit(repo: &Path) {
     fs::create_dir_all(repo).unwrap();
@@ -43,8 +19,7 @@ fn initialize_repo_with_commit(repo: &Path) {
             ("commit.gpgsign", "false"),
         ],
     );
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo);
+    let mut cmd = git_cmd(repo);
     import_linear_history(
         &mut cmd,
         "main",
@@ -826,14 +801,12 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .is_empty(),
         "the push must not silently fall back to the local branch name"
     );
-    let pending_marker = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(&work_repo)
-        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
-        .status()
-        .expect("read pending-upstream marker");
+    let pending_marker = git_output(
+        &work_repo,
+        &["config", "--get", "branch.feature.gitcometPendingUpstream"],
+    );
     assert!(
-        !pending_marker.success(),
+        !pending_marker.status.success(),
         "a successful push must clear the pending-upstream marker"
     );
 }
@@ -888,14 +861,12 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
     );
     opened.fetch_all(true).expect("fetch newly live upstream");
 
-    let marker = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(&work_repo)
-        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
-        .status()
-        .expect("read pending-upstream marker");
+    let marker = git_output(
+        &work_repo,
+        &["config", "--get", "branch.feature.gitcometPendingUpstream"],
+    );
     assert!(
-        !marker.success(),
+        !marker.status.success(),
         "observing the mapped tracking ref must clear the pending marker"
     );
 
@@ -1416,9 +1387,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
             writeln!(config, "\n[branch \"branch-{index}\"]\n remote = origin\n merge = refs/heads/main\n gitcometPendingUpstream = false").unwrap();
         }
         drop(config);
-        let mut child = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(repo)
+        let mut child = git_cmd(repo)
             .args(["update-ref", "--stdin"])
             .stdin(Stdio::piped())
             .spawn()

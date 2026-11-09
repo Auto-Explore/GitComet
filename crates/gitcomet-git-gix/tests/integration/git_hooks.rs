@@ -1,7 +1,7 @@
 //! Skipping Git hooks (`--no-verify`) for a commit and the push after it.
 //! Every hook here fails, so an operation that ran one fails too.
 
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, git_command, run_checked, stdout_text};
 use gitcomet_core::services::{
     GitBackend, GitHooks, GitRepository, SafePushAfterCommitContext, SafePushAfterCommitDecision,
     SafePushAfterCommitTarget,
@@ -13,22 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
+    let mut cmd = git_cmd(repo);
     // Local bare remotes require file protocol to be permitted.
     cmd.env("GIT_ALLOW_PROTOCOL", "file");
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    stdout_text(run_checked(&mut cmd, args)).trim().to_string()
 }
 
 fn write_failing_hook(hooks: &Path, name: &str) {
@@ -108,8 +96,7 @@ fn head(repo: &Path) -> String {
 }
 
 fn remote_branch(remote: &Path, branch: &str) -> Option<String> {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
+    let mut cmd = git_command();
     let output = cmd
         .arg("--git-dir")
         .arg(remote)
@@ -605,8 +592,7 @@ exec git "$@"
         || {
             let fixture = fixture();
             let base = head(&fixture.work);
-            let mut mktree = gitcomet_core::test_support::git_fixture::git_command();
-            crate::test_git_env::apply(&mut mktree);
+            let mut mktree = git_command();
             let mut child = mktree
                 .args(["-C", fixture.work.to_str().unwrap(), "mktree", "--missing"])
                 .stdin(std::process::Stdio::piped())
@@ -688,7 +674,7 @@ fn push_after_commit_without_hooks_ignores_a_dangling_remote_head() {
 }
 
 fn git_lfs_available() -> bool {
-    let available = gitcomet_core::test_support::git_fixture::git_command()
+    let available = git_command()
         .args(["lfs", "version"])
         .output()
         .is_ok_and(|output| output.status.success());

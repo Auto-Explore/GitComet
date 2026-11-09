@@ -1,3 +1,4 @@
+use crate::git_cli::{git_cmd, git_output, git_stdout, run_git};
 use crate::test_git_env;
 use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
@@ -9,49 +10,7 @@ use gitcomet_core::test_support::git_fixture::{
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed\nstderr: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_output(repo: &Path, args: &[&str]) -> Output {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run")
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let output = git_output(repo, args);
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout)
-        .expect("git stdout is utf-8")
-        .trim()
-        .to_string()
-}
 
 fn local_submodule_config_entries(repo: &Path) -> Vec<String> {
     let output = git_output(repo, &["config", "--list", "--local"]);
@@ -65,10 +24,8 @@ fn local_submodule_config_entries(repo: &Path) -> Vec<String> {
 }
 
 fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Option<&str>) {
-    let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(parent_repo)
-        .arg("-c")
+    let mut cmd = git_cmd(parent_repo);
+    cmd.arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
         .arg("add");
@@ -89,9 +46,7 @@ fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Opt
 
 fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
+    let output = git_cmd(repo)
         .args(args)
         .arg(path)
         .output()
@@ -150,7 +105,7 @@ fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
             ],
         );
         import_linear_history(
-            git_command().arg("-C").arg(repo),
+            &mut git_cmd(repo),
             "master",
             [LinearCommit {
                 author: "You <you@example.com>",
@@ -192,9 +147,7 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed");
     let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let output = git_command()
-        .arg("-C")
-        .arg(&parent_repo)
+    let output = git_cmd(&parent_repo)
         .arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
@@ -268,9 +221,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
 
     let original_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let add_output = git_command()
-        .arg("-C")
-        .arg(&parent_repo)
+    let add_output = git_cmd(&parent_repo)
         .arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
@@ -339,9 +290,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     );
     let mismatched_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let fetch_output = git_command()
-        .arg("-C")
-        .arg(parent_repo.join("sm"))
+    let fetch_output = git_cmd(&parent_repo.join("sm"))
         .arg("-c")
         .arg("protocol.file.allow=always")
         .args(["fetch", "--quiet"])
@@ -353,9 +302,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
         String::from_utf8_lossy(&fetch_output.stderr)
     );
 
-    let checkout_output = git_command()
-        .arg("-C")
-        .arg(parent_repo.join("sm"))
+    let checkout_output = git_cmd(&parent_repo.join("sm"))
         .args(["checkout", "--quiet", &mismatched_head])
         .output()
         .expect("git checkout in submodule to run");
@@ -398,9 +345,7 @@ fn list_submodules_recurses_into_nested_submodules() {
     init_repo_with_seed(&child_repo, "child.txt", "child\n", "seed child");
     init_repo_with_seed(&parent_repo, "parent.txt", "parent\n", "seed parent");
 
-    let child_add_output = git_command()
-        .arg("-C")
-        .arg(&child_repo)
+    let child_add_output = git_cmd(&child_repo)
         .arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
@@ -425,9 +370,7 @@ fn list_submodules_recurses_into_nested_submodules() {
         ],
     );
 
-    let parent_add_output = git_command()
-        .arg("-C")
-        .arg(&parent_repo)
+    let parent_add_output = git_cmd(&parent_repo)
         .arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
@@ -587,9 +530,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
 
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
 
-    let add_output = git_command()
-        .arg("-C")
-        .arg(&parent_repo)
+    let add_output = git_cmd(&parent_repo)
         .arg("-c")
         .arg("protocol.file.allow=always")
         .arg("submodule")
@@ -604,9 +545,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let checkout_base_output = git_command()
-        .arg("-C")
-        .arg(parent_repo.join("sm"))
+    let checkout_base_output = git_cmd(&parent_repo.join("sm"))
         .args(["checkout", "--quiet", &base_head])
         .output()
         .expect("git checkout base in submodule to run");
@@ -628,9 +567,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     );
 
     run_git(&parent_repo, &["checkout", "-b", "branch-left"]);
-    let checkout_left_output = git_command()
-        .arg("-C")
-        .arg(parent_repo.join("sm"))
+    let checkout_left_output = git_cmd(&parent_repo.join("sm"))
         .args(["checkout", "--quiet", &left_head])
         .output()
         .expect("git checkout left in submodule to run");
@@ -652,9 +589,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     );
 
     run_git(&parent_repo, &["checkout", "master"]);
-    let checkout_right_output = git_command()
-        .arg("-C")
-        .arg(parent_repo.join("sm"))
+    let checkout_right_output = git_cmd(&parent_repo.join("sm"))
         .args(["checkout", "--quiet", &right_head])
         .output()
         .expect("git checkout right in submodule to run");
