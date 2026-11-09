@@ -820,8 +820,13 @@ pub trait FileListImpl {
     fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App);
     fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
     fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
-    /// Shows only files whose path contains `query` (case-insensitive).
-    fn set_filter(&self, query: SharedString, cx: &mut App);
+    /// Shows only files whose path matches `query` as `options` say.
+    fn set_filter(
+        &self,
+        query: SharedString,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    );
     /// The files as shown: sorted, filtered.
     fn files(&self, cx: &App) -> Vec<CommitFileChange>;
     fn selected(&self, cx: &App) -> Option<CommitFileChange>;
@@ -901,8 +906,18 @@ impl FileList {
         self.0.set_mode(mode, cx)
     }
 
-    pub fn set_filter(&self, query: impl Into<SharedString>, cx: &mut App) {
-        self.0.set_filter(query.into(), cx)
+    /// Shows only files whose path matches `query`, matched as a quick
+    /// search bar's match case, whole word and regex toggles say;
+    /// `TextSearchOptions::default()` is a case-insensitive substring. A
+    /// query that is not a valid regex shows no files. A filter chip's query
+    /// replaces it, matched with the default options.
+    pub fn set_filter(
+        &self,
+        query: impl Into<SharedString>,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) {
+        self.0.set_filter(query.into(), options, cx)
     }
 
     pub fn files(&self, cx: &App) -> Vec<CommitFileChange> {

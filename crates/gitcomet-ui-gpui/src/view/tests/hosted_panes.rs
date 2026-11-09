@@ -5337,7 +5337,7 @@ fn list_observers_follow_sort_layout_and_filter(cx: &mut gpui::TestAppContext) {
         Some(&vec![PathBuf::from("b.rs"), PathBuf::from("a.rs")])
     );
     seen.borrow_mut().clear();
-    cx.update(|_, app| list.set_filter("a.rs", app));
+    cx.update(|_, app| list.set_filter("a.rs", Default::default(), app));
     cx.run_until_parked();
     assert_eq!(seen.borrow().last(), Some(&vec![PathBuf::from("a.rs")]));
     drop(subscription);

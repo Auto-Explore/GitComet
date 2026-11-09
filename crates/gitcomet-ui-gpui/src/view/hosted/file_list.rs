@@ -642,7 +642,11 @@ fn chip_active(
 ) -> bool {
     use gitcomet_extension_api::FileListFilterChip as Chip;
     match chip {
-        Chip::Query { query, .. } => !query.is_empty() && controller.query == *query,
+        Chip::Query { query, .. } => {
+            !query.is_empty()
+                && controller.query == *query
+                && controller.search_options == Default::default()
+        }
         Chip::Visible { visible, .. } => controller.shows_only(visible),
         _ => false,
     }
@@ -987,9 +991,14 @@ impl FileListImpl for HostedFileList {
         });
     }
 
-    fn set_filter(&self, query: SharedString, cx: &mut App) {
+    fn set_filter(
+        &self,
+        query: SharedString,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) {
         self.entity.update(cx, |list, cx| {
-            list.controller.borrow_mut().set_query(query);
+            list.controller.borrow_mut().set_filter(query, options);
             cx.notify();
         });
     }
