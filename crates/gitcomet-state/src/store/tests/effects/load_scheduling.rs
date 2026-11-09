@@ -2181,8 +2181,8 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     }
 
     let repo_id = RepoId(500);
-    let workdir = unique_temp_path("gitcomet-effects-dispatch");
-    std::fs::create_dir_all(&workdir).expect("create workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
 
     let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
         spec: RepoSpec {
