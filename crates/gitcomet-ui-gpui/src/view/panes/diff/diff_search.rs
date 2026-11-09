@@ -2831,41 +2831,6 @@ fn search_three_way_via_spans_with_matcher(
     collect_stream_match_visible_rows(summary_rows, matcher, out);
 }
 
-/// Each conflict block's choice, by conflict index; collected once per search.
-fn block_choices(
-    segments: &[conflict_resolver::ConflictSegment],
-) -> Vec<conflict_resolver::ConflictChoice> {
-    segments
-        .iter()
-        .filter_map(|seg| match seg {
-            conflict_resolver::ConflictSegment::Block(block) => Some(block.choice),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The text a collapsed resolved block shows; search matches the same text.
-pub(in crate::view) fn collapsed_block_summary(
-    choices: &[conflict_resolver::ConflictChoice],
-    conflict_ix: usize,
-) -> String {
-    let label = choices
-        .get(conflict_ix)
-        .copied()
-        .map_or("?", conflict_choice_label);
-    format!("Resolved: picked {label}")
-}
-
-fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static str {
-    match choice {
-        conflict_resolver::ConflictChoice::Base => "Base (A)",
-        conflict_resolver::ConflictChoice::Ours => "Local (B)",
-        conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
-        conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
-        _ => "Ordered source selection",
-    }
-}
-
 #[cfg(test)]
 fn three_way_visible_item_matches_query(
     item: conflict_resolver::ThreeWayVisibleItem,

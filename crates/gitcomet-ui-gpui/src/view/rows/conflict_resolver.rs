@@ -5,9 +5,7 @@ use super::diff_text::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::panes::diff::diff_search::{
-    DiffSearchMatcher, DiffSearchOptions, collapsed_block_summary,
-};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 
