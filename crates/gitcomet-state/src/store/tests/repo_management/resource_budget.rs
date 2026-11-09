@@ -1217,7 +1217,7 @@ fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
     );
     let history = &state.repos[0].history_state;
     let reissued = effects.iter().find_map(|effect| match effect {
-        Effect::LoadRangeFiles { request, .. } => Some(*request),
+        Effect::LoadRangeFiles { load, .. } => Some(load.request),
         _ => None,
     });
     assert_eq!(reissued, Some(history.range_files_request));

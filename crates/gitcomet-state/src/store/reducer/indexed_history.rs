@@ -152,14 +152,11 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     history.index = Some(index.clone());
                     history.rev = history.rev.wrapping_add(1);
                     history.status_rev = history.status_rev.wrapping_add(1);
-                    // An explicit comparison empties the multi-selection; the
-                    // commit clicked before it is left alone, as a reload does.
-                    if repo.history_state.multi_selection.commits.is_empty() {
-                        return Vec::new();
-                    }
-                    let pruned = effects::prune_multi_selection(repo, |id| {
+                    let Some(pruned) = effects::prune_multi_selection(repo, |id| {
                         index.position(id.as_ref()).is_some()
-                    });
+                    }) else {
+                        return Vec::new();
+                    };
                     return effects::apply_pruned_selection(state, repo_id, pruned, Some(&index));
                 }
                 Ok(Some(_)) => {

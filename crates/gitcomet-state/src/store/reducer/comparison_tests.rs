@@ -118,7 +118,7 @@ fn range_files_loaded_populates_only_the_current_comparison() {
     let request = effects
         .iter()
         .find_map(|e| match e {
-            Effect::LoadRangeFiles { request, .. } => Some(*request),
+            Effect::LoadRangeFiles { load, .. } => Some(load.request),
             _ => None,
         })
         .expect("a range-file load should be issued");
@@ -478,9 +478,9 @@ fn external_worktree_changes_refresh_a_worktree_comparison_one_at_a_time() {
             Effect::LoadRangeFiles {
                 from: f,
                 to: None,
-                request,
+                load,
                 ..
-            } if *f == from => Some(*request),
+            } if *f == from => Some(load.request),
             _ => None,
         })
     };
@@ -958,7 +958,7 @@ fn range_load_cancellation(effects: &[Effect]) -> gitcomet_core::services::Cance
     effects
         .iter()
         .find_map(|e| match e {
-            Effect::LoadRangeFiles { cancellation, .. } => Some(cancellation.clone()),
+            Effect::LoadRangeFiles { load, .. } => Some(load.cancellation.clone()),
             _ => None,
         })
         .expect("a range-file load")

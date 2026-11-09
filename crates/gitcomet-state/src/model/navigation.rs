@@ -143,25 +143,23 @@ pub struct MainViewSnapshot {
 
 impl PartialEq for MainViewSnapshot {
     fn eq(&self, other: &Self) -> bool {
-        self.diff_target == other.diff_target
-            && self.content_preview == other.content_preview
-            && self.edit_mode == other.edit_mode
-            && self.selected_commit == other.selected_commit
-            && same_range_view(
-                self.range_selection.as_ref(),
+        let Self {
+            diff_target,
+            content_preview,
+            edit_mode,
+            selected_commit,
+            range_selection,
+            worktree_selection,
+        } = self;
+        *diff_target == other.diff_target
+            && *content_preview == other.content_preview
+            && *edit_mode == other.edit_mode
+            && *selected_commit == other.selected_commit
+            && RangeSelection::same_optional(
+                range_selection.as_ref(),
                 other.range_selection.as_ref(),
             )
-            && self.worktree_selection == other.worktree_selection
-    }
-}
-
-/// Whether two comparisons show the same view. What started one does not
-/// count: a step back restores a selection's comparison as an explicit one.
-fn same_range_view(a: Option<&RangeSelection>, b: Option<&RangeSelection>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a.same_comparison(b) && a.base == b.base,
-        (None, None) => true,
-        (Some(_), None) | (None, Some(_)) => false,
+            && *worktree_selection == other.worktree_selection
     }
 }
 
@@ -354,14 +352,22 @@ impl RepoState {
     /// nav-history reconcile can skip cloning a `MainViewSnapshot` (which owns a
     /// `PathBuf`) on the common path where the view did not move.
     pub(crate) fn main_view_snapshot_matches(&self, other: &MainViewSnapshot) -> bool {
-        self.diff_state.diff_target == other.diff_target
-            && self.diff_state.content_preview == other.content_preview
-            && self.diff_state.edit_mode == other.edit_mode
-            && self.history_state.selected_commit == other.selected_commit
-            && same_range_view(
+        let MainViewSnapshot {
+            diff_target,
+            content_preview,
+            edit_mode,
+            selected_commit,
+            range_selection,
+            worktree_selection,
+        } = other;
+        self.diff_state.diff_target == *diff_target
+            && self.diff_state.content_preview == *content_preview
+            && self.diff_state.edit_mode == *edit_mode
+            && self.history_state.selected_commit == *selected_commit
+            && RangeSelection::same_optional(
                 self.history_state.range_selection.as_ref(),
-                other.range_selection.as_ref(),
+                range_selection.as_ref(),
             )
-            && self.history_state.worktree_selection == other.worktree_selection
+            && self.history_state.worktree_selection == *worktree_selection
     }
 }

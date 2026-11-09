@@ -56,6 +56,11 @@ mod worktree;
 mod worktree_file;
 mod worktree_section;
 
+/// The menu entry that compares a commit against the mark named `label`.
+pub(in crate::view) fn compare_with_mark_label(label: &str) -> SharedString {
+    format!("Compare with {label}").into()
+}
+
 /// Comparing `commit_id` (named `label`) against the comparison mark: compare
 /// and merge-base compare when the mark is another commit, and clearing the
 /// mark wherever one is set, the marked commit's own row included.
@@ -71,7 +76,7 @@ fn marked_comparison_entries(
     let mut items = Vec::new();
     if mark_commit != commit_id {
         items.push(ContextMenuItem::Entry {
-            label: crate::view::rows::compare_with_mark_label(mark_label),
+            label: compare_with_mark_label(mark_label),
             icon: Some("icons/open_external.svg".into()),
             shortcut: None,
             disabled: false,

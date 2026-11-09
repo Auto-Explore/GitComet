@@ -1086,16 +1086,11 @@ fn paint_comparison_mark_chip(
     Some(chip)
 }
 
-/// The menu entry that compares a commit against the mark named `label`.
-pub(in crate::view) fn compare_with_mark_label(label: &str) -> SharedString {
-    format!("Compare with {label}").into()
-}
-
 fn comparison_mark_tooltip(label: &str) -> SharedString {
     format!(
         "{label} is marked for comparison. Right-click another commit, branch or tag \
          and choose \"{}\".",
-        compare_with_mark_label(label)
+        crate::view::panels::compare_with_mark_label(label)
     )
     .into()
 }
@@ -1978,8 +1973,8 @@ pub(super) fn history_commit_row_canvas(
                 .map(|chip| (chip, label.clone()))
             });
             if let Some((chip, _)) = &comparison_mark_hover {
-                summary_bounds.origin.x += chip.size.width + inset;
-                summary_bounds.size.width -= chip.size.width + inset;
+                summary_bounds.origin.x += chip.size.width + chip_style.gap;
+                summary_bounds.size.width -= chip.size.width + chip_style.gap;
                 leading_marks_right = chip.right();
             }
             for (edge, marks, owner) in [

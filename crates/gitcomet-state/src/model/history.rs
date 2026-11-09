@@ -467,9 +467,10 @@ fn commit_selection_entry_index(
 }
 
 /// A claimed range-file load: the id its reply carries, and what stops it.
-pub(crate) struct RangeFilesLoad {
-    pub(crate) request: u64,
-    pub(crate) cancellation: gitcomet_core::services::CancellationToken,
+#[derive(Clone, Debug)]
+pub struct RangeFilesLoad {
+    pub request: u64,
+    pub cancellation: gitcomet_core::services::CancellationToken,
 }
 
 /// A "compare two points" selection. `from` is the base/older side and `to`
@@ -525,6 +526,16 @@ impl RangeSelection {
             options: Default::default(),
             base: None,
             source: ComparisonSource::Explicit,
+        }
+    }
+
+    /// [`Self::same_comparison`] over optional comparisons: both absent, or the
+    /// same request. What started one and its loaded base do not count.
+    pub fn same_optional(a: Option<&Self>, b: Option<&Self>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => a.same_comparison(b),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
         }
     }
 

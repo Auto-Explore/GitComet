@@ -380,8 +380,7 @@ pub(super) fn repo_externally_changed(
             from,
             to: None,
             options,
-            request: load.request,
-            cancellation: load.cancellation,
+            load,
         });
     }
 
@@ -962,15 +961,17 @@ pub(super) fn log_loaded(
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
             && repo_state.history_state.indexed.index.is_none()
-            && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
             // One set over the page: the selection can hold thousands of ids
             // and the page tens of thousands of commits, so a scan per id was
             // quadratic on every reload, and reloads arrive in bursts.
             let page_ids: FxHashSet<&str> = page.commits.iter().map(|c| c.id.as_ref()).collect();
-            let pruned = prune_multi_selection(repo_state, |id| page_ids.contains(id.as_ref()));
-            effects.extend(apply_pruned_selection(state, repo_id, pruned, None));
+            if let Some(pruned) =
+                prune_multi_selection(repo_state, |id| page_ids.contains(id.as_ref()))
+            {
+                effects.extend(apply_pruned_selection(state, repo_id, pruned, None));
+            }
         }
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return effects;

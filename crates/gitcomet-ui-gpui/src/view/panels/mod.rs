@@ -869,3 +869,4 @@ pub(in crate::view) use repo_tabs_bar::repo_tab_insert_before_for_drag_cursor;
 
 #[cfg(test)]
 mod tests;
+pub(in crate::view) use popover::compare_with_mark_label;

@@ -500,11 +500,15 @@ pub(super) struct PrunedSelection {
 
 /// Drops the selected commits `listed` rejects. A reveal's target is exempt:
 /// it is selected ahead of the page that will contain it. So is an owned
-/// reword's target until its continuation settles.
+/// reword's target until its continuation settles. `None` for an empty
+/// selection: an explicit comparison's, whose stray focus is left alone.
 pub(super) fn prune_multi_selection(
     repo: &RepoState,
     listed: impl Fn(&CommitId) -> bool,
-) -> PrunedSelection {
+) -> Option<PrunedSelection> {
+    if repo.history_state.multi_selection.commits.is_empty() {
+        return None;
+    }
     let reveal = repo.history_state.reveal_target.as_ref();
     let reword = repo
         .history_state
@@ -523,7 +527,7 @@ pub(super) fn prune_multi_selection(
     // Row indices may have shifted.
     selection.anchor_index = None;
     selection.anchor_log_rev = None;
-    PrunedSelection {
+    Some(PrunedSelection {
         selection,
         dropped,
         focus_gone: repo
@@ -531,7 +535,7 @@ pub(super) fn prune_multi_selection(
             .selected_commit
             .as_ref()
             .is_some_and(|id| !survives(id)),
-    }
+    })
 }
 
 /// Applies `pruned`: the focus moves to a surviving commit, and a selection
@@ -804,8 +808,7 @@ pub(super) fn compare_range_with_options(
         from,
         to,
         options,
-        request: load.request,
-        cancellation: load.cancellation,
+        load,
     });
     effects
 }
@@ -950,8 +953,7 @@ pub(super) fn range_files_loaded(
         from,
         to,
         options,
-        request: load.request,
-        cancellation: load.cancellation,
+        load,
     });
     effects
 }

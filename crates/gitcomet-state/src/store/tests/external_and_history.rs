@@ -5135,11 +5135,11 @@ fn a_merge_base_comparison_loads_with_its_options_and_diffs_from_the_base() {
         .find_map(|effect| match effect {
             Effect::LoadRangeFiles {
                 options: sent,
-                request,
+                load,
                 ..
             } => {
                 assert_eq!(*sent, options);
-                Some(*request)
+                Some(load.request)
             }
             _ => None,
         })

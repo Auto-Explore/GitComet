@@ -1276,12 +1276,12 @@ pub(super) fn schedule_load_range_files(
     from: gitcomet_core::domain::CommitId,
     to: Option<gitcomet_core::domain::CommitId>,
     options: gitcomet_core::services::ComparisonOptions,
-    request: u64,
-    cancellation: CancellationToken,
+    load: crate::model::RangeFilesLoad,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let request = load.request;
         // History and hosted views share this comparison service.
-        let result = repo.compare_files(&from, to.as_ref(), &options, &cancellation);
+        let result = repo.compare_files(&from, to.as_ref(), &options, &load.cancellation);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
