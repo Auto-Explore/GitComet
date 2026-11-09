@@ -637,19 +637,21 @@ impl GixRepo {
                             IndexUnconflictedBlobId::Present(blob_id) => self
                                 .file_diff_source_from_blob_id(blob_id, &repo_path, cancellation)?,
                             IndexUnconflictedBlobId::Missing => None,
-                            IndexUnconflictedBlobId::Unmerged => self
+                            IndexUnconflictedBlobId::Unmerged => match self
                                 .file_diff_source_from_index_stage(
                                     &repo,
                                     &repo_path,
                                     2,
                                     cancellation,
-                                )?
-                                .or(self.file_diff_source_from_index_stage(
+                                )? {
+                                Some(ours) => Some(ours),
+                                None => self.file_diff_source_from_index_stage(
                                     &repo,
                                     &repo_path,
                                     3,
                                     cancellation,
-                                )?),
+                                )?,
+                            },
                         };
                         (old, new)
                     }
@@ -1027,11 +1029,14 @@ impl GixRepo {
                             IndexUnconflictedBlob::Present(bytes) => Some(bytes),
                             IndexUnconflictedBlob::Missing => None,
                             IndexUnconflictedBlob::Unmerged => {
-                                gix_index_stage_image_blob_bytes_optional(&repo, &repo_path, 2)?.or(
-                                    gix_index_stage_image_blob_bytes_optional(
+                                match gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 2,
+                                )? {
+                                    Some(ours) => Some(ours),
+                                    None => gix_index_stage_image_blob_bytes_optional(
                                         &repo, &repo_path, 3,
                                     )?,
-                                )
+                                }
                             }
                         };
                         (old, new)
