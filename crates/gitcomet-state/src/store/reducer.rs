@@ -1748,7 +1748,11 @@ fn reduce_inner(
             } else {
                 path
             };
-            actions_emit_effects::remove_worktree(repo_id, normalized_path, delete_branch)
+            vec![Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
+                repo_id,
+                path: normalized_path,
+                delete_branch,
+            })]
         }
         Msg::ForceRemoveWorktree {
             repo_id,
@@ -1771,7 +1775,13 @@ fn reduce_inner(
             } else {
                 path
             };
-            actions_emit_effects::force_remove_worktree(repo_id, normalized_path, delete_branch)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::ForceRemoveWorktree {
+                    repo_id,
+                    path: normalized_path,
+                    delete_branch,
+                },
+            )]
         }
         Msg::DismissForceRemoveWorktreePrompt { prompt } => {
             if state.force_remove_worktree_prompt.as_ref() == Some(&prompt) {
@@ -2305,7 +2315,12 @@ fn reduce_inner(
         } => actions_emit_effects::delete_remote_tag(repos, state, repo_id, remote, name),
         Msg::AddRemote { repo_id, name, url } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_remote(repo_id, name, url, state.remote_url_policy)
+            vec![Effect::RepoCommand(RepoCommandEffect::AddRemote {
+                repo_id,
+                name,
+                url,
+                remote_url_policy: state.remote_url_policy,
+            })]
         }
         Msg::RemoveRemote { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -2321,7 +2336,13 @@ fn reduce_inner(
             kind,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::set_remote_url(repo_id, name, url, kind, state.remote_url_policy)
+            vec![Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
+                repo_id,
+                name,
+                url,
+                kind,
+                remote_url_policy: state.remote_url_policy,
+            })]
         }
         Msg::CheckoutConflictSide {
             repo_id,

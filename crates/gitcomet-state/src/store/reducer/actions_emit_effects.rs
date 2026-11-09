@@ -19,7 +19,7 @@ use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, GitHooks, InteractiveRebaseEntry, PullMode,
-    RemoteUrlKind, SafePushAfterCommitTarget,
+    SafePushAfterCommitTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,32 +74,6 @@ pub(super) fn rename_branch(
 
 pub(super) fn delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
     vec![Effect::DeleteBranch { repo_id, name }]
-}
-
-pub(super) fn remove_worktree(
-    repo_id: RepoId,
-    path: PathBuf,
-    delete_branch: Option<String>,
-) -> Vec<Effect> {
-    vec![Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
-        repo_id,
-        path,
-        delete_branch,
-    })]
-}
-
-pub(super) fn force_remove_worktree(
-    repo_id: RepoId,
-    path: PathBuf,
-    delete_branch: Option<String>,
-) -> Vec<Effect> {
-    vec![Effect::RepoCommand(
-        RepoCommandEffect::ForceRemoveWorktree {
-            repo_id,
-            path,
-            delete_branch,
-        },
-    )]
 }
 
 pub(super) fn add_submodule(
@@ -667,36 +641,6 @@ pub(super) fn delete_remote_tag(
         remote,
         name,
         auth: None,
-    })]
-}
-
-pub(super) fn add_remote(
-    repo_id: RepoId,
-    name: String,
-    url: String,
-    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
-) -> Vec<Effect> {
-    vec![Effect::RepoCommand(RepoCommandEffect::AddRemote {
-        repo_id,
-        name,
-        url,
-        remote_url_policy,
-    })]
-}
-
-pub(super) fn set_remote_url(
-    repo_id: RepoId,
-    name: String,
-    url: String,
-    kind: RemoteUrlKind,
-    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
-) -> Vec<Effect> {
-    vec![Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
-        repo_id,
-        name,
-        url,
-        kind,
-        remote_url_policy,
     })]
 }
 
