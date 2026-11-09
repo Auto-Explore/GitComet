@@ -550,6 +550,9 @@ impl BarItemOwner for BottomStatusBarView {
             .child(
                 div()
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
+                    .h(status_bar_item_height(ui_scale_percent, theme))
+                    .flex()
+                    .items_center()
                     .text_size(theme.ui_text(11.0))
                     .line_height(scaled_px(theme.metrics.ui_text(12.0)))
                     .child(name),
