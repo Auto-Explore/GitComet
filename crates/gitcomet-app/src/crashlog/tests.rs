@@ -176,8 +176,11 @@ fn only_panics_that_reach_contain_skip_the_crash_report() {
                 .location
                 .as_deref()
                 .and_then(|location| location.rsplit_once("#L"))
-                .is_some_and(|(file, line)| file.ends_with("crashlog/tests.rs")
-                    && line.parse::<u32>().is_ok()),
+                // Component-wise: Windows reports `crashlog\tests.rs`.
+                .is_some_and(|(file, line)| {
+                    std::path::Path::new(file).ends_with("crashlog/tests.rs")
+                        && line.parse::<u32>().is_ok()
+                }),
             "{kind}: {:?}",
             parsed.location
         );
