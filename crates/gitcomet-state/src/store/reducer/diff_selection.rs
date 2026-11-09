@@ -5,7 +5,7 @@ use super::conflict_load::{
 };
 use super::util::{
     SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
-    diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
+    diff_target_preview_flags, error_loadable, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
@@ -1204,15 +1204,7 @@ pub(super) fn diff_file_image_loaded(
                 });
                 Loadable::Ready(v.map(Arc::new))
             }
-            Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.bump_diff_state_rev();
     }
@@ -1241,15 +1233,7 @@ pub(super) fn diff_preview_text_file_loaded(
             .wrapping_add(1);
         repo_state.diff_state.diff_preview_text_file = match result {
             Ok(preview) => Loadable::Ready(preview.map(Arc::new)),
-            Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.bump_diff_state_rev();
     }

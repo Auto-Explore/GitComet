@@ -1117,6 +1117,17 @@ pub(super) fn push_diagnostic(
     });
 }
 
+/// Records `error` as a diagnostic and returns it as the failed load.
+pub(super) fn error_loadable<T>(
+    inputs: &ReducerInputs,
+    repo_state: &mut RepoState,
+    error: &Error,
+) -> Loadable<T> {
+    let message = error.to_string();
+    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message.clone());
+    Loadable::Error(message)
+}
+
 pub(super) fn handle_session_persist_result(
     inputs: &ReducerInputs,
     state: &mut AppState,
