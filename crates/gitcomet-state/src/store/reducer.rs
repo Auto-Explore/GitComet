@@ -26,6 +26,7 @@ mod history_find;
 #[cfg(test)]
 mod history_selection_ack_tests;
 mod indexed_history;
+mod internal;
 #[cfg(test)]
 mod line_stats_tests;
 mod loads;
@@ -893,27 +894,6 @@ fn reduce_inner(
             bare_conversion::disable(state, repo_id, preview)
         }
         Msg::ClearBareConversionPreview { repo_id } => bare_conversion::clear(state, repo_id),
-        Msg::Internal(crate::msg::InternalMsg::BareConversionPreviewLoaded { repo_id, result }) => {
-            bare_conversion::preview_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::QuiesceRepository {
-            common_dir,
-            cancellation,
-            reply,
-        }) => {
-            if cancellation.is_cancelled() {
-                return vec![Effect::Control(
-                    crate::msg::ControlEffect::RepositoryQuiesced { reply },
-                )];
-            }
-            bare_conversion::quiesce(repos, state, &common_dir, reply)
-        }
-        Msg::Internal(crate::msg::InternalMsg::BareModeDisabled { common_dir, result }) => {
-            bare_conversion::finished(inputs, repos, state, &common_dir, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RepositoryModeLoaded { repo_id, result }) => {
-            bare_conversion::mode_loaded(inputs, repos, state, repo_id, result)
-        }
         Msg::OpenDocumentRepository { path, activate } => {
             repo_management::open_document_repository(inputs, id_alloc, state, path, activate)
         }
@@ -1084,21 +1064,6 @@ fn reduce_inner(
             secret,
         } => auth::submit_auth_prompt(inputs, repos, id_alloc, state, generation, username, secret),
         Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
-        Msg::Internal(crate::msg::InternalMsg::AutoFetchUpdated {
-            repo_id,
-            lifetime,
-            revision,
-            snapshot,
-            result,
-        }) => auto_fetch::updated(inputs, state, repo_id, lifetime, revision, snapshot, result),
-        Msg::Internal(crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }) => {
-            auto_fetch::refresh(state, repo_id, lifetime)
-        }
-        Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
-            generation,
-            result,
-            auth,
-        }) => auth::auth_prompt_validated(inputs, repos, id_alloc, state, generation, result, auth),
         Msg::SetGitRuntimeState(runtime) => settings::set_git_runtime_state(state, runtime),
         Msg::SetCommitSignatureTargets {
             repo_id,
@@ -1131,58 +1096,6 @@ fn reduce_inner(
             repo_id,
             insert_before,
         } => repo_management::reorder_repo_tabs(state, repo_id, insert_before),
-        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted {
-            repo_id,
-            operation_id,
-            label,
-            context,
-            time,
-            progress_lane,
-        }) => git_operations::git_operation_started(
-            state,
-            repo_id,
-            operation_id,
-            label,
-            context,
-            time,
-            progress_lane,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
-            repo_id,
-            operation_id,
-            event,
-        }) => git_operations::git_operation_event(state, repo_id, operation_id, event),
-        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
-            repo_id,
-            operation_id,
-            outer_outcome,
-            duration,
-            message,
-        }) => git_operations::git_operation_finished(
-            inputs,
-            repos,
-            id_alloc,
-            state,
-            repo_id,
-            operation_id,
-            outer_outcome,
-            duration,
-            message,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
-            repo_id,
-            action,
-            error,
-        }) => {
-            util::handle_session_persist_result(
-                inputs,
-                state,
-                repo_id,
-                action,
-                Err(std::io::Error::other(error)),
-            );
-            Vec::new()
-        }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(inputs, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
         Msg::WatchWorktree {
@@ -1694,12 +1607,6 @@ fn reduce_inner(
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
         Msg::AbortCloneRepo { dest } => repo_management::abort_clone_repo(state, dest),
-        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress { dest, line }) => {
-            repo_management::clone_repo_progress(state, dest, line)
-        }
-        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished { url, dest, result }) => {
-            auth::clone_repo_finished(state, url, dest, result)
-        }
         Msg::ExportPatch {
             repo_id,
             commit_id,
@@ -1945,22 +1852,6 @@ fn reduce_inner(
             }
             effects
         }
-        Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
-            repo_id,
-            key,
-            result,
-        }) => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
-                && repo.annex_whereis.contains_key(&key)
-            {
-                let loaded = match result {
-                    Ok(whereis) => Loadable::Ready(Arc::new(whereis)),
-                    Err(error) => Loadable::Error(error.to_string()),
-                };
-                repo.set_annex_whereis(key, loaded);
-            }
-            Vec::new()
-        }
         Msg::LoadAnnexUnused { repo_id } => state
             .repos
             .iter_mut()
@@ -1968,9 +1859,6 @@ fn reduce_inner(
             .and_then(effects::request_annex_unused_effect)
             .into_iter()
             .collect(),
-        Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }) => {
-            effects::annex_unused_loaded(state, repo_id, result)
-        }
         Msg::LoadLfsLocks { repo_id } => state
             .repos
             .iter_mut()
@@ -1978,9 +1866,6 @@ fn reduce_inner(
             .and_then(effects::request_lfs_locks_effect)
             .into_iter()
             .collect(),
-        Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded { repo_id, result }) => {
-            effects::lfs_locks_loaded(state, repo_id, result)
-        }
         Msg::AppendGitattributesRule { repo_id, rule } => {
             begin_local_action(state, repo_id);
             vec![Effect::RepoCommand(
@@ -2013,9 +1898,6 @@ fn reduce_inner(
         }
         Msg::StartRepoMaintenance { repo_id } => maintenance::start(state, repo_id),
         Msg::SnoozeRepoMaintenance { repo_id } => maintenance::snooze(state, repo_id),
-        Msg::Internal(crate::msg::InternalMsg::RepoMaintenanceChecked { repo_id, needed }) => {
-            maintenance::checked(state, repo_id, needed)
-        }
         Msg::Pull { repo_id, mode } => match annex_takeover(inputs, repos, state, repo_id, true) {
             Some(effects) => effects,
             None => actions_emit_effects::pull(repos, state, repo_id, mode),
@@ -2059,12 +1941,6 @@ fn reduce_inner(
             request,
             cancellation,
         } => loads::preview_tag_push(state, repo_id, request, cancellation),
-        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
-            repo_id,
-            mode,
-            generation,
-            result,
-        }) => loads::tag_push_preview_loaded(state, repo_id, mode, generation, result),
         Msg::Push { repo_id } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
             None => actions_emit_effects::push(repos, state, repo_id),
@@ -2566,414 +2442,10 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             vec![Effect::DropStash { repo_id, index }]
         }
-        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
-            repository_mode,
-            head_commit,
-            repo_id,
-            spec,
-            repo,
-            preferences,
-        }) => repo_management::repo_opened_ok(
-            inputs,
-            repos,
-            state,
-            repo_id,
-            spec,
-            repo,
-            preferences,
-            repository_mode,
-            head_commit,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
-            repo_id,
-            load_epoch,
-            message,
-        }) => {
-            loads::repo_load_finished(inputs, repos, id_alloc, state, repo_id, load_epoch, message)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
-            repo_id,
-            spec,
-            error,
-        }) => repo_management::repo_opened_err(inputs, repos, state, repo_id, spec, error),
-        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded { repo_id, result }) => {
-            effects::branches_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded { repo_id, result }) => {
-            effects::remotes_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
-            effects::remote_branches_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded { repo_id, result }) => {
-            effects::worktree_status_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
-            effects::staged_status_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
-            repo_id,
-            generation,
-            result,
-            large_files,
-        }) => {
-            effects::uncommitted_line_stats_loaded(state, repo_id, generation, result, large_files)
-        }
-        Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded { repo_id, result }) => {
-            effects::large_file_support_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
-            effects::status_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded { repo_id, result }) => {
-            effects::head_branch_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
-            effects::upstream_divergence_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::HeadTrackingLoaded { repo_id, result }) => {
-            effects::head_tracking_loaded(inputs, state, repo_id, result)
-        }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::DiffSession(event) => diff_session::reduce(inputs, repos, state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::HistoryFind(event) => history_find::reduce(state, event),
-        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
-            repo_id,
-            seq,
-            scope,
-            cursor,
-            result,
-        }) => external_and_history::log_loaded(inputs, state, repo_id, seq, scope, cursor, result),
-        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
-            repo_id,
-            seq,
-            commits,
-            scanned,
-        }) => external_and_history::log_chunk_loaded(state, repo_id, seq, commits, scanned),
-        Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
-            effects::tags_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded { repo_id, result }) => {
-            effects::remote_tags_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::StashesLoaded { repo_id, result }) => {
-            effects::stashes_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::ReflogLoaded { repo_id, result }) => {
-            effects::reflog_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
-            external_and_history::rebase_state_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
-            repo_id,
-            base,
-            result,
-        }) => external_and_history::interactive_rebase_setup_loaded(
-            inputs, state, repo_id, base, result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
-            repo_id,
-            requested_ids,
-            result,
-        }) => external_and_history::interactive_cherry_pick_messages_loaded(
-            state,
-            repo_id,
-            requested_ids,
-            result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed {
-            repo_id,
-            message,
-        }) => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-                && repo_state.suggested_commit_message.as_deref() == Some(message.as_str())
-            {
-                repo_state.set_suggested_commit_message(None);
-            }
-            Vec::new()
-        }
-        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { repo_id, message }) => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                repo_state.set_suggested_commit_message(Some(message));
-            }
-            Vec::new()
-        }
-        Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
-            external_and_history::merge_commit_message_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
-            repo_id,
-            commit_id,
-            result,
-        }) => effects::hover_commit_message_loaded(state, repo_id, commit_id, result),
-        Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
-            request,
-            repo_id,
-            path,
-            cursor,
-            result,
-        }) => {
-            file_history::file_history_loaded(inputs, state, repo_id, request, path, cursor, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
-            repo_id,
-            path,
-            source,
-            result,
-        }) => effects::blame_loaded(inputs, state, repo_id, path, source, result),
-        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
-            request,
-            repo_id,
-            path,
-            result,
-            conflict_session,
-        }) => conflict_load::conflict_file_loaded(
-            inputs,
-            state,
-            repo_id,
-            request,
-            path,
-            *result,
-            conflict_session.map(|session| *session),
-        ),
-        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            read,
-            result,
-        }) => effects::worktrees_loaded(inputs, state, repo_id, read, result),
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
-            repo_id,
-            scope,
-            result,
-        }) => effects::worktree_dirty_loaded(state, repo_id, scope, result),
-        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
-            effects::ref_metadata_loaded(state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
-            effects::submodules_loaded(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
-            cancellation,
-            repo_id,
-            source,
-            result,
-        }) => {
-            if cancellation.is_some_and(|token| token.is_cancelled()) {
-                Vec::new()
-            } else {
-                effects::file_browser_loaded(inputs, state, repo_id, source, result)
-            }
-        }
-        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
-            repo_id,
-            url,
-            path,
-            branch,
-            name,
-            force,
-            result,
-        }) => submodule_trust::add_trust_checked(
-            inputs, state, repo_id, url, path, branch, name, force, result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }) => {
-            submodule_trust::update_trust_checked(inputs, state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
-            repo_id,
-            path,
-            result,
-        }) => submodule_trust::load_trust_checked(inputs, state, repo_id, path, result),
-        Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
-            repo_id,
-            commit_id,
-            result,
-        }) => effects::commit_details_loaded(inputs, state, repo_id, commit_id, result),
-        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
-            repo_id,
-            epoch,
-            batch,
-            result,
-        }) => effects::commit_signatures_verified(state, repo_id, epoch, batch, result),
-        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
-            repo_id,
-            reference,
-            result,
-        }) => effects::commit_reveal_resolved(inputs, state, repo_id, reference, result),
-        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
-            repo_id,
-            reference,
-            request,
-            purpose,
-            result,
-        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, purpose, result),
-        Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-            repo_id,
-            from,
-            to,
-            request,
-            result,
-        }) => effects::range_files_loaded(inputs, state, repo_id, from, to, request, result),
-        Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
-            repo_id,
-            oldest,
-            head,
-            result,
-        }) => effects::squash_message_preview_loaded(inputs, state, repo_id, oldest, head, result),
-        Msg::Internal(crate::msg::InternalMsg::SquashRebaseSetupLoaded {
-            repo_id,
-            base,
-            actual_head,
-            selected_ids,
-            reword_id,
-            message,
-            count,
-            result,
-        }) => effects::squash_rebase_setup_loaded(
-            inputs,
-            state,
-            repo_id,
-            effects::SquashRebaseSetup {
-                base,
-                actual_head,
-                selected_ids,
-                reword_id,
-                message,
-                count,
-            },
-            result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
-            repo_id,
-            request_rev,
-            result,
-        }) => effects::recent_commit_messages_loaded(inputs, state, repo_id, request_rev, result),
-        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
-            repo_id,
-            target,
-            result,
-        }) => diff_selection::diff_loaded(inputs, state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
-            repo_id,
-            target,
-            result,
-        }) => diff_selection::diff_file_loaded(inputs, state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
-            repo_id,
-            target,
-            result,
-        }) => diff_selection::text_attributes_loaded(inputs, state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
-            repo_id,
-            target,
-            side,
-            result,
-        }) => diff_selection::diff_preview_text_file_loaded(
-            inputs, state, repo_id, target, side, result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
-            repo_id,
-            target,
-            result,
-        }) => diff_selection::submodule_summary_loaded(inputs, state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
-            repo_id,
-            inline_rev,
-            target,
-            result,
-        }) => diff_selection::inline_submodule_load_finished(
-            inputs,
-            state,
-            repo_id,
-            inline_rev,
-            target,
-            result.map(Arc::new),
-            |inline| (&mut inline.diff_rev, &mut inline.diff),
-        ),
-        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
-            repo_id,
-            inline_rev,
-            target,
-            result,
-        }) => diff_selection::inline_submodule_load_finished(
-            inputs,
-            state,
-            repo_id,
-            inline_rev,
-            target,
-            result.map(|file| file.map(Arc::new)),
-            |inline| (&mut inline.diff_file_rev, &mut inline.diff_file),
-        ),
-        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
-            repo_id,
-            inline_rev,
-            target,
-            result,
-        }) => diff_selection::inline_submodule_load_finished(
-            inputs,
-            state,
-            repo_id,
-            inline_rev,
-            target,
-            result.map(|image| image.map(Arc::new)),
-            |inline| (&mut inline.diff_file_rev, &mut inline.diff_file_image),
-        ),
-        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
-            repo_id,
-            target,
-            result,
-        }) => diff_selection::diff_file_image_loaded(inputs, state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
-            repo_id,
-            action,
-            result,
-        }) => external_and_history::repo_action_finished(inputs, state, repo_id, action, result),
-        Msg::Internal(crate::msg::InternalMsg::RepoPathsActionFinished {
-            repo_id,
-            action,
-            paths,
-            result,
-        }) => external_and_history::repo_paths_action_finished(
-            inputs, state, repo_id, action, paths, result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
-            external_and_history::branch_already_exists(inputs, state, action, prompt)
-        }
-        Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged { repo_id, name }) => {
-            external_and_history::branch_not_fully_merged(inputs, state, repo_id, name)
-        }
-        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
-            repo_id,
-            action,
-            worktree_path,
-            result,
-        }) => external_and_history::repo_action_finished_in_worktree(
-            inputs,
-            id_alloc,
-            state,
-            repo_id,
-            action,
-            worktree_path,
-            result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            repo_id,
-            amend,
-            result,
-        }) => auth::commit_finished(inputs, repos, state, repo_id, result, amend),
-        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
-            repo_id,
-            context,
-            auth,
-            result,
-        }) => auth::safe_push_after_commit_finished(
-            inputs, repos, state, repo_id, context, auth, result,
-        ),
-        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id,
-            command,
-            result,
-        }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
+        Msg::Internal(msg) => internal::reduce(inputs, repos, id_alloc, state, msg),
     }
 }
