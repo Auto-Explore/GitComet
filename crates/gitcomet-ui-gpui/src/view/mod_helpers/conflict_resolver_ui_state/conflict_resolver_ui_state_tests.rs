@@ -142,11 +142,9 @@ pub(crate) fn apply_three_way_conflict_maps_distributes_ranges_and_flags() {
     let mut state = ConflictResolverUiState::default();
     state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("base\n".into()),
-        ours: "ours\n".into(),
-        theirs: "theirs\n".into(),
         choice: ConflictChoice::Theirs,
         resolved: true,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("ours\n", "theirs\n")
     })];
     let maps = conflict_resolver::ThreeWayConflictMaps {
         conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
@@ -174,16 +172,8 @@ pub(crate) fn apply_three_way_conflict_maps_distributes_ranges_and_flags() {
 
 #[test]
 pub(crate) fn merge_plan_ranges_override_marker_output_offset_estimates() {
-    let block = |ours: &str, theirs: &str| {
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: ours.into(),
-            theirs: theirs.into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        })
-    };
+    let block =
+        |ours: &str, theirs: &str| ConflictSegment::Block(ConflictBlock::unresolved(ours, theirs));
     let exact_ranges = vec![1..3, 4..5, 6..8];
     let mut state = ConflictResolverUiState {
         // These text segments are merged-output projections whose line
@@ -235,21 +225,12 @@ pub(crate) fn refresh_conflict_has_base_from_segments_refreshes_choice_cache() {
     let mut state = ConflictResolverUiState::default();
     state.marker_segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "ours\n".into(),
-            theirs: "theirs\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(ConflictBlock::unresolved("ours\n", "theirs\n")),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".into()),
-            ours: "ours2\n".into(),
-            theirs: "theirs2\n".into(),
             choice: ConflictChoice::Both,
             resolved: true,
-            whitespace_only: false,
+            ..ConflictBlock::unresolved("ours2\n", "theirs2\n")
         }),
     ];
 
@@ -267,14 +248,10 @@ pub(crate) fn ignored_whitespace_visual_kind_caches_entire_change_run() {
     use gitcomet_core::file_diff::FileDiffRowKind as RK;
 
     let mut state = ConflictResolverUiState::default();
-    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "let x = 1\nabc  \n".into(),
-        theirs: "let x=1\nabc\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "let x = 1\nabc  \n",
+        "let x=1\nabc\n",
+    ))];
     state.rebuild_two_way_visible_state();
 
     let first_row = state.two_way_split_row_by_source(0).unwrap();
@@ -293,14 +270,10 @@ pub(crate) fn ignored_whitespace_visual_kind_caches_entire_change_run() {
 #[test]
 pub(crate) fn giant_two_way_word_highlights_are_shared_between_column_renders() {
     let mut state = ConflictResolverUiState::default();
-    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "let local_name = value;\n".into(),
-        theirs: "let remote_name = value;\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "let local_name = value;\n",
+        "let remote_name = value;\n",
+    ))];
     state.rebuild_two_way_visible_state();
     let row = state.two_way_split_row_by_source(0).unwrap();
 
@@ -317,14 +290,9 @@ pub(crate) fn giant_two_way_word_highlights_are_shared_between_column_renders() 
 #[test]
 pub(crate) fn rebuild_three_way_visible_state_streamed_mode() {
     let mut state = ConflictResolverUiState::default();
-    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "a\nb\n".into(),
-        theirs: "c\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    state.marker_segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "a\nb\n", "c\n",
+    ))];
     state.three_way_text.ours = "a\nb\n".into();
     state.three_way_text.theirs = "c\n".into();
     state.three_way_line_starts.ours = vec![0, 2].into();
@@ -352,11 +320,7 @@ pub(crate) fn three_way_measure_rows_do_not_materialize_deferred_line_starts() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base 1234567890\n".into()),
-            ours: "ours abcdefghij\n".into(),
-            theirs: "theirs klmnopqrstuv\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
+            ..ConflictBlock::unresolved("ours abcdefghij\n", "theirs klmnopqrstuv\n")
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -421,11 +385,7 @@ pub(crate) fn three_way_measure_rows_use_each_stage_coordinates_when_clean_conte
             ConflictSegment::Text("ctx\nclean ours insertion\n".into()),
             ConflictSegment::Block(ConflictBlock {
                 base: Some("base conflict\n".into()),
-                ours: "ours conflict\n".into(),
-                theirs: format!("{long_theirs}\n").into(),
-                choice: ConflictChoice::Ours,
-                resolved: false,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("ours conflict\n", format!("{long_theirs}\n"))
             }),
             ConflictSegment::Text("tail\n".into()),
         ],
@@ -473,11 +433,8 @@ pub(crate) fn hidden_resolved_measure_row_is_not_remapped_as_a_side_line() {
             ConflictSegment::Text("head\n".into()),
             ConflictSegment::Block(ConflictBlock {
                 base: Some("b1\nb2\n".into()),
-                ours: "o1\nours insertion\no2\n".into(),
-                theirs: "t1\nt2\n".into(),
-                choice: ConflictChoice::Ours,
                 resolved: true,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("o1\nours insertion\no2\n", "t1\nt2\n")
             }),
             ConflictSegment::Text(format!("tail\n{long_theirs}\n").into()),
         ],
@@ -535,11 +492,7 @@ pub(crate) fn collapsed_context_measure_row_uses_the_compact_visible_index() {
             ConflictSegment::Text(prefix.into()),
             ConflictSegment::Block(ConflictBlock {
                 base: Some("base conflict\n".into()),
-                ours: "ours conflict\n".into(),
-                theirs: format!("{long_theirs}\n").into(),
-                choice: ConflictChoice::Ours,
-                resolved: false,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("ours conflict\n", format!("{long_theirs}\n"))
             }),
             ConflictSegment::Text("tail\n".into()),
         ],
@@ -607,14 +560,10 @@ pub(crate) fn streamed_conflict_index_for_side_line_uses_grouped_side_ranges() {
 #[test]
 pub(crate) fn streamed_mode_dispatch_uses_projection() {
     let mut state = ConflictResolverUiState::default();
-    let segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "a\nb\nc\nd\ne\n".into(),
-        theirs: "a\nb\nc\nd\ne\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "a\nb\nc\nd\ne\n",
+        "a\nb\nc\nd\ne\n",
+    ))];
     let ranges = vec![0..5];
     state.streamed_mut().three_way_visible_projection =
         conflict_resolver::build_three_way_visible_projection(5, &ranges, &segments, false);
@@ -629,14 +578,7 @@ pub(crate) fn streamed_mode_dispatch_uses_projection() {
 pub(crate) fn streamed_state_with_one_conflict() -> ConflictResolverUiState {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "a\nb\n".into(),
-            theirs: "c\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\nb\n", "c\n")),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     let projection = TwoWaySplitProjection::new(&index, &segments, false);
@@ -746,11 +688,7 @@ pub(crate) fn split_ready_state() -> ConflictResolverUiState {
             // even though the raw marker block is two-sided.
             ConflictSegment::Block(ConflictBlock {
                 base: Some("b1\nb2\nb3\n".into()),
-                ours: "o1\no2\no3\n".into(),
-                theirs: "t1\nt2\nt3\n".into(),
-                choice: ConflictChoice::Ours,
-                resolved: false,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("o1\no2\no3\n", "t1\nt2\nt3\n")
             }),
             ConflictSegment::Text("tail\n".into()),
         ],
@@ -1014,11 +952,7 @@ pub(crate) fn split_boundaries_use_staged_positions_after_one_sided_clean_contex
             ConflictSegment::Text("ctx\nours clean insertion\n".into()),
             ConflictSegment::Block(ConflictBlock {
                 base: Some("b1\nb2\n".into()),
-                ours: "o1\no2\n".into(),
-                theirs: "t1\nt2\n".into(),
-                choice: ConflictChoice::Ours,
-                resolved: false,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("o1\no2\n", "t1\nt2\n")
             }),
             ConflictSegment::Text("tail\n".into()),
         ],
@@ -1145,16 +1079,7 @@ pub(crate) fn split_boundaries_reject_synthetic_base_only_and_serialized_whole_b
 
 #[test]
 pub(crate) fn joinable_context_rejects_marker_looking_text_between_blocks() {
-    let block = || {
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "ours\n".into(),
-            theirs: "theirs\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        })
-    };
+    let block = || ConflictSegment::Block(ConflictBlock::unresolved("ours\n", "theirs\n"));
     let mut state = ConflictResolverUiState {
         marker_segments: vec![
             block(),

@@ -731,11 +731,9 @@ fn split_row_text_search_matches_rendered_tab_expansion() {
 fn conflict_search_three_way_mode_uses_three_way_visible_rows() {
     let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("base".into()),
-        ours: "needle\n".into(),
-        theirs: "remote\n".into(),
         choice: ConflictChoice::Theirs,
         resolved: true,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("needle\n", "remote\n")
     })];
     let visible_range = 0..1;
     let three_way_visible_projection = build_three_way_visible_projection(
@@ -804,14 +802,10 @@ fn conflict_search_three_way_mode_uses_three_way_visible_rows() {
 
 #[test]
 fn conflict_search_two_way_general_matches_across_adjacent_rows() {
-    let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "foo\nbar\n".into(),
-        theirs: "remote\nside\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
-    })];
+    let marker_segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "foo\nbar\n",
+        "remote\nside\n",
+    ))];
     let index = ConflictSplitRowIndex::new(&marker_segments, 1);
     let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
     let three_way_visible_projection =
@@ -846,11 +840,9 @@ fn conflict_search_two_way_general_matches_across_adjacent_rows() {
 fn conflict_search_three_way_collapsed_rows_match_choice_summary() {
     let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("base".into()),
-        ours: "ours".into(),
-        theirs: "theirs".into(),
         choice: ConflictChoice::Theirs,
         resolved: true,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("ours", "theirs")
     })];
     let visible_range = 0..1;
     let three_way_visible_projection = build_three_way_visible_projection(
@@ -882,11 +874,7 @@ fn conflict_search_three_way_collapsed_rows_match_choice_summary() {
 fn conflict_search_three_way_projection_uses_streamed_visible_rows() {
     let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("base".into()),
-        ours: "needle\n".into(),
-        theirs: "remote\n".into(),
-        choice: ConflictChoice::Ours,
-        resolved: false,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("needle\n", "remote\n")
     })];
     let conflict_ranges = 0..1;
     let three_way_visible_projection = build_three_way_visible_projection(
@@ -919,11 +907,7 @@ fn three_way_span_search_matches_per_item_search() {
         ConflictSegment::Text("header\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base_needle\nbase_plain\n".into()),
-            ours: "ours_plain\nours_needle\n".into(),
-            theirs: "theirs_plain\ntheirs_plain\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
+            ..ConflictBlock::unresolved("ours_plain\nours_needle\n", "theirs_plain\ntheirs_plain\n")
         }),
         ConflictSegment::Text("footer\n".into()),
     ];
@@ -981,14 +965,10 @@ fn two_way_source_text_search_matches_row_based_search() {
     // as the old row-generation path.
     let marker_segments = vec![
         ConflictSegment::Text("context_line\n".into()),
-        ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "alpha\nneedle_ours\ngamma\n".into(),
-            theirs: "delta\nepsilon\nneedle_theirs\n".into(),
-            choice: ConflictChoice::Ours,
-            resolved: false,
-            whitespace_only: false,
-        }),
+        ConflictSegment::Block(ConflictBlock::unresolved(
+            "alpha\nneedle_ours\ngamma\n",
+            "delta\nepsilon\nneedle_theirs\n",
+        )),
     ];
     let index = ConflictSplitRowIndex::new(&marker_segments, 1);
     let proj = TwoWaySplitProjection::new(&index, &marker_segments, false);
@@ -1041,11 +1021,9 @@ fn three_way_span_search_handles_collapsed_blocks() {
     // Verify that collapsed resolved blocks are searchable via span search.
     let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("base\n".into()),
-        ours: "ours\n".into(),
-        theirs: "theirs\n".into(),
         choice: ConflictChoice::Theirs,
         resolved: true,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("ours\n", "theirs\n")
     })];
     let conflict_ranges = 0..1;
     let projection = build_three_way_visible_projection(

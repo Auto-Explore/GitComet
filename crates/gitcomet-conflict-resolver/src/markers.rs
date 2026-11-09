@@ -171,6 +171,21 @@ pub struct ConflictBlock {
     pub whitespace_only: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl ConflictBlock {
+    /// An unresolved block choosing ours with no base; struct update sets the rest.
+    pub fn unresolved(ours: impl Into<ConflictText>, theirs: impl Into<ConflictText>) -> Self {
+        Self {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+            whitespace_only: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictSegment {
     Text(ConflictText),

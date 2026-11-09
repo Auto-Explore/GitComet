@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 #[test]
 fn split_row_index_single_block_plain_rows() {
-    let segments = vec![ConflictSegment::Block(block("a\nb\nc\n", "x\ny\n"))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "a\nb\nc\n",
+        "x\ny\n",
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     // Row count = max(3, 2) = 3
     assert_eq!(index.total_rows(), 3);
@@ -38,7 +41,7 @@ fn split_row_index_context_plus_block() {
         ConflictSegment::Text("line1\nline2\nline3\nline4\nline5\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
-            ..block("a\n", "b\nc\n")
+            ..ConflictBlock::unresolved("a\n", "b\nc\n")
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 2);
@@ -79,7 +82,9 @@ fn split_row_index_context_plus_block() {
 
 #[test]
 fn split_row_index_equal_block_rows_share_old_new_arc() {
-    let segments = vec![ConflictSegment::Block(block("shared\n", "shared\n"))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        "shared\n", "shared\n",
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 1);
 
     let row = index.row_at(&segments, 0).unwrap();
@@ -108,7 +113,7 @@ fn split_row_index_row_range_matches_row_at_across_page_boundary() {
         .collect();
     let segments = vec![
         ConflictSegment::Text(shared.into()),
-        ConflictSegment::Block(block(ours, theirs)),
+        ConflictSegment::Block(ConflictBlock::unresolved(ours, theirs)),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
     let start = CONFLICT_SPLIT_PAGE_SIZE - 8;
@@ -152,7 +157,7 @@ fn split_row_index_row_range_matches_row_at_across_page_boundary() {
 #[test]
 fn split_row_index_shared_slice_context_rows_reuse_conflict_backing() {
     let shared = std::sync::Arc::<str>::from("ctx\nshared\n");
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         ConflictText::shared_slice(Arc::clone(&shared), 0..shared.len()),
         ConflictText::shared_slice(Arc::clone(&shared), 0..shared.len()),
     ))];
@@ -172,7 +177,7 @@ fn split_row_index_shared_slice_context_rows_reuse_conflict_backing() {
 fn split_row_index_shared_slice_modify_rows_reuse_conflict_backing() {
     let ours = std::sync::Arc::<str>::from("old\n");
     let theirs = std::sync::Arc::<str>::from("new\n");
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         ConflictText::shared_slice(Arc::clone(&ours), 0..ours.len()),
         ConflictText::shared_slice(Arc::clone(&theirs), 0..theirs.len()),
     ))];
@@ -194,11 +199,11 @@ fn split_row_index_shared_slice_modify_rows_reuse_conflict_backing() {
 fn split_row_index_conflict_ix_lookup() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("a\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\n", "b\n")),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
-            ..block("c\n", "d\n")
+            ..ConflictBlock::unresolved("c\n", "d\n")
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -219,7 +224,10 @@ fn split_row_index_conflict_ix_lookup() {
 fn split_row_index_page_cache_reuses_requested_page() {
     let line_count = CONFLICT_SPLIT_PAGE_SIZE * 3;
     let text: String = (0..line_count).map(|ix| format!("line_{ix}\n")).collect();
-    let segments = vec![ConflictSegment::Block(block(text.clone(), text))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        text.clone(),
+        text,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
     assert!(index.cached_page_indices().is_empty());
@@ -248,7 +256,10 @@ fn split_row_index_page_cache_stays_bounded() {
     let total_pages = CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES + 2;
     let line_count = CONFLICT_SPLIT_PAGE_SIZE * total_pages;
     let text: String = (0..line_count).map(|ix| format!("line_{ix}\n")).collect();
-    let segments = vec![ConflictSegment::Block(block(text.clone(), text))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        text.clone(),
+        text,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
     for page_ix in 0..total_pages {
@@ -278,7 +289,7 @@ fn split_row_index_matches_eager_for_small_segments() {
     // as the eager `block_local_two_way_diff_rows` path (minus diff alignment).
     let segments = vec![
         ConflictSegment::Text("header\n".into()),
-        ConflictSegment::Block(block("same\n", "same\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("same\n", "same\n")),
         ConflictSegment::Text("footer\n".into()),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 3);
@@ -298,12 +309,12 @@ fn split_row_index_matches_eager_for_small_segments() {
 fn two_way_split_projection_no_hide() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("a\nb\n", "x\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\nb\n", "x\n")),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
     let proj = TwoWaySplitProjection::new(&index, &segments, false);
 
-    // Total = context(1) + block(max(2,1)) = 3
+    // Total = context(1) + ConflictBlock::unresolved(max(2,1)) = 3
     assert_eq!(proj.visible_len(), index.total_rows());
 
     // All visible indices map to source rows
@@ -319,7 +330,7 @@ fn two_way_split_projection_hide_resolved() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("a\nb\n", "x\n")
+            ..ConflictBlock::unresolved("a\nb\n", "x\n")
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -327,7 +338,7 @@ fn two_way_split_projection_hide_resolved() {
     let proj_no_hide = TwoWaySplitProjection::new(&index, &segments, false);
     let proj_hide = TwoWaySplitProjection::new(&index, &segments, true);
 
-    // Without hide: context(1) + block(2) + context(1) = 4
+    // Without hide: context(1) + ConflictBlock::unresolved(2) + context(1) = 4
     assert_eq!(proj_no_hide.visible_len(), 4);
     // With hide: context(1) + context(1) = 2 (block hidden)
     assert_eq!(proj_hide.visible_len(), 2);
@@ -337,7 +348,7 @@ fn two_way_split_projection_hide_resolved() {
 fn widest_source_rows_ignore_hidden_middle_context_lines() {
     let segments = vec![
         ConflictSegment::Text("ctx\nTHIS_LINE_IS_HIDDEN_BUT_VERY_WIDE\nvisible_tail\n".into()),
-        ConflictSegment::Block(block("a\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\n", "b\n")),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
 
@@ -362,7 +373,7 @@ fn widest_source_rows_skip_hidden_resolved_blocks() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block(
+            ..ConflictBlock::unresolved(
                 "THIS_RESOLVED_ROW_IS_HIDDEN_AND_VERY_WIDE\n",
                 "THIS_RESOLVED_ROW_IS_HIDDEN_AND_VERY_WIDE\n",
             )
@@ -390,11 +401,11 @@ fn widest_source_rows_skip_hidden_resolved_blocks() {
 fn two_way_split_projection_visible_ix_for_conflict() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("a\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\n", "b\n")),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
-            ..block("c\n", "d\n")
+            ..ConflictBlock::unresolved("c\n", "d\n")
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -425,7 +436,9 @@ fn split_row_index_large_block_no_diff_computation() {
     // running any whole-block diff computation.
     let big_ours: String = (0..1000).map(|i| format!("ours_line_{i}\n")).collect();
     let big_theirs: String = (0..800).map(|i| format!("theirs_line_{i}\n")).collect();
-    let segments = vec![ConflictSegment::Block(block(big_ours, big_theirs))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        big_ours, big_theirs,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 1000); // max(1000, 800)
 
@@ -449,7 +462,7 @@ fn split_row_index_large_block_no_diff_computation() {
 
 #[test]
 fn split_row_index_positional_alignment_handles_shifted_insertions() {
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "header\nbody\ntail\n",
         "header\ninserted\nbody\ntail\n",
     ))];
@@ -489,7 +502,7 @@ fn split_row_index_positional_alignment_handles_shifted_insertions() {
 
 #[test]
 fn split_row_index_positional_alignment_keeps_repeated_lines_reviewable() {
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "repeat\na\nrepeat\na\nrepeat\n",
         "x\nrepeat\na\nrepeat\na\nrepeat\n",
     ))];
@@ -574,7 +587,7 @@ fn split_row_index_positional_alignment_keeps_repeated_lines_reviewable() {
 fn split_row_index_classifies_modify_vs_context_kinds() {
     // Rows with identical text on both sides should be Context;
     // rows with differing text should be Modify.
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "same\ndiff_a\nsame2\n",
         "same\ndiff_b\nsame2\n",
     ))];
@@ -599,7 +612,7 @@ fn split_row_index_classifies_modify_vs_context_kinds() {
 
 #[test]
 fn split_row_index_positional_alignment_keeps_inserted_block_reviewable() {
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "alpha\nbeta\ngamma\n",
         "alpha\nnew1\nnew2\nbeta\ngamma\n",
     ))];
@@ -637,7 +650,7 @@ fn split_row_index_positional_alignment_keeps_inserted_block_reviewable() {
 fn split_row_index_gap_diff_no_common_lines_falls_back_to_positional() {
     // When no lines match between ours and theirs in a gap, the diff
     // has no Context rows, so we fall back to positional pairing.
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "aaa\nbbb\n",
         "xxx\nyyy\nzzz\n",
     ))];
@@ -666,7 +679,7 @@ fn split_row_index_gap_diff_no_common_lines_falls_back_to_positional() {
 fn split_row_index_gap_diff_produces_more_rows_than_positional() {
     // Verify that the diff alignment can produce more rows than max(N, M)
     // when matching lines interleave with unmatched lines.
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "ctx\nold_only\nctx2\n",
         "ctx\nnew_only\nctx2\n",
     ))];
@@ -693,7 +706,7 @@ fn split_row_index_gap_diff_with_anchors_refines_each_gap() {
     // Verify that each gap between anchors is independently refined.
     // Here we set up a block with a unique anchor in the middle,
     // and insertions on both sides.
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "start\nunique_anchor\nend\n",
         "added_before\nstart\nunique_anchor\nadded_after\nend\n",
     ))];
@@ -783,7 +796,7 @@ fn compute_word_highlights_for_modify_row() {
 fn split_row_index_modify_rows_get_word_highlights() {
     // End-to-end: build paged index, verify that Modify rows produce
     // word highlights via compute_word_highlights_for_row.
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "let x = 1;\nlet y = 2;\n",
         "let x = 99;\nlet y = 2;\n",
     ))];
@@ -807,7 +820,7 @@ fn split_row_index_modify_rows_get_word_highlights() {
 
 #[test]
 fn search_matching_rows_finds_text_in_block() {
-    let segments = vec![ConflictSegment::Block(block(
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
         "alpha\nbeta\ngamma\n",
         "delta\nepsilon\nzeta\n",
     ))];
@@ -832,7 +845,7 @@ fn search_matching_rows_finds_text_in_block() {
 fn search_matching_rows_finds_text_in_context() {
     let segments = vec![
         ConflictSegment::Text("first\nsecond\nthird\n".into()),
-        ConflictSegment::Block(block("ours\n", "theirs\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("ours\n", "theirs\n")),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 2);
 
@@ -853,7 +866,10 @@ fn search_matching_rows_equivalence_with_row_at() {
     // the same set of source rows as manually iterating row_at.
     let segments = vec![
         ConflictSegment::Text("ctx_a\nctx_b\n".into()),
-        ConflictSegment::Block(block("needle_ours\nplain\n", "plain\nneedle_theirs\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved(
+            "needle_ours\nplain\n",
+            "plain\nneedle_theirs\n",
+        )),
         ConflictSegment::Text("ctx_c\nctx_d\n".into()),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -887,7 +903,9 @@ fn search_matching_rows_does_not_materialize_split_pages() {
     let theirs: String = (0..line_count)
         .map(|ix| format!("theirs_line_{ix}\n"))
         .collect();
-    let segments = vec![ConflictSegment::Block(block(ours, theirs))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        ours, theirs,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
 
     assert!(
@@ -924,7 +942,7 @@ fn search_text_matching_rows_matches_predicate_path() {
         .collect();
     let segments = vec![
         ConflictSegment::Text(context.into()),
-        ConflictSegment::Block(block(ours, theirs)),
+        ConflictSegment::Block(ConflictBlock::unresolved(ours, theirs)),
     ];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
 
@@ -958,7 +976,7 @@ fn search_ascii_case_insensitive_matching_rows_matches_predicate_path() {
         .collect();
     let segments = vec![
         ConflictSegment::Text(context.into()),
-        ConflictSegment::Block(block(ours, theirs)),
+        ConflictSegment::Block(ConflictBlock::unresolved(ours, theirs)),
     ];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
 
@@ -991,7 +1009,9 @@ fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
     let theirs: String = (0..line_count)
         .map(|ix| format!("theirs_line_{ix}\n"))
         .collect();
-    let segments = vec![ConflictSegment::Block(block(ours, theirs))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        ours, theirs,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
     let row_ix = CONFLICT_SPLIT_PAGE_SIZE * 3 + 17;
@@ -1014,7 +1034,9 @@ fn split_row_index_metadata_stays_sparse_for_large_block() {
     let theirs: String = (0..line_count)
         .map(|ix| format!("theirs_line_{ix}\n"))
         .collect();
-    let segments = vec![ConflictSegment::Block(block(ours, theirs))];
+    let segments = vec![ConflictSegment::Block(ConflictBlock::unresolved(
+        ours, theirs,
+    ))];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
     assert!(
@@ -1044,13 +1066,13 @@ fn resolved_output_projection_matches_generated_text_lines() {
         ConflictSegment::Block(ConflictBlock {
             base: Some("base middle\n".into()),
             resolved: true,
-            ..block("ours middle\n", "theirs middle\n")
+            ..ConflictBlock::unresolved("ours middle\n", "theirs middle\n")
         }),
         ConflictSegment::Text("suffix\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Both,
             resolved: true,
-            ..block("left", "right\n")
+            ..ConflictBlock::unresolved("left", "right\n")
         }),
     ];
 
@@ -1074,7 +1096,7 @@ fn resolved_output_projection_uses_a_placeholder_row_for_unresolved_block() {
         ConflictSegment::Block(ConflictBlock {
             base: Some("base one\nbase two\n".into()),
             choice: ConflictChoice::empty(),
-            ..block("local one\nlocal two\n", "remote one\nremote two\n")
+            ..ConflictBlock::unresolved("local one\nlocal two\n", "remote one\nremote two\n")
         }),
         ConflictSegment::Text("tail\n".into()),
     ];
@@ -1108,7 +1130,7 @@ fn resolved_output_projection_merges_adjacent_segments_without_newlines() {
         ConflictSegment::Text("prefix ".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("middle", "remote")
+            ..ConflictBlock::unresolved("middle", "remote")
         }),
         ConflictSegment::Text(" suffix\nnext".into()),
     ];
@@ -1129,20 +1151,20 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
         ConflictSegment::Text("head\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("a0\na1\n", "x\n")
+            ..ConflictBlock::unresolved("a0\na1\n", "x\n")
         }),
         ConflictSegment::Text("middle\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Both,
             resolved: true,
-            ..block("b-left\n", "b-right\n")
+            ..ConflictBlock::unresolved("b-left\n", "b-right\n")
         }),
         ConflictSegment::Text("tail\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base-last".into()),
             choice: ConflictChoice::Base,
             resolved: true,
-            ..block("ignored\n", "ignored\n")
+            ..ConflictBlock::unresolved("ignored\n", "ignored\n")
         }),
     ];
 
@@ -1172,7 +1194,7 @@ fn resolved_output_projection_keeps_large_fragment_line_access() {
         ConflictSegment::Text("head\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("ours-choice\n", "theirs-choice\n")
+            ..ConflictBlock::unresolved("ours-choice\n", "theirs-choice\n")
         }),
         ConflictSegment::Text(trailing.into()),
     ];
@@ -1219,7 +1241,7 @@ fn resolved_output_projection_clone_retains_sparse_output_after_original_drop() 
             base: Some("base\n".into()),
             choice: ConflictChoice::Both,
             resolved: true,
-            ..block("ours", "-theirs\n")
+            ..ConflictBlock::unresolved("ours", "-theirs\n")
         }),
         ConflictSegment::Text(trailing.into()),
     ];
@@ -1257,7 +1279,7 @@ fn resolved_output_projection_range_walk_matches_point_lookups() {
         ConflictSegment::Text("head\nprefix ".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("middle", "remote")
+            ..ConflictBlock::unresolved("middle", "remote")
         }),
         ConflictSegment::Text(" suffix\nbody\n".into()),
     ];
@@ -1305,7 +1327,7 @@ fn resolved_output_projection_deep_range_walk_matches_point_lookups() {
         ConflictSegment::Text(head.into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("ours-only\n", "theirs-only\n")
+            ..ConflictBlock::unresolved("ours-only\n", "theirs-only\n")
         }),
         ConflictSegment::Text(tail.into()),
     ];
@@ -1341,19 +1363,19 @@ fn derive_region_resolution_updates_from_segments_uses_block_choices() {
     let segments = vec![
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
-            ..block("ours unresolved\n", "theirs unresolved\n")
+            ..ConflictBlock::unresolved("ours unresolved\n", "theirs unresolved\n")
         }),
         ConflictSegment::Text("between\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Both,
             resolved: true,
-            ..block("left\n", "right\n")
+            ..ConflictBlock::unresolved("left\n", "right\n")
         }),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".into()),
             choice: ConflictChoice::Base,
             resolved: true,
-            ..block("ours\n", "theirs\n")
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
     ];
 

@@ -198,10 +198,10 @@ fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("b\n", "B\n")
+            ..ConflictBlock::unresolved("b\n", "B\n")
         }),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("c\n", "C\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("c\n", "C\n")),
     ];
     let row_conflict_map = vec![None, Some(0), Some(0), None, Some(1), Some(1)];
 
@@ -260,7 +260,7 @@ fn visible_map_identity_when_not_hiding() {
     // conflict range: 1..3
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
-        ConflictSegment::Block(block("b\nc\n", "x\ny\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("b\nc\n", "x\ny\n")),
         ConflictSegment::Text("d\ne\n".into()),
     ];
     let ranges = [1..3];
@@ -277,7 +277,7 @@ fn visible_map_collapses_resolved_block() {
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("b\nc\n", "x\ny\n")
+            ..ConflictBlock::unresolved("b\nc\n", "x\ny\n")
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -294,12 +294,12 @@ fn visible_map_collapses_resolved_block() {
 #[test]
 fn visible_map_keeps_unresolved_blocks_expanded() {
     let segments = vec![
-        ConflictSegment::Block(block("a\nb\n", "x\ny\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("a\nb\n", "x\ny\n")),
         ConflictSegment::Text("c\n".into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..block("d\n", "z\n")
+            ..ConflictBlock::unresolved("d\n", "z\n")
         }),
     ];
     let ranges = vec![0..2, 3..4];
@@ -319,13 +319,13 @@ fn visible_map_matches_legacy_scan_with_empty_and_trailing_ranges() {
     let segments = vec![
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("a\n", "A\n")
+            ..ConflictBlock::unresolved("a\n", "A\n")
         }),
-        ConflictSegment::Block(block("b\nc\n", "B\nC\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("b\nc\n", "B\nC\n")),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..block("d\ne\n", "D\nE\n")
+            ..ConflictBlock::unresolved("d\ne\n", "D\nE\n")
         }),
     ];
     let ranges = vec![0..0, 1..3, 4..6, 7..9];
@@ -363,7 +363,7 @@ fn visible_map_linear_walk_outpaces_legacy_scan() {
         .map(|ix| {
             ConflictSegment::Block(ConflictBlock {
                 resolved: ix % 3 != 0,
-                ..block("ours\n", "theirs\n")
+                ..ConflictBlock::unresolved("ours\n", "theirs\n")
             })
         })
         .collect();
@@ -410,7 +410,7 @@ fn visible_index_for_conflict_finds_collapsed() {
         ConflictSegment::Text("a\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("b\nc\n", "x\ny\n")
+            ..ConflictBlock::unresolved("b\nc\n", "x\ny\n")
         }),
         ConflictSegment::Text("d\n".into()),
     ];
@@ -425,7 +425,7 @@ fn visible_index_for_conflict_finds_collapsed() {
 fn visible_index_for_conflict_finds_expanded() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
-        ConflictSegment::Block(block("b\nc\n", "x\ny\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("b\nc\n", "x\ny\n")),
     ];
     let ranges = [1..3];
     let map = build_three_way_visible_map(3, &ranges, &segments, false);
@@ -766,9 +766,9 @@ fn bulk_pick_then_two_way_visible_indices_hides_all_resolved() {
     // Two-way variant: after bulk pick, all conflict rows should be hidden.
     let mut segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("A\n", "a\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("A\n", "a\n")),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("B\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("B\n", "b\n")),
         ConflictSegment::Text("end\n".into()),
     ];
     // row indices: 0=ctx, 1,2=block0(ours+theirs), 3=mid, 4,5=block1, 6=end
@@ -871,12 +871,12 @@ fn resolved_counter_consistent_with_visible_map_after_incremental_picks() {
         ConflictSegment::Text("pre\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("orig1\norig1b\n".into()),
-            ..block("A\nA2\n", "a\na2\n")
+            ..ConflictBlock::unresolved("A\nA2\n", "a\na2\n")
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("orig2\norig2b\norig2c\n".into()),
-            ..block("B\nB2\nB3\n", "b\nb2\nb3\n")
+            ..ConflictBlock::unresolved("B\nB2\nB3\n", "b\nb2\nb3\n")
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -922,7 +922,7 @@ fn large_unresolved_three_way_block() -> (usize, [std::ops::Range<usize>; 1], Ve
         ConflictSegment::Text("pre\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".into()),
-            ..block("ours\n", "theirs\n")
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -1077,10 +1077,10 @@ fn split_and_inline_hide_resolved_filter_same_conflicts() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("A\nB\n", "a\nb\n")
+            ..ConflictBlock::unresolved("A\nB\n", "a\nb\n")
         }),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("C\n", "c\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("C\n", "c\n")),
         ConflictSegment::Text("end\n".into()),
     ];
 
@@ -1126,14 +1126,14 @@ fn split_and_inline_hide_resolved_filter_same_conflicts() {
 fn unresolved_conflict_indices_match_queue_order() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("A\n", "a\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("A\n", "a\n")),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..block("B\n", "b\n")
+            ..ConflictBlock::unresolved("B\n", "b\n")
         }),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("C\n", "c\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("C\n", "c\n")),
     ];
 
     assert_eq!(unresolved_conflict_indices(&segments), vec![0, 2]);
@@ -1145,10 +1145,10 @@ fn visible_index_for_two_way_conflict_respects_hide_resolved_filter() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("A\n", "a\n")
+            ..ConflictBlock::unresolved("A\n", "a\n")
         }),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("B\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("B\n", "b\n")),
         ConflictSegment::Text("end\n".into()),
     ];
     let ours_text = "ctx\nA\nmid\nB\nend\n";
@@ -1185,19 +1185,19 @@ fn unresolved_visible_nav_entries_for_three_way_skip_resolved_blocks_even_when_v
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base-a\n".into()),
-            ..block("ours-a\n", "theirs-a\n")
+            ..ConflictBlock::unresolved("ours-a\n", "theirs-a\n")
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base-b\n".into()),
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..block("ours-b\n", "theirs-b\n")
+            ..ConflictBlock::unresolved("ours-b\n", "theirs-b\n")
         }),
         ConflictSegment::Text("tail\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base-c\n".into()),
-            ..block("ours-c\n", "theirs-c\n")
+            ..ConflictBlock::unresolved("ours-c\n", "theirs-c\n")
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -1217,10 +1217,10 @@ fn unresolved_visible_nav_entries_for_two_way_skip_resolved_conflicts() {
         ConflictSegment::Text("ctx\n".into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..block("A\n", "a\n")
+            ..ConflictBlock::unresolved("A\n", "a\n")
         }),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("B\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("B\n", "b\n")),
         ConflictSegment::Text("end\n".into()),
     ];
     let ours_text = "ctx\nA\nmid\nB\nend\n";
@@ -1245,9 +1245,9 @@ fn unresolved_visible_nav_entries_for_two_way_skip_resolved_conflicts() {
 fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
-        ConflictSegment::Block(block("A\n", "a\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("A\n", "a\n")),
         ConflictSegment::Text("mid\n".into()),
-        ConflictSegment::Block(block("B\n", "b\n")),
+        ConflictSegment::Block(ConflictBlock::unresolved("B\n", "b\n")),
         ConflictSegment::Text("end\n".into()),
     ];
     let ours_text = "ctx\nA\nmid\nB\nend\n";
