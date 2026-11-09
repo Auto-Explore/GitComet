@@ -882,7 +882,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
             draw_and_drain_test_window(cx);
         };
 
-    // section 30 aligned two-way full mode (this fixture has a base, so ours/theirs
+    // Aligned two-way full mode (this fixture has a base, so ours/theirs
     // align onto the shared whole-file row space). The left/right columns
     // always couple as a pair; the resolved output couples with them only when
     // the merge-tool output-scroll-sync setting is on. Both are still gated by

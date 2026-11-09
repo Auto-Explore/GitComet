@@ -4,31 +4,20 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 
-use crate::test_git_env;
-
 pub fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
+    let mut cmd = crate::git_cli::git_cmd(repo);
     cmd.env("GIT_AUTHOR_DATE", "1700000000 +0000")
         .env("GIT_COMMITTER_DATE", "1800000000 +0530");
-    let output = cmd.arg("-C").arg(repo).args(args).output().unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    crate::git_cli::stdout_text(crate::git_cli::run_checked(&mut cmd, args))
+        .trim()
+        .to_owned()
 }
 
 pub fn reftable_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
-        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-        test_git_env::apply(&mut cmd);
-        let available = cmd
-            .arg("-C")
-            .arg(dir.path())
+        let available = crate::git_cli::git_cmd(dir.path())
             .args(["init", "--ref-format=reftable"])
             .output()
             .unwrap()
@@ -108,7 +97,7 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
             .is_empty()
     );
     repo.stage(&[Path::new("file.txt")]).unwrap();
-    repo.commit("root").unwrap();
+    repo.commit_with_outcome("root").unwrap();
     let page = repo
         .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
         .unwrap();
@@ -328,7 +317,7 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
         "+two"
     ));
     repo.stage(&[Path::new("notes.txt")]).unwrap();
-    repo.commit("second").unwrap();
+    repo.commit_with_outcome("second").unwrap();
     let second = repo.head_commit_id().unwrap().unwrap();
     assert_eq!(second.as_ref().len(), width);
     assert_eq!(second.as_ref(), git(dir.path(), &["rev-parse", "HEAD"]));

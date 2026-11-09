@@ -1,3 +1,4 @@
+use crate::git_cli::{git_cmd, run_checked};
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::patch_action::{PatchOperation, SourceLineSelection};
 use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
@@ -5,18 +6,8 @@ use gitcomet_git_gix::GixBackend;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::test_git_env;
-
 fn git(path: &Path, args: &[&str]) -> Vec<u8> {
-    let mut command = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut command);
-    let output = command.arg("-C").arg(path).args(args).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    run_checked(&mut git_cmd(path), args).stdout
 }
 
 fn fixture(old: &str, new: &str) -> (tempfile::TempDir, std::sync::Arc<dyn GitRepository>) {

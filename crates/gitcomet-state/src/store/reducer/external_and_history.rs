@@ -9,7 +9,7 @@ use super::repo_management::{
 };
 use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
-    append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
+    append_requested_status_refresh_effects, diff_reload_effects, error_loadable, push_diagnostic,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
 };
 use super::{diff_selection, repo_management};
@@ -708,10 +708,7 @@ pub(super) fn interactive_rebase_setup_loaded(
         {
             let entries = match result {
                 Ok(v) => Loadable::Ready(v),
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
         }
@@ -802,10 +799,7 @@ pub(super) fn merge_commit_message_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let value = match result {
             Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.set_merge_commit_message(value);
         if repo_state
@@ -940,9 +934,9 @@ pub(super) fn log_loaded(
                     super::auto_fetch::refresh_failed(inputs, repo_state, e);
                     return finish_log_load(repo_state, seq);
                 }
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                let failed = error_loadable(inputs, repo_state, &e);
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
-                    repo_state.set_log(Loadable::Error(e.to_string()));
+                    repo_state.set_log(failed);
                 }
                 return finish_log_load(repo_state, seq);
             }

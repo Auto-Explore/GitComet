@@ -1522,17 +1522,16 @@ impl GitRepository for IndexedFindRepo {
         fn delete_branch(&self, name: &str) -> ();
         fn checkout_branch(&self, name: &str) -> ();
         fn checkout_commit(&self, id: &CommitId) -> ();
-        fn cherry_pick(&self, id: &CommitId) -> ();
         fn stash_create(&self, message: &str, include_untracked: bool) -> ();
 
         fn stash_apply(&self, index: usize) -> ();
         fn stash_drop(&self, index: usize) -> ();
         fn stage(&self, paths: &[&Path]) -> ();
         fn unstage(&self, paths: &[&Path]) -> ();
-        fn commit(&self, message: &str) -> ();
+        fn commit_with_outcome(&self, message: &str) -> gitcomet_core::services::CommitOperationOutcome;
 
 
-        fn push(&self) -> ();
+        fn push_with_output(&self) -> gitcomet_core::services::CommandOutput;
         fn discard_worktree_changes(&self, paths: &[&Path]) -> ();
     }
 }

@@ -1,33 +1,11 @@
 use super::*;
 
-fn merge_active(repo: &RepoState) -> bool {
-    matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
-}
-
-fn repo_has_head_commit(repo: &RepoState) -> bool {
-    if repo.detached_head_commit.is_some() {
-        return true;
-    }
-
-    match &repo.head_branch {
-        Loadable::Ready(head) if head == "HEAD" => true,
-        Loadable::Ready(head) => match &repo.branches {
-            Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
-            _ => true,
-        },
-        _ => true,
-    }
-}
-
 fn can_amend(repo: Option<&RepoState>) -> bool {
     let Some(repo) = repo else {
         return false;
     };
 
-    repo.commit_in_flight == 0
-        && !merge_active(repo)
-        && !matches!(repo.rebase_in_progress, Loadable::Ready(true))
-        && repo_has_head_commit(repo)
+    repo.commit_in_flight == 0 && amend_allowed(repo)
 }
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {

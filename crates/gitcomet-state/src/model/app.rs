@@ -1,6 +1,6 @@
 //! App-wide state: settings, prompts, and notifications.
 
-use super::{CloneOpState, RepoId, RepoState};
+use super::{CloneOpState, CommitRequest, RepoId, RepoState};
 use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::process::GitRuntimeState;
@@ -306,10 +306,7 @@ pub enum AuthRetryOperation {
     },
     Commit {
         repo_id: RepoId,
-        message: String,
-        amend: bool,
-        push_after_commit: bool,
-        hooks: gitcomet_core::services::GitHooks,
+        request: CommitRequest,
     },
     Clone {
         url: String,
@@ -323,15 +320,17 @@ pub struct AuthPromptState {
     pub challenge: Option<gitcomet_core::auth::AuthChallenge>,
     pub status: AuthPromptStatus,
     pub kind: AuthPromptKind,
-    pub reason: String,
+    // What the failed command printed, kept when it explains the prompt
+    // better than the challenge does: a remote's reason for a rejection.
+    pub output: Option<String>,
     pub operation: AuthRetryOperation,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthPromptStatus {
     AwaitingInput,
     Validating,
-    Rejected,
+    Rejected { message: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

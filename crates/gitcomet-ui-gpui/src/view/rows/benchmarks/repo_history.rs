@@ -687,7 +687,7 @@ impl BranchSidebarFixture {
 }
 
 // ---------------------------------------------------------------------------
-// Branch sidebar cache simulation benchmarks (Phase 1)
+// Branch sidebar cache simulation benchmarks
 // ---------------------------------------------------------------------------
 
 /// Metrics emitted as sidecar JSON for branch sidebar cache benchmarks.

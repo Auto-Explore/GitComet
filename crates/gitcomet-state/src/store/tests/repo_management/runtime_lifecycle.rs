@@ -90,10 +90,6 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.checkout_commit(_id)
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        self.inner.cherry_pick(_id)
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         self.inner.stash_create(_message, _include_untracked)
     }
@@ -121,8 +117,11 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.unstage(_paths)
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
-        self.inner.commit(_message)
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        self.inner.commit_with_outcome(_message)
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -133,8 +132,8 @@ impl GitRepository for BlockedStatusRepository {
         self.inner.pull(_mode)
     }
 
-    fn push(&self) -> Result<()> {
-        self.inner.push()
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.inner.push_with_output()
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

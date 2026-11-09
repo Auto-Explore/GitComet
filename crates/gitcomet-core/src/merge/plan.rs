@@ -992,17 +992,7 @@ fn diff_chunks<'a>(
     // whitespace-insensitive equivalence classes. Preserve that detail: it
     // makes an exact repeated line win over an earlier whitespace-equivalent
     // candidate (one of KDiff3's upstream alignment regressions).
-    let mut prefix = 0usize;
-    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
-        prefix += 1;
-    }
-    let mut suffix = 0usize;
-    while prefix + suffix < left.len()
-        && prefix + suffix < right.len()
-        && left[left.len() - 1 - suffix] == right[right.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) = crate::text_utils::common_affix_len(left, right);
     let left_mid = &left[prefix..left.len() - suffix];
     let right_mid = &right[prefix..right.len() - suffix];
 
@@ -2053,23 +2043,6 @@ fn build_blocks(
         .collect()
 }
 
-fn detect_line_ending(base: Option<&str>, local: &str, remote: &str) -> &'static str {
-    // One pass per text: `matches("\r\n")` plus `matches('\n')` scanned each
-    // input twice, on files that can be megabytes.
-    let (mut crlf, mut lf) = (0usize, 0usize);
-    for text in [base.unwrap_or_default(), local, remote] {
-        let (text_crlf, text_lf) = gitcomet_text_utils_count_line_feeds(text);
-        crlf += text_crlf;
-        lf += text_lf - text_crlf;
-    }
-    if crlf > lf { "\r\n" } else { "\n" }
-}
-
-/// `(CRLF count, total LF count)` in one scan.
-fn gitcomet_text_utils_count_line_feeds(text: &str) -> (usize, usize) {
-    crate::text_utils::count_line_feeds(text)
-}
-
 fn source_indices_are_complete_and_ordered(
     rows: &[AlignedRow],
     source: MergeSource,
@@ -2297,7 +2270,10 @@ pub fn build_merge_plan_with_alignments(
         rows,
         blocks,
         unresolved_blocks,
-        line_ending: detect_line_ending(base, local, remote),
+        line_ending: crate::text_utils::detect_line_ending_from_texts(
+            [base.unwrap_or_default(), local, remote],
+            crate::text_utils::LineEndingDetectionMode::DominantCrlfVsLf,
+        ),
     }
 }
 

@@ -346,17 +346,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn empty_conflict_file() -> ConflictFile {
-        ConflictFile {
-            path: PathBuf::from("a.txt").into(),
-            base_bytes: None,
-            ours_bytes: None,
-            theirs_bytes: None,
-            current_bytes: None,
-            base: None,
-            ours: None,
-            theirs: None,
-            current: None,
-        }
+        ConflictFile::empty(PathBuf::from("a.txt"))
     }
 
     #[test]

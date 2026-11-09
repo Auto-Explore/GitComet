@@ -29,25 +29,22 @@ fn bare_fast_stage_and_unstage_refuse_before_counters_or_effects() {
     for mode in [RepositoryMode::Bare, RepositoryMode::WorkingTree] {
         for action in 0..4 {
             let (_, _, mut state, repo_id) = fixture(mode);
-            let mut effects = reducer::SinglePathActionEffects::new();
+            let mut effects = reducer::PathActionEffects::new();
             let path = PathBuf::from("config");
-            match action {
-                0 => reducer::fill_stage_path_inline(&mut state, repo_id, path, &mut effects),
-                1 => reducer::fill_stage_paths_inline(
-                    &mut state,
+            let effect = match action {
+                0 => Effect::StagePath { repo_id, path },
+                1 => Effect::StagePaths {
                     repo_id,
-                    RepoPathList::from(vec![path]),
-                    &mut effects,
-                ),
-                2 => reducer::fill_unstage_path_inline(&mut state, repo_id, path, &mut effects),
-                3 => reducer::fill_unstage_paths_inline(
-                    &mut state,
+                    paths: RepoPathList::from(vec![path]),
+                },
+                2 => Effect::UnstagePath { repo_id, path },
+                3 => Effect::UnstagePaths {
                     repo_id,
-                    RepoPathList::from(vec![path]),
-                    &mut effects,
-                ),
+                    paths: RepoPathList::from(vec![path]),
+                },
                 _ => unreachable!(),
-            }
+            };
+            reducer::fill_path_action_inline(&mut state, repo_id, effect, &mut effects);
             assert_eq!(
                 effects.len(),
                 usize::from(mode == RepositoryMode::WorkingTree)
@@ -72,9 +69,12 @@ fn bare_worktree_commands_refuse_without_mutating_operation_counters() {
     for message in [
         Msg::Commit {
             repo_id,
-            message: "message".into(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "message".into(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
         Msg::DropStash { repo_id, index: 0 },
         Msg::Reset {
@@ -237,7 +237,7 @@ fn authentication_replay_rechecks_bare_mode_and_preserves_supported_fetch() {
             challenge: None,
             status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: crate::model::AuthPromptKind::UsernamePassword,
-            reason: "authentication required".into(),
+            output: Some("authentication required".into()),
             operation: crate::model::AuthRetryOperation::RepoCommand { repo_id, command },
         });
         let effects = reduce(
@@ -917,9 +917,6 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn checkout_commit(&self, id: &CommitId) -> Result<()> {
             self.inner.checkout_commit(id)
         }
-        fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-            self.inner.cherry_pick(id)
-        }
         fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
             self.inner.stash_create(message, include_untracked)
         }
@@ -938,8 +935,11 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn unstage(&self, paths: &[&Path]) -> Result<()> {
             self.inner.unstage(paths)
         }
-        fn commit(&self, message: &str) -> Result<()> {
-            self.inner.commit(message)
+        fn commit_with_outcome(
+            &self,
+            message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+            self.inner.commit_with_outcome(message)
         }
         fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
             self.inner.fetch_all(prune)
@@ -947,8 +947,8 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
             self.inner.pull(mode)
         }
-        fn push(&self) -> Result<()> {
-            self.inner.push()
+        fn push_with_output(&self) -> Result<CommandOutput> {
+            self.inner.push_with_output()
         }
         fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
             self.inner.discard_worktree_changes(paths)

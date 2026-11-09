@@ -1,6 +1,5 @@
-use super::history::gix_head_id_or_none;
+use super::GixRepo;
 use super::remotes::tracking_refs_for_remote_branch;
-use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, git_command_failed_error_with_id,
     git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output, run_git_simple,
@@ -493,11 +492,6 @@ fn stash_tracked_change_paths(
 }
 
 impl GixRepo {
-    fn head_commit_id_for_outcome(&self) -> Result<Option<CommitId>> {
-        let repo = self.reopen_repo()?;
-        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
-    }
-
     fn ref_exists_in_repo(repo: &gix::Repository, ref_name: &str) -> Result<bool> {
         Ok(crate::refs::view(repo)?
             .find_exact(ref_name)
@@ -853,14 +847,6 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("checkout").arg(id.as_ref());
         run_git_simple(cmd, "git checkout <commit>")
-    }
-
-    pub(super) fn cherry_pick_impl(&self, id: &CommitId) -> Result<()> {
-        validate_hex_commit_id(id)?;
-
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("cherry-pick").arg("--").arg(id.as_ref());
-        run_git_simple(cmd, "git cherry-pick")
     }
 
     pub(super) fn stash_create_impl(&self, message: &str, include_untracked: bool) -> Result<()> {
@@ -1227,10 +1213,6 @@ impl GixRepo {
         }
     }
 
-    pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
-        self.commit_identity_impl(message, None, false, GitHooks::Run)
-    }
-
     fn commit_identity_impl(
         &self,
         message: &str,
@@ -1270,9 +1252,9 @@ impl GixRepo {
 
     pub(super) fn commit_with_outcome_impl(&self, message: &str) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
-        let pre_head = self.head_commit_id_for_outcome()?;
-        self.commit_impl(message)?;
-        let post_head = self.head_commit_id_for_outcome()?;
+        let pre_head = self.head_commit_id_impl()?;
+        self.commit_identity_impl(message, None, false, GitHooks::Run)?;
+        let post_head = self.head_commit_id_impl()?;
         Ok(CommitOperationOutcome {
             local_branch,
             pre_head,
@@ -1297,9 +1279,9 @@ impl GixRepo {
         hooks: GitHooks,
     ) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
-        let pre_head = self.head_commit_id_for_outcome()?;
+        let pre_head = self.head_commit_id_impl()?;
         self.commit_identity_impl(message, identity, amend, hooks)?;
-        let post_head = self.head_commit_id_for_outcome()?;
+        let post_head = self.head_commit_id_impl()?;
         Ok(CommitOperationOutcome {
             local_branch,
             pre_head,
@@ -1312,9 +1294,9 @@ impl GixRepo {
         message: &str,
     ) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
-        let pre_head = self.head_commit_id_for_outcome()?;
+        let pre_head = self.head_commit_id_impl()?;
         self.commit_amend_impl(message)?;
-        let post_head = self.head_commit_id_for_outcome()?;
+        let post_head = self.head_commit_id_impl()?;
         Ok(CommitOperationOutcome {
             local_branch,
             pre_head,

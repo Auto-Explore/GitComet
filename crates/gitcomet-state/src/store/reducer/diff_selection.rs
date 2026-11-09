@@ -5,7 +5,7 @@ use super::conflict_load::{
 };
 use super::util::{
     SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
-    diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
+    diff_target_preview_flags, error_loadable, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
     AppState, ComparisonSource, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView,
@@ -1022,14 +1022,8 @@ pub(super) fn diff_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
+                repo_state.diff_state.diff = super::util::error_loadable(inputs, repo_state, &e);
                 repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
-                repo_state.diff_state.diff = Loadable::Error(e.to_string());
                 repo_state.bump_diff_state_rev();
             }
         }
@@ -1150,15 +1144,10 @@ pub(super) fn diff_file_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
+                repo_state.diff_state.diff_file =
+                    super::util::error_loadable(inputs, repo_state, &e);
                 repo_state.diff_state.diff_file_rev =
                     repo_state.diff_state.diff_file_rev.wrapping_add(1);
-                repo_state.diff_state.diff_file = Loadable::Error(e.to_string());
                 repo_state.bump_diff_state_rev();
             }
         }
@@ -1206,15 +1195,7 @@ pub(super) fn diff_file_image_loaded(
                 });
                 Loadable::Ready(v.map(Arc::new))
             }
-            Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.bump_diff_state_rev();
     }
@@ -1243,15 +1224,7 @@ pub(super) fn diff_preview_text_file_loaded(
             .wrapping_add(1);
         repo_state.diff_state.diff_preview_text_file = match result {
             Ok(preview) => Loadable::Ready(preview.map(Arc::new)),
-            Err(e) => {
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.bump_diff_state_rev();
     }
@@ -1347,13 +1320,8 @@ pub(super) fn submodule_summary_loaded(
             Err(e) => {
                 repo_state.diff_state.submodule_summary_rev =
                     repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
-                super::util::push_diagnostic(
-                    inputs,
-                    repo_state,
-                    DiagnosticKind::Error,
-                    e.to_string(),
-                );
-                repo_state.diff_state.submodule_summary = Loadable::Error(e.to_string());
+                repo_state.diff_state.submodule_summary =
+                    super::util::error_loadable(inputs, repo_state, &e);
             }
         }
         repo_state.bump_diff_state_rev();
@@ -1361,104 +1329,36 @@ pub(super) fn submodule_summary_loaded(
     effects.into_vec()
 }
 
-pub(super) fn inline_submodule_diff_loaded(
+/// Stores an inline submodule diff load in the slot `slot` picks (its rev
+/// counter and value), unless the inline view moved on since the request.
+pub(super) fn inline_submodule_load_finished<V>(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     inline_rev: u64,
     target: DiffTarget,
-    result: std::result::Result<Diff, Error>,
+    result: std::result::Result<V, Error>,
+    slot: impl FnOnce(&mut InlineSubmoduleDiffState) -> (&mut u64, &mut Loadable<V>),
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let (next_diff, diagnostic) = match result {
-            Ok(diff) => (Loadable::Ready(Arc::new(diff)), None),
-            Err(e) => {
-                let message = e.to_string();
-                (Loadable::Error(message.clone()), Some(message))
-            }
-        };
-        {
-            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
-                return Vec::new();
-            };
-            if inline.rev != inline_rev || inline.target != target {
-                return Vec::new();
-            }
-            inline.diff_rev = inline.diff_rev.wrapping_add(1);
-            inline.diff = next_diff;
-        }
-        if let Some(message) = diagnostic {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+        return Vec::new();
+    };
+    if inline.rev != inline_rev || inline.target != target {
+        return Vec::new();
+    }
+    let (rev, value) = slot(inline);
+    *rev = rev.wrapping_add(1);
+    match result {
+        Ok(loaded) => *value = Loadable::Ready(loaded),
+        Err(e) => {
+            let message = e.to_string();
+            *value = Loadable::Error(message.clone());
             super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
         }
-        repo_state.bump_diff_state_rev();
     }
-    Vec::new()
-}
-
-pub(super) fn inline_submodule_diff_file_loaded(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    inline_rev: u64,
-    target: DiffTarget,
-    result: std::result::Result<Option<FileDiffText>, Error>,
-) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let (next_diff_file, diagnostic) = match result {
-            Ok(file) => (Loadable::Ready(file.map(Arc::new)), None),
-            Err(e) => {
-                let message = e.to_string();
-                (Loadable::Error(message.clone()), Some(message))
-            }
-        };
-        {
-            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
-                return Vec::new();
-            };
-            if inline.rev != inline_rev || inline.target != target {
-                return Vec::new();
-            }
-            inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
-            inline.diff_file = next_diff_file;
-        }
-        if let Some(message) = diagnostic {
-            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
-        }
-        repo_state.bump_diff_state_rev();
-    }
-    Vec::new()
-}
-
-pub(super) fn inline_submodule_diff_file_image_loaded(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    inline_rev: u64,
-    target: DiffTarget,
-    result: std::result::Result<Option<FileDiffImage>, Error>,
-) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let (next_diff_image, diagnostic) = match result {
-            Ok(file) => (Loadable::Ready(file.map(Arc::new)), None),
-            Err(e) => {
-                let message = e.to_string();
-                (Loadable::Error(message.clone()), Some(message))
-            }
-        };
-        {
-            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
-                return Vec::new();
-            };
-            if inline.rev != inline_rev || inline.target != target {
-                return Vec::new();
-            }
-            inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
-            inline.diff_file_image = next_diff_image;
-        }
-        if let Some(message) = diagnostic {
-            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
-        }
-        repo_state.bump_diff_state_rev();
-    }
+    repo_state.bump_diff_state_rev();
     Vec::new()
 }

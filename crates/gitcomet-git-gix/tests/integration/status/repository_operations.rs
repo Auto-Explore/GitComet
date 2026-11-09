@@ -186,7 +186,7 @@ fn commit_creates_new_commit_and_cleans_status() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.commit("second").unwrap();
+    opened.commit_with_outcome("second").unwrap();
 
     let msg = git_command()
         .arg("-C")
@@ -456,7 +456,7 @@ fn amend_rewrites_head_commit_message_and_content() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.commit_amend("amended").unwrap();
+    opened.commit_amend_with_outcome("amended").unwrap();
 
     let head_after = git_command()
         .arg("-C")
@@ -796,7 +796,7 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
     assert!(status.unstaged.is_empty(), "expected no unstaged changes");
 
     opened
-        .commit("Merge branch 'feature'")
+        .commit_with_outcome("Merge branch 'feature'")
         .expect("merge commit should succeed even without tree changes");
 
     assert!(
@@ -2252,7 +2252,11 @@ fn cherry_pick_applies_commit_onto_current_branch() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .cherry_pick(&gitcomet_core::domain::CommitId(feature_sha.into()))
+        .cherry_pick_with_output(
+            &gitcomet_core::domain::CommitId(feature_sha.into()),
+            true,
+            None,
+        )
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");

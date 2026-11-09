@@ -346,7 +346,7 @@ pub(super) fn bootstrap_marker_layout(
         .collect();
     let rendering_mode =
         conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_side_max_len);
-    // section 30 aligned row space: compute the kdiff3-style alignment once per
+    // Aligned row space: compute the kdiff3-style alignment once per
     // bootstrap (side texts are immutable for the session). Files without
     // a base version (e.g. both-added conflicts) align ours↔theirs
     // directly with empty base ranges, so the two-way view gets the same
@@ -667,7 +667,7 @@ pub(super) fn bootstrap_word_highlights(
     ThreeWaySides<conflict_resolver::WordHighlights>,
     FxHashMap<usize, conflict_resolver::TwoWayWordHighlightPair>,
 ) {
-    // section 30 R11: the aligned row space gives exact base↔side line pairs, so
+    // The aligned row space gives exact base↔side line pairs, so
     // word highlights come from a row-capped per-line word diff instead of
     // the old whole-file side_by_side/myers pass (which the streamed path
     // had to skip). Identity maps (no side texts / impractical alignment)
@@ -702,7 +702,7 @@ pub(super) fn bootstrap_word_highlights(
             .with_conflict_block_count(Some(conflict_block_count))
     });
 
-    // section 30 R11: aligned two-way (ours↔theirs) word highlights, computed
+    // Aligned two-way (ours↔theirs) word highlights, computed
     // once here and shared by both diff columns, replacing the old
     // per-render/per-column inline word diff. Independent of base, so this
     // runs even for both-added conflicts where the three-way pass stays empty.
@@ -896,17 +896,15 @@ mod tests {
     #[test]
     fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {
         let make_file = || gitcomet_state::model::ConflictFile {
-            path: std::path::PathBuf::from("index.html").into(),
             base_bytes: Some(std::sync::Arc::<[u8]>::from(b"base\nbytes\n".as_slice())),
-            ours_bytes: None,
             theirs_bytes: Some(std::sync::Arc::<[u8]>::from(b"theirs\nbytes\n".as_slice())),
-            current_bytes: None,
             base: Some(std::sync::Arc::<str>::from("base\ntext\n")),
             ours: Some(std::sync::Arc::<str>::from("ours\ntext\n")),
             theirs: Some(std::sync::Arc::<str>::from("theirs\ntext\n")),
             current: Some(std::sync::Arc::<str>::from(
                 "<<<<<<< ours\nbody\n=======\nbody\n>>>>>>> theirs\n",
             )),
+            ..gitcomet_state::model::ConflictFile::empty(std::path::PathBuf::from("index.html"))
         };
 
         let left = make_file();

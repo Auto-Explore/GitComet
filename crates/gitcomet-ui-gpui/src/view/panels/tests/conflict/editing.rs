@@ -2197,15 +2197,8 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
         gitcomet_state::model::ConflictFileLoadMode::CurrentOnly;
     current_only_repo.conflict_state.conflict_file =
         gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-            path: file_rel.clone().into(),
-            base_bytes: None,
-            ours_bytes: None,
-            theirs_bytes: None,
-            current_bytes: None,
-            base: None,
-            ours: None,
-            theirs: None,
             current: Some(current.to_string().into()),
+            ..gitcomet_state::model::ConflictFile::empty(file_rel.clone())
         }));
     current_only_repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
         file_rel.clone(),

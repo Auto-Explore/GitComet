@@ -11,7 +11,7 @@ use super::log::diff_range_files;
 use super::patch::write_pathspec_file;
 use crate::util::{
     git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_pathspec_file,
-    run_git_capture_bytes_cancellable, run_git_simple,
+    push_read_only_diff_flags, run_git_capture_bytes_cancellable, run_git_simple,
 };
 use gitcomet_core::domain::{CommitFileChange, CommitId, FileMode, FileStatusKind, ObjectHash};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -67,11 +67,9 @@ where
     fields.find(|field| !field.is_empty())
 }
 
-/// `git diff <from> [<to>]` in one of git's machine formats. Omitting `to`
-/// compares `from` against the working tree, where git would write refreshed
-/// stats back to the index even without optional locks; the watcher would
-/// report that as an index change and reload every worktree view. `index`
-/// replaces the repository's index for that comparison.
+/// `git diff <from> [<to>]` in one of git's machine formats; omitting `to`
+/// compares against the working tree. `index` replaces the repository's index
+/// for that comparison.
 fn range_diff_command(
     workdir: &Path,
     format: &[&str],
@@ -83,10 +81,8 @@ fn range_diff_command(
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
+    push_read_only_diff_flags(&mut command);
     command
-        .arg("--no-optional-locks")
-        .arg("-c")
-        .arg("diff.autoRefreshIndex=false")
         .arg("diff")
         .args(format)
         .arg("-z")

@@ -333,14 +333,7 @@ impl Scrollbar {
                             offset: margin + (track - length) * position.clamp(0.0, 1.0) as f32,
                         }
                     } else {
-                        match axis {
-                            ScrollbarAxis::Vertical => {
-                                vertical_thumb_metrics(viewport_size, max_offset, scroll)?
-                            }
-                            ScrollbarAxis::Horizontal => {
-                                horizontal_thumb_metrics(viewport_size, max_offset, scroll)?
-                            }
-                        }
+                        thumb_metrics(viewport_size, max_offset, scroll)?
                     };
 
                 if let Some(limit) = max_thumb_length {
@@ -588,24 +581,15 @@ impl Scrollbar {
                                 }
                             });
                             let sign = interaction.read(cx).offset_sign;
-                            let new_offset = match axis {
-                                ScrollbarAxis::Vertical => compute_vertical_click_offset(
-                                    clamped_track_axis_position(event.position, track_bounds, axis),
-                                    track_bounds,
-                                    thumb_size,
-                                    thumb_size / 2.0,
-                                    max_offset,
-                                    sign,
-                                ),
-                                ScrollbarAxis::Horizontal => compute_horizontal_click_offset(
-                                    clamped_track_axis_position(event.position, track_bounds, axis),
-                                    track_bounds,
-                                    thumb_size,
-                                    thumb_size / 2.0,
-                                    max_offset,
-                                    sign,
-                                ),
-                            };
+                            let new_offset = compute_click_offset(
+                                axis,
+                                clamped_track_axis_position(event.position, track_bounds, axis),
+                                track_bounds,
+                                thumb_size,
+                                thumb_size / 2.0,
+                                max_offset,
+                                sign,
+                            );
                             driver.set_axis_offset(axis, new_offset);
                         }
 
@@ -633,24 +617,19 @@ impl Scrollbar {
                         }
 
                         let sign = interaction.read(cx).offset_sign;
-                        let new_offset = match axis {
-                            ScrollbarAxis::Vertical => compute_vertical_click_offset(
-                                event.position.y,
-                                track_bounds,
-                                thumb_size,
-                                grab,
-                                max_offset,
-                                sign,
-                            ),
-                            ScrollbarAxis::Horizontal => compute_horizontal_click_offset(
-                                event.position.x,
-                                track_bounds,
-                                thumb_size,
-                                grab,
-                                max_offset,
-                                sign,
-                            ),
+                        let event_pos = match axis {
+                            ScrollbarAxis::Vertical => event.position.y,
+                            ScrollbarAxis::Horizontal => event.position.x,
                         };
+                        let new_offset = compute_click_offset(
+                            axis,
+                            event_pos,
+                            track_bounds,
+                            thumb_size,
+                            grab,
+                            max_offset,
+                            sign,
+                        );
                         driver.set_axis_offset(axis, new_offset);
                         if !always_visible {
                             interaction.update(cx, |state, _cx| state.showing = true);
@@ -737,7 +716,7 @@ impl Scrollbar {
         } else {
             raw_offset_y.max(px(0.0)).min(max_offset)
         };
-        vertical_thumb_metrics(viewport_h, max_offset, scroll_y).is_some()
+        thumb_metrics(viewport_h, max_offset, scroll_y).is_some()
     }
 }
 
@@ -825,21 +804,28 @@ fn clamped_track_axis_position(
     }
 }
 
-pub fn compute_vertical_click_offset(
-    event_y: Pixels,
+/// The scroll offset that puts the thumb under `event_pos` (along `axis`),
+/// grabbed `thumb_offset` from its start; `sign` < 0 negates it.
+pub fn compute_click_offset(
+    axis: ScrollbarAxis,
+    event_pos: Pixels,
     track_bounds: Bounds<Pixels>,
     thumb_size: Pixels,
     thumb_offset: Pixels,
     max_offset: Pixels,
-    sign_y: i8,
+    sign: i8,
 ) -> Pixels {
-    let viewport_size = track_bounds.size.height.max(px(0.0));
+    let (track_start, track_len) = match axis {
+        ScrollbarAxis::Vertical => (track_bounds.origin.y, track_bounds.size.height),
+        ScrollbarAxis::Horizontal => (track_bounds.origin.x, track_bounds.size.width),
+    };
+    let viewport_size = track_len.max(px(0.0));
     if viewport_size <= px(0.0) || max_offset <= px(0.0) {
         return px(0.0);
     }
 
     let max_thumb_start = (viewport_size - thumb_size).max(px(0.0));
-    let thumb_start = (event_y - track_bounds.origin.y - thumb_offset)
+    let thumb_start = (event_pos - track_start - thumb_offset)
         .max(px(0.0))
         .min(max_thumb_start);
 
@@ -849,96 +835,23 @@ pub fn compute_vertical_click_offset(
         0.0
     };
 
-    let scroll_y = (max_offset * pct).max(px(0.0)).min(max_offset);
-    let sign = if sign_y < 0 { -1.0 } else { 1.0 };
-    scroll_y * sign
+    let scroll = (max_offset * pct).max(px(0.0)).min(max_offset);
+    if sign < 0 { -scroll } else { scroll }
 }
 
-fn compute_horizontal_click_offset(
-    event_x: Pixels,
-    track_bounds: Bounds<Pixels>,
-    thumb_size: Pixels,
-    thumb_offset: Pixels,
-    max_offset: Pixels,
-    sign_x: i8,
-) -> Pixels {
-    let viewport_size = track_bounds.size.width.max(px(0.0));
-    if viewport_size <= px(0.0) || max_offset <= px(0.0) {
-        return px(0.0);
-    }
-
-    let max_thumb_start = (viewport_size - thumb_size).max(px(0.0));
-    let thumb_start = (event_x - track_bounds.origin.x - thumb_offset)
-        .max(px(0.0))
-        .min(max_thumb_start);
-
-    let pct = if max_thumb_start > px(0.0) {
-        thumb_start / max_thumb_start
-    } else {
-        0.0
-    };
-
-    let scroll_x = (max_offset * pct).max(px(0.0)).min(max_offset);
-    let sign = if sign_x < 0 { -1.0 } else { 1.0 };
-    scroll_x * sign
-}
-
-pub fn vertical_thumb_metrics(
-    viewport_h: Pixels,
-    max_offset: Pixels,
-    scroll_y: Pixels,
-) -> Option<ThumbMetrics> {
-    if viewport_h <= px(0.0) || max_offset <= px(0.0) {
+/// Thumb length and offset along a track of `viewport` for a scroll position.
+pub fn thumb_metrics(viewport: Pixels, max_offset: Pixels, scroll: Pixels) -> Option<ThumbMetrics> {
+    if viewport <= px(0.0) || max_offset <= px(0.0) {
         return None;
     }
-    let content_h = viewport_h + max_offset;
+    let content = viewport + max_offset;
     let margin = px(4.0);
-    let track_h = (viewport_h - margin * 2.0).max(px(0.0));
-
-    let thumb_h = ((viewport_h * (viewport_h / content_h)).max(px(24.0))).min(track_h);
-    let available = (track_h - thumb_h).max(px(0.0));
-
-    let pct = if max_offset <= px(0.0) {
-        0.0
-    } else {
-        scroll_y / max_offset
-    };
-
-    let top = margin + available * pct;
-
+    let track = (viewport - margin * 2.0).max(px(0.0));
+    let length = ((viewport * (viewport / content)).max(px(24.0))).min(track);
+    let available = (track - length).max(px(0.0));
     Some(ThumbMetrics {
-        offset: top,
-        length: thumb_h,
-        thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
-    })
-}
-
-fn horizontal_thumb_metrics(
-    viewport_w: Pixels,
-    max_offset: Pixels,
-    scroll_x: Pixels,
-) -> Option<ThumbMetrics> {
-    if viewport_w <= px(0.0) || max_offset <= px(0.0) {
-        return None;
-    }
-    let content_w = viewport_w + max_offset;
-    let margin = px(4.0);
-    let track_w = (viewport_w - margin * 2.0).max(px(0.0));
-
-    let thumb_w = ((viewport_w * (viewport_w / content_w)).max(px(24.0))).min(track_w);
-    let available = (track_w - thumb_w).max(px(0.0));
-
-    let pct = if max_offset <= px(0.0) {
-        0.0
-    } else {
-        scroll_x / max_offset
-    };
-
-    let left = margin + available * pct;
-
-    Some(ThumbMetrics {
-        offset: left,
-        length: thumb_w,
+        offset: margin + available * (scroll / max_offset),
+        length,
         thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
     })
 }
@@ -952,12 +865,12 @@ mod tests {
         let viewport = px(600.0);
         let max_offset = px(200.0);
         for fraction in [0.0, 0.25, 0.5, 1.0] {
-            let uncapped =
-                vertical_thumb_metrics(viewport, max_offset, max_offset * fraction).unwrap();
+            let uncapped = thumb_metrics(viewport, max_offset, max_offset * fraction).unwrap();
             let capped = capped_thumb_metrics(uncapped, viewport, px(4.0), px(48.0));
             assert_eq!(capped.length, px(48.0));
             let track = Bounds::new(point(px(0.0), px(4.0)), size(px(16.0), px(592.0)));
-            let offset = compute_vertical_click_offset(
+            let offset = compute_click_offset(
+                ScrollbarAxis::Vertical,
                 capped.offset + px(17.0),
                 track,
                 capped.length,
@@ -967,21 +880,40 @@ mod tests {
             );
             assert!((f32::from(offset) + f32::from(max_offset) * fraction).abs() < 0.001);
         }
-        let long = vertical_thumb_metrics(viewport, px(1_000_000.0), px(0.0)).unwrap();
+        let long = thumb_metrics(viewport, px(1_000_000.0), px(0.0)).unwrap();
         assert_eq!(
             capped_thumb_metrics(long, viewport, px(4.0), px(48.0)).length,
             px(24.0)
         );
-        let short_track = vertical_thumb_metrics(px(20.0), px(100.0), px(0.0)).unwrap();
+        let short_track = thumb_metrics(px(20.0), px(100.0), px(0.0)).unwrap();
         assert_eq!(
             capped_thumb_metrics(short_track, px(20.0), px(4.0), px(48.0)).length,
             px(12.0)
         );
     }
 
+    /// Each axis reads its own track origin and length: a wide, short track
+    /// must map along x, never along its 16px height.
+    #[test]
+    fn click_offset_follows_the_axis_of_the_track() {
+        let wide = Bounds::new(point(px(100.0), px(7.0)), size(px(400.0), px(16.0)));
+        let tall = Bounds::new(point(px(7.0), px(100.0)), size(px(16.0), px(400.0)));
+        for (axis, track) in [
+            (ScrollbarAxis::Horizontal, wide),
+            (ScrollbarAxis::Vertical, tall),
+        ] {
+            let offset_at = |pos: f32| {
+                compute_click_offset(axis, px(pos), track, px(100.0), px(0.0), px(900.0), 1)
+            };
+            assert_eq!(offset_at(100.0), px(0.0), "{axis:?} start");
+            assert_eq!(offset_at(250.0), px(450.0), "{axis:?} middle");
+            assert_eq!(offset_at(400.0), px(900.0), "{axis:?} end");
+        }
+    }
+
     #[test]
     fn thumb_metrics_none_without_overflow() {
-        assert!(vertical_thumb_metrics(px(100.0), px(0.0), px(0.0)).is_none());
+        assert!(thumb_metrics(px(100.0), px(0.0), px(0.0)).is_none());
     }
 
     #[test]

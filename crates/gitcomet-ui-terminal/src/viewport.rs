@@ -765,18 +765,7 @@ impl TerminalViewportView {
                 cols
             };
             let line_start = text.len();
-            for c in sc..ec {
-                let cell = &grid[Line(row)][Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let ch = cell.c;
-                if ch == ' ' || ch == '\0' {
-                    text.push(' ');
-                } else {
-                    text.push(ch);
-                }
-            }
+            push_row_text(&mut text, &grid[Line(row)], sc..ec);
             // Grid rows are space-padded to the full width, so whenever the
             // selection reaches the line end the trailing spaces are padding
             // rather than selected content. A selection that stops mid-row is
@@ -807,18 +796,7 @@ impl TerminalViewportView {
         let mut text = String::new();
         for row in 0..rows {
             let grid_row = row as i32 - display_offset as i32;
-            for c in 0..cols {
-                let cell = &grid[Line(grid_row)][Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let ch = cell.c;
-                if ch == ' ' || ch == '\0' {
-                    text.push(' ');
-                } else {
-                    text.push(ch);
-                }
-            }
+            push_row_text(&mut text, &grid[Line(grid_row)], 0..cols);
             if row + 1 < rows && !terminal_row_wraps(&grid[Line(grid_row)], cols) {
                 text.push('\n');
             }
@@ -845,18 +823,7 @@ impl TerminalViewportView {
         let top = -(history_size as i32);
         let bottom = screen_lines as i32 - 1;
         for row in top..=bottom {
-            for c in 0..cols {
-                let cell = &grid[Line(row)][Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let ch = cell.c;
-                if ch == ' ' || ch == '\0' {
-                    text.push(' ');
-                } else {
-                    text.push(ch);
-                }
-            }
+            push_row_text(&mut text, &grid[Line(row)], 0..cols);
             if row < bottom && !terminal_row_wraps(&grid[Line(row)], cols) {
                 text.push('\n');
             }
@@ -1542,17 +1509,12 @@ impl TerminalViewportView {
                 layout_key: layout.key,
             };
 
-            let mut rebuild = false;
-            if self.render_cache.viewport_key != Some(viewport_key) {
-                self.render_cache
-                    .rows
-                    .resize_with(usize::from(rows), TerminalCachedRow::default);
+            self.render_cache
+                .rows
+                .resize_with(usize::from(rows), TerminalCachedRow::default);
+            let rebuild = self.render_cache.viewport_key != Some(viewport_key);
+            if rebuild {
                 self.render_cache.viewport_key = Some(viewport_key);
-                rebuild = true;
-            } else {
-                self.render_cache
-                    .rows
-                    .resize_with(usize::from(rows), TerminalCachedRow::default);
             }
 
             let mut paint_state = TerminalCanvasPaintState {
@@ -2011,6 +1973,22 @@ fn pixels_bits(value: Pixels) -> u32 {
 fn pixels_to_u16(value: Pixels) -> u16 {
     let raw: f32 = value.into();
     raw as u16
+}
+
+/// Appends `row`'s characters in `cols`, blanks as spaces and wide-char
+/// spacers skipped.
+fn push_row_text(
+    text: &mut String,
+    row: &alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>,
+    cols: std::ops::Range<usize>,
+) {
+    for c in cols {
+        let cell = &row[Column(c)];
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        text.push(if cell.c == '\0' { ' ' } else { cell.c });
+    }
 }
 
 /// Cleans up text copied from the terminal grid. Grid rows are space-padded to

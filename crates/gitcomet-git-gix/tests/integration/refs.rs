@@ -1,36 +1,12 @@
+use crate::git_cli::{git_cmd, git_output, git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::{HistoryMode, Upstream, UpstreamDivergence};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, LinearCommit, append_config, import_linear_history,
+    LinearCommit, append_config, import_linear_history,
 };
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    // Concurrent local transports can leave Git-for-Windows shell children
-    // stuck after receive-pack exits when they share the test runner's console.
-    // Pipe their output instead, retaining diagnostics for failed commands.
-    run_git_capture(repo, args);
-}
-
-fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 fn initialize_repo_with_commit(repo: &Path) {
     fs::create_dir_all(repo).unwrap();
@@ -43,8 +19,7 @@ fn initialize_repo_with_commit(repo: &Path) {
             ("commit.gpgsign", "false"),
         ],
     );
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo);
+    let mut cmd = git_cmd(repo);
     import_linear_history(
         &mut cmd,
         "main",
@@ -239,23 +214,22 @@ fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
             .expect("set exact upstream");
 
         assert_eq!(
-            run_git_capture(&repo, &["config", "--get", "branch.feature.remote"]).trim(),
+            git_stdout(&repo, &["config", "--get", "branch.feature.remote"]),
             target.remote
         );
         assert_eq!(
-            run_git_capture(&repo, &["config", "--get", "branch.feature.merge"]).trim(),
+            git_stdout(&repo, &["config", "--get", "branch.feature.merge"]),
             format!("refs/heads/{}", target.branch)
         );
         assert_eq!(
-            run_git_capture(
+            git_stdout(
                 &repo,
                 &[
                     "for-each-ref",
                     "--format=%(upstream:short)|%(upstream:track)|%(upstream:remotename)|%(upstream:remoteref)",
                     "refs/heads/feature",
                 ],
-            )
-            .trim(),
+            ),
             format!(
                 "team/alice/main||{}|refs/heads/{}",
                 target.remote, target.branch
@@ -307,19 +281,18 @@ fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
         .expect("checkout should resolve the mapped local tracking ref");
 
     assert_eq!(
-        run_git_capture(&repo, &["branch", "--show-current"]).trim(),
+        git_stdout(&repo, &["branch", "--show-current"]),
         "review-local"
     );
     assert_eq!(
-        run_git_capture(
+        git_stdout(
             &repo,
             &[
                 "for-each-ref",
                 "--format=%(upstream:remotename)|%(upstream:remoteref)",
                 "refs/heads/review-local",
             ],
-        )
-        .trim(),
+        ),
         "origin|refs/heads/main"
     );
 }
@@ -566,7 +539,9 @@ fn list_branches_reflects_new_upstream_without_reopen() {
         .expect("feature branch present");
     assert_eq!(feature_before.upstream, None);
 
-    opened.push_set_upstream("origin", "feature").unwrap();
+    opened
+        .push_set_upstream_with_output("origin", "feature")
+        .unwrap();
 
     let after = opened
         .list_branches(&gitcomet_core::services::CancellationToken::new())
@@ -622,8 +597,8 @@ fn set_upstream_honours_auto_setup_rebase() {
             .set_upstream_branch_with_output("main", &upstream("origin", "main"))
             .expect("set upstream");
 
-        let actual = run_git_capture(&work_repo, &["config", "branch.main.rebase"]);
-        assert_eq!(actual.trim(), rebase, "{setting}");
+        let actual = git_stdout(&work_repo, &["config", "branch.main.rebase"]);
+        assert_eq!(actual.as_str(), rebase, "{setting}");
     }
 }
 
@@ -687,7 +662,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
 
-    let upstream_after = run_git_capture(
+    let upstream_after = git_stdout(
         &work_repo,
         &[
             "for-each-ref",
@@ -695,7 +670,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
             "refs/heads/feature",
         ],
     );
-    assert_eq!(upstream_after.trim(), "origin/feature");
+    assert_eq!(upstream_after.as_str(), "origin/feature");
 
     let after = opened
         .list_branches(&gitcomet_core::services::CancellationToken::new())
@@ -758,7 +733,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .expect("pending upstream survives a pruning fetch before its first push");
 
     assert!(
-        run_git_capture(
+        git_stdout(
             &work_repo,
             &[
                 "ls-remote",
@@ -767,24 +742,22 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
                 "refs/heads/review/feature"
             ],
         )
-        .trim()
         .is_empty(),
         "setting upstream must not push or create the remote ref"
     );
     assert_eq!(
-        run_git_capture(&work_repo, &["config", "--get", "branch.feature.remote"]).trim(),
+        git_stdout(&work_repo, &["config", "--get", "branch.feature.remote"]),
         "origin"
     );
     assert_eq!(
-        run_git_capture(&work_repo, &["config", "--get", "branch.feature.merge"]).trim(),
+        git_stdout(&work_repo, &["config", "--get", "branch.feature.merge"]),
         "refs/heads/review/feature"
     );
     assert_eq!(
-        run_git_capture(
+        git_stdout(
             &work_repo,
             &["config", "--get", "branch.feature.gitcometPendingUpstream"],
-        )
-        .trim(),
+        ),
         "true"
     );
 
@@ -802,7 +775,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .push_with_output()
         .expect("later push uses the configured target");
     assert!(
-        !run_git_capture(
+        !git_stdout(
             &work_repo,
             &[
                 "ls-remote",
@@ -811,27 +784,23 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
                 "refs/heads/review/feature"
             ],
         )
-        .trim()
         .is_empty(),
         "the next normal push must create the configured remote branch"
     );
     assert!(
-        run_git_capture(
+        git_stdout(
             &work_repo,
             &["ls-remote", "--heads", "origin", "refs/heads/feature"],
         )
-        .trim()
         .is_empty(),
         "the push must not silently fall back to the local branch name"
     );
-    let pending_marker = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(&work_repo)
-        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
-        .status()
-        .expect("read pending-upstream marker");
+    let pending_marker = git_output(
+        &work_repo,
+        &["config", "--get", "branch.feature.gitcometPendingUpstream"],
+    );
     assert!(
-        !pending_marker.success(),
+        !pending_marker.status.success(),
         "a successful push must clear the pending-upstream marker"
     );
 }
@@ -886,14 +855,12 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
     );
     opened.fetch_all(true).expect("fetch newly live upstream");
 
-    let marker = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(&work_repo)
-        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
-        .status()
-        .expect("read pending-upstream marker");
+    let marker = git_output(
+        &work_repo,
+        &["config", "--get", "branch.feature.gitcometPendingUpstream"],
+    );
     assert!(
-        !marker.success(),
+        !marker.status.success(),
         "observing the mapped tracking ref must clear the pending marker"
     );
 
@@ -1167,7 +1134,7 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
         .expect("unset upstream");
     assert_eq!(output.exit_code, Some(0));
 
-    let upstream_after = run_git_capture(
+    let upstream_after = git_stdout_raw(
         &work_repo,
         &[
             "for-each-ref",
@@ -1289,15 +1256,14 @@ fn list_branches_uses_first_merge_entry() {
             );
         }
         assert_eq!(
-            run_git_capture(
+            git_stdout(
                 repo,
                 &[
                     "for-each-ref",
                     "--format=%(upstream:short) %(upstream:track)",
                     "refs/heads/main"
                 ]
-            )
-            .trim(),
+            ),
             "origin/old [ahead 1]"
         );
         let opened = GixBackend.open(repo).unwrap();
@@ -1364,16 +1330,16 @@ fn changing_upstream_replaces_repeated_merge_entries() {
             .set_upstream_branch_with_output("main", &upstream("origin", "new"))
             .unwrap();
         assert_eq!(
-            run_git_capture(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]).trim(),
+            git_stdout(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
             "origin/new",
             "separate sections: {separate_sections}"
         );
         assert_eq!(
-            run_git_capture(repo, &["config", "--get-all", "branch.main.merge"]).trim(),
+            git_stdout(repo, &["config", "--get-all", "branch.main.merge"]),
             "refs/heads/new"
         );
         assert_eq!(
-            run_git_capture(repo, &["config", "branch.main.description"]).trim(),
+            git_stdout(repo, &["config", "branch.main.description"]),
             "keep-me"
         );
         let branches = opened
@@ -1400,7 +1366,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
         initialize_repo_with_commit(repo);
         run_git(repo, &["remote", "add", "origin", "."]);
         run_git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        let oid = run_git_capture(repo, &["rev-parse", "HEAD"]);
+        let oid = git_stdout(repo, &["rev-parse", "HEAD"]);
         let mut refs = String::new();
         let mut config = fs::OpenOptions::new()
             .append(true)
@@ -1409,14 +1375,12 @@ fn tracked_branch_listing_scales_with_branch_count() {
         for index in 0..count {
             refs.push_str(&format!(
                 "create refs/heads/branch-{index} {}\n",
-                oid.trim()
+                oid.as_str()
             ));
             writeln!(config, "\n[branch \"branch-{index}\"]\n remote = origin\n merge = refs/heads/main\n gitcometPendingUpstream = false").unwrap();
         }
         drop(config);
-        let mut child = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(repo)
+        let mut child = git_cmd(repo)
             .args(["update-ref", "--stdin"])
             .stdin(Stdio::piped())
             .spawn()
@@ -1480,7 +1444,7 @@ fn fetch_refspecs_fetches_exactly_the_named_refs() {
         .expect("refspec fetch");
     assert!(output.command.contains("refs/pull/7/head"), "{output:?}");
 
-    let refs = run_git_capture(&repo, &["for-each-ref", "--format=%(refname)"]);
+    let refs = git_stdout_raw(&repo, &["for-each-ref", "--format=%(refname)"]);
     assert!(refs.contains("refs/remotes/origin/pr/7"), "{refs}");
     assert!(
         !refs.contains("refs/remotes/origin/unrelated"),

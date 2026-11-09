@@ -945,7 +945,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -957,6 +957,12 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: "ship".to_string(),
+                amend: false,
+                push_after_commit: true,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
                 local_branch: Some("main".to_string()),
@@ -981,7 +987,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     state.repos[0].push_in_flight = 0;
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -993,6 +999,12 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: "ship".to_string(),
+                amend: false,
+                push_after_commit: true,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
         }),
@@ -1003,6 +1015,82 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { .. })
     )));
     assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+/// The push after a commit follows the request that commit was made with,
+/// even when another commit was started before it finished.
+#[test]
+fn a_finished_commit_pushes_by_its_own_request_not_the_latest_one() {
+    use gitcomet_core::services::GitHooks;
+
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let first = crate::model::CommitRequest {
+        message: "first".to_string(),
+        amend: false,
+        push_after_commit: true,
+        hooks: GitHooks::Skip,
+    };
+    for request in [
+        first.clone(),
+        crate::model::CommitRequest {
+            message: "second".to_string(),
+            amend: false,
+            push_after_commit: false,
+            hooks: GitHooks::Run,
+        },
+    ] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Commit { repo_id, request },
+        );
+    }
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            request: first,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                local_branch: Some("main".to_string()),
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            }),
+        }),
+    );
+
+    let context = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { context, .. }) => {
+                Some(context.clone())
+            }
+            _ => None,
+        })
+        .expect("the first commit asked for a push");
+    assert_eq!(context.hooks, GitHooks::Skip);
+    assert_eq!(
+        state.repos[0]
+            .pending
+            .commit_retry
+            .as_ref()
+            .map(|pending| pending.message.as_str()),
+        Some("second"),
+        "the second commit is still pending"
+    );
 }
 
 #[test]
@@ -1027,16 +1115,22 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
         &mut state,
         Msg::Commit {
             repo_id,
-            message: "wip".to_string(),
-            push_after_commit: true,
-            hooks: GitHooks::Skip,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "wip".to_string(),
+                push_after_commit: true,
+                hooks: GitHooks::Skip,
+            },
         },
     );
     assert!(
         matches!(
             effects.as_slice(),
             [Effect::Commit {
-                hooks: GitHooks::Skip,
+                request: crate::model::CommitRequest {
+                    hooks: GitHooks::Skip,
+                    ..
+                },
                 ..
             }]
         ),
@@ -1056,6 +1150,12 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "wip".to_string(),
+                push_after_commit: true,
+                hooks: GitHooks::Skip,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
                 local_branch: Some("main".to_string()),

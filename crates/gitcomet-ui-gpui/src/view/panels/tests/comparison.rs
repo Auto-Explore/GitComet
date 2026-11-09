@@ -1103,12 +1103,9 @@ fn entry_labels(
             this.popover_host.update(cx, |host, cx| {
                 host.context_menu_model(&kind, cx)
                     .expect("a context menu model")
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                        _ => None,
-                    })
+                    .entry_labels()
+                    .into_iter()
+                    .map(str::to_string)
                     .collect()
             })
         })

@@ -771,6 +771,20 @@ struct ContextMenuModel {
     groups: Vec<std::ops::Range<usize>>,
 }
 
+#[cfg(test)]
+impl ContextMenuModel {
+    /// The labels of the model's entries, in order.
+    fn entry_labels(&self) -> Vec<&str> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 impl ContextMenuModel {
     fn new(items: Vec<ContextMenuItem>) -> Self {
         Self {

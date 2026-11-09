@@ -8,6 +8,8 @@ use crate::git_root::is_git_root_marker;
 #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
 use crate::linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
 #[cfg(feature = "ui-gpui-runtime")]
+use crate::mergetool_mode::path_label;
+#[cfg(feature = "ui-gpui-runtime")]
 use crate::{browser_instance, crashlog};
 use crate::{difftool_mode, extract_fixtures_mode, mergetool_mode, setup_mode};
 #[cfg(feature = "ui-gpui-runtime")]
@@ -737,33 +739,14 @@ fn build_focused_mergetool_gui_config(
         ));
     };
 
+    let labels = mergetool_mode::mergetool_labels(config);
     Ok(gitcomet_ui_gpui::FocusedMergetoolConfig {
         repo_path,
         conflicted_file_path: config.merged.clone(),
-        label_local: config
-            .label_local
-            .clone()
-            .unwrap_or_else(|| path_label(&config.local)),
-        label_remote: config
-            .label_remote
-            .clone()
-            .unwrap_or_else(|| path_label(&config.remote)),
-        label_base: config.label_base.clone().unwrap_or_else(|| {
-            config
-                .base
-                .as_ref()
-                .map(|path| path_label(path))
-                .unwrap_or_else(|| "empty tree".to_string())
-        }),
+        label_local: labels.local,
+        label_remote: labels.remote,
+        label_base: labels.base,
     })
-}
-
-/// Extract a filename label from a path.
-#[cfg(feature = "ui-gpui-runtime")]
-fn path_label(path: &std::path::Path) -> String {
-    path.file_name()
-        .and_then(|n| n.to_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| format!("{path:?}"))
 }
 
 #[cfg(feature = "ui-gpui-runtime")]

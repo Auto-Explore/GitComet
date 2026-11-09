@@ -443,16 +443,20 @@ mod tests {
             },
             AuthRetryOperation::Commit {
                 repo_id: id,
-                message: "message".into(),
-                amend: false,
-                push_after_commit: false,
-                hooks: gitcomet_core::services::GitHooks::Run,
+                request: crate::model::CommitRequest {
+                    message: "message".into(),
+                    amend: false,
+                    push_after_commit: false,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
             },
         ] {
             for status in [
                 AuthPromptStatus::AwaitingInput,
                 AuthPromptStatus::Validating,
-                AuthPromptStatus::Rejected,
+                AuthPromptStatus::Rejected {
+                    message: "rejected".into(),
+                },
             ] {
                 cases.push(AppState {
                     auth_prompt: Some(AuthPromptState {
@@ -460,7 +464,7 @@ mod tests {
                         challenge: None,
                         status,
                         kind: AuthPromptKind::UsernamePassword,
-                        reason: "authentication required".into(),
+                        output: Some("authentication required".into()),
                         operation: operation.clone(),
                     }),
                     ..AppState::test_default()
@@ -534,7 +538,7 @@ mod tests {
             challenge: None,
             status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: crate::model::AuthPromptKind::UsernamePassword,
-            reason: "authentication required".into(),
+            output: Some("authentication required".into()),
             operation: AuthRetryOperation::Clone {
                 url: "https://example.com/repo.git".into(),
                 dest: "/clone".into(),

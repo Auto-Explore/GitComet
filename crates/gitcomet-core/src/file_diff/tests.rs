@@ -430,7 +430,7 @@ fn shared_boundary_counts_unicode_codepoints() {
     let new = PreparedReplacementLine::new("prefix-ê-suffix");
 
     assert_eq!(
-        shared_boundary_chars(old.chars(), new.chars()),
+        crate::text_utils::common_affix_len(old.chars(), new.chars()),
         ("prefix-".chars().count(), "-suffix".chars().count())
     );
 }
@@ -442,7 +442,7 @@ fn shared_boundary_bytes_matches_generic_ascii_boundaries() {
 
     assert_eq!(
         shared_boundary_bytes(old, new),
-        shared_boundary_units(old, new)
+        crate::text_utils::common_affix_len(old, new)
     );
 }
 

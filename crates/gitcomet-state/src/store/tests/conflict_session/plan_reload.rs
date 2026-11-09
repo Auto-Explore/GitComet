@@ -4,17 +4,13 @@ use gitcomet_core::merge::{MergeBlockId, MergeSource, OrderedSelection};
 
 fn file() -> ConflictFile {
     ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
         base: Some("base\nshared\nsame\n".into()),
         ours: Some("ours\nshared\nlocal\n".into()),
         theirs: Some("theirs\nshared\nsame\n".into()),
         current: Some(
             "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nshared\nlocal\n".into(),
         ),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     }
 }
 

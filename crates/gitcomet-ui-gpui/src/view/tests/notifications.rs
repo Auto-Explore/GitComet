@@ -796,7 +796,7 @@ fn auth_pull_state(kind: AuthPromptKind) -> AppState {
             challenge: None,
             status: AuthPromptStatus::AwaitingInput,
             kind,
-            reason: auth_challenge(kind).into(),
+            output: Some(auth_challenge(kind).into()),
             operation: AuthRetryOperation::RepoCommand {
                 repo_id: repo.id,
                 command: gitcomet_state::msg::RepoCommandKind::Pull {
@@ -979,8 +979,9 @@ fn validating_authentication_prompt_preserves_focus_and_rejection_refocuses_inpu
 
         let prompt = state.auth_prompt.as_mut().unwrap();
         prompt.generation += 1;
-        prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = auth_rejection(kind).into();
+        prompt.status = AuthPromptStatus::Rejected {
+            message: auth_rejection(kind).into(),
+        };
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
         cx.update(|window, app| {
@@ -1125,8 +1126,9 @@ fn rejected_credentials_and_prompt_cancellation_do_not_accumulate_error_toasts(
         rejected.time += Duration::from_secs(1);
         state.repos[0].feedback_mut().push_command_result(rejected);
         prompt.generation += 1;
-        prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = auth_rejection(kind).into();
+        prompt.status = AuthPromptStatus::Rejected {
+            message: auth_rejection(kind).into(),
+        };
         state.auth_prompt = Some(prompt);
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
@@ -1184,8 +1186,9 @@ fn authentication_validation_rejection_and_new_generation_clear_stale_input(
         });
 
         let prompt = state.auth_prompt.as_mut().unwrap();
-        prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = auth_rejection(kind).into();
+        prompt.status = AuthPromptStatus::Rejected {
+            message: auth_rejection(kind).into(),
+        };
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
         assert!(cx.debug_bounds("auth_prompt_error").is_some());
@@ -1222,6 +1225,49 @@ fn authentication_validation_rejection_and_new_generation_clear_stale_input(
 }
 
 #[gpui::test]
+fn rejected_auth_prompt_shows_what_git_printed(cx: &mut gpui::TestAppContext) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation = 2;
+        prompt.status = AuthPromptStatus::Rejected {
+            message: auth_rejection(kind).into(),
+        };
+        prompt.output = Some("remote: Password authentication is not supported.".into());
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_error").is_some());
+        assert!(
+            cx.debug_bounds("auth_prompt_details_scroll").is_some(),
+            "rejected {kind:?} credentials must still show git's output"
+        );
+
+        // The pane shows the output, not the inline rejection message.
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation = 3;
+        prompt.output = None;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_error").is_some());
+        assert!(cx.debug_bounds("auth_prompt_details_scroll").is_none());
+
+        // Without output, a challenge still explains the prompt.
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation = 4;
+        prompt.challenge = Some(gitcomet_core::auth::AuthChallenge::from_prompt(
+            gitcomet_core::auth::GitAuthKind::UsernamePassword,
+            "Password for 'https://example.com':",
+        ));
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_details_scroll").is_some());
+    }
+}
+
+#[gpui::test]
 fn repeated_auth_rejection_reenables_input_when_validation_snapshot_is_skipped(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1232,8 +1278,9 @@ fn repeated_auth_rejection_reenables_input_when_validation_snapshot_is_skipped(
         let mut state = auth_pull_state(kind);
         let prompt = state.auth_prompt.as_mut().unwrap();
         prompt.generation = 2;
-        prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = auth_rejection(kind).into();
+        prompt.status = AuthPromptStatus::Rejected {
+            message: auth_rejection(kind).into(),
+        };
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
 
@@ -1574,7 +1621,7 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_inline_error(
         challenge: None,
         status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
-        reason: "Enter passphrase".to_string(),
+        output: Some("Enter passphrase".to_string()),
         operation: AuthRetryOperation::Clone {
             url: "git@example.com:repo.git".to_string(),
             dest: PathBuf::from("/tmp/repo"),
@@ -1612,7 +1659,7 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
         challenge: None,
         status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
-        reason: "Enter passphrase".to_string(),
+        output: Some("Enter passphrase".to_string()),
         operation: AuthRetryOperation::Clone {
             url: "git@example.com:repo.git".to_string(),
             dest: PathBuf::from("/tmp/repo"),
@@ -1657,7 +1704,7 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_inline_error(
         challenge: None,
         status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
-        reason: "auth required".to_string(),
+        output: Some("auth required".to_string()),
         operation: AuthRetryOperation::Clone {
             url: "https://example.com/repo.git".to_string(),
             dest: PathBuf::from("/tmp/repo"),
@@ -1697,7 +1744,7 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
         challenge: None,
         status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
-        reason: "auth required".to_string(),
+        output: Some("auth required".to_string()),
         operation: AuthRetryOperation::Clone {
             url: "https://example.com/repo.git".to_string(),
             dest: PathBuf::from("/tmp/repo"),

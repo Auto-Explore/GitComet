@@ -52,15 +52,8 @@ pub fn open_private_append(path: &Path) -> io::Result<File> {
     ensure_private_dir(private_file_parent(path)?)?;
 
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "private state path is not a regular file: {}",
-                    path.display()
-                ),
-            ));
-        }
+        // symlink_metadata never reports a symlink as a file.
+        Ok(metadata) if !metadata.is_file() => return Err(not_a_regular_file(path)),
         Ok(_) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(err),
@@ -75,16 +68,20 @@ pub fn open_private_append(path: &Path) -> io::Result<File> {
     }
     let file = options.open(path)?;
     if !file.metadata()?.is_file() || !opened_the_named_file(&file, path) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "private state path is not a regular file: {}",
-                path.display()
-            ),
-        ));
+        return Err(not_a_regular_file(path));
     }
     make_file_private(&file);
     Ok(file)
+}
+
+fn not_a_regular_file(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "private state path is not a regular file: {}",
+            path.display()
+        ),
+    )
 }
 
 /// Whether the open handle is the entry `path` names, catching a symlink

@@ -64,7 +64,7 @@ pub fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
 }
 
 /// Whether computing the three-way alignment is practical for these sides
-/// (section 30 aligned row space).
+/// (aligned row space).
 ///
 /// The alignment diff is O(size × dissimilarity): a whole-file conflict on a
 /// large file makes Myers effectively quadratic. Small files always align;
@@ -79,7 +79,7 @@ pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) ->
     )
 }
 
-/// Whether computing the direct two-way alignment is practical (section 30 aligned
+/// Whether computing the direct two-way alignment is practical (aligned
 /// row space, no-base fallback). Same rationale as
 /// [`three_way_alignment_is_practical`], with ours standing in for the base
 /// as the similarity anchor.
@@ -299,18 +299,8 @@ pub fn push_tiny_block_diff_rows(
         return false;
     }
 
-    let mut prefix = 0usize;
-    while prefix < old_len && prefix < new_len && old_lines[prefix] == new_lines[prefix] {
-        prefix += 1;
-    }
-
-    let mut suffix = 0usize;
-    while prefix + suffix < old_len
-        && prefix + suffix < new_len
-        && old_lines[old_len - 1 - suffix] == new_lines[new_len - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) =
+        gitcomet_core::text_utils::common_affix_len(&old_lines[..old_len], &new_lines[..new_len]);
 
     for (offset, line) in old_lines.iter().enumerate().take(prefix) {
         push_tiny_block_context_row(

@@ -40,7 +40,14 @@ use gitcomet_core::merge::{
     ConflictStyle, DiffAlgorithm, MergeError, MergeOptions, MergeStrategy, build_merge_plan,
     merge_file, merge_file_bytes,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+
+#[path = "support/merge_markers.rs"]
+mod merge_markers;
+use merge_markers::{
+    contains_marker_like_line, validate_content_integrity, validate_context_preservation,
+    validate_marker_wellformedness,
+};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
@@ -638,189 +645,6 @@ fn validate_merge_output_invariants(
     }
     validate_content_integrity(base, contrib1, contrib2, output, fixture_name);
     validate_context_preservation(base, contrib1, contrib2, output, fixture_name);
-}
-
-/// Check that conflict markers are well-formed: balanced and properly ordered.
-fn validate_marker_wellformedness(output: &str, fixture_name: &str) {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum State {
-        Outside,
-        InOurs,   // after <<<<<<< before =======
-        InBase,   // after ||||||| before ======= (diff3/zdiff3)
-        InTheirs, // after ======= before >>>>>>>
-    }
-
-    let mut state = State::Outside;
-    let mut conflict_count = 0u32;
-
-    for (line_num, line) in output.lines().enumerate() {
-        let trimmed = line.trim_end();
-        let line_num = line_num + 1; // 1-indexed for error messages
-
-        if is_open_marker(trimmed) {
-            assert_eq!(
-                state,
-                State::Outside,
-                "[{}] line {}: unexpected <<<<<<< (already inside conflict)",
-                fixture_name,
-                line_num
-            );
-            state = State::InOurs;
-            conflict_count += 1;
-        } else if is_base_marker(trimmed) {
-            assert_eq!(
-                state,
-                State::InOurs,
-                "[{}] line {}: unexpected ||||||| (expected inside ours section)",
-                fixture_name,
-                line_num
-            );
-            state = State::InBase;
-        } else if is_separator_marker(trimmed) {
-            assert!(
-                state == State::InOurs || state == State::InBase,
-                "[{}] line {}: unexpected ======= (expected after <<<<<<< or |||||||)",
-                fixture_name,
-                line_num
-            );
-            state = State::InTheirs;
-        } else if is_close_marker(trimmed) {
-            assert_eq!(
-                state,
-                State::InTheirs,
-                "[{}] line {}: unexpected >>>>>>> (expected after =======)",
-                fixture_name,
-                line_num
-            );
-            state = State::Outside;
-        }
-    }
-
-    assert_eq!(
-        state,
-        State::Outside,
-        "[{}] unclosed conflict markers ({} conflicts opened)",
-        fixture_name,
-        conflict_count
-    );
-}
-
-/// Check that every non-marker line in output comes from at least one input.
-fn validate_content_integrity(
-    base: &str,
-    contrib1: &str,
-    contrib2: &str,
-    output: &str,
-    fixture_name: &str,
-) {
-    let base_lines: HashSet<&str> = base.lines().collect();
-    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
-
-    for (line_num, line) in output.lines().enumerate() {
-        let trimmed = line.trim_end();
-        if is_open_marker(trimmed)
-            || is_close_marker(trimmed)
-            || is_separator_marker(trimmed)
-            || is_base_marker(trimmed)
-        {
-            continue;
-        }
-
-        assert!(
-            base_lines.contains(line)
-                || contrib1_lines.contains(line)
-                || contrib2_lines.contains(line),
-            "[{}] line {}: output line {:?} not found in any input",
-            fixture_name,
-            line_num + 1,
-            line
-        );
-    }
-}
-
-/// Check that lines common to all three inputs appear in the output.
-fn validate_context_preservation(
-    base: &str,
-    contrib1: &str,
-    contrib2: &str,
-    output: &str,
-    fixture_name: &str,
-) {
-    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
-    let output_lines: HashSet<&str> = output.lines().collect();
-
-    for line in base.lines() {
-        if contrib1_lines.contains(line) && contrib2_lines.contains(line) {
-            assert!(
-                output_lines.contains(line),
-                "[{}] line {:?} is common to all three inputs but missing from output",
-                fixture_name,
-                line
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Marker detection helpers
-// ---------------------------------------------------------------------------
-
-fn is_open_marker(line: &str) -> bool {
-    line.starts_with("<<<<<<<")
-        && line[7..].chars().all(|c| {
-            c == '<'
-                || c == ' '
-                || c.is_alphanumeric()
-                || c == '/'
-                || c == '.'
-                || c == ':'
-                || c == '-'
-                || c == '_'
-        })
-}
-
-fn is_close_marker(line: &str) -> bool {
-    line.starts_with(">>>>>>>")
-        && line[7..].chars().all(|c| {
-            c == '>'
-                || c == ' '
-                || c.is_alphanumeric()
-                || c == '/'
-                || c == '.'
-                || c == ':'
-                || c == '-'
-                || c == '_'
-        })
-}
-
-fn is_separator_marker(line: &str) -> bool {
-    line.starts_with("=======") && line[7..].chars().all(|c| c == '=')
-}
-
-fn is_base_marker(line: &str) -> bool {
-    line.starts_with("|||||||")
-        && line[7..].chars().all(|c| {
-            c == '|'
-                || c == ' '
-                || c.is_alphanumeric()
-                || c == '/'
-                || c == '.'
-                || c == ':'
-                || c == '-'
-                || c == '_'
-        })
-}
-
-fn contains_marker_like_line(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim_end();
-        is_open_marker(trimmed)
-            || is_base_marker(trimmed)
-            || is_separator_marker(trimmed)
-            || is_close_marker(trimmed)
-    })
 }
 
 fn run_validation_with_artifact<F>(

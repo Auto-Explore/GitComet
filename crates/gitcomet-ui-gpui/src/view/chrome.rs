@@ -21,6 +21,7 @@ use crate::kit::window_chrome::{
 };
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
+use crate::theme::mix_rgba;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -134,17 +135,8 @@ fn main_window_control(
     }
 }
 
-fn mix(mut a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    a.red = a.red + (b.red - a.red) * t;
-    a.green = a.green + (b.green - a.green) * t;
-    a.blue = a.blue + (b.blue - a.blue) * t;
-    a.alpha = a.alpha + (b.alpha - a.alpha) * t;
-    a
-}
-
 fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
-    mix(color, gpui::rgba(0xFFFFFFFF), amount)
+    mix_rgba(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
 /// A workspace's dot and tint colour. Fixed per option, never theme-derived,
@@ -194,7 +186,7 @@ pub(in crate::view) fn title_bar_background(
     // Keep text, tabs and window controls in the theme's contrast system while
     // making groups visibly distinct. Active windows carry a little more tint;
     // inactive ones remain identifiable without competing for attention.
-    mix(
+    mix_rgba(
         base,
         workspace_color(Some(group_color)),
         if window_is_active { 0.18 } else { 0.12 },

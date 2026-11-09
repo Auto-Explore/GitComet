@@ -89,11 +89,8 @@ fn direct_worktree_mutations_and_reads_refuse_bare_without_changing_git_data() {
     reject!(repo.checkout_commit(&head));
     reject!(repo.stage(&[Path::new("config")]));
     reject!(repo.unstage(&[]));
-    reject!(repo.commit("blocked"));
     reject!(repo.commit_with_outcome("blocked"));
     reject!(repo.commit_with_identity("blocked", None));
-    reject!(repo.commit_amend("blocked"));
-    reject!(repo.commit_amend_with_output("blocked"));
     reject!(repo.commit_amend_with_outcome("blocked"));
     reject!(repo.commit_amend_with_identity("blocked", None));
     for hooks in [GitHooks::Run, GitHooks::Skip] {
@@ -112,7 +109,6 @@ fn direct_worktree_mutations_and_reads_refuse_bare_without_changing_git_data() {
     reject!(repo.rebase_abort_with_output());
     reject!(repo.interactive_rebase_with_output("HEAD", &[]));
     reject!(repo.interactive_cherry_pick_with_output(&[], false));
-    reject!(repo.cherry_pick(&head));
     reject!(repo.cherry_pick_with_output(&head, true, None));
     reject!(repo.revert_with_output(&head, true, None));
     reject!(repo.apply_file_change_with_output(&apply, true));
@@ -271,7 +267,7 @@ fn linked_worktree_with_shared_bare_config_accepts_worktree_actions_and_patches(
         bare.apply_prepared_diff_patch(&prepared),
     );
     repo.apply_prepared_diff_patch(&prepared).unwrap();
-    repo.commit("linked change").unwrap();
+    repo.commit_with_outcome("linked change").unwrap();
     assert_eq!(run_git_output(&linked, &["show", "HEAD:file.txt"]), "three");
     assert_eq!(
         run_git_output(dir.path(), &["show", "HEAD:file.txt"]),
@@ -389,7 +385,8 @@ fn bare_fetch_and_push_use_local_remotes_without_a_checkout() {
         RemoteUrlPolicy::default(),
     )
     .unwrap();
-    repo.push_set_upstream("origin", "main").unwrap();
+    repo.push_set_upstream_with_output("origin", "main")
+        .unwrap();
     assert_eq!(
         run_git_output(remote.path(), &["rev-parse", "main"]),
         repo.head_commit_id().unwrap().unwrap().as_ref()
@@ -418,7 +415,7 @@ fn bare_fetch_and_push_use_local_remotes_without_a_checkout() {
         ),
         next
     );
-    repo.push().unwrap();
+    repo.push_with_output().unwrap();
     assert!(!dir.path().join("index").exists());
 }
 
@@ -508,7 +505,7 @@ fn old_direct_handles_refuse_reads_and_writes_after_conversion() {
     stale!(repo.large_file_support(&CancellationToken::new()));
     stale!(repo.create_branch("stale", &head));
     stale!(repo.stage(&[Path::new("file.txt")]));
-    stale!(repo.commit("stale"));
+    stale!(repo.commit_with_outcome("stale"));
     stale!(repo.run_large_file_command(&LargeFileCommand::AnnexInit));
     let reopened = GixBackend.open(dir.path()).unwrap();
     assert_eq!(

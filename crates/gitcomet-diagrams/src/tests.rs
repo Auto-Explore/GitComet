@@ -178,10 +178,7 @@ fn removed_formats_and_explicit_code_languages_stay_code() {
         "x.json",
         "x.json5",
     ] {
-        assert_eq!(
-            DiagramKind::for_file(Path::new(path), "flowchart LR;A-->B"),
-            None
-        );
+        assert_eq!(DiagramKind::for_path(Path::new(path)), None);
     }
     for token in [
         "d2", "dot", "graphviz", "plantuml", "wavedrom", "json", "json5", "rust", "text",

@@ -1,6 +1,6 @@
 use super::*;
 
-/// Cog-wheel settings menu for the merge conflict resolver (section 30). Holds the
+/// Cog-wheel settings menu for the merge conflict resolver. Holds the
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.diff_renderer.read(cx);
@@ -173,17 +173,6 @@ mod tests {
         }));
     }
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<&str> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn whitespace_options_mirror_the_diff_view_and_drive_its_settings() {
         let model = model_for_mergetool_settings(
@@ -231,11 +220,12 @@ mod tests {
         for three_way_view in [true, false] {
             let model = model(three_way_view);
             assert!(
-                !entry_labels(&model)
+                !model
+                    .entry_labels()
                     .iter()
                     .any(|label| label.contains("for all")),
                 "{:?}",
-                entry_labels(&model)
+                model.entry_labels()
             );
         }
     }

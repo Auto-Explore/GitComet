@@ -67,7 +67,6 @@ fn conflict_region_origin(state: &AppState) -> Arc<crate::msg::ConflictRegionOri
 
 fn sample_marker_conflict_file(path: &str) -> ConflictFile {
     ConflictFile {
-        path: PathBuf::from(path).into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -84,6 +83,7 @@ fn sample_marker_conflict_file(path: &str) -> ConflictFile {
                 .to_string()
                 .into(),
         ),
+        ..ConflictFile::empty(PathBuf::from(path))
     }
 }
 
@@ -92,7 +92,6 @@ fn two_region_marker_conflict_file(path: &str, current: &str) -> ConflictFile {
     let ours = "ours one\nmiddle\nours two\n";
     let theirs = "theirs one\nmiddle\ntheirs two\n";
     ConflictFile {
-        path: PathBuf::from(path).into(),
         base_bytes: Some(base.as_bytes().to_vec().into()),
         ours_bytes: Some(ours.as_bytes().to_vec().into()),
         theirs_bytes: Some(theirs.as_bytes().to_vec().into()),
@@ -101,6 +100,7 @@ fn two_region_marker_conflict_file(path: &str, current: &str) -> ConflictFile {
         ours: Some(ours.to_string().into()),
         theirs: Some(theirs.to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from(path))
     }
 }
 
@@ -416,7 +416,6 @@ fn conflict_file_loaded_builds_session_with_regions() {
     let current_text: Arc<str> =
         "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n".into();
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -429,6 +428,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
         ours: Some("ours\n".to_string().into()),
         theirs: Some("theirs\n".to_string().into()),
         current: Some(current_text.clone()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -504,15 +504,8 @@ fn first_paint_pick_survives_full_upgrade(timing: FirstPaintPickTiming) {
     );
     let current = "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n";
     let current_only = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -630,15 +623,8 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         "end\n",
     );
     let current_only = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -681,7 +667,6 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
     let ours = "start\nours one\nshared separator\nours two\nend\n";
     let theirs = "start\ntheirs one\nshared separator\ntheirs two\nend\n";
     let full = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(base.as_bytes().to_vec().into()),
         ours_bytes: Some(ours.as_bytes().to_vec().into()),
         theirs_bytes: Some(theirs.as_bytes().to_vec().into()),
@@ -690,6 +675,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         ours: Some(ours.into()),
         theirs: Some(theirs.into()),
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -746,15 +732,8 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         ">>>>>>> theirs\n",
     );
     let current_only = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -792,7 +771,6 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         },
     );
     let full = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"value = 1\n".to_vec().into()),
         ours_bytes: Some(b"value=1\n".to_vec().into()),
         theirs_bytes: Some(b"value  =  1\n".to_vec().into()),
@@ -801,6 +779,7 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         ours: Some("value=1\n".into()),
         theirs: Some("value  =  1\n".into()),
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -847,15 +826,13 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("deleted.txt").into(),
         base_bytes: Some(b"original\n".to_vec().into()),
         ours_bytes: Some(b"modified\n".to_vec().into()),
-        theirs_bytes: None,
         current_bytes: Some(b"modified\n".to_vec().into()),
         base: Some("original\n".to_string().into()),
         ours: Some("modified\n".to_string().into()),
-        theirs: None,
         current: Some("modified\n".to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("deleted.txt"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -904,15 +881,11 @@ fn conflict_file_loaded_builds_binary_session() {
 
     // Binary file: bytes present but text is None (non-UTF8).
     let file = ConflictFile {
-        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
         current_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(PathBuf::from("image.png"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -993,8 +966,6 @@ fn load_conflict_file_clears_previous_session() {
 
     // First load — builds a session.
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
         current_bytes: Some(
@@ -1002,7 +973,6 @@ fn load_conflict_file_clears_previous_session() {
                 .to_vec()
                 .into(),
         ),
-        base: None,
         ours: Some("ours\n".to_string().into()),
         theirs: Some("theirs\n".to_string().into()),
         current: Some(
@@ -1010,6 +980,7 @@ fn load_conflict_file_clears_previous_session() {
                 .to_string()
                 .into(),
         ),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -1215,7 +1186,6 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -1232,6 +1202,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
                 .to_string()
                 .into(),
         ),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let provided_session = ConflictSession::new(
         PathBuf::from("file.txt"),
@@ -1702,15 +1673,13 @@ theirs only\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
         ours_bytes: Some(b"ours only\n".to_vec().into()),
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),
         current_bytes: Some(current.as_bytes().to_vec().into()),
-        base: None,
         ours: Some("ours only\n".to_string().into()),
         theirs: Some("theirs only\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -1880,7 +1849,6 @@ theirs one\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours one\n".to_vec().into()),
         theirs_bytes: Some(b"theirs one\n".to_vec().into()),
@@ -1889,6 +1857,7 @@ theirs one\n\
         ours: Some("ours one\n".into()),
         theirs: Some("theirs one\n".into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -1957,7 +1926,6 @@ same content\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"same content\n".to_vec().into()),
         theirs_bytes: Some(b"same content\n".to_vec().into()),
@@ -1966,6 +1934,7 @@ same content\n\
         ours: Some("same content\n".to_string().into()),
         theirs: Some("same content\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2045,7 +2014,6 @@ fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
         ">>>>>>> theirs\n",
     );
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"value = 1\n".to_vec().into()),
         ours_bytes: Some(b"value=1\n".to_vec().into()),
         theirs_bytes: Some(b"value  =  1\n".to_vec().into()),
@@ -2054,6 +2022,7 @@ fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
         ours: Some("value=1\n".into()),
         theirs: Some("value  =  1\n".into()),
         current: Some(current.into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
 
     let request = current_conflict_request(&state, repo_id);
@@ -2150,7 +2119,6 @@ fn history_conflict_file() -> ConflictFile {
 >>>>>>> theirs\n\
 ";
     ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"## Changelog\n- entry a\n".to_vec().into()),
         ours_bytes: Some(b"## Changelog\n- entry a\n- entry b\n".to_vec().into()),
         theirs_bytes: Some(b"## Changelog\n- entry a\n- entry c\n".to_vec().into()),
@@ -2159,6 +2127,7 @@ fn history_conflict_file() -> ConflictFile {
         ours: Some("## Changelog\n- entry a\n- entry b\n".to_string().into()),
         theirs: Some("## Changelog\n- entry a\n- entry c\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     }
 }
 
@@ -2248,7 +2217,6 @@ same content\n\
 >>>>>>> theirs\n\
 ";
     let make_file = || ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"same content\n".to_vec().into()),
         theirs_bytes: Some(b"same content\n".to_vec().into()),
@@ -2257,6 +2225,7 @@ same content\n\
         ours: Some("same content\n".to_string().into()),
         theirs: Some("same content\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
 
     let load = |repos: &mut RepositoryRuntimes, state: &mut AppState, file: ConflictFile| {
@@ -2408,7 +2377,6 @@ theirs one\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours one\n".to_vec().into()),
         theirs_bytes: Some(b"theirs one\n".to_vec().into()),
@@ -2417,6 +2385,7 @@ theirs one\n\
         ours: Some("ours one\n".to_string().into()),
         theirs: Some("theirs one\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2498,7 +2467,6 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -2507,6 +2475,7 @@ theirs two\n\
         ours: Some("ours\n".to_string().into()),
         theirs: Some("theirs\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2591,7 +2560,6 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base one\nbase two\n".to_vec().into()),
         ours_bytes: Some(b"ours one\nours two\n".to_vec().into()),
         theirs_bytes: Some(b"theirs one\ntheirs two\n".to_vec().into()),
@@ -2600,6 +2568,7 @@ theirs two\n\
         ours: Some("ours one\nours two\n".to_string().into()),
         theirs: Some("theirs one\ntheirs two\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2666,15 +2635,11 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
         ours_bytes: Some(b"ours only\n".to_vec().into()),
-        theirs_bytes: None,
         current_bytes: Some(b"ours only\n".to_vec().into()),
-        base: None,
         ours: Some("ours only\n".to_string().into()),
-        theirs: None,
         current: Some("ours only\n".to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2809,15 +2774,11 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
         current_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(PathBuf::from("image.png"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -2893,15 +2854,11 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
         current_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
-        base: None,
-        ours: None,
-        theirs: None,
-        current: None,
+        ..ConflictFile::empty(PathBuf::from("image.png"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -3173,15 +3130,11 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),
         current_bytes: Some(b"theirs only\n".to_vec().into()),
-        base: None,
-        ours: None,
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -3295,15 +3248,11 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
-        base_bytes: None,
-        ours_bytes: None,
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),
         current_bytes: Some(b"theirs only\n".to_vec().into()),
-        base: None,
-        ours: None,
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(&state, repo_id);
     reduce(
@@ -3386,7 +3335,6 @@ fn setup_two_conflict_file(
         ">>>>>>> theirs\n",
     );
     let file = ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base one\nbase two\nmiddle\nbase three\n".to_vec().into()),
         ours_bytes: Some(b"ours one\nours two\nmiddle\nours three\n".to_vec().into()),
         theirs_bytes: Some(
@@ -3399,6 +3347,7 @@ fn setup_two_conflict_file(
         ours: Some("ours one\nours two\nmiddle\nours three\n".into()),
         theirs: Some("theirs one\ntheirs two\nmiddle\ntheirs three\n".into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let request = current_conflict_request(state, repo_id);
     reduce(
@@ -4033,7 +3982,6 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
 
     let current = "<<<<<<< ours\nlocal\n=======\nremote\n>>>>>>> theirs\n";
     let make_file = || ConflictFile {
-        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"local\n".to_vec().into()),
         theirs_bytes: Some(b"remote\n".to_vec().into()),
@@ -4042,6 +3990,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
         ours: Some("local\n".to_string().into()),
         theirs: Some("remote\n".to_string().into()),
         current: Some(current.to_string().into()),
+        ..ConflictFile::empty(PathBuf::from("file.txt"))
     };
     let load = |repos: &mut RepositoryRuntimes, state: &mut AppState| {
         let request = current_conflict_request(state, repo_id);
@@ -4311,7 +4260,6 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
         let ours = stage_text(indices.clone(), "ours");
         let theirs = stage_text(indices, "theirs");
         ConflictFile {
-            path: PathBuf::from("file.txt").into(),
             base_bytes: Some(base.as_bytes().to_vec().into()),
             ours_bytes: Some(ours.as_bytes().to_vec().into()),
             theirs_bytes: Some(theirs.as_bytes().to_vec().into()),
@@ -4320,6 +4268,7 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             ours: Some(ours.into()),
             theirs: Some(theirs.into()),
             current: Some("".into()),
+            ..ConflictFile::empty(PathBuf::from("file.txt"))
         }
     };
     let request = current_conflict_request(&state, repo_id);

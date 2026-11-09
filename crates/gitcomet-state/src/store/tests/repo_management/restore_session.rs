@@ -90,15 +90,8 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
-    let dir = std::env::temp_dir().join(format!(
-        "gitcomet-restore-session-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
 
     let repo_a = dir.join("repo-a");
     let repo_b = dir.join("repo-b");

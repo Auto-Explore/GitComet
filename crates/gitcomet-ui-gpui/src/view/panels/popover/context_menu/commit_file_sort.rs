@@ -100,12 +100,9 @@ mod tests {
 
     fn sort_labels(list: crate::view::rows::FileListId) -> Vec<String> {
         super::model_for_sort(list, crate::view::rows::CommitFileSort::PathAscending)
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
+            .entry_labels()
+            .into_iter()
+            .map(str::to_string)
             .collect()
     }
 

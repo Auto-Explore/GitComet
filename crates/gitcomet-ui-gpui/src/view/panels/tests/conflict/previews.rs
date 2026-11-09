@@ -50,15 +50,11 @@ fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppConte
             repo.conflict_state.conflict_file_path = Some(file_rel.clone());
             repo.conflict_state.conflict_file =
                 gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-                    path: file_rel.clone().into(),
-                    base_bytes: None,
-                    ours_bytes: None,
-                    theirs_bytes: None,
-                    current_bytes: None,
                     base: Some(base_svg.clone()),
                     ours: Some(ours_svg.clone()),
                     theirs: Some(theirs_svg.clone()),
                     current: Some(current_text.clone()),
+                    ..gitcomet_state::model::ConflictFile::empty(file_rel.clone())
                 }));
             repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
                 file_rel.clone(),
@@ -218,15 +214,11 @@ fn raster_conflict_preview_uses_alpha_correct_oriented_render_images(
             repo.conflict_state.conflict_file_path = Some(file_rel.clone());
             repo.conflict_state.conflict_file =
                 gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-                    path: file_rel.clone().into(),
                     base_bytes: Some(Arc::clone(&base)),
                     ours_bytes: Some(Arc::clone(&ours)),
                     theirs_bytes: Some(Arc::clone(&theirs)),
                     current_bytes: Some(Arc::clone(&ours)),
-                    base: None,
-                    ours: None,
-                    theirs: None,
-                    current: None,
+                    ..gitcomet_state::model::ConflictFile::empty(file_rel.clone())
                 }));
             repo.conflict_state.conflict_session = Some(ConflictSession::new_with_current(
                 file_rel.clone(),

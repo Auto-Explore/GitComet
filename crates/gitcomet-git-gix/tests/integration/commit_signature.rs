@@ -3,6 +3,7 @@
 //! Uses SSH signing rather than GPG: generating a throwaway ed25519 key is fast
 //! and hermetic, while a GPG keypair needs entropy and an agent.
 
+use crate::git_cli::{git_cmd, git_stdout, run_git};
 #[cfg(unix)]
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::domain::{CommitId, DiffTarget, SignatureFormat, SignatureStatus};
@@ -11,33 +12,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-
-use crate::test_git_env;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
 
 fn ssh_signing_available() -> bool {
     Command::new("ssh-keygen")
@@ -401,13 +375,10 @@ fn a_tampered_commit_reports_a_bad_signature() {
     // signature header: the payload no longer matches what was signed.
     let raw = git_stdout(&fixture.repo, &["cat-file", "commit", signed.as_ref()]);
     let tampered_raw = format!("{raw}\ntampered\n");
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C")
-        .arg(&fixture.repo)
-        .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+    let mut cmd = git_cmd(&fixture.repo);
+    cmd.args(["hash-object", "-t", "commit", "-w", "--stdin"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
-    test_git_env::apply(&mut cmd);
     let mut child = cmd.spawn().expect("spawn git hash-object");
     {
         use std::io::Write as _;

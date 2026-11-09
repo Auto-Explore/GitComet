@@ -284,9 +284,12 @@ impl PopoverHost {
         let pending = PendingCommit::new(&self.state, repo_id, false, message.clone().into());
         self.store.dispatch(Msg::Commit {
             repo_id,
-            message,
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: gitcomet_state::model::CommitRequest {
+                message,
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         });
         self.pending_commit_prompts.insert(repo_id, pending);
         self.dismiss_inline_popover(window, cx);
@@ -365,7 +368,7 @@ impl PopoverHost {
                 && (repo
                     .staged_status_entries()
                     .is_some_and(|entries| !entries.is_empty())
-                    || matches!(repo.merge_commit_message, Loadable::Ready(Some(_))))
+                    || merge_in_progress(repo))
         }) && self
             .commit_prompt_message_input
             .read_with(cx, |input, _| !input.text().trim().is_empty())

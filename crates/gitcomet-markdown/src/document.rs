@@ -466,25 +466,15 @@ pub fn scrollbar_bucket_flags(documents: &[&MarkdownPreviewDocument]) -> Vec<u8>
         return Vec::new();
     }
 
-    let bucket_count = 240usize.min(max_len).max(1);
+    let bucket_count = 240usize.min(max_len);
     let mut buckets = vec![0u8; bucket_count];
 
     for document in documents {
         let len = document.rows.len();
-        if len == 0 {
-            continue;
-        }
-
         for (row_ix, row) in document.rows.iter().enumerate() {
-            let flag = scrollbar_flag_for_change_hint(row.change_hint);
-            if flag == 0 {
-                continue;
-            }
-
-            let bucket_ix = (row_ix * bucket_count) / len;
-            if let Some(bucket) = buckets.get_mut(bucket_ix) {
-                *bucket |= flag;
-            }
+            // row_ix < len, so the bucket is always in range.
+            buckets[(row_ix * bucket_count) / len] |=
+                scrollbar_flag_for_change_hint(row.change_hint);
         }
     }
 

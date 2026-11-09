@@ -105,9 +105,6 @@ impl GitRepository for CommonDirRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported()
     }
@@ -133,7 +130,10 @@ impl GitRepository for CommonDirRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -144,7 +144,7 @@ impl GitRepository for CommonDirRepo {
         let result: Result<()> = { unsupported() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

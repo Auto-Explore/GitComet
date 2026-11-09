@@ -1,3 +1,4 @@
+use crate::git_cli::{git_cmd, run_git};
 use gitcomet_core::domain::FileStatusKind;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -6,20 +7,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
 
-fn run_git(repo: &Path, args: &[&str]) {
-    let status = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
 fn hash_blob(repo: &Path, contents: &[u8]) -> String {
-    let mut child = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let mut child = git_cmd(repo)
         .args(["hash-object", "-w", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -68,9 +57,7 @@ fn set_unmerged_stages(
         index_info.push_str(&format!("100644 {blob} 3\t{path}\n"));
     }
 
-    let mut child = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let mut child = git_cmd(repo)
         .args(["update-index", "--index-info"])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
@@ -176,9 +163,7 @@ fn checkout_conflict_base_replaces_a_symlink_instead_of_writing_through_it() {
     symlink(&outside, repo.join("notes")).unwrap();
     run_git(repo, &["commit", "-am", "upstream"]);
     run_git(repo, &["checkout", "mine"]);
-    let rebase = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let rebase = git_cmd(repo)
         .args(["rebase", "main"])
         .output()
         .expect("git rebase to run");
@@ -228,9 +213,7 @@ fn checkout_conflict_base_applies_the_checkout_filters() {
     run_git(repo, &["checkout", "main"]);
     fs::write(repo.join("x.txt"), "ours\r\n").unwrap();
     run_git(repo, &["commit", "-am", "ours"]);
-    let merge = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let merge = git_cmd(repo)
         .args(["merge", "theirs"])
         .output()
         .expect("git merge to run");
@@ -273,9 +256,7 @@ fn checkout_conflict_base_refuses_a_submodule_conflict() {
     run_git(&sub, &["config", "user.email", "you@example.com"]);
     run_git(&sub, &["config", "user.name", "You"]);
     run_git(&sub, &["commit", "--allow-empty", "-m", "checked out"]);
-    let ours = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(&sub)
+    let ours = git_cmd(&sub)
         .args(["rev-parse", "HEAD"])
         .output()
         .expect("rev-parse");
@@ -283,9 +264,7 @@ fn checkout_conflict_base_refuses_a_submodule_conflict() {
     let base = "1".repeat(ours.len());
     let theirs = "2".repeat(ours.len());
 
-    let mut child = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let mut child = git_cmd(repo)
         .args(["update-index", "--index-info"])
         .stdin(Stdio::piped())
         .spawn()
@@ -305,9 +284,7 @@ fn checkout_conflict_base_refuses_a_submodule_conflict() {
         .checkout_conflict_base(Path::new("s"))
         .expect_err("a submodule conflict has no base to check out");
 
-    let unmerged = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
+    let unmerged = git_cmd(repo)
         .args(["ls-files", "-u", "--", "s"])
         .output()
         .expect("ls-files");

@@ -1,24 +1,9 @@
+use crate::git_cli::run_git;
 use gitcomet_core::domain::UpstreamDivergence;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let output = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 fn git_remote_url(path: &Path) -> String {
     if cfg!(windows) {
@@ -178,7 +163,7 @@ fn upstream_divergence_reflects_new_upstream_without_reopen() {
     );
 
     opened
-        .push_set_upstream("origin", "feature")
+        .push_set_upstream_with_output("origin", "feature")
         .expect("push branch and configure upstream");
 
     assert_eq!(

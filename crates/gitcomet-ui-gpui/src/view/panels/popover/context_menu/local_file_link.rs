@@ -67,17 +67,6 @@ mod tests {
         LocalFileLinkSource::Version(FileSource::WorkingDirectory)
     }
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     fn open_entry(model: &ContextMenuModel) -> (&ContextMenuAction, bool) {
         model
             .items
@@ -99,7 +88,7 @@ mod tests {
         let path = std::path::Path::new("docs/other.md");
         let model = model_for_local_file_link(RepoId(3), &working_directory(), path, false, None);
 
-        assert_eq!(entry_labels(&model), vec!["Open in GitComet"]);
+        assert_eq!(model.entry_labels(), vec!["Open in GitComet"]);
         // The resolved path is shown so a link's text cannot disguise where
         // it goes.
         assert!(model.items.iter().any(|item| matches!(
@@ -165,7 +154,7 @@ mod tests {
         let path = std::path::Path::new("missing.txt");
         let model = model_for_local_file_link(RepoId(3), &working_directory(), path, true, None);
 
-        assert_eq!(entry_labels(&model), vec!["Open in GitComet"]);
+        assert_eq!(model.entry_labels(), vec!["Open in GitComet"]);
         assert!(
             open_entry(&model).1,
             "nothing to open, so the entry is disabled"
@@ -185,7 +174,7 @@ mod tests {
             Some("https://images.example.com/badge.svg"),
         );
 
-        assert_eq!(entry_labels(&model), vec!["Load image", "Open in GitComet"]);
+        assert_eq!(model.entry_labels(), vec!["Load image", "Open in GitComet"]);
         let load = model
             .items
             .iter()

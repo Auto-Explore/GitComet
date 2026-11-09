@@ -292,9 +292,12 @@ fn repo_operations_emit_effects() {
         &mut state,
         Msg::Commit {
             repo_id: RepoId(1),
-            message: "m".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "m".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
     assert!(matches!(

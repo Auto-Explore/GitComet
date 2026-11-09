@@ -1,19 +1,10 @@
+use crate::git_cli::run_git;
 use gitcomet_core::error::ErrorKind;
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let status = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("run git command");
-    assert!(status.success(), "git {:?} failed", args);
-}
 
 /// `git init` a non-bare repo at `path` with one commit, using an inline
 /// identity so the test does not depend on ambient git config.

@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, git_stdout, run_git, run_git_with_env};
 use gitcomet_core::domain::{CommitId, FileStatusKind, HistoryMode, LineStats, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
@@ -14,53 +14,6 @@ mod ref_filter;
 mod sharing;
 mod snapshot_refresh;
 mod topology;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    run_git_with_env(repo, args, &[]);
-}
-
-fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let cmd = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true");
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    let output = cmd.output().expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .output()
-        .expect("git command to run");
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 fn git_remote_url(path: &Path) -> String {
     if cfg!(windows) {
@@ -108,9 +61,7 @@ fn fast_import_linear_history_with_authors(
 ) {
     let messages: Vec<_> = (0..count).map(|i| format!("c{i}")).collect();
     let bodies: Vec<_> = (0..count).map(|i| format!("v{i}\n")).collect();
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd.arg("-C").arg(repo);
+    let mut cmd = git_cmd(repo);
     import_linear_history(
         &mut cmd,
         "master",
@@ -1347,11 +1298,7 @@ fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let mut child = cmd
-        .arg("-C")
-        .arg(repo)
+    let mut child = git_cmd(repo)
         .args(["pack-objects", "--no-reuse-delta", "--no-reuse-object"])
         .arg(pack_dir.join("pack"))
         .stdin(std::process::Stdio::piped())
@@ -1364,11 +1311,8 @@ fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
         std::fs::remove_file(&pack).unwrap();
         std::fs::remove_file(pack.with_extension("idx")).unwrap();
     }
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
     assert!(
-        !cmd.arg("-C")
-            .arg(repo)
+        !git_cmd(repo)
             .args(["cat-file", "-e", &root])
             .output()
             .unwrap()
@@ -2297,11 +2241,7 @@ fn commit_details_preserves_shallow_boundary_merge_metadata_without_parent_objec
     );
     assert_eq!(git_stdout(&shallow, &["rev-parse", "HEAD"]), merge_id);
     let first_parent_spec = format!("{first_parent_id}^{{commit}}");
-    let mut parent_check = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut parent_check);
-    let parent_check = parent_check
-        .arg("-C")
-        .arg(&shallow)
+    let parent_check = git_cmd(&shallow)
         .args(["cat-file", "-e", first_parent_spec.as_str()])
         .output()
         .expect("check whether the shallow clone contains its first parent");

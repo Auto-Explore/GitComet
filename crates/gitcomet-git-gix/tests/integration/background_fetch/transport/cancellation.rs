@@ -213,7 +213,7 @@ fn background_fetch_cancellation_reaps_the_process_tree_before_returning() {
     let remote = repository(root.path(), "remote");
     let first = commit(&remote, "first");
     let local = repository(root.path(), "local");
-    git(
+    git_stdout(
         &local,
         &[
             "fetch",
@@ -257,12 +257,12 @@ fn background_fetch_cancellation_reaps_the_process_tree_before_returning() {
         }),
         "the cancelled fetch must leave no live descendants: {remaining:?}"
     );
-    assert_eq!(git(&local, &["rev-parse", "origin/main"]), first);
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), first);
 
     fetch.release();
 
     assert!(!resumed.exists());
-    assert_eq!(git(&local, &["rev-parse", "origin/main"]), first);
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), first);
 
     GixBackend
         .open(&local)
@@ -270,5 +270,5 @@ fn background_fetch_cancellation_reaps_the_process_tree_before_returning() {
         .fetch_all_background(false, &CancellationToken::new())
         .expect("the released transport must permit a later fetch");
     assert!(resumed.exists());
-    assert_eq!(git(&local, &["rev-parse", "origin/main"]), latest);
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), latest);
 }

@@ -17,7 +17,7 @@ fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
 #[test]
 fn next_pane_resize_drag_width_recomputes_bounds_when_window_changes() {
     let state = PaneResizeState::new(
-        PaneResizeHandle::Sidebar,
+        SidePane::Sidebar,
         px(0.0),
         px(280.0),
         px(420.0),
@@ -29,7 +29,7 @@ fn next_pane_resize_drag_width_recomputes_bounds_when_window_changes() {
     let total_w = px(900.0);
     let width = next_pane_resize_drag_width(&state, current_x, total_w, false, false);
     let (min_width, max_width) = pane_resize_drag_width_bounds(
-        PaneResizeHandle::Sidebar,
+        SidePane::Sidebar,
         px(280.0),
         px(420.0),
         total_w,

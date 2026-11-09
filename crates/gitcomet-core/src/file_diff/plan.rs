@@ -974,21 +974,7 @@ where
             &mut LevenshteinScratch,
         ) -> u32,
 {
-    let mut prefix = 0usize;
-    while prefix < old_lines.len()
-        && prefix < new_lines.len()
-        && old_lines[prefix] == new_lines[prefix]
-    {
-        prefix += 1;
-    }
-
-    let mut suffix = 0usize;
-    while prefix + suffix < old_lines.len()
-        && prefix + suffix < new_lines.len()
-        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) = crate::text_utils::common_affix_len(old_lines, new_lines);
 
     let old_mid_end = old_lines.len().saturating_sub(suffix);
     let new_mid_end = new_lines.len().saturating_sub(suffix);
@@ -1361,7 +1347,7 @@ pub(super) fn replacement_pair_cost_with_distance<T: Eq>(
     new_units: &[T],
     distance_fn: impl FnOnce(&[T], &[T]) -> u32,
 ) -> u32 {
-    let (shared_prefix, shared_suffix) = shared_boundary_units(old_units, new_units);
+    let (shared_prefix, shared_suffix) = crate::text_utils::common_affix_len(old_units, new_units);
     replacement_pair_cost_with_shared_boundary(
         old_units,
         new_units,
@@ -1429,24 +1415,4 @@ pub(super) fn shared_boundary_bytes(a: &[u8], b: &[u8]) -> (usize, usize) {
     }
 
     (prefix, suffix)
-}
-
-pub(super) fn shared_boundary_units<T: Eq>(a: &[T], b: &[T]) -> (usize, usize) {
-    let mut prefix = 0usize;
-    while prefix < a.len() && prefix < b.len() && a[prefix] == b[prefix] {
-        prefix += 1;
-    }
-
-    let max_suffix = a.len().min(b.len()).saturating_sub(prefix);
-    let mut suffix = 0usize;
-    while suffix < max_suffix && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix] {
-        suffix += 1;
-    }
-
-    (prefix, suffix)
-}
-
-#[cfg(test)]
-pub(super) fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
-    shared_boundary_units(a, b)
 }

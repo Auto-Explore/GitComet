@@ -201,10 +201,6 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }
@@ -236,8 +232,11 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
-        Ok(())
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        Ok(gitcomet_core::services::CommitOperationOutcome::default())
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -250,24 +249,13 @@ impl GitRepository for RepoActivationRecordingRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> Result<()> {
-        Ok(())
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        Ok(CommandOutput::empty_success("git push"))
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
         Ok(())
     }
-}
-
-fn unique_repo_monitor_test_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "gitcomet-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ))
 }
 
 fn active_ready_repo_state(repo_id: RepoId, workdir: PathBuf) -> AppState {
@@ -414,8 +402,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
     // schedule duplicate status/log/branch loads. Seed every lane the full refresh touches as
     // in-flight (the primary batch does not include branches/remote branches).
     let repo_id = RepoId(21);
-    let workdir = unique_repo_monitor_test_path("activation-coalesce");
-    std::fs::create_dir_all(&workdir).expect("create activation coalesce workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
@@ -458,8 +446,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
 #[test]
 fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     let repo_id = RepoId(22);
-    let workdir = unique_repo_monitor_test_path("activation-fallback");
-    std::fs::create_dir_all(&workdir).expect("create activation fallback workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = active_ready_repo_state(repo_id, workdir.clone());
     let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));

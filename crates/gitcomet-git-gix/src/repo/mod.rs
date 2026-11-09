@@ -64,6 +64,7 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod history_rebase;
 mod history_transaction;
 mod large_files;
 mod lfs;
@@ -79,6 +80,7 @@ mod patch_action;
 mod porcelain;
 mod pull;
 mod remotes;
+mod remotes_push;
 mod shared;
 mod shared_ranges;
 mod signatures;
@@ -1355,12 +1357,6 @@ impl GitRepository for GixRepo {
         self.checkout_commit_impl(id)
     }
 
-    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.cherry_pick_impl(id)
-    }
-
     fn cherry_pick_with_output(
         &self,
         id: &CommitId,
@@ -1445,29 +1441,10 @@ impl GitRepository for GixRepo {
         self.unstage_impl(paths)
     }
 
-    fn commit(&self, message: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_impl(message)
-    }
-
     fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.commit_with_outcome_impl(message)
-    }
-
-    fn commit_amend(&self, message: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_amend_impl(message)
-    }
-
-    fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_amend_impl(message)?;
-        Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
     fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
@@ -1601,19 +1578,9 @@ impl GitRepository for GixRepo {
         self.preview_tag_push_impl(request, cancellation)
     }
 
-    fn push(&self) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_impl()
-    }
-
     fn push_with_output(&self) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.push_with_output_impl()
-    }
-
-    fn push_force(&self) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_force_impl()
     }
 
     fn push_force_with_output(&self) -> Result<CommandOutput> {
@@ -1830,11 +1797,6 @@ impl GitRepository for GixRepo {
     ) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.set_remote_url_with_output_impl(name, url, kind, remote_url_policy)
-    }
-
-    fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.push_set_upstream_impl(remote, branch)
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {

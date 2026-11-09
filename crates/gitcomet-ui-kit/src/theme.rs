@@ -1281,18 +1281,27 @@ impl From<ThemeFile> for AppTheme {
     }
 }
 
-static INTERNED_LANE_PALETTES: OnceLock<Mutex<Vec<&'static GraphLanePalette>>> = OnceLock::new();
+/// A `'static` copy of `value`, reusing one interned earlier when `same` holds.
+/// Themes load a handful of times per session but their palettes are copied
+/// into every row's paint closure, so one leak per distinct value is cheaper.
+fn intern<T>(
+    interned: &'static OnceLock<Mutex<Vec<&'static T>>>,
+    value: T,
+    same: impl Fn(&T, &T) -> bool,
+) -> &'static T {
+    let mut interned = interned
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = interned.iter().find(|existing| same(existing, &value)) {
+        return existing;
+    }
+    let leaked: &'static T = Box::leak(Box::new(value));
+    interned.push(leaked);
+    leaked
+}
 
-/// Hands out a `'static` reference to a lane palette, reusing one already
-/// interned when the colours match.
-///
-/// Themes are loaded a handful of times over a session -- at startup, and when
-/// the user picks another one -- while their palettes are copied into every
-/// per-row paint closure of every frame. Trading a one-time leak per *distinct*
-/// palette for a pointer-sized field in `AppTheme` is the right side of that
-/// exchange; reloading the same theme file interns nothing new.
-/// One allocation per distinct interstitial palette, compared bit for bit
-/// like [`lane_palettes_are_identical`].
+/// Interstitial palettes compare bit for bit, like [`lane_palettes_are_identical`].
 fn intern_interstitial(colors: InterstitialColors) -> &'static InterstitialColors {
     static INTERNED: OnceLock<Mutex<Vec<&'static InterstitialColors>>> = OnceLock::new();
     fn bits(colors: &InterstitialColors) -> Vec<u32> {
@@ -1314,33 +1323,12 @@ fn intern_interstitial(colors: InterstitialColors) -> &'static InterstitialColor
             .flat_map(|c| [c.red, c.green, c.blue, c.alpha].map(f32::to_bits))
             .collect()
     }
-    let mut interned = INTERNED
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let key = bits(&colors);
-    if let Some(existing) = interned.iter().find(|existing| bits(existing) == key) {
-        return existing;
-    }
-    let leaked: &'static InterstitialColors = Box::leak(Box::new(colors));
-    interned.push(leaked);
-    leaked
+    intern(&INTERNED, colors, |a, b| bits(a) == bits(b))
 }
 
 fn intern_lane_palette(palette: GraphLanePalette) -> &'static GraphLanePalette {
-    let interned = INTERNED_LANE_PALETTES.get_or_init(|| Mutex::new(Vec::new()));
-    let mut interned = interned
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(existing) = interned
-        .iter()
-        .find(|existing| lane_palettes_are_identical(existing, &palette))
-    {
-        return existing;
-    }
-    let leaked: &'static GraphLanePalette = Box::leak(Box::new(palette));
-    interned.push(leaked);
-    leaked
+    static INTERNED: OnceLock<Mutex<Vec<&'static GraphLanePalette>>> = OnceLock::new();
+    intern(&INTERNED, palette, lane_palettes_are_identical)
 }
 
 /// Compares two palettes bit for bit rather than by `PartialEq`.
@@ -1368,6 +1356,17 @@ pub fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
         a.green + (b.green - a.green) * t,
         a.blue + (b.blue - a.blue) * t,
         1.0,
+    )
+}
+
+/// Like [`mix_colors`], but mixes alpha too instead of forcing it opaque.
+pub fn mix_rgba(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        a.alpha + (b.alpha - a.alpha) * t,
     )
 }
 
@@ -1828,27 +1827,13 @@ fn load_runtime_themes_from_dir(
 }
 
 fn load_theme_specs_from_json(json: &str) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
-    let bundle = parse_theme_bundle(json)?;
-    load_theme_specs_from_bundle(bundle)
+    collect_theme_specs(parse_theme_bundle(json)?, false)
 }
 
 fn load_runtime_theme_specs_from_json(
     json: &str,
 ) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
-    let bundle = parse_theme_bundle(json)?;
-    load_runtime_theme_specs_from_bundle(bundle)
-}
-
-fn load_theme_specs_from_bundle(
-    bundle: ThemeBundleFile,
-) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
-    collect_theme_specs(bundle, false)
-}
-
-fn load_runtime_theme_specs_from_bundle(
-    bundle: ThemeBundleFile,
-) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
-    collect_theme_specs(bundle, true)
+    collect_theme_specs(parse_theme_bundle(json)?, true)
 }
 
 fn collect_theme_specs(

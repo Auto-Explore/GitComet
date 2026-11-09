@@ -460,7 +460,7 @@ impl DiffRenderer {
     ) -> Vec<AnyElement> {
         let tab_width = this.display_tab_width;
 
-        // section 30 aligned row space: two-way full mode shares the three-way
+        // Aligned row space: two-way full mode shares the three-way
         // projection. The block-local path below remains for giant files and
         // partially loaded sides.
         if this.conflict_resolver.two_way_uses_aligned_rows() {
@@ -703,7 +703,7 @@ impl DiffRenderer {
                     cell = cell.on_pointer_click(
                         MouseButton::Left,
                         cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                            // section 30: clicking a conflict block body selects it.
+                            // Clicking a conflict block body selects it.
                             this.conflict_resolver_select_conflict(conflict_ix, cx);
                         }),
                     );
@@ -750,7 +750,7 @@ impl DiffRenderer {
             .collect()
     }
 
-    /// section 30 aligned row space: two-way full mode. Renders one column of the
+    /// Aligned row space: two-way full mode. Renders one column of the
     /// ours↔theirs diff over the shared three-way visible projection —
     /// whole-file rows, context folds, and collapsed resolved blocks — while
     /// keeping the two-way diff styling (add/remove/modify backgrounds and
@@ -827,17 +827,7 @@ impl DiffRenderer {
             match visible_item {
                 conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
                     let label: SharedString = if matches!(side, ConflictPickSide::Ours) {
-                        let choice_label = conflict_choices
-                            .get(range_ix)
-                            .map(|c| match *c {
-                                conflict_resolver::ConflictChoice::Base => "Base (A)",
-                                conflict_resolver::ConflictChoice::Ours => "Local (B)",
-                                conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
-                                conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
-                                _ => "Ordered source selection",
-                            })
-                            .unwrap_or("?");
-                        format!("  Resolved: picked {choice_label}").into()
+                        format!("  {}", collapsed_block_summary(&conflict_choices, range_ix)).into()
                     } else {
                         "".into()
                     };
@@ -885,7 +875,7 @@ impl DiffRenderer {
                         .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // section 30: clicking a conflict block body selects it.
+                                // Clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
@@ -1187,7 +1177,7 @@ impl DiffRenderer {
                             cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                    // section 30: clicking a conflict block body selects it.
+                                    // Clicking a conflict block body selects it.
                                     this.conflict_resolver_select_conflict(conflict_ix, cx);
                                 }),
                             );
@@ -1247,7 +1237,7 @@ impl DiffRenderer {
         elements
     }
 
-    /// Diff-view-style collapsed context fold row (section 30, R6): muted band,
+    /// Diff-view-style collapsed context fold row: muted band,
     /// reveal arrows clustered where the line-number gutter sits, and a
     /// left-aligned hidden-range label; clicking elsewhere expands the whole
     /// fold. `output_pane` selects which fold-reveal state the controls
@@ -1451,7 +1441,7 @@ impl DiffRenderer {
                     .unwrap_or_default();
                 let source = gutter_row.source();
                 let (_, badge_fg) = resolved_output_source_badge_colors(theme, source);
-                // section 30 R11: outside marker regions the badge is provenance of
+                // Outside marker regions the badge is provenance of
                 // a line git itself pre-merged (or plain context), not a
                 // resolver pick — mute it so only real picks read as
                 // decisions.
@@ -1571,7 +1561,7 @@ impl DiffRenderer {
                         )
                     })
                     .child({
-                        // section 30: confidence dot on the first row of an
+                        // Confidence dot on the first row of an
                         // auto-resolved conflict (accent/warning/danger for
                         // high/medium/low). Rule detail for the active
                         // conflict shows in the resolver header trace label.
@@ -2394,7 +2384,7 @@ fn two_way_split_input_row_menu_targets(
     )
 }
 
-/// Input-row menu targets for the section 30 aligned two-way view. `row_ix` is an
+/// Input-row menu targets for the aligned two-way view. `row_ix` is an
 /// aligned visual row (shared by both columns), so the line pick reuses the
 /// aligned-row-space `ThreeWayLine` target with this side's choice.
 fn two_way_aligned_input_row_menu_targets(

@@ -106,9 +106,6 @@ impl GitRepository for RecordingRewordRepo {
     fn checkout_commit(&self, _: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _: &str, _: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -127,7 +124,10 @@ impl GitRepository for RecordingRewordRepo {
     fn unstage(&self, _: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _: bool) -> Result<CommandOutput> {
@@ -136,7 +136,7 @@ impl GitRepository for RecordingRewordRepo {
     fn pull(&self, _: PullMode) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _: &[&Path]) -> Result<()> {
