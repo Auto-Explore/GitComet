@@ -1416,8 +1416,3 @@ pub(super) fn shared_boundary_bytes(a: &[u8], b: &[u8]) -> (usize, usize) {
 
     (prefix, suffix)
 }
-
-#[cfg(test)]
-pub(super) fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
-    crate::text_utils::common_affix_len(a, b)
-}

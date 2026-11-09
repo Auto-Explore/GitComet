@@ -1220,7 +1220,7 @@ fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
 }
 
 #[test]
-fn push_force_without_output_updates_remote_head_after_rewrite() {
+fn push_force_updates_remote_head_after_rewrite() {
     let _guard = remote_management_test_lock();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();

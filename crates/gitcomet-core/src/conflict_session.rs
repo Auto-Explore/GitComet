@@ -1308,10 +1308,9 @@ impl ConflictSession {
     /// Mirrors KDiff3's `updateDefaults` filter: only blocks that are still
     /// unresolved, classified as a whitespace conflict, and not hand-edited
     /// (its `hasModfiedText()` guard) are touched. Returns the number of
-    /// blocks whose decision changed.
+    /// blocks whose decision changed; a marker-only session has no
+    /// whitespace classification and changes none.
     pub fn replace_whitespace_conflict_selections(&mut self, selection: OrderedSelection) -> usize {
-        // Marker-only fallback sessions have no aligned-row classification,
-        // so there is no trustworthy whitespace verdict to act on.
         self.replace_selections_where(selection, |block, _| {
             block.whitespace_conflict && !block.is_resolved() && block.manual_content.is_none()
         })

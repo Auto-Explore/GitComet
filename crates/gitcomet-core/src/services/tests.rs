@@ -249,7 +249,6 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     ));
     assert_unsupported(repo.fetch_all(true));
     assert_unsupported(repo.pull(PullMode::FastForwardOnly));
-    assert_unsupported(repo.push_with_output());
     assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
     assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
     assert_unsupported(repo.push_force_with_output());
