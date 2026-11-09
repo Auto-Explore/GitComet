@@ -1,6 +1,7 @@
 //! The errors on screen in full: what failed, the command and its output,
 //! and what can be done about each.
 
+use super::dialog_size::{DialogSize, timestamp_label};
 use super::*;
 use crate::kit::interaction as controls;
 use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
@@ -64,21 +65,15 @@ fn text(
         .child(input.clone())
 }
 
-const DIALOG_WIDTH_PX: f32 = 720.0;
-const DIALOG_HEIGHT_PX: f32 = 420.0;
-const DIALOG_MAX_WIDTH_PX: f32 = 1200.0;
-const DIALOG_MAX_HEIGHT_PX: f32 = 860.0;
-const DIALOG_WIDTH_FRACTION: f32 = 0.6;
-const DIALOG_HEIGHT_FRACTION: f32 = 0.6;
-const DIALOG_MARGIN_PX: f32 = 16.0;
+const DIALOG_SIZE: DialogSize = DialogSize {
+    width_px: 720.0,
+    height_px: 420.0,
+    max_width_px: 1200.0,
+    max_height_px: 860.0,
+    width_fraction: 0.6,
+    height_fraction: 0.6,
+};
 const RAIL_WIDTH_PX: f32 = 240.0;
-
-fn extent(available: Pixels, preferred: Pixels, max: Pixels, fraction: f32) -> Pixels {
-    (available * fraction)
-        .max(preferred)
-        .min(max)
-        .min(available)
-}
 
 fn repo_name(this: &PopoverHost, repo_id: Option<RepoId>) -> Option<SharedString> {
     let repo_id = repo_id?;
@@ -87,18 +82,6 @@ fn repo_name(this: &PopoverHost, repo_id: Option<RepoId>) -> Option<SharedString
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| crate::view::path_display::repo_path_name(&repo.spec.workdir))
-}
-
-fn time_label(this: &PopoverHost, notice: &ErrorNotice) -> String {
-    let mut label = String::with_capacity(24);
-    format_datetime_into(
-        &mut label,
-        notice.time,
-        this.date_time_format,
-        this.timezone,
-        this.show_timezone,
-    );
-    label
 }
 
 /// The errors the toast host holds, newest first.
@@ -132,7 +115,7 @@ fn rail(
         .map(|(id, notice)| {
             let id = *id;
             let selected = this.error_details_selected == Some(id);
-            let time = time_label(this, notice);
+            let time = timestamp_label(this, notice.time);
             let meta = if notice.count > 1 {
                 format!("{time} · ×{}", notice.count)
             } else {
@@ -253,7 +236,7 @@ fn detail(
     if let Some(name) = repo_name(this, notice.repo_id) {
         meta.push(name.to_string());
     }
-    meta.push(time_label(this, notice));
+    meta.push(timestamp_label(this, notice.time));
     if notice.count > 1 {
         meta.push(format!("happened {} times", notice.count));
     }
@@ -514,22 +497,8 @@ pub(super) fn panel(
         select(this, *first, cx);
     }
 
-    let ui_scale = popover_ui_scale(cx);
-    let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
-    let margin = scaled_px(DIALOG_MARGIN_PX);
-    let width = extent(
-        (window_size.width - margin * 2.0).max(px(0.0)),
-        scaled_px(DIALOG_WIDTH_PX),
-        scaled_px(DIALOG_MAX_WIDTH_PX),
-        DIALOG_WIDTH_FRACTION,
-    );
-    let height = extent(
-        (window_size.height - margin * 2.0).max(px(0.0)),
-        scaled_px(DIALOG_HEIGHT_PX),
-        scaled_px(DIALOG_MAX_HEIGHT_PX),
-        DIALOG_HEIGHT_FRACTION,
-    );
+    let scaled_px = crate::ui_scale::scaler(popover_ui_scale(cx));
+    let (width, height) = DIALOG_SIZE.resolve(window, cx);
 
     let selected = this
         .error_details_selected
@@ -633,22 +602,4 @@ pub(super) fn panel(
         .child(body);
     this.error_details_text.fields.retain(|_, (_, seen)| *seen);
     panel
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_dialog_grows_with_the_window_between_its_floor_and_cap() {
-        let extent = |available: f32| extent(px(available), px(720.0), px(1200.0), 0.6);
-        assert_eq!(extent(500.0), px(500.0), "never wider than the window");
-        assert_eq!(extent(1000.0), px(720.0), "keeps its floor while it fits");
-        assert_eq!(
-            extent(1800.0),
-            px(1080.0),
-            "takes its share of a big window"
-        );
-        assert_eq!(extent(4000.0), px(1200.0), "and stops at the cap");
-    }
 }

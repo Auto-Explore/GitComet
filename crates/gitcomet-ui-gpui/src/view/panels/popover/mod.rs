@@ -25,6 +25,7 @@ mod create_tag_prompt;
 mod delete_branches_confirm;
 mod delete_permanently_confirm;
 mod delete_remote_branch_confirm;
+mod dialog_size;
 mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;

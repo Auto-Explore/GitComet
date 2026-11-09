@@ -1,3 +1,4 @@
+use super::dialog_size::{DialogSize, timestamp_label};
 use super::*;
 use crate::kit::interaction as controls;
 use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
@@ -127,19 +128,6 @@ fn select_run(
     cx.notify();
 }
 
-/// One side of the dialog.
-fn hook_activity_dialog_extent(
-    available: Pixels,
-    preferred: Pixels,
-    max: Pixels,
-    fraction: f32,
-) -> Pixels {
-    (available * fraction)
-        .max(preferred)
-        .min(max)
-        .min(available)
-}
-
 /// A hook run is a two-line list row; the per-hook lines under it are
 /// ordinary rows.
 const HOOK_ACTIVITY_RUN_ROW_HEIGHT_PX: f32 = 48.0;
@@ -151,13 +139,14 @@ const HOOK_ACTIVITY_COMMAND_MAX_HEIGHT_PX: f32 = 104.0;
 /// Smallest the dialog opens at, and the share of the window it takes when
 /// there is more room than that. Hook output is wide and long, so give it the
 /// space rather than scrolling a fixed box, but stop short of the whole window.
-const DIALOG_WIDTH_PX: f32 = 900.0;
-const DIALOG_HEIGHT_PX: f32 = 680.0;
-const DIALOG_MAX_WIDTH_PX: f32 = 1600.0;
-const DIALOG_MAX_HEIGHT_PX: f32 = 1100.0;
-const DIALOG_WIDTH_FRACTION: f32 = 0.72;
-const DIALOG_HEIGHT_FRACTION: f32 = 0.8;
-const DIALOG_MARGIN_PX: f32 = 16.0;
+const DIALOG_SIZE: DialogSize = DialogSize {
+    width_px: 900.0,
+    height_px: 680.0,
+    max_width_px: 1600.0,
+    max_height_px: 1100.0,
+    width_fraction: 0.72,
+    height_fraction: 0.8,
+};
 const HISTORY_RAIL_WIDTH_PX: f32 = 220.0;
 
 fn status_label(status: GitHookOperationStatus) -> &'static str {
@@ -215,18 +204,6 @@ fn hook_status_label(hook: &gitcomet_state::model::GitHookRun) -> String {
     }
 }
 
-fn operation_timestamp_label(this: &PopoverHost, operation: &GitHookOperation) -> String {
-    let mut timestamp = String::with_capacity(24);
-    format_datetime_into(
-        &mut timestamp,
-        operation.time,
-        this.date_time_format,
-        this.timezone,
-        this.show_timezone,
-    );
-    timestamp
-}
-
 fn history_row(
     this: &mut PopoverHost,
     operation: &GitHookOperation,
@@ -244,7 +221,7 @@ fn history_row(
     } else {
         format!("{} · {duration}", status_label(operation.status))
     };
-    let timestamp = operation_timestamp_label(this, operation);
+    let timestamp = timestamp_label(this, operation.time);
     let selector = format!("hook_activity_run_{}", operation_id.0);
     let timestamp_selector = format!("hook_activity_run_timestamp_{}", operation_id.0);
     let press_view = cx.entity();
@@ -923,24 +900,7 @@ pub(super) fn panel(
     }
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
-    let margin = scaled_px(DIALOG_MARGIN_PX);
-    let available = gpui::size(
-        (window_size.width - margin * 2.0).max(px(0.0)),
-        (window_size.height - margin * 2.0).max(px(0.0)),
-    );
-    let width = hook_activity_dialog_extent(
-        available.width,
-        scaled_px(DIALOG_WIDTH_PX),
-        scaled_px(DIALOG_MAX_WIDTH_PX),
-        DIALOG_WIDTH_FRACTION,
-    );
-    let height = hook_activity_dialog_extent(
-        available.height,
-        scaled_px(DIALOG_HEIGHT_PX),
-        scaled_px(DIALOG_MAX_HEIGHT_PX),
-        DIALOG_HEIGHT_FRACTION,
-    );
+    let (width, height) = DIALOG_SIZE.resolve(window, cx);
     let rail_width = scaled_px(HISTORY_RAIL_WIDTH_PX).min(width * 0.34);
 
     let (repository_name, repository_path, operations) = this
@@ -1174,25 +1134,4 @@ pub(super) fn panel(
         .run_clicks
         .retain(|id, _| operations.iter().any(|operation| operation.id == *id));
     panel
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_dialog_grows_with_the_window_between_its_floor_and_cap() {
-        let extent = |available: f32| {
-            hook_activity_dialog_extent(px(available), px(900.0), px(1600.0), 0.72)
-        };
-
-        assert_eq!(extent(600.0), px(600.0), "never wider than the window");
-        assert_eq!(extent(1000.0), px(900.0), "keeps its floor while it fits");
-        assert_eq!(
-            extent(2000.0),
-            px(1440.0),
-            "takes its share of a big window"
-        );
-        assert_eq!(extent(4000.0), px(1600.0), "and stops at the cap");
-    }
 }
