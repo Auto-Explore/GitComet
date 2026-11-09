@@ -222,15 +222,14 @@ fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
             format!("refs/heads/{}", target.branch)
         );
         assert_eq!(
-            git_stdout_raw(
+            git_stdout(
                 &repo,
                 &[
                     "for-each-ref",
                     "--format=%(upstream:short)|%(upstream:track)|%(upstream:remotename)|%(upstream:remoteref)",
                     "refs/heads/feature",
                 ],
-            )
-            .trim(),
+            ),
             format!(
                 "team/alice/main||{}|refs/heads/{}",
                 target.remote, target.branch
@@ -286,15 +285,14 @@ fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
         "review-local"
     );
     assert_eq!(
-        git_stdout_raw(
+        git_stdout(
             &repo,
             &[
                 "for-each-ref",
                 "--format=%(upstream:remotename)|%(upstream:remoteref)",
                 "refs/heads/review-local",
             ],
-        )
-        .trim(),
+        ),
         "origin|refs/heads/main"
     );
 }
@@ -735,7 +733,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .expect("pending upstream survives a pruning fetch before its first push");
 
     assert!(
-        git_stdout_raw(
+        git_stdout(
             &work_repo,
             &[
                 "ls-remote",
@@ -744,7 +742,6 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
                 "refs/heads/review/feature"
             ],
         )
-        .trim()
         .is_empty(),
         "setting upstream must not push or create the remote ref"
     );
@@ -757,11 +754,10 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         "refs/heads/review/feature"
     );
     assert_eq!(
-        git_stdout_raw(
+        git_stdout(
             &work_repo,
             &["config", "--get", "branch.feature.gitcometPendingUpstream"],
-        )
-        .trim(),
+        ),
         "true"
     );
 
@@ -779,7 +775,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .push_with_output()
         .expect("later push uses the configured target");
     assert!(
-        !git_stdout_raw(
+        !git_stdout(
             &work_repo,
             &[
                 "ls-remote",
@@ -788,16 +784,14 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
                 "refs/heads/review/feature"
             ],
         )
-        .trim()
         .is_empty(),
         "the next normal push must create the configured remote branch"
     );
     assert!(
-        git_stdout_raw(
+        git_stdout(
             &work_repo,
             &["ls-remote", "--heads", "origin", "refs/heads/feature"],
         )
-        .trim()
         .is_empty(),
         "the push must not silently fall back to the local branch name"
     );
@@ -1262,15 +1256,14 @@ fn list_branches_uses_first_merge_entry() {
             );
         }
         assert_eq!(
-            git_stdout_raw(
+            git_stdout(
                 repo,
                 &[
                     "for-each-ref",
                     "--format=%(upstream:short) %(upstream:track)",
                     "refs/heads/main"
                 ]
-            )
-            .trim(),
+            ),
             "origin/old [ahead 1]"
         );
         let opened = GixBackend.open(repo).unwrap();

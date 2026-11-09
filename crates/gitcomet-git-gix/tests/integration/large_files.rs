@@ -243,7 +243,7 @@ fn plain_pointer_text_diff_regression() {
     run_git(repo, &["commit", "-qm", "pointer example"]);
     let opened = GixBackend.open(repo).unwrap();
     let target = DiffTarget::commit(
-        CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into()),
+        CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into()),
         "example.png".into(),
     );
     let text = opened
@@ -843,9 +843,7 @@ fn commit_file_rows_carry_large_file_state() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     init_lfs_repo(&repo);
-    let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
 
     let opened = GixBackend.open(&repo).unwrap();
     let details = opened
@@ -1145,9 +1143,7 @@ fn seed_lfs_history(root: &Path) -> (PathBuf, String) {
     fs::write(repo.join("a.bin"), "middle version\n").unwrap();
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "middle"]);
-    let middle = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let middle = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
     fs::write(repo.join("a.bin"), "current version\n").unwrap();
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "current"]);
@@ -1425,7 +1421,7 @@ fn lfs_missing_images_do_not_send_pointer_text_to_the_decoder() {
     run_git(repo, &["commit", "-qm", "image"]);
     fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
     let target = DiffTarget::commit(
-        gitcomet_core::domain::CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into()),
+        gitcomet_core::domain::CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into()),
         "pic.png".into(),
     );
     let opened = GixBackend.open(repo).unwrap();
@@ -1450,14 +1446,8 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (repo, _) = clone_lfs_history(dir.path());
-    let root = gitcomet_core::domain::CommitId(
-        git_stdout_raw(&repo, &["rev-parse", "HEAD~2"])
-            .trim()
-            .into(),
-    );
-    let head = gitcomet_core::domain::CommitId(
-        git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into(),
-    );
+    let root = gitcomet_core::domain::CommitId(git_stdout(&repo, &["rev-parse", "HEAD~2"]).into());
+    let head = gitcomet_core::domain::CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
     let before = fs::read(repo.join("a.bin")).unwrap();
     let opened = GixBackend.open(&repo).unwrap();
     let root_target = DiffTarget::commit(root.clone(), "a.bin".into());
@@ -2007,9 +1997,7 @@ fn commit_rows_look_for_pointers_only_where_lfs_or_annex_is_used() {
     run_git(&repo, &["add", "a.bin"]);
     run_git(&repo, &["commit", "-qm", "pointer-shaped text"]);
     let row = |repo: &Path| {
-        let head = git_stdout_raw(repo, &["rev-parse", "HEAD"])
-            .trim()
-            .to_string();
+        let head = git_stdout(repo, &["rev-parse", "HEAD"]).to_string();
         let details = GixBackend
             .open(repo)
             .unwrap()
@@ -2052,9 +2040,7 @@ fn timing_commit_details_of_a_large_plain_commit() {
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-qm", "large"]);
     run_git(&repo, &["gc", "-q"]);
-    let head = gitcomet_core::domain::CommitId(
-        git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into(),
-    );
+    let head = gitcomet_core::domain::CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
     let opened = GixBackend.open(&repo).unwrap();
     let mut samples = Vec::new();
     for _ in 0..5 {
@@ -2389,8 +2375,8 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
     fs::write(repo.join("a.bin"), "new content\n").unwrap();
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-qm", "new content and image"]);
-    let head = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into());
-    let parent = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD^"]).trim().into());
+    let head = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
+    let parent = CommitId(git_stdout(&repo, &["rev-parse", "HEAD^"]).into());
     let opened = GixBackend.open(&repo).unwrap();
     let text_target = DiffTarget::commit(head.clone(), "a.bin".into());
     let image_target = DiffTarget::commit(head.clone(), "pic.png".into());
@@ -2503,13 +2489,13 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
     let repo = dir.path();
     init_repo(repo);
     run_git(repo, &["commit", "--allow-empty", "-qm", "empty"]);
-    let parent = CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into());
+    let parent = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
     fs::create_dir(repo.join("nested")).unwrap();
     fs::write(repo.join("nested/.gitattributes"), "*.bin filter=lfs\n").unwrap();
     fs::write(repo.join("nested/a.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:1111111111111111111111111111111111111111111111111111111111111111\nsize 12\n").unwrap();
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-qm", "nested LFS pointer"]);
-    let head = CommitId(git_stdout_raw(repo, &["rev-parse", "HEAD"]).trim().into());
+    let head = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
     let opened = GixBackend.open(repo).unwrap();
     assert!(!repo.join(".git/lfs").exists());
     for rows in [
@@ -2779,9 +2765,7 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
         rows.unstaged.as_ref(),
         &[row("raw.bin", FileStatusKind::Modified)]
     );
-    let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
     let details = opened
         .commit_details(&gitcomet_core::domain::CommitId(head.into()))
         .unwrap();

@@ -31,9 +31,7 @@ fn export_patch_and_apply_patch_round_trip() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "add line"],
     );
 
-    let head = git_stdout_raw(repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let head = git_stdout(repo, &["rev-parse", "HEAD"]).to_string();
     let patch_path = dir.path().join("change.patch");
 
     let backend = GixBackend;
@@ -65,9 +63,7 @@ fn export_patch_and_apply_patch_round_trip() {
         "one\ntwo\n"
     );
 
-    let subject = git_stdout_raw(repo, &["log", "-1", "--pretty=%s"])
-        .trim()
-        .to_string();
+    let subject = git_stdout(repo, &["log", "-1", "--pretty=%s"]).to_string();
     assert_eq!(subject, "add line");
 }
 

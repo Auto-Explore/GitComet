@@ -213,9 +213,7 @@ fn copy_drop_get_and_refused_drop() {
     )
     .unwrap();
     assert!(
-        git_stdout_raw(&repo, &["annex", "find", "--format=${key}", "big.bin"])
-            .trim()
-            .is_empty(),
+        git_stdout(&repo, &["annex", "find", "--format=${key}", "big.bin"]).is_empty(),
         "dropped content is absent from the local store"
     );
     let files = open(&repo)
@@ -312,9 +310,7 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
         &["-c", "annex.largefiles=anything", "add", "notes.txt"],
     );
     run_git(&repo, &["commit", "-qm", "edit notes"]);
-    let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]).to_string();
 
     let diff = open(&repo)
         .diff_file_text(
@@ -406,9 +402,7 @@ fn hide_missing_adjusted_branch_hides_files_without_content() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let base = git_stdout_raw(&repo, &["branch", "--show-current"])
-        .trim()
-        .to_string();
+    let base = git_stdout(&repo, &["branch", "--show-current"]).to_string();
     fs::write(repo.join("kept.bin"), vec![5u8; 1024]).unwrap();
     run_git(&repo, &["annex", "add", "-q", "kept.bin"]);
     run_git(&repo, &["commit", "-qm", "add kept.bin"]);
@@ -675,11 +669,7 @@ fn get_by_key_restores_a_dropped_historical_version() {
         },
     )
     .unwrap();
-    assert!(
-        git_stdout_raw(&repo, &["annex", "find", "--format=${key}", "big.bin"])
-            .trim()
-            .is_empty()
-    );
+    assert!(git_stdout(&repo, &["annex", "find", "--format=${key}", "big.bin"]).is_empty());
     run(
         &repo,
         LargeFileCommand::AnnexGetKeys {
@@ -708,9 +698,7 @@ fn get_multiple_keys_attempts_later_keys_after_failure_regression() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let key = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"])
-        .trim()
-        .to_string();
+    let key = git_stdout(&repo, &["annex", "lookupkey", "big.bin"]).to_string();
     run_git(&repo, &["annex", "copy", "-q", "--to=backup", "big.bin"]);
     run_git(&repo, &["annex", "drop", "-q", "big.bin"]);
     let missing = format!("SHA256E-s1--{}.bin", "0".repeat(64));
@@ -743,7 +731,7 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
     run_git(&repo, &["commit", "-qm", "move directory"]);
     assert!(!repo.join("moved/sub/pic.png").is_file());
     let opened = open(&repo);
-    let head = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into());
+    let head = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
     let target = DiffTarget::commit(head.clone(), "moved/sub/pic.png".into());
     let rows = opened.commit_details(&head).unwrap().files;
     let state = rows
@@ -1021,12 +1009,8 @@ fn special_remote_types_come_from_the_annex_branch() {
     assert!(fresh.annex.has_annex_branch);
     assert!(!fresh.annex.initialized());
     assert!(!fresh.annex.has_annex_dir);
-    let head = CommitId(git_stdout_raw(&clone, &["rev-parse", "HEAD"]).trim().into());
-    let parent = CommitId(
-        git_stdout_raw(&clone, &["rev-parse", "HEAD^"])
-            .trim()
-            .into(),
-    );
+    let head = CommitId(git_stdout(&clone, &["rev-parse", "HEAD"]).into());
+    let parent = CommitId(git_stdout(&clone, &["rev-parse", "HEAD^"]).into());
     for rows in [
         opened.commit_details(&head).unwrap().files,
         opened
@@ -1926,9 +1910,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
     for name in ["a:b.txt", "percent%.txt"] {
         fs::write(repo.join(name), "escaped content\n").unwrap();
         run_git(&repo, &["annex", "add", "--backend=WORM", name]);
-        let raw = git_stdout_raw(&repo, &["annex", "lookupkey", name])
-            .trim()
-            .to_string();
+        let raw = git_stdout(&repo, &["annex", "lookupkey", name]).to_string();
         let link = fs::read_link(repo.join(name)).unwrap();
         assert_eq!(
             annex::key_from_symlink_target(link.to_str().unwrap().as_bytes())
@@ -1954,7 +1936,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
         );
         run_git(&repo, &["commit", "-qm", "escaped key"]);
         let target = DiffTarget::commit(
-            CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into()),
+            CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into()),
             name.into(),
         );
         let diff = opened

@@ -7,9 +7,7 @@ fn bare_annex_all_versions_commands_transfer_content_without_checkout() {
     let dir = tempfile::tempdir().unwrap();
     let source = init_annex_repo(dir.path());
     let bare = dir.path().join("bare");
-    let key = git_stdout_raw(&source, &["annex", "lookupkey", "big.bin"])
-        .trim()
-        .to_string();
+    let key = git_stdout(&source, &["annex", "lookupkey", "big.bin"]).to_string();
     run_git(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
     run_git(&bare, &["config", "user.name", "Test"]);
     run_git(&bare, &["config", "user.email", "test@example.com"]);
