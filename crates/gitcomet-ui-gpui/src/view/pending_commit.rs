@@ -139,7 +139,7 @@ mod tests {
             challenge: None,
             status: AuthPromptStatus::AwaitingInput,
             kind: AuthPromptKind::Passphrase,
-            reason: "auth required".into(),
+            output: Some("auth required".into()),
             operation: AuthRetryOperation::Commit {
                 repo_id: RepoId(1),
                 request: gitcomet_state::model::CommitRequest {

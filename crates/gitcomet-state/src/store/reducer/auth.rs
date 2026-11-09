@@ -76,32 +76,31 @@ fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option
             Some(AuthOutcome::NeedsInput(challenge)) => {
                 (Some(challenge.clone()), AuthPromptStatus::AwaitingInput)
             }
-            Some(AuthOutcome::Rejected(challenge)) => {
-                (Some(challenge.clone()), AuthPromptStatus::Rejected)
-            }
+            Some(AuthOutcome::Rejected(challenge)) => (
+                Some(challenge.clone()),
+                AuthPromptStatus::Rejected {
+                    message: rejected_auth_message(kind, Some(challenge)).to_string(),
+                },
+            ),
             _ => (None, AuthPromptStatus::AwaitingInput),
         },
         _ => (None, AuthPromptStatus::AwaitingInput),
     };
-    let reason = if status == AuthPromptStatus::Rejected {
-        rejected_auth_reason(kind, challenge.as_ref()).to_string()
-    } else {
-        challenge.as_ref().map_or_else(
-            || util::format_error_for_user(error),
-            |challenge| challenge.prompt.clone(),
-        )
-    };
+    // A first prompt's output only says git could not ask; its challenge is
+    // the better explanation. A rejection's output says why the remote refused.
+    let rejected = matches!(status, AuthPromptStatus::Rejected { .. });
+    let output = (rejected || challenge.is_none()).then(|| util::format_error_for_user(error));
     Some(AuthPromptState {
         generation: 0,
         challenge,
         status,
         kind,
-        reason,
+        output,
         operation,
     })
 }
 
-fn rejected_auth_reason(kind: AuthPromptKind, challenge: Option<&AuthChallenge>) -> &'static str {
+fn rejected_auth_message(kind: AuthPromptKind, challenge: Option<&AuthChallenge>) -> &'static str {
     match kind {
         AuthPromptKind::Passphrase if challenge.is_some_and(AuthChallenge::is_pin) => {
             "The security key PIN was not accepted. Try again."
@@ -612,8 +611,9 @@ pub(super) fn submit_auth_prompt(
     let mut auth = match prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
         Ok(auth) => auth,
         Err(err) => {
-            prompt.status = AuthPromptStatus::Rejected;
-            prompt.reason = util::format_error_for_user(&err);
+            prompt.status = AuthPromptStatus::Rejected {
+                message: util::format_error_for_user(&err),
+            };
             install_auth_prompt(state, prompt);
             return Vec::new();
         }
@@ -662,8 +662,9 @@ pub(super) fn auth_prompt_validated(
         .take()
         .expect("validated authentication prompt");
     if result == PassphraseValidation::Rejected {
-        prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = rejected_auth_reason(prompt.kind, prompt.challenge.as_ref()).to_string();
+        prompt.status = AuthPromptStatus::Rejected {
+            message: rejected_auth_message(prompt.kind, prompt.challenge.as_ref()).to_string(),
+        };
         install_auth_prompt(state, prompt);
         return Vec::new();
     }

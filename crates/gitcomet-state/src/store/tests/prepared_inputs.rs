@@ -760,7 +760,7 @@ fn auth_worktree_retry_prepares_the_path_only_when_git_is_available() {
             challenge: None,
             status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: AuthPromptKind::Passphrase,
-            reason: "test signing prompt".into(),
+            output: Some("test signing prompt".into()),
             operation: AuthRetryOperation::RepoCommand {
                 repo_id: RepoId(1),
                 command: RepoCommandKind::RemoveWorktree {

@@ -225,9 +225,13 @@ fn rejected_validation_stays_inline_without_replaying_or_logging_a_failure() {
     );
     assert!(effects.is_empty());
     let prompt = state.auth_prompt.as_ref().unwrap();
-    assert_eq!(prompt.status, AuthPromptStatus::Rejected);
     assert_ne!(prompt.generation, generation);
-    assert!(prompt.reason.contains("could not unlock"));
+    assert!(
+        matches!(&prompt.status, AuthPromptStatus::Rejected { message } if message.contains("could not unlock"))
+    );
+    // A first prompt's "Permission denied" output stays out of the pane
+    // when the key was rejected locally.
+    assert_eq!(prompt.output, None);
     let rejected_prompt = prompt.clone();
     let effects = reduce(
         &mut repos,
@@ -273,7 +277,7 @@ fn rejected_validation_stays_inline_without_replaying_or_logging_a_failure() {
     assert!(effects.is_empty());
     let prompt = state.auth_prompt.as_ref().unwrap();
     assert_eq!(prompt.status, rejected_prompt.status);
-    assert_eq!(prompt.reason, rejected_prompt.reason);
+    assert_eq!(prompt.output, rejected_prompt.output);
     assert_eq!(prompt.challenge, rejected_prompt.challenge);
     assert_ne!(prompt.generation, rejected_prompt.generation);
     assert_eq!(state.repos[0].feedback.command_log.len(), 1);
@@ -442,10 +446,12 @@ fn username_password_retries_keep_rejections_inline_and_later_git_failures_termi
             );
             assert_auth_attempt_is_recoverable(&state);
             let rejected = state.auth_prompt.as_ref().unwrap();
-            assert_eq!(rejected.status, AuthPromptStatus::Rejected);
             assert_ne!(rejected.generation, prompt.generation);
             assert_eq!(rejected.challenge.as_ref(), Some(&challenge));
-            assert!(rejected.reason.contains("credentials were rejected"));
+            assert!(matches!(
+                &rejected.status,
+                AuthPromptStatus::Rejected { message } if message.contains("credentials were rejected")
+            ));
             assert_eq!(state.repos[0].feedback.command_log.len(), 2);
         }
     }
@@ -494,7 +500,11 @@ fn structured_rejected_credentials_and_new_key_challenges_preserve_their_identit
     );
     let first = state.auth_prompt.clone().unwrap();
     assert_eq!(first.kind, AuthPromptKind::UsernamePassword);
-    assert_eq!(first.status, AuthPromptStatus::Rejected);
+    assert!(matches!(first.status, AuthPromptStatus::Rejected { .. }));
+    assert_eq!(
+        first.output.as_deref(),
+        Some("git pull --prune failed: HTTP 401")
+    );
     assert_eq!(first.challenge, Some(challenge));
     assert_auth_attempt_is_recoverable(&state);
     let second = key_challenge(Some(PathBuf::from("/tmp/other-key")));
@@ -559,9 +569,47 @@ fn security_key_pin_is_replayed_directly_and_its_rejection_says_pin() {
         ),
     );
     let prompt = state.auth_prompt.as_ref().expect("PIN retry prompt");
-    assert_eq!(prompt.status, AuthPromptStatus::Rejected);
     assert_eq!(
-        prompt.reason,
-        "The security key PIN was not accepted. Try again."
+        prompt.status,
+        AuthPromptStatus::Rejected {
+            message: "The security key PIN was not accepted. Try again.".into()
+        }
+    );
+    assert_eq!(
+        prompt.output.as_deref(),
+        Some("git pull --prune failed: git@github.com: Permission denied (publickey).")
+    );
+}
+
+#[test]
+fn rejected_credentials_keep_what_git_printed() {
+    let _lock = super::super::staged_auth_test_lock();
+    let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
+    let challenge = AuthChallenge::from_prompt(
+        GitAuthKind::UsernamePassword,
+        "Password for 'https://example.com':",
+    );
+    finish_pull(
+        &mut repos,
+        &mut state,
+        outcome_error(
+            AuthOutcome::Rejected(challenge),
+            GitFailureId::CommandFailed,
+            "remote: Password authentication is not supported. Use a token.\n\
+             fatal: Authentication failed for 'https://example.com/repo.git/'",
+        ),
+    );
+    let prompt = state.auth_prompt.as_ref().expect("credential retry prompt");
+    assert_eq!(
+        prompt.status,
+        AuthPromptStatus::Rejected {
+            message: "The credentials were rejected. Enter them again.".into()
+        }
+    );
+    assert!(
+        prompt.output.as_deref().is_some_and(|output| output
+            .contains("remote: Password authentication is not supported. Use a token.")),
+        "the rejection must keep the remote's explanation: {:?}",
+        prompt.output
     );
 }
