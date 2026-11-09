@@ -5580,3 +5580,101 @@ fn a_successful_empty_list_clears_the_focus_it_governs() {
         "an empty remote-branch list retires the focused remote branch"
     );
 }
+
+/// Selects `selected` over a log of `log` (each `(id, parent)`, newest first),
+/// then reloads it as `reloaded`; returns the comparison left.
+fn reload_selection(
+    log: &[(&str, &str)],
+    selected: &[&str],
+    reloaded: &[(&str, &str)],
+) -> Option<crate::model::RangeSelection> {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let page = |commits: &[(&str, &str)]| {
+        std::sync::Arc::new(LogPage {
+            commits: commits
+                .iter()
+                .map(|(id, parent)| Commit {
+                    id: CommitId((*id).into()),
+                    parent_ids: [CommitId((*parent).into())].into_iter().collect(),
+                    summary: "s".into(),
+                    author: "a".into(),
+                    time: SystemTime::UNIX_EPOCH,
+                })
+                .collect(),
+            next_cursor: None,
+        })
+    };
+    state.repos[0].history_state.history_scope = LogScope::CurrentBranch;
+    state.repos[0].history_state.log = Loadable::Ready(page(log));
+    for (ix, id) in selected.iter().enumerate() {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SelectCommitMulti {
+                request_id: None,
+                repo_id: RepoId(1),
+                commit_id: CommitId((*id).into()),
+                mode: if ix == 0 {
+                    crate::msg::CommitSelectMode::Single
+                } else {
+                    crate::msg::CommitSelectMode::Toggle
+                },
+                clicked_index: None,
+                visible_order: None,
+            },
+        );
+    }
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(page(reloaded).into()),
+        }),
+    );
+    state.repos[0].history_state.range_selection.clone()
+}
+
+#[test]
+fn a_reload_that_shortens_a_chain_keeps_the_survivors_merged_diff() {
+    let range = reload_selection(
+        &[("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+        &["c3", "c2", "c1"],
+        &[("c3x", "c2"), ("c2", "c1"), ("c1", "c0")],
+    )
+    .expect("the surviving chain keeps a comparison");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("c2".into())));
+    assert_eq!(
+        range.source,
+        crate::model::ComparisonSource::MergedSelection
+    );
+}
+
+#[test]
+fn a_reload_that_leaves_two_commits_of_a_gap_compares_them() {
+    let range = reload_selection(
+        &[("c4", "c3"), ("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+        &["c4", "c3", "c1"],
+        &[("c4x", "c3"), ("c3", "c2"), ("c2", "c1"), ("c1", "c0")],
+    )
+    .expect("the surviving pair compares");
+    assert_eq!(range.from, CommitId("c1".into()));
+    assert_eq!(range.to, Some(CommitId("c3".into())));
+    assert_eq!(range.source, crate::model::ComparisonSource::SelectedPair);
+}

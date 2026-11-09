@@ -414,45 +414,18 @@ pub(super) fn select_commit_multi(
     let comparison = {
         let selected = &repo_state.history_state.multi_selection.commits;
         (selected.len() >= 2)
-            .then(|| selection_comparison(repo_state, selected))
+            .then(|| selection_comparison(repo_state, None, selected))
             .flatten()
     };
 
     let mut effects = match comparison {
-        Some(SelectionComparison { from, to, source }) => {
+        Some(comparison) => {
             // Keep the focused commit selected (selection-derived UI stays
             // coherent) but don't load its details — the comparison view takes
             // over the details pane, so a single-commit detail load is wasted.
             // Leaving comparison mode is what reconciles the details pane again.
             repo_state.set_selected_commit(Some(focus));
-            let next = RangeSelection {
-                source,
-                ..RangeSelection::new(
-                    from.clone(),
-                    Some(to.clone()),
-                    range_endpoint_label(&from),
-                    range_endpoint_label(&to),
-                )
-            };
-            // A right-click keeps the selection; its loaded comparison stays.
-            if repo_state
-                .history_state
-                .range_selection
-                .as_ref()
-                .is_some_and(|range| range.same_comparison(&next) && range.source == source)
-            {
-                Vec::new()
-            } else {
-                compare_range(
-                    state,
-                    repo_id,
-                    next.from,
-                    next.to,
-                    next.from_label,
-                    next.to_label,
-                    source,
-                )
-            }
+            enter_selection_comparison(state, repo_id, comparison)
         }
         None => {
             let left_comparison = repo_state.clear_range_comparison();
@@ -480,6 +453,142 @@ pub(super) fn select_commit_multi(
         }
     }
     effects
+}
+
+/// Open `comparison` for the multi-selection, unless it is already open: a
+/// right-click keeps the selection, and its loaded comparison stays.
+fn enter_selection_comparison(
+    state: &mut AppState,
+    repo_id: RepoId,
+    SelectionComparison { from, to, source }: SelectionComparison,
+) -> Vec<Effect> {
+    let next = RangeSelection {
+        source,
+        ..RangeSelection::new(
+            from.clone(),
+            Some(to.clone()),
+            range_endpoint_label(&from),
+            range_endpoint_label(&to),
+        )
+    };
+    let open = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.history_state.range_selection.as_ref())
+        .is_some_and(|range| range.same_comparison(&next) && range.source == source);
+    if open {
+        return Vec::new();
+    }
+    compare_range(
+        state,
+        repo_id,
+        next.from,
+        next.to,
+        next.from_label,
+        next.to_label,
+        source,
+    )
+}
+
+/// The multi-selection without the commits a reloaded log no longer lists.
+pub(super) struct PrunedSelection {
+    selection: CommitMultiSelection,
+    dropped: bool,
+    focus_gone: bool,
+}
+
+/// Drops the selected commits `listed` rejects. A reveal's target is exempt:
+/// it is selected ahead of the page that will contain it. So is an owned
+/// reword's target until its continuation settles.
+pub(super) fn prune_multi_selection(
+    repo: &RepoState,
+    listed: impl Fn(&CommitId) -> bool,
+) -> PrunedSelection {
+    let reveal = repo.history_state.reveal_target.as_ref();
+    let reword = repo
+        .history_state
+        .selected_commit
+        .as_ref()
+        .filter(|id| repo.reword.retains_selected_commit(id));
+    let survives = |id: &CommitId| reveal == Some(id) || reword == Some(id) || listed(id);
+    let mut selection = repo.history_state.multi_selection.clone();
+    let dropped = selection.commits.iter().any(|id| !survives(id));
+    if dropped {
+        Arc::make_mut(&mut selection.commits).retain(|id| survives(id));
+    }
+    if selection.anchor.as_ref().is_some_and(|id| !survives(id)) {
+        selection.anchor = None;
+    }
+    // Row indices may have shifted.
+    selection.anchor_index = None;
+    selection.anchor_log_rev = None;
+    PrunedSelection {
+        selection,
+        dropped,
+        focus_gone: repo
+            .history_state
+            .selected_commit
+            .as_ref()
+            .is_some_and(|id| !survives(id)),
+    }
+}
+
+/// Applies `pruned`: the focus moves to a surviving commit, and a selection
+/// comparison is re-derived from the survivors, read against `index` when the
+/// reload built a new one.
+pub(super) fn apply_pruned_selection(
+    state: &mut AppState,
+    repo_id: RepoId,
+    PrunedSelection {
+        selection,
+        dropped,
+        focus_gone,
+    }: PrunedSelection,
+    index: Option<&gitcomet_core::history_index::HistoryIndexHandle>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let refocus = focus_gone
+        .then(|| selection.commits.last().cloned())
+        .flatten();
+    let selected = Arc::clone(&selection.commits);
+    repo.set_commit_multi_selection(selection);
+    let from_selection = match repo
+        .history_state
+        .range_selection
+        .as_ref()
+        .map(|r| r.source)
+    {
+        Some(ComparisonSource::MergedSelection | ComparisonSource::SelectedPair) | None => true,
+        Some(ComparisonSource::Explicit) => false,
+    };
+    let mut left_comparison = false;
+    if dropped && from_selection {
+        if let Some(comparison) = (selected.len() >= 2)
+            .then(|| selection_comparison(repo, index, &selected))
+            .flatten()
+        {
+            if let Some(commit_id) = refocus {
+                repo.set_selected_commit(Some(commit_id));
+            }
+            return enter_selection_comparison(state, repo_id, comparison);
+        }
+        left_comparison = repo.clear_range_comparison();
+    }
+    if focus_gone {
+        let Some(commit_id) = refocus else {
+            repo.set_selected_commit(None);
+            repo.set_commit_details(Loadable::NotLoaded);
+            return Vec::new();
+        };
+        return select_commit_and_load_details(repo, repo_id, commit_id);
+    }
+    if left_comparison {
+        return reconcile_selected_commit_details(repo, repo_id);
+    }
+    Vec::new()
 }
 
 /// Emit a details load when the loaded commit details don't describe
@@ -516,9 +625,10 @@ struct SelectionComparison {
 /// `git diff a b`. `None` otherwise, or when a commit is not in the loaded log.
 fn selection_comparison(
     repo_state: &RepoState,
+    index: Option<&gitcomet_core::history_index::HistoryIndexHandle>,
     selected: &[CommitId],
 ) -> Option<SelectionComparison> {
-    let shape = selection_shape(repo_state, selected)?;
+    let shape = selection_shape(repo_state, index, selected)?;
     if shape.chain {
         return Some(SelectionComparison {
             from: shape
@@ -545,11 +655,14 @@ struct SelectionShape {
     chain: bool,
 }
 
-fn selection_shape(repo_state: &RepoState, selected: &[CommitId]) -> Option<SelectionShape> {
+fn selection_shape(
+    repo_state: &RepoState,
+    index: Option<&gitcomet_core::history_index::HistoryIndexHandle>,
+    selected: &[CommitId],
+) -> Option<SelectionShape> {
     let indexed = &repo_state.history_state.indexed;
-    if let Some(index) = indexed
-        .displayed_index
-        .as_ref()
+    if let Some(index) = index
+        .or(indexed.displayed_index.as_ref())
         .or(indexed.range_index.as_ref())
     {
         let positions: Option<Vec<usize>> = selected

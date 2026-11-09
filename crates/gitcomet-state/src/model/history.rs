@@ -801,22 +801,6 @@ impl RepoState {
         true
     }
 
-    /// Leave a comparison derived from the multi-selection, and its open file
-    /// diff, once the selection lost one of its commits. An explicit one stays.
-    pub(crate) fn clear_selection_comparison(&mut self) -> bool {
-        match self
-            .history_state
-            .range_selection
-            .as_ref()
-            .map(|range| range.source)
-        {
-            Some(ComparisonSource::MergedSelection | ComparisonSource::SelectedPair) => {
-                self.clear_range_comparison()
-            }
-            Some(ComparisonSource::Explicit) | None => false,
-        }
-    }
-
     /// Drop the comparison's file list and retire any load still in flight,
     /// keeping its endpoints so the list can be loaded again.
     pub(crate) fn release_range_files(&mut self) {
