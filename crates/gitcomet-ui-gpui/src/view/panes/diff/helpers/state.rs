@@ -504,21 +504,21 @@ pub(crate) struct DiffRenderer {
 
     // Display settings: whitespace, merge tool, diff view, blame, tabs, split.
     pub(in crate::view) reveal_whitespace_chars: bool,
-    /// section 30 merge tool: auto-advance to the next unresolved conflict after a
+    /// Merge tool: auto-advance to the next unresolved conflict after a
     /// source pick. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_auto_advance: bool,
-    /// section 30 merge tool: default for the collapse-unchanged-context mode when a
+    /// Merge tool: default for the collapse-unchanged-context mode when a
     /// conflicted file opens. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_collapse_unchanged: bool,
-    /// section 30 merge tool: sync the resolved output pane's scroll with the source
+    /// Merge tool: sync the resolved output pane's scroll with the source
     /// columns (in modes where they share a row space). Persisted UI setting
     /// (cog menu). Merge-tool-specific rather than a general diff setting
     /// because the resolver ships as a standalone tool.
     pub(in crate::view) mergetool_output_scroll_sync: bool,
-    /// section 30 merge tool: show per-column and resolved-output line number
+    /// Merge tool: show per-column and resolved-output line number
     /// gutters. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_show_line_numbers: bool,
-    /// section 30 merge tool: last-used view mode (true = 3-way). Fresh opens of
+    /// Merge tool: last-used view mode (true = 3-way). Fresh opens of
     /// base-present conflicts default to this; toolbar toggle persists it.
     pub(in crate::view) mergetool_view_three_way: bool,
     pub(in crate::view) diff_view: DiffViewMode,

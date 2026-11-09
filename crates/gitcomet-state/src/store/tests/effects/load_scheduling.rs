@@ -430,9 +430,6 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -455,7 +452,10 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -464,7 +464,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -472,15 +472,8 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("conflict.txt");
     let current = "a\n<<<<<<<\nours\n=======\ntheirs\n>>>>>>>\nb\n";
@@ -651,9 +644,6 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -676,7 +666,10 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -685,7 +678,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -693,15 +686,8 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.txt");
     let base_text = "base\n";
@@ -898,9 +884,6 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -923,7 +906,10 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -932,7 +918,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -940,15 +926,8 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-binary-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.bin");
     let base_bytes = vec![0xff, 0x00, 0x01];
@@ -1157,9 +1136,6 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1182,7 +1158,10 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1191,7 +1170,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1204,15 +1183,8 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-absent-current-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("removed.txt");
     let base_text = "base\n";
@@ -1410,9 +1382,6 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1435,7 +1404,10 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn unstage(&self, _paths: &[&Path]) -> Result<()> {
             unimplemented!()
         }
-        fn commit(&self, _message: &str) -> Result<()> {
+        fn commit_with_outcome(
+            &self,
+            _message: &str,
+        ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
             unimplemented!()
         }
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1444,7 +1416,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn push(&self) -> Result<()> {
+        fn push_with_output(&self) -> Result<CommandOutput> {
             unimplemented!()
         }
         fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1468,15 +1440,8 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-trace-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_guard = tempfile::tempdir().expect("create tempdir");
+    let base = base_guard.path().to_path_buf();
 
     let rel = PathBuf::from("trace_conflict.html");
     let base_text = "<div>base</div>\n<section>common</section>\n<footer>end</footer>\n";
@@ -2216,8 +2181,8 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     }
 
     let repo_id = RepoId(500);
-    let workdir = unique_temp_path("gitcomet-effects-dispatch");
-    std::fs::create_dir_all(&workdir).expect("create workdir");
+    let workdir_guard = tempfile::tempdir().expect("create tempdir");
+    let workdir = workdir_guard.path().to_path_buf();
 
     let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
         spec: RepoSpec {
@@ -2625,20 +2590,28 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::Commit {
                 repo_id,
-                message: "msg".to_string(),
                 identity: None,
-                hooks: gitcomet_core::services::GitHooks::Run,
                 auth: None,
+                request: crate::model::CommitRequest {
+                    amend: false,
+                    message: "msg".to_string(),
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                    push_after_commit: false,
+                },
             },
             1,
         ),
         (
-            Effect::CommitAmend {
+            Effect::Commit {
                 repo_id,
-                message: "msg".to_string(),
                 identity: None,
-                hooks: gitcomet_core::services::GitHooks::Run,
                 auth: None,
+                request: crate::model::CommitRequest {
+                    amend: true,
+                    message: "msg".to_string(),
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                    push_after_commit: false,
+                },
             },
             1,
         ),

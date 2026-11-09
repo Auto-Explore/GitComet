@@ -934,12 +934,12 @@ impl GitCometView {
         &self,
         theme: AppTheme,
         id: &'static str,
-        handle: PaneResizeHandle,
+        handle: SidePane,
         cx: &gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let collapsed = match handle {
-            PaneResizeHandle::Sidebar => self.sidebar_collapsed,
-            PaneResizeHandle::Details => self.details_collapsed,
+            SidePane::Sidebar => self.sidebar_collapsed,
+            SidePane::Details => self.details_collapsed,
         };
         if collapsed {
             return div().id(id).w(px(0.0)).h_full();
@@ -948,7 +948,7 @@ impl GitCometView {
         // Only the details divider shows an idle hairline: it separates two
         // regions inside the content card. The sidebar handle sits on the
         // bare canvas and stays invisible until hovered or dragged.
-        let idle_line = matches!(handle, PaneResizeHandle::Details);
+        let idle_line = matches!(handle, SidePane::Details);
         let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
         div()
             .id(id)
@@ -972,23 +972,18 @@ impl GitCometView {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
                     crate::text_selection_owner::preserve(cx);
-                    match handle {
-                        PaneResizeHandle::Sidebar => {
-                            this.sidebar_width_anim_seq =
-                                this.sidebar_width_anim_seq.wrapping_add(1);
-                            this.sidebar_width_animating = false;
-                            this.sidebar_render_width = this.sidebar_width;
-                        }
-                        PaneResizeHandle::Details => {
-                            this.details_width_anim_seq =
-                                this.details_width_anim_seq.wrapping_add(1);
-                            this.details_width_animating = false;
-                            this.details_render_width = this.details_width;
-                        }
-                    }
+                    // A drag cancels any running collapse animation.
+                    let committed = match handle {
+                        SidePane::Sidebar => this.sidebar_width,
+                        SidePane::Details => this.details_width,
+                    };
+                    let (width, anim_seq, animating) = this.side_pane_width_anim(handle);
+                    *anim_seq = anim_seq.wrapping_add(1);
+                    *animating = false;
+                    *width = committed;
                     let minimum = match handle {
-                        PaneResizeHandle::Sidebar => this.sidebar_min_width(),
-                        PaneResizeHandle::Details => this.details_min_width(),
+                        SidePane::Sidebar => this.sidebar_min_width(),
+                        SidePane::Details => this.details_min_width(),
                     };
                     this.pane_resize = Some(
                         PaneResizeState::new(
@@ -1009,8 +1004,8 @@ impl GitCometView {
                     cx.notify();
                 }),
             )
-            .on_drag_move(cx.listener(
-                move |this, e: &gpui::DragMoveEvent<PaneResizeHandle>, _w, cx| {
+            .on_drag_move(
+                cx.listener(move |this, e: &gpui::DragMoveEvent<SidePane>, _w, cx| {
                     let Some(state) = this.pane_resize else {
                         return;
                     };
@@ -1028,7 +1023,7 @@ impl GitCometView {
                     );
                     let mut changed = false;
                     match state.handle {
-                        PaneResizeHandle::Sidebar => {
+                        SidePane::Sidebar => {
                             if this.sidebar_width != next_width {
                                 this.set_sidebar_width_from_pixels(next_width);
                                 changed = true;
@@ -1038,7 +1033,7 @@ impl GitCometView {
                                 changed = true;
                             }
                         }
-                        PaneResizeHandle::Details => {
+                        SidePane::Details => {
                             if this.details_width != next_width {
                                 this.set_details_width_from_pixels(next_width);
                                 changed = true;
@@ -1052,8 +1047,8 @@ impl GitCometView {
                     if changed {
                         cx.notify();
                     }
-                },
-            ))
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {

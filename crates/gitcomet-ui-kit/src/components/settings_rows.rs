@@ -6,7 +6,7 @@
 
 use crate::icons::svg_icon;
 use crate::interaction::{ControlInteractionExt, InteractionState, InteractionStyle};
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::{AppTheme, mix_rgba, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
@@ -20,16 +20,6 @@ const TOGGLE_KNOB_SIZE_PX: f32 = 12.0;
 const TOGGLE_KNOB_COMFORTABLE_SIZE_PX: f32 = 16.0;
 /// Width of the navigation column that lists settings pages.
 pub const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
-
-fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
-    let t = t.clamp(0.0, 1.0);
-    Rgba::new(
-        a.red + (b.red - a.red) * t,
-        a.green + (b.green - a.green) * t,
-        a.blue + (b.blue - a.blue) * t,
-        a.alpha + (b.alpha - a.alpha) * t,
-    )
-}
 
 /// One choice in a settings list: a check mark when selected, the label, and
 /// an optional one-line detail. The caller attaches activation.
@@ -115,7 +105,7 @@ pub fn settings_option_row(
 }
 
 pub fn settings_row_separator_color(theme: AppTheme) -> Rgba {
-    mix(
+    mix_rgba(
         theme.colors.surface.canvas,
         theme.colors.stroke.subtle,
         if theme.is_dark { 0.14 } else { 0.10 },
@@ -124,13 +114,13 @@ pub fn settings_row_separator_color(theme: AppTheme) -> Rgba {
 
 pub fn settings_dropdown_background(theme: AppTheme) -> Rgba {
     if theme.is_dark {
-        mix(
+        mix_rgba(
             theme.colors.surface.raised,
             theme.colors.surface.canvas,
             0.58,
         )
     } else {
-        mix(
+        mix_rgba(
             theme.colors.surface.raised,
             theme.colors.stroke.default,
             0.55,

@@ -1,43 +1,8 @@
-use crate::test_git_env;
+use crate::git_cli::{git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
-use std::path::Path;
-use std::process::Command;
-
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    // Keep tests deterministic by isolating from host git config.
-    test_git_env::apply(&mut cmd);
-    cmd
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
-fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 #[test]
 fn export_patch_and_apply_patch_round_trip() {
@@ -66,9 +31,7 @@ fn export_patch_and_apply_patch_round_trip() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "add line"],
     );
 
-    let head = run_git_capture(repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let head = git_stdout(repo, &["rev-parse", "HEAD"]);
     let patch_path = dir.path().join("change.patch");
 
     let backend = GixBackend;
@@ -100,9 +63,7 @@ fn export_patch_and_apply_patch_round_trip() {
         "one\ntwo\n"
     );
 
-    let subject = run_git_capture(repo, &["log", "-1", "--pretty=%s"])
-        .trim()
-        .to_string();
+    let subject = git_stdout(repo, &["log", "-1", "--pretty=%s"]);
     assert_eq!(subject, "add line");
 }
 
@@ -127,7 +88,7 @@ fn apply_unified_patch_to_worktree_applies_and_reverses() {
     );
 
     fs::write(&file, "base\nchanged\n").expect("write modified file");
-    let patch = run_git_capture(repo, &["diff", "--", "a.txt"]);
+    let patch = git_stdout_raw(repo, &["diff", "--", "a.txt"]);
     assert!(patch.contains("+changed"));
 
     run_git(repo, &["checkout", "--", "a.txt"]);
@@ -182,7 +143,7 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
     run_git(&repo, &["commit", "-m", "base"]);
     fs::write(repo.join("f.txt"), "b\n").expect("write");
     run_git(&repo, &["commit", "-am", "patched"]);
-    let patch = run_git_capture(&repo, &["format-patch", "-1", "--stdout"]);
+    let patch = git_stdout_raw(&repo, &["format-patch", "-1", "--stdout"]);
     let patch_path = dir.path().join("0001.patch");
     fs::write(&patch_path, patch).expect("write patch");
     run_git(&repo, &["reset", "--hard", "HEAD~1"]);
@@ -203,8 +164,5 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
 
     assert_eq!(output.command, "git am --continue");
     assert!(!repo.join(".git/rebase-apply").exists(), "am finished");
-    assert_eq!(
-        run_git_capture(&repo, &["log", "-1", "--format=%s"]).trim(),
-        "patched"
-    );
+    assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%s"]), "patched");
 }

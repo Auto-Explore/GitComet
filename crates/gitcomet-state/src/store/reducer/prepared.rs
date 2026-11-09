@@ -1151,10 +1151,7 @@ fn cancelled_selection_refresh(
         InternalMsg::CommitFinished {
             repo_id: completed,
             result,
-        }
-        | InternalMsg::CommitAmendFinished {
-            repo_id: completed,
-            result,
+            ..
         } if *completed == repo_id && (result.is_ok() || starts_log()) => AlreadyHandled,
         InternalMsg::SafePushAfterCommitFinished {
             repo_id: completed,

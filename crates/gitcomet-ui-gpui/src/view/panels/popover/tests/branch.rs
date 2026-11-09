@@ -443,10 +443,6 @@ impl GitRepository for TrackingRepo {
         )))
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn interactive_cherry_pick_with_output(
         &self,
         entries: &[gitcomet_core::services::InteractiveRebaseEntry],
@@ -497,8 +493,11 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn commit(&self, _message: &str) -> Result<()> {
-        Ok(())
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        Ok(gitcomet_core::services::CommitOperationOutcome::default())
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -511,8 +510,8 @@ impl GitRepository for TrackingRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> Result<()> {
-        Ok(())
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        Ok(CommandOutput::empty_success("git push"))
     }
 
     fn run_large_file_command(
@@ -2789,12 +2788,9 @@ mod checkout_picker {
             host.update(app, |host, cx| {
                 let entries = |model: ContextMenuModel| {
                     model
-                        .items
+                        .entry_labels()
                         .into_iter()
-                        .filter_map(|item| match item {
-                            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                            _ => None,
-                        })
+                        .map(str::to_string)
                         .collect::<Vec<_>>()
                 };
                 let menu = host
@@ -2866,12 +2862,9 @@ mod checkout_picker {
 
 fn branch_group_entry_labels(model: &ContextMenuModel) -> Vec<String> {
     model
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-            _ => None,
-        })
+        .entry_labels()
+        .into_iter()
+        .map(str::to_string)
         .collect()
 }
 

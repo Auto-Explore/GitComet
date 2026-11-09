@@ -25,6 +25,7 @@ mod create_tag_prompt;
 mod delete_branches_confirm;
 mod delete_permanently_confirm;
 mod delete_remote_branch_confirm;
+mod dialog_size;
 mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;
@@ -502,6 +503,19 @@ pub(in crate::view) fn benchmark_workspace_rows(
     query: &str,
 ) -> Vec<components::PickerPromptItem> {
     worktree_badge_picker::rows(repo, query).items
+}
+
+/// `time` in the user's date, time and timezone settings.
+fn timestamp_label(this: &PopoverHost, time: std::time::SystemTime) -> String {
+    let mut label = String::with_capacity(24);
+    format_datetime_into(
+        &mut label,
+        time,
+        this.date_time_format,
+        this.timezone,
+        this.show_timezone,
+    );
+    label
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {

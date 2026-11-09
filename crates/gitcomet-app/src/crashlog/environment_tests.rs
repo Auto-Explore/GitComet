@@ -1,3 +1,4 @@
+use super::report::*;
 use super::*;
 use gitcomet_core::environment::{GraphicsDetails, Rendering};
 

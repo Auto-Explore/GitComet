@@ -208,7 +208,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
         "feature",
         CheckoutRemoteBranchMode::Create,
     ));
-    assert_unsupported(repo.commit_amend("message"));
+    assert_unsupported(repo.commit_amend_with_outcome("message"));
     assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
     assert_unsupported(repo.compare_files(
         &commit,
@@ -249,12 +249,9 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     ));
     assert_unsupported(repo.fetch_all(true));
     assert_unsupported(repo.pull(PullMode::FastForwardOnly));
-    assert_unsupported(repo.push_with_output());
     assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
     assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
-    assert_unsupported(repo.push_force());
     assert_unsupported(repo.push_force_with_output());
-    assert_unsupported(repo.push_set_upstream("origin", "main"));
     assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
     assert_unsupported(repo.set_upstream_branch_with_output(
         "main",
@@ -265,7 +262,6 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     ));
     assert_unsupported(repo.unset_upstream_branch_with_output("main"));
     assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
-    assert_unsupported(repo.commit_amend_with_output("message"));
     assert_unsupported(repo.pull_branch_with_output("origin", "main"));
     assert_unsupported(repo.merge_ref_with_output("origin/main"));
     assert_unsupported(repo.squash_ref_with_output("origin/main"));
@@ -531,10 +527,6 @@ impl GitRepository for RecordingHistoryModeRepo {
         unsupported()
     }
 
-    fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-        unsupported()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> super::Result<()> {
         unsupported()
     }
@@ -563,7 +555,10 @@ impl GitRepository for RecordingHistoryModeRepo {
         unsupported()
     }
 
-    fn commit(&self, _message: &str) -> super::Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> super::Result<crate::services::CommitOperationOutcome> {
         unsupported()
     }
 
@@ -577,7 +572,7 @@ impl GitRepository for RecordingHistoryModeRepo {
         result.map(|()| CommandOutput::empty_success("git pull"))
     }
 
-    fn push(&self) -> super::Result<()> {
+    fn push_with_output(&self) -> super::Result<CommandOutput> {
         unsupported()
     }
 

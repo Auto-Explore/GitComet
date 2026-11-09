@@ -4,10 +4,6 @@ use super::*;
 use crate::view::pending_commit::PendingCommit;
 use gitcomet_core::services::GitHooks;
 
-pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
-    repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
-}
-
 pub(super) fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
@@ -23,20 +19,14 @@ pub(super) struct CommitOptions {
 impl CommitOptions {
     pub(super) fn msg(self, repo_id: RepoId, message: String) -> Msg {
         let hooks = GitHooks::from_skip(self.skip_hooks);
-        if self.amend {
-            Msg::CommitAmend {
-                repo_id,
+        Msg::Commit {
+            repo_id,
+            request: gitcomet_state::model::CommitRequest {
                 message,
+                amend: self.amend,
                 push_after_commit: self.push_after,
                 hooks,
-            }
-        } else {
-            Msg::Commit {
-                repo_id,
-                message,
-                push_after_commit: self.push_after,
-                hooks,
-            }
+            },
         }
     }
 
@@ -72,21 +62,6 @@ impl CommitOptions {
 }
 
 impl DetailsPaneView {
-    fn repo_has_head_commit(repo: &RepoState) -> bool {
-        if repo.detached_head_commit.is_some() {
-            return true;
-        }
-
-        match &repo.head_branch {
-            Loadable::Ready(head) if head == "HEAD" => true,
-            Loadable::Ready(head) => match &repo.branches {
-                Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
-                _ => true,
-            },
-            _ => true,
-        }
-    }
-
     pub(super) fn can_submit_commit(&self, message: &str) -> bool {
         let Some(repo) = self.active_repo() else {
             return false;
@@ -101,14 +76,12 @@ impl DetailsPaneView {
             return false;
         }
         if self.commit_amend_enabled {
-            return !merge_active(Some(repo))
-                && !matches!(repo.rebase_in_progress, Loadable::Ready(true))
-                && Self::repo_has_head_commit(repo);
+            return amend_allowed(repo);
         }
         let staged_count = repo
             .staged_status_entries()
             .map_or(0, |entries| entries.len());
-        let is_merge_active = merge_active(Some(repo));
+        let is_merge_active = merge_in_progress(repo);
         commit_allowed(is_merge_active, staged_count)
     }
 

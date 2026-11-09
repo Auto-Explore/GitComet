@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::run_git;
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitVersion, refresh_git_runtime};
 use gitcomet_core::services::{GitBackend, MAINTENANCE_CHECK_COMMAND};
@@ -6,22 +6,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// `git maintenance is-needed` arrived in 2.53; older git skips these tests.
 /// Probed once: a refresh racing another test's probe returns the unprobed

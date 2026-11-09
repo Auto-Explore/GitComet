@@ -31,23 +31,8 @@ pub(super) fn patience_recurse<'a>(
         return myers_edits(&old[old_start..old_end], &new[new_start..new_end]);
     }
 
-    // Strip common prefix.
-    let mut prefix = 0;
-    while old_start + prefix < old_end
-        && new_start + prefix < new_end
-        && old[old_start + prefix] == new[new_start + prefix]
-    {
-        prefix += 1;
-    }
-
-    // Strip common suffix.
-    let mut suffix = 0;
-    while old_start + prefix + suffix < old_end
-        && new_start + prefix + suffix < new_end
-        && old[old_end - 1 - suffix] == new[new_end - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) =
+        crate::text_utils::common_affix_len(&old[old_start..old_end], &new[new_start..new_end]);
 
     let inner_old_start = old_start + prefix;
     let inner_old_end = old_end - suffix;
@@ -277,18 +262,7 @@ pub(super) fn eof_newline_delta(old_text: &str, new_text: &str) -> Option<FileDi
 pub(super) fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     // Keep fallback linear by only preserving common prefix/suffix and
     // representing the interior as delete/insert spans.
-    let mut prefix = 0usize;
-    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
-        prefix += 1;
-    }
-
-    let mut suffix = 0usize;
-    while prefix + suffix < old.len()
-        && prefix + suffix < new.len()
-        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) = crate::text_utils::common_affix_len(old, new);
 
     let old_mid_end = old.len().saturating_sub(suffix);
     let new_mid_end = new.len().saturating_sub(suffix);
@@ -331,18 +305,7 @@ pub(super) fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<
 }
 
 pub(super) fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
-    let mut prefix = 0usize;
-    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
-        prefix += 1;
-    }
-
-    let mut suffix = 0usize;
-    while prefix + suffix < old.len()
-        && prefix + suffix < new.len()
-        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) = crate::text_utils::common_affix_len(old, new);
 
     let old_mid_end = old.len().saturating_sub(suffix);
     let new_mid_end = new.len().saturating_sub(suffix);

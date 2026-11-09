@@ -70,12 +70,8 @@ fn deleting_placeholder_to_empty_does_not_implicitly_choose_an_empty_source() {
     use gitcomet_core::conflict_session::ConflictRegionResolution as R;
 
     let segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: None,
-        ours: "".into(),
-        theirs: "theirs\n".into(),
         choice: ConflictChoice::empty(),
-        resolved: false,
-        whitespace_only: false,
+        ..ConflictBlock::unresolved("", "theirs\n")
     })];
     let mut output = generate_resolved_text(&segments);
     let mut block_map = ResolvedOutputBlockMap::from_segments(&segments);
@@ -96,12 +92,8 @@ fn selected_empty_source_keeps_its_explicit_source_resolution() {
     let segments = vec![
         ConflictSegment::Text("pre\n".into()),
         ConflictSegment::Block(ConflictBlock {
-            base: None,
-            ours: "".into(),
-            theirs: "theirs\n".into(),
-            choice: ConflictChoice::Ours,
             resolved: true,
-            whitespace_only: false,
+            ..ConflictBlock::unresolved("", "theirs\n")
         }),
         ConflictSegment::Text("post\n".into()),
     ];

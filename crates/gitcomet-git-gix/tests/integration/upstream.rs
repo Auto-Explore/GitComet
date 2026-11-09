@@ -1,22 +1,13 @@
-use crate::test_git_env;
+use crate::git_cli::{git_command, run_checked, stdout_text};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
     GitBackend, PullMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
-use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config};
+use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    // Keep tests deterministic by isolating from host git config.
-    test_git_env::apply(&mut cmd);
-    // Local bare remotes require file protocol to be permitted.
-    cmd.env("GIT_ALLOW_PROTOCOL", "file");
-    cmd
-}
 
 fn is_bare_git_dir(repo: &Path) -> bool {
     let has_bare_layout =
@@ -37,8 +28,10 @@ fn is_bare_git_dir(repo: &Path) -> bool {
     })
 }
 
+// Local bare remotes require file protocol; bare dirs are named explicitly.
 fn git_command_for_repo(repo: &Path) -> Command {
     let mut cmd = git_command();
+    cmd.env("GIT_ALLOW_PROTOCOL", "file");
     if is_bare_git_dir(repo) {
         cmd.arg("--git-dir").arg(repo);
     } else {
@@ -48,25 +41,11 @@ fn git_command_for_repo(repo: &Path) -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    // Capture output so concurrent Git-for-Windows transport shells do not
-    // share the test runner's console and hang after receive-pack exits.
-    run_git_capture(repo, args);
+    run_checked(&mut git_command_for_repo(repo), args);
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = git_command_for_repo(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
+    stdout_text(run_checked(&mut git_command_for_repo(repo), args))
 }
 
 fn commit_id(repo: &Path, rev: &str) -> CommitId {
@@ -115,7 +94,7 @@ fn push_without_upstream_sets_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    opened.push().unwrap();
+    opened.push_with_output().unwrap();
 
     let upstream = run_git_capture(
         &work_repo,

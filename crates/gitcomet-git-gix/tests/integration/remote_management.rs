@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, run_checked, stdout_text};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
@@ -11,42 +11,24 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 mod scoped_pull;
 
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    // Keep tests deterministic by isolating from host git config.
-    test_git_env::apply(&mut cmd);
-    // Local bare remotes require file protocol to be permitted.
+// Local bare remotes require file protocol to be permitted.
+fn git_with_file_protocol(repo: &Path) -> Command {
+    let mut cmd = git_cmd(repo);
     cmd.env("GIT_ALLOW_PROTOCOL", "file");
     cmd
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    run_git_capture(repo, args);
+    run_checked(&mut git_with_file_protocol(repo), args);
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
+    stdout_text(run_checked(&mut git_with_file_protocol(repo), args))
 }
 
 fn run_git_status(repo: &Path, args: &[&str]) -> std::process::ExitStatus {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    git_command()
-        .arg("-C")
-        .arg(repo)
+    git_with_file_protocol(repo)
         .args(args)
         .output()
         .expect("git command to run")
@@ -1220,7 +1202,7 @@ fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
 }
 
 #[test]
-fn push_force_without_output_updates_remote_head_after_rewrite() {
+fn push_force_updates_remote_head_after_rewrite() {
     let _guard = remote_management_test_lock();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
@@ -1271,7 +1253,7 @@ fn push_force_without_output_updates_remote_head_after_rewrite() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened.push_force().expect("force push");
+    opened.push_force_with_output().expect("force push");
 
     let remote_head_after = run_git_capture(&remote_repo, &["rev-parse", "refs/heads/main"])
         .trim()
@@ -1572,7 +1554,7 @@ fn push_without_origin_uses_first_remote_name_for_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened.push().expect("push branch");
+    opened.push_with_output().expect("push branch");
 
     let upstream = run_git_capture(
         &work_repo,

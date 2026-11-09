@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_output, run_git};
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::error::{ErrorKind, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -6,23 +6,6 @@ use gitcomet_core::services::{GitBackend, WorktreeCheckout};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
-
-fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd
-}
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
 
 fn same_path(lhs: &Path, rhs: &Path) -> bool {
     canonicalize_or_original(lhs.to_path_buf()) == canonicalize_or_original(rhs.to_path_buf())
@@ -253,12 +236,7 @@ exec git "$@"
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
+    let output = git_output(repo, args);
     output
         .status
         .success()

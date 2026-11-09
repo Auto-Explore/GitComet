@@ -4245,8 +4245,8 @@ fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
 /// the index is classified apart from the rest of the git dir: staging or
 /// unstaging writes `.git/index` and nothing else, which cannot change any other
 /// worktree's status and must not cost a scan. A linked worktree's own index
-/// lives at `.git/worktrees/<name>/index`, which is *not* `is_git_index_path`, so
-/// it still arrives as a git-state change and still earns one.
+/// lives at `.git/worktrees/<name>/index`, which repo_monitor/policy.rs does not
+/// treat as this checkout's index, so it still arrives as a git-state change.
 #[test]
 fn an_index_only_change_does_not_rescan_the_other_worktrees() {
     let mut repos: RepositoryRuntimes = Default::default();

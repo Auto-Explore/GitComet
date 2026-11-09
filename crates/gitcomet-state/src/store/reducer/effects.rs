@@ -1,6 +1,6 @@
 use super::util::{
-    EffectAccumulator, apply_selected_diff_load_plan_state, diff_reload_effects, push_diagnostic,
-    push_notification, selected_diff_load_plan,
+    EffectAccumulator, apply_selected_diff_load_plan_state, diff_reload_effects, error_loadable,
+    push_diagnostic, push_notification, selected_diff_load_plan,
 };
 use crate::model::{
     AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
@@ -43,10 +43,7 @@ pub(super) fn blame_loaded(
                 Some(prev) if *prev == v => prev,
                 _ => Arc::new(v),
             }),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
     }
     Vec::new()
@@ -70,11 +67,11 @@ pub(super) fn worktrees_loaded(
                 Err(e) => {
                     // Only explicit loads publish errors. Cancelled replies are
                     // suppressed by the worker's repo-load guard.
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    let failed = error_loadable(inputs, repo_state, &e);
                     // An unavailable listing is not evidence that the worktrees
                     // disappeared. Keep rows and badges until a read succeeds.
                     if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
-                        repo_state.set_worktrees(Loadable::Error(e.to_string()));
+                        repo_state.set_worktrees(failed);
                     }
                 }
             }
@@ -353,8 +350,7 @@ pub(super) fn submodules_loaded(
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+                    error_loadable(inputs, repo_state, &e)
                 }
             }
         };
@@ -780,10 +776,7 @@ pub(super) fn range_files_loaded(
             }
             Loadable::Ready(Arc::new(comparison.files))
         }
-        Err(e) => {
-            push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-            Loadable::Error(e.to_string())
-        }
+        Err(e) => error_loadable(inputs, repo_state, &e),
     };
     repo_state.set_range_files(next);
     let mut effects = super::util::replan_one_sided_change(inputs, repo_state);
@@ -963,7 +956,10 @@ pub(super) fn append_ensure_sidebar_data_effects(
     if request.stashes && matches!(repo_state.stashes, Loadable::NotLoaded) {
         repo_state.set_stashes(Loadable::Loading);
         if repo_state.loads_in_flight.request(LoadKind::Stashes) {
-            effects.push_effect(Effect::LoadStashes { repo_id, limit: 50 });
+            effects.push_effect(Effect::LoadStashes {
+                repo_id,
+                limit: STASH_LIST_LIMIT,
+            });
         }
     }
 }
@@ -983,19 +979,44 @@ pub(super) fn ensure_sidebar_data(
     effects
 }
 
-pub(super) fn load_stashes(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+/// Stash entries the stash list loads.
+const STASH_LIST_LIMIT: usize = 50;
+/// Reflog entries the reflog view loads.
+const REFLOG_LIMIT: usize = 200;
+
+/// Marks a lane loading and requests its load, once the repository is open.
+fn request_open_repo_lane<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    kind: LoadKind,
+    set_lane: fn(&mut RepoState, Loadable<T>),
+    effect: Effect,
+) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    repo_state.set_stashes(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::Stashes) {
-        vec![Effect::LoadStashes { repo_id, limit: 50 }]
+    set_lane(repo_state, Loadable::Loading);
+    if repo_state.loads_in_flight.request(kind) {
+        vec![effect]
     } else {
         Vec::new()
     }
+}
+
+pub(super) fn load_stashes(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    request_open_repo_lane(
+        state,
+        repo_id,
+        LoadKind::Stashes,
+        RepoState::set_stashes,
+        Effect::LoadStashes {
+            repo_id,
+            limit: STASH_LIST_LIMIT,
+        },
+    )
 }
 
 pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -1013,35 +1034,23 @@ pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
 }
 
 pub(super) fn load_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
-    repo_state.set_tags(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::Tags) {
-        vec![Effect::References(ReferenceEffect::LoadTags { repo_id })]
-    } else {
-        Vec::new()
-    }
+    request_open_repo_lane(
+        state,
+        repo_id,
+        LoadKind::Tags,
+        RepoState::set_tags,
+        Effect::References(ReferenceEffect::LoadTags { repo_id }),
+    )
 }
 
 pub(super) fn load_remote_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
-    repo_state.set_remote_tags(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
-        vec![Effect::References(ReferenceEffect::LoadRemoteTags {
-            repo_id,
-        })]
-    } else {
-        Vec::new()
-    }
+    request_open_repo_lane(
+        state,
+        repo_id,
+        LoadKind::RemoteTags,
+        RepoState::set_remote_tags,
+        Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }),
+    )
 }
 
 pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -1052,7 +1061,7 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
     if repo_state.loads_in_flight.request(LoadKind::Reflog) {
         vec![Effect::LoadReflog {
             repo_id,
-            limit: 200,
+            limit: REFLOG_LIMIT,
         }]
     } else {
         Vec::new()
@@ -1141,10 +1150,7 @@ pub(super) fn recent_commit_messages_loaded(
     {
         let value = match result {
             Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.set_recent_commit_messages(value);
     }
@@ -1229,22 +1235,9 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
 /// already running. Returns `None` when a scan is in flight, so callers can
 /// fire this from several triggers without stacking up repeated full scans.
 ///
-/// The watcher-driven trigger fires on every git-state flush, and a full scan
-/// runs `status` on every other worktree, so what bounds the cost is worth
-/// spelling out. First, what does *not* reach here: `.git/index` is classified
-/// as `RepoExternalChange::Index`, not `git_state` (`repo_monitor.rs`,
-/// `is_git_index_path`), so the common edit-stage-unstage loop -- which writes
-/// nothing else -- costs no scan at all. A linked worktree's own index sits at
-/// `.git/worktrees/<name>/index` and is deliberately outside that test, so
-/// changes there do still arrive as git-state and do still earn a scan.
-/// Then, for what does reach here: the monitor debounces raw events at 250ms
-/// with a 2s ceiling
-/// (`repo_monitor.rs`), and `request` admits at most one scan in flight plus one
-/// queued. A storm therefore costs one scan at a time, never a growing queue,
-/// and always ends with one trailing scan — dropping the queued repeat instead
-/// would be cheaper but could leave the counts stale after the last event.
-/// There is deliberately no time-based throttle here: this reducer has no clock,
-/// and the ones that do (window focus, `view/mod.rs`) ride their own.
+/// At most one scan runs with one queued, so an event storm ends in one
+/// trailing scan. This checkout's own index never triggers it
+/// (repo_monitor/policy.rs), and this reducer has no clock to throttle by.
 pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Option<Effect> {
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return None;
@@ -1292,35 +1285,23 @@ pub(super) fn worktree_dirty_effect(repo_state: &RepoState, scope: WorktreeDirty
 }
 
 pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
-    repo_state.set_ref_metadata(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::RefMetadata) {
-        vec![Effect::References(ReferenceEffect::LoadRefMetadata {
-            repo_id,
-        })]
-    } else {
-        Vec::new()
-    }
+    request_open_repo_lane(
+        state,
+        repo_id,
+        LoadKind::RefMetadata,
+        RepoState::set_ref_metadata,
+        Effect::References(ReferenceEffect::LoadRefMetadata { repo_id }),
+    )
 }
 
 pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
-    repo_state.set_submodules(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::Submodules) {
-        vec![Effect::LoadSubmodules { repo_id }]
-    } else {
-        Vec::new()
-    }
+    request_open_repo_lane(
+        state,
+        repo_id,
+        LoadKind::Submodules,
+        RepoState::set_submodules,
+        Effect::LoadSubmodules { repo_id },
+    )
 }
 
 pub(super) fn load_file_browser(
@@ -1843,10 +1824,7 @@ pub(super) fn file_browser_loaded(
                     reopen = pending.map(|pending| (Arc::clone(&entries), pending));
                     Loadable::Ready(entries)
                 }
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.file_browser.stale = false;
             repo_state.file_browser.bump_rev();
@@ -1882,10 +1860,7 @@ pub(super) fn branches_loaded(
         if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
             let branches = match result {
                 Ok(v) => Loadable::Ready(v),
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.set_branches(branches);
         }
@@ -1918,10 +1893,7 @@ pub(super) fn remotes_loaded(
             }
             let remotes = match result {
                 Ok(v) => Loadable::Ready(v),
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.set_remotes(remotes);
         }
@@ -1992,10 +1964,7 @@ pub(super) fn remote_branches_loaded(
         if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
             let branches = match result {
                 Ok(v) => Loadable::Ready(v),
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.set_remote_branches(branches);
         }
@@ -2024,8 +1993,8 @@ pub(super) fn status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_status(failed);
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
@@ -2052,8 +2021,8 @@ pub(super) fn worktree_status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_worktree_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_worktree_status(failed);
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
@@ -2270,8 +2239,8 @@ pub(super) fn staged_status_loaded(
                 }
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_staged_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_staged_status(failed);
             }
         }
         StatusLane::Staged.finish(repo_state, &mut effects);
@@ -2362,10 +2331,7 @@ pub(super) fn head_branch_loaded(
                 }
                 Loadable::Ready(v)
             }
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         // Another branch can track other LFS patterns or be an annex adjusted
         // branch, whether a GitComet checkout or a terminal moved HEAD.
@@ -2468,10 +2434,7 @@ fn apply_upstream_divergence_result(
     }
     let value = match result {
         Ok(value) => Loadable::Ready(value),
-        Err(error) => {
-            push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
-            Loadable::Error(error.to_string())
-        }
+        Err(error) => error_loadable(inputs, repo, &error),
     };
     repo.set_upstream_divergence(value);
 }
@@ -2503,8 +2466,7 @@ pub(super) fn tags_loaded(
                     if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                         Loadable::NotLoaded
                     } else {
-                        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                        Loadable::Error(e.to_string())
+                        error_loadable(inputs, repo_state, &e)
                     }
                 }
             };
@@ -2533,8 +2495,7 @@ pub(super) fn remote_tags_loaded(
                 } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+                    error_loadable(inputs, repo_state, &e)
                 }
             }
         };
@@ -2558,14 +2519,14 @@ pub(super) fn stashes_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let stashes = match result {
             Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.set_stashes(stashes);
         if repo_state.loads_in_flight.finish(LoadKind::Stashes) {
-            effects.push(Effect::LoadStashes { repo_id, limit: 50 });
+            effects.push(Effect::LoadStashes {
+                repo_id,
+                limit: STASH_LIST_LIMIT,
+            });
         }
     }
     effects
@@ -2581,16 +2542,13 @@ pub(super) fn reflog_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let next = match result {
             Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.set_reflog(next);
         if repo_state.loads_in_flight.finish(LoadKind::Reflog) {
             effects.push(Effect::LoadReflog {
                 repo_id,
-                limit: 200,
+                limit: REFLOG_LIMIT,
             });
         }
     }
@@ -2653,10 +2611,7 @@ pub(super) fn squash_message_preview_loaded(
                         body,
                     })
                 }
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
+                Err(e) => error_loadable(inputs, repo_state, &e),
             };
             repo_state.set_squash_preview(value);
         }
@@ -2900,10 +2855,7 @@ pub(super) fn commit_details_loaded(
             .map(|target| selected_diff_load_plan(inputs, repo_state, target));
         let value = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         repo_state.set_commit_details(value);
         let session_effects = super::diff_session::record_one_sided_sides(repo_state);
@@ -2966,6 +2918,5 @@ pub(super) fn commit_signatures_verified(
         .collect()
 }
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests;

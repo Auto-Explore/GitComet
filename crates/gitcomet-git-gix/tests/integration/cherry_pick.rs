@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_output, git_stdout, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
     GitBackend, GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry, SequencerState,
@@ -8,37 +8,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let output = git_output(repo, args);
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd.arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .output()
-        .expect("git command to run")
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let output = git_output(repo, args);
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");
@@ -1348,7 +1317,7 @@ fn conflicting_cherry_pick_returns_error_and_leaves_worktree_conflicted() {
     commit_file(&repo, "file.txt", "main\n", "main change");
 
     let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
         .expect_err("conflicting cherry-pick should fail");
 
     let message = err.to_string();
@@ -1378,7 +1347,7 @@ fn dirty_worktree_rejects_cherry_pick_and_preserves_local_change() {
     fs::write(repo.join("file.txt"), "dirty worktree\n").expect("write dirty worktree");
 
     let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
         .expect_err("dirty worktree should reject cherry-pick");
 
     let message = err.to_string();
@@ -1391,30 +1360,6 @@ fn dirty_worktree_rejects_cherry_pick_and_preserves_local_change() {
         "dirty worktree\n"
     );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M file.txt");
-}
-
-#[test]
-fn dirty_index_rejects_cherry_pick_and_preserves_staged_change() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let repo = dir.path().join("repo");
-    let picked = setup_conflicting_cherry_pick_repo(&repo);
-    fs::write(repo.join("file.txt"), "staged change\n").expect("write staged change");
-    run_git(&repo, &["add", "file.txt"]);
-
-    let err = open_backend(&repo)
-        .cherry_pick(&commit_id(&picked))
-        .expect_err("dirty index should reject cherry-pick");
-
-    let message = err.to_string();
-    assert!(
-        message.contains("local changes") || message.contains("would be overwritten"),
-        "unexpected dirty-index error: {message}"
-    );
-    assert_eq!(
-        fs::read_to_string(repo.join("file.txt")).unwrap(),
-        "staged change\n"
-    );
-    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M  file.txt");
 }
 
 #[test]

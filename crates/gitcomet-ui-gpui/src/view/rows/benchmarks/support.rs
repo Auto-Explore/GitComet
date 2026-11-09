@@ -421,15 +421,11 @@ pub(crate) fn populate_conflict_state(repo: &mut RepoState, path: &str, line_cou
     repo.conflict_state.conflict_file_path = Some(path_buf.clone());
     let content: Arc<str> = Arc::from(build_synthetic_file_content(line_count));
     repo.conflict_state.conflict_file = Loadable::Ready(Some(ConflictFile {
-        path: path_buf.into(),
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        current_bytes: None,
         base: Some(Arc::clone(&content)),
         ours: Some(Arc::clone(&content)),
         theirs: Some(Arc::clone(&content)),
         current: Some(content),
+        ..ConflictFile::empty(path_buf)
     }));
     repo.conflict_state.conflict_rev = 1;
 }

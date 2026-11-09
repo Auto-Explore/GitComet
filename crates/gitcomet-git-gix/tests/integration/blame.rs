@@ -1,42 +1,9 @@
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, git_stdout, run_git};
 use gitcomet_core::services::GitBackend;
 use gitcomet_core::test_support::git_fixture::append_config;
 use gitcomet_core::test_support::git_fixture::{LinearCommit, import_linear_history};
 use gitcomet_git_gix::GixBackend;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let status = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let output = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .output()
-        .expect("git command to run");
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 #[test]
 fn blame_file_reports_head_and_explicit_revision() {
@@ -53,9 +20,7 @@ fn blame_file_reports_head_and_explicit_revision() {
         ],
     );
 
-    let mut import = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut import);
-    import.arg("-C").arg(repo);
+    let mut import = git_cmd(repo);
     import_linear_history(
         &mut import,
         "main",
@@ -468,11 +433,7 @@ fn blame_worktree_staged_succeeds_for_conflicted_file() {
     );
 
     // The merge conflicts; do not assert success.
-    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut merge);
-    let _ = merge
-        .arg("-C")
-        .arg(repo)
+    let _ = git_cmd(repo)
         .args(["merge", "theirs"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .status()

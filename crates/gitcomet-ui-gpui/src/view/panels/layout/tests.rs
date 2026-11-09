@@ -427,7 +427,7 @@ fn commit_allowed_when_staged_changes_exist() {
 fn commit_allowed_when_merge_is_active_without_staged_changes() {
     let mut repo = test_repo();
     repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'feature'".to_string()));
-    assert!(commit_allowed(merge_active(Some(&repo)), 0));
+    assert!(commit_allowed(merge_in_progress(&repo), 0));
 }
 
 #[test]
@@ -456,21 +456,15 @@ fn commit_options_carry_the_hook_choice_to_commit_and_amend() {
                 match options.msg(repo_id, "message".to_string()) {
                     Msg::Commit {
                         repo_id: id,
-                        message,
-                        push_after_commit,
-                        hooks,
+                        request:
+                            gitcomet_state::model::CommitRequest {
+                                message,
+                                amend: sent_amend,
+                                push_after_commit,
+                                hooks,
+                            },
                     } => {
-                        assert!(!amend, "{options:?} should amend");
-                        assert_eq!((id, message.as_str()), (repo_id, "message"));
-                        assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
-                    }
-                    Msg::CommitAmend {
-                        repo_id: id,
-                        message,
-                        push_after_commit,
-                        hooks,
-                    } => {
-                        assert!(amend, "{options:?} should not amend");
+                        assert_eq!(sent_amend, amend, "{options:?}");
                         assert_eq!((id, message.as_str()), (repo_id, "message"));
                         assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
                     }

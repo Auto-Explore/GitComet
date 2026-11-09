@@ -6,22 +6,10 @@
 //! itself can settle whether `/out\[1\].log` ignores `out[1].log`, and the cost
 //! of getting it wrong is a feature that silently does nothing.
 
-use crate::test_git_env;
+use crate::git_cli::{git_cmd, run_git};
 use gitcomet_core::gitignore::{self, GitignoreScope};
 use std::fs;
 use std::path::Path;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let status = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {args:?} failed");
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");
@@ -32,10 +20,7 @@ fn init_repo(repo: &Path) {
 
 /// Whether git considers `relative` ignored, via `git check-ignore`.
 fn is_ignored(repo: &Path, relative: &Path) -> bool {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd.arg("-C")
-        .arg(repo)
+    git_cmd(repo)
         .args(["check-ignore", "-q", "--no-index"])
         .arg(relative)
         .status()
@@ -46,11 +31,7 @@ fn is_ignored(repo: &Path, relative: &Path) -> bool {
 /// The untracked paths git still reports, so we can prove the *unignored*
 /// control file survives every pattern we wrote.
 fn untracked(repo: &Path) -> Vec<String> {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    let out = cmd
-        .arg("-C")
-        .arg(repo)
+    let out = git_cmd(repo)
         .args(["status", "--porcelain", "-uall"])
         .output()
         .expect("git status to run");

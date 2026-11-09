@@ -1363,7 +1363,6 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
-    fn cherry_pick(&self, id: &CommitId) -> Result<()>;
     /// Runs a single cherry-pick. `mainline` is Git's 1-based parent number
     /// for a merge commit and must be `None` for non-merge commits.
     fn cherry_pick_with_output(
@@ -1426,19 +1425,11 @@ pub trait GitRepository: Send + Sync {
 
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;
-    fn commit(&self, message: &str) -> Result<()>;
-    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
-        self.commit(message)?;
-        Ok(CommitOperationOutcome::default())
-    }
-    fn commit_amend(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome>;
+    fn commit_amend_with_outcome(&self, _message: &str) -> Result<CommitOperationOutcome> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",
         )))
-    }
-    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
-        self.commit_amend(message)?;
-        Ok(CommitOperationOutcome::default())
     }
 
     /// Identity override for this operation. Existing implementations remain
@@ -1751,7 +1742,7 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn pull(&self, mode: PullMode) -> Result<CommandOutput>;
-    fn push(&self) -> Result<()>;
+    fn push_with_output(&self) -> Result<CommandOutput>;
 
     fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -1769,17 +1760,6 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn push_force(&self) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "force push is not implemented for this backend",
-        )))
-    }
-    fn push_set_upstream(&self, _remote: &str, _branch: &str) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "pushing with --set-upstream is not implemented for this backend",
-        )))
-    }
-
     /// Fetches exactly `refspecs` from `remote` (for example
     /// `+refs/pull/7/head:refs/remotes/origin/pr/7`), pruning nothing.
     fn fetch_refspecs_with_output(
@@ -1792,14 +1772,10 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn push_with_output(&self) -> Result<CommandOutput> {
-        self.push()?;
-        Ok(CommandOutput::empty_success("git push"))
-    }
-
     fn push_force_with_output(&self) -> Result<CommandOutput> {
-        self.push_force()?;
-        Ok(CommandOutput::empty_success("git push --force-with-lease"))
+        Err(Error::new(ErrorKind::Unsupported(
+            "force push is not implemented for this backend",
+        )))
     }
 
     fn safe_push_after_commit(
@@ -1850,10 +1826,9 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
-        self.push_set_upstream(remote, branch)?;
-        Ok(CommandOutput::empty_success(format!(
-            "git push --set-upstream {remote} HEAD:refs/heads/{branch}"
+    fn push_set_upstream_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with --set-upstream is not implemented for this backend",
         )))
     }
 
@@ -1902,11 +1877,6 @@ pub trait GitRepository: Send + Sync {
             last = self.delete_remote_branch_with_output(remote, branch)?;
         }
         Ok(last)
-    }
-
-    fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
-        self.commit_amend(message)?;
-        Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
     fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {

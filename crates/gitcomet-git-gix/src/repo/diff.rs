@@ -4,7 +4,10 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{push_literal_paths, run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
+use crate::util::{
+    push_literal_paths, push_read_only_diff_flags, run_git_parsed_stdout,
+    run_git_parsed_stdout_cancellable,
+};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
@@ -126,9 +129,7 @@ impl GixRepo {
             .arg("diff.dstPrefix=b/");
         cmd.arg("--no-pager");
         if matches!(target, DiffTarget::WorkingTree { .. }) {
-            cmd.arg("--no-optional-locks")
-                .arg("-c")
-                .arg("diff.autoRefreshIndex=false");
+            push_read_only_diff_flags(&mut cmd);
         }
         let subcommand = match target {
             DiffTarget::Commit { .. } => "show",
@@ -637,19 +638,21 @@ impl GixRepo {
                             IndexUnconflictedBlobId::Present(blob_id) => self
                                 .file_diff_source_from_blob_id(blob_id, &repo_path, cancellation)?,
                             IndexUnconflictedBlobId::Missing => None,
-                            IndexUnconflictedBlobId::Unmerged => self
+                            IndexUnconflictedBlobId::Unmerged => match self
                                 .file_diff_source_from_index_stage(
                                     &repo,
                                     &repo_path,
                                     2,
                                     cancellation,
-                                )?
-                                .or(self.file_diff_source_from_index_stage(
+                                )? {
+                                Some(ours) => Some(ours),
+                                None => self.file_diff_source_from_index_stage(
                                     &repo,
                                     &repo_path,
                                     3,
                                     cancellation,
-                                )?),
+                                )?,
+                            },
                         };
                         (old, new)
                     }
@@ -1027,11 +1030,14 @@ impl GixRepo {
                             IndexUnconflictedBlob::Present(bytes) => Some(bytes),
                             IndexUnconflictedBlob::Missing => None,
                             IndexUnconflictedBlob::Unmerged => {
-                                gix_index_stage_image_blob_bytes_optional(&repo, &repo_path, 2)?.or(
-                                    gix_index_stage_image_blob_bytes_optional(
+                                match gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 2,
+                                )? {
+                                    Some(ours) => Some(ours),
+                                    None => gix_index_stage_image_blob_bytes_optional(
                                         &repo, &repo_path, 3,
                                     )?,
-                                )
+                                }
                             }
                         };
                         (old, new)

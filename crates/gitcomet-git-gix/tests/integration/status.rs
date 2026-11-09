@@ -11,6 +11,7 @@ use gitcomet_core::test_support::git_fixture::{
 };
 use gitcomet_git_gix::GixBackend;
 
+use crate::git_cli::{self, run_checked, stdout_text};
 use crate::test_git_env;
 use std::fs;
 use std::io::Write;
@@ -72,9 +73,7 @@ fn set_repo_local_mergetool_cmd_with_consent(repo: &Path, tool_name: &str, comma
 }
 
 fn git_command() -> Command {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    // Keep integration tests deterministic by isolating from host git config.
-    test_git_env::apply(&mut cmd);
+    let mut cmd = git_cli::git_command();
     // Some scenarios clone local file:// remotes (submodules, temp-origin repos).
     cmd.env("GIT_ALLOW_PROTOCOL", "file");
     cmd
@@ -119,21 +118,9 @@ fn run_git_expect_failure(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_output(repo: &Path, args: &[&str]) -> String {
-    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    let mut cmd = git_command();
+    cmd.arg("-C").arg(repo);
+    stdout_text(run_checked(&mut cmd, args)).trim().to_string()
 }
 
 fn assert_git_failure(error: &Error, expected_command: &str, expected_id: GitFailureId) {

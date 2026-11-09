@@ -5,8 +5,8 @@ use super::history::gix_head_id_or_none;
 use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
-    push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
-    stable_path_bytes, submodule_script_path,
+    push_literal_paths, push_read_only_diff_flags, run_git_capture_bytes_cancellable,
+    run_git_simple, run_git_with_output, stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -513,6 +513,113 @@ fn push_submodule_add_args(
     command
 }
 
+/// A configured submodule with its path relative to its repository and joined
+/// onto the walk's prefix.
+struct SubmoduleEntry<'repo> {
+    submodule: gix::Submodule<'repo>,
+    relative_path: PathBuf,
+    full_path: PathBuf,
+}
+
+/// `repo`'s configured submodules in order, each resolved when reached so a walk
+/// that stops at its target never reads the entries after it.
+fn submodule_entries<'repo>(
+    repo: &'repo gix::Repository,
+    prefix: &Path,
+) -> Result<impl Iterator<Item = Result<SubmoduleEntry<'repo>>> + 'repo> {
+    let submodules = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?;
+    let prefix = prefix.to_path_buf();
+    Ok(submodules.into_iter().flatten().map(move |submodule| {
+        let relative_path = submodule
+            .path()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
+            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
+        let full_path = prefix.join(&relative_path);
+        Ok(SubmoduleEntry {
+            submodule,
+            relative_path,
+            full_path,
+        })
+    }))
+}
+
+/// Records `submodule`'s source if it is local and untrusted, then its nested ones.
+fn collect_untrusted_submodule_source(
+    current_workdir: &Path,
+    trust_root: &Path,
+    entry: &SubmoduleEntry<'_>,
+    out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
+) -> Result<()> {
+    let SubmoduleEntry {
+        submodule,
+        full_path,
+        ..
+    } = entry;
+    if let Some(target) =
+        trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?
+        && !submodule_source_trusted(trust_root, &target)?
+    {
+        out.insert(full_path.to_path_buf(), target);
+    }
+    if let Some(nested_repo) = open_configured_submodule_repo(submodule)? {
+        collect_repo_untrusted_submodule_sources(
+            &nested_repo,
+            trust_root,
+            full_path,
+            out,
+            remote_url_policy,
+        )?;
+    }
+    Ok(())
+}
+
+/// `git submodule update --init` for one submodule of `repo`, refusing an
+/// untrusted local source, then the same for everything nested in it.
+fn update_submodule_recursive(
+    repo: &gix::Repository,
+    trust_root: &Path,
+    entry: &SubmoduleEntry<'_>,
+    outputs: &mut Vec<CommandOutput>,
+    remote_url_policy: RemoteUrlPolicy,
+) -> Result<()> {
+    let SubmoduleEntry {
+        submodule,
+        relative_path,
+        full_path,
+    } = entry;
+    let current_workdir = repo_workdir_for_submodule_trust(repo);
+    let local_target =
+        trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?;
+    let mut cmd = git_workdir_cmd_for(current_workdir);
+    if let Some(target) = local_target.as_ref() {
+        if !submodule_source_trusted(trust_root, target)? {
+            return Err(untrusted_local_submodule_error(target, "update"));
+        }
+        allow_file_submodule_transport(&mut cmd);
+    }
+
+    cmd.arg("submodule").arg("update").arg("--init");
+    push_literal_paths(&mut cmd, [submodule_script_path(relative_path)]);
+    outputs.push(run_git_with_output(
+        cmd,
+        &format!("git submodule update --init -- {}", full_path.display()),
+    )?);
+
+    if let Some(nested_repo) = open_gitlink_repo(repo, relative_path)? {
+        update_repo_submodules_recursive(
+            &nested_repo,
+            trust_root,
+            full_path,
+            outputs,
+            remote_url_policy,
+        )?;
+    }
+    Ok(())
+}
+
 fn collect_repo_untrusted_submodule_sources(
     repo: &gix::Repository,
     trust_root: &Path,
@@ -520,37 +627,16 @@ fn collect_repo_untrusted_submodule_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
-    })?
-    else {
-        return Ok(());
-    };
-
     let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for submodule in submodules {
-        let relative_path = submodule
-            .path()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
-            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
-        let full_path = prefix.join(&relative_path);
-
-        if let Some(target) =
-            trust_target_from_submodule(current_workdir, &full_path, &submodule, remote_url_policy)?
-            && !submodule_source_trusted(trust_root, &target)?
-        {
-            out.insert(full_path.clone(), target);
-        }
-
-        if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
-            collect_repo_untrusted_submodule_sources(
-                &nested_repo,
-                trust_root,
-                &full_path,
-                out,
-                remote_url_policy,
-            )?;
-        }
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        collect_untrusted_submodule_source(
+            current_workdir,
+            trust_root,
+            &entry,
+            out,
+            remote_url_policy,
+        )?;
     }
 
     Ok(())
@@ -563,52 +649,9 @@ fn update_repo_submodules_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
-    })?
-    else {
-        return Ok(());
-    };
-
-    let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for submodule in submodules {
-        let relative_path = submodule
-            .path()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
-            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
-        let full_path = prefix.join(&relative_path);
-
-        let local_target = trust_target_from_submodule(
-            current_workdir,
-            &full_path,
-            &submodule,
-            remote_url_policy,
-        )?;
-
-        let mut cmd = git_workdir_cmd_for(current_workdir);
-        if let Some(target) = local_target.as_ref() {
-            if !submodule_source_trusted(trust_root, target)? {
-                return Err(untrusted_local_submodule_error(target, "update"));
-            }
-            allow_file_submodule_transport(&mut cmd);
-        }
-
-        cmd.arg("submodule").arg("update").arg("--init");
-        push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
-        outputs.push(run_git_with_output(
-            cmd,
-            &format!("git submodule update --init -- {}", full_path.display()),
-        )?);
-
-        if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-            update_repo_submodules_recursive(
-                &nested_repo,
-                trust_root,
-                &full_path,
-                outputs,
-                remote_url_policy,
-            )?;
-        }
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        update_submodule_recursive(repo, trust_root, &entry, outputs, remote_url_policy)?;
     }
 
     Ok(())
@@ -622,49 +665,26 @@ fn collect_target_submodule_untrusted_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
-    })?
-    else {
-        return Ok(false);
-    };
-
     let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for submodule in submodules {
-        let relative_path = submodule
-            .path()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
-            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
-        let full_path = prefix.join(&relative_path);
-
-        if full_path == target_path {
-            if let Some(target) = trust_target_from_submodule(
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        if entry.full_path == target_path {
+            collect_untrusted_submodule_source(
                 current_workdir,
-                &full_path,
-                &submodule,
+                trust_root,
+                &entry,
+                out,
                 remote_url_policy,
-            )? && !submodule_source_trusted(trust_root, &target)?
-            {
-                out.insert(full_path.clone(), target);
-            }
-            if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
-                collect_repo_untrusted_submodule_sources(
-                    &nested_repo,
-                    trust_root,
-                    &full_path,
-                    out,
-                    remote_url_policy,
-                )?;
-            }
+            )?;
             return Ok(true);
         }
 
-        if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_configured_submodule_repo(&submodule)?
+        if target_path.starts_with(&entry.full_path)
+            && let Some(nested_repo) = open_configured_submodule_repo(&entry.submodule)?
             && collect_target_submodule_untrusted_sources(
                 &nested_repo,
                 trust_root,
-                &full_path,
+                &entry.full_path,
                 target_path,
                 out,
                 remote_url_policy,
@@ -685,61 +705,19 @@ fn load_target_submodule_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
-    })?
-    else {
-        return Ok(false);
-    };
-
-    let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for submodule in submodules {
-        let relative_path = submodule
-            .path()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
-            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
-        let full_path = prefix.join(&relative_path);
-
-        if full_path == target_path {
-            let local_target = trust_target_from_submodule(
-                current_workdir,
-                &full_path,
-                &submodule,
-                remote_url_policy,
-            )?;
-            let mut cmd = git_workdir_cmd_for(current_workdir);
-            if let Some(target) = local_target.as_ref() {
-                if !submodule_source_trusted(trust_root, target)? {
-                    return Err(untrusted_local_submodule_error(target, "update"));
-                }
-                allow_file_submodule_transport(&mut cmd);
-            }
-
-            cmd.arg("submodule").arg("update").arg("--init");
-            push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
-            outputs.push(run_git_with_output(
-                cmd,
-                &format!("git submodule update --init -- {}", full_path.display()),
-            )?);
-
-            if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-                update_repo_submodules_recursive(
-                    &nested_repo,
-                    trust_root,
-                    &full_path,
-                    outputs,
-                    remote_url_policy,
-                )?;
-            }
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        if entry.full_path == target_path {
+            update_submodule_recursive(repo, trust_root, &entry, outputs, remote_url_policy)?;
             return Ok(true);
         }
 
-        if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)?
+        if target_path.starts_with(&entry.full_path)
+            && let Some(nested_repo) = open_gitlink_repo(repo, &entry.relative_path)?
             && load_target_submodule_recursive(
                 &nested_repo,
                 trust_root,
-                &full_path,
+                &entry.full_path,
                 target_path,
                 outputs,
                 remote_url_policy,
@@ -1135,7 +1113,8 @@ fn git_numstat_counts(
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
-    command.arg("--no-optional-locks").arg("diff");
+    push_read_only_diff_flags(&mut command);
+    command.arg("diff");
     if cached {
         command.arg("--cached");
     }
@@ -2158,6 +2137,42 @@ mod tests {
             submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
                 .unwrap();
         assert_eq!(pointer_counts(&staged), (None, None));
+    }
+
+    /// Stale stats would make `git diff --numstat` write refreshed ones back to
+    /// the submodule's index, which its watcher reports as an index change.
+    #[test]
+    fn live_lists_do_not_write_the_submodule_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        std::fs::write(dir.join("touched.txt"), "unchanged\n").unwrap();
+        std::fs::write(dir.join("edited.txt"), "one\ntwo\n").unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "seed"]);
+        std::fs::write(dir.join("edited.txt"), "one\n2\n").unwrap();
+        let stale =
+            filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 120, 0);
+        for name in ["touched.txt", "edited.txt"] {
+            filetime::set_file_mtime(dir.join(name), stale).unwrap();
+        }
+        let index = dir.join(".git/index");
+        let before = std::fs::read(&index).unwrap();
+
+        let repo = open_repo(dir).repo();
+        let (_, unstaged) =
+            submodule_live_inner_changes(dir, Some(&repo), &CancellationToken::new()).unwrap();
+
+        let listed: Vec<_> = unstaged
+            .iter()
+            .map(|change| (change.path.as_path(), change.additions, change.deletions))
+            .collect();
+        assert_eq!(listed, vec![(Path::new("edited.txt"), Some(1), Some(1))]);
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "the live lists refreshed index stat metadata"
+        );
     }
 
     /// numstat still counts a gitlink replaced by a file, submodules ignored

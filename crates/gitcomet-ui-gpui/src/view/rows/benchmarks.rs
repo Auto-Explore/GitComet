@@ -13,9 +13,7 @@ use crate::kit::{
 };
 use crate::theme::AppTheme;
 use crate::view::history_graph;
-use crate::view::mod_helpers::{
-    PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
-};
+use crate::view::mod_helpers::{PaneResizeState, SidePane, StatusMultiSelection, StatusSection};
 use crate::view::next_pane_resize_drag_width;
 use crate::view::panes::diff::diff_cache::{
     PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,

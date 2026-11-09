@@ -7,7 +7,13 @@
 //! invariants.
 
 use gitcomet_core::merge::{MergeOptions, merge_file};
-use std::collections::HashSet;
+
+#[path = "support/merge_markers.rs"]
+mod merge_markers;
+use merge_markers::{
+    count_open_markers, validate_content_integrity, validate_context_preservation,
+    validate_marker_wellformedness,
+};
 
 const DEFAULT_LINES: [&str; 5] = ["aaa\n", "bbb\n", "ccc\n", "ddd\n", "eee\n"];
 
@@ -278,104 +284,6 @@ fn build_case(indices: &[usize; 5]) -> PermutationCase {
     }
 }
 
-fn validate_marker_wellformedness(output: &str, case_id: &str) {
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum State {
-        Outside,
-        InOurs,
-        InBase,
-        InTheirs,
-    }
-
-    let mut state = State::Outside;
-    for (line_ix, line) in output.lines().enumerate() {
-        let line_no = line_ix + 1;
-        if is_open_marker(line) {
-            assert_eq!(
-                state,
-                State::Outside,
-                "[{case_id}] line {line_no}: nested <<<<<<< marker"
-            );
-            state = State::InOurs;
-        } else if is_base_marker(line) {
-            assert_eq!(
-                state,
-                State::InOurs,
-                "[{case_id}] line {line_no}: unexpected ||||||| marker"
-            );
-            state = State::InBase;
-        } else if is_separator_marker(line) {
-            assert!(
-                state == State::InOurs || state == State::InBase,
-                "[{case_id}] line {line_no}: unexpected ======= marker"
-            );
-            state = State::InTheirs;
-        } else if is_close_marker(line) {
-            assert_eq!(
-                state,
-                State::InTheirs,
-                "[{case_id}] line {line_no}: unexpected >>>>>>> marker"
-            );
-            state = State::Outside;
-        }
-    }
-
-    assert_eq!(state, State::Outside, "[{case_id}] unclosed marker block");
-}
-
-fn validate_content_integrity(
-    base: &str,
-    contrib1: &str,
-    contrib2: &str,
-    output: &str,
-    case_id: &str,
-) {
-    let base_lines: HashSet<&str> = base.lines().collect();
-    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
-
-    for (line_ix, line) in output.lines().enumerate() {
-        if is_open_marker(line)
-            || is_base_marker(line)
-            || is_separator_marker(line)
-            || is_close_marker(line)
-        {
-            continue;
-        }
-
-        assert!(
-            base_lines.contains(line)
-                || contrib1_lines.contains(line)
-                || contrib2_lines.contains(line),
-            "[{case_id}] line {} is not traceable to base/local/remote content: {:?}",
-            line_ix + 1,
-            line
-        );
-    }
-}
-
-fn validate_context_preservation(
-    base: &str,
-    contrib1: &str,
-    contrib2: &str,
-    output: &str,
-    case_id: &str,
-) {
-    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
-    let output_lines: HashSet<&str> = output.lines().collect();
-
-    for line in base.lines() {
-        if contrib1_lines.contains(line) && contrib2_lines.contains(line) {
-            assert!(
-                output_lines.contains(line),
-                "[{case_id}] line common to all inputs missing from output: {:?}",
-                line
-            );
-        }
-    }
-}
-
 fn split_visual_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         Vec::new()
@@ -643,26 +551,6 @@ fn validate_alignment_monotonicity(rows: &[AlignmentRow], case_id: &str) {
     check_column(rows, case_id, "base", |row| row.base);
     check_column(rows, case_id, "contrib1", |row| row.contrib1);
     check_column(rows, case_id, "contrib2", |row| row.contrib2);
-}
-
-fn count_open_markers(output: &str) -> usize {
-    output.lines().filter(|line| is_open_marker(line)).count()
-}
-
-fn is_open_marker(line: &str) -> bool {
-    line.starts_with("<<<<<<<")
-}
-
-fn is_base_marker(line: &str) -> bool {
-    line.starts_with("|||||||")
-}
-
-fn is_separator_marker(line: &str) -> bool {
-    line.starts_with("=======")
-}
-
-fn is_close_marker(line: &str) -> bool {
-    line.starts_with(">>>>>>>")
 }
 
 #[derive(Clone, Copy, Debug)]

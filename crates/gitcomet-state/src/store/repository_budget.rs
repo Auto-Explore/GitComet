@@ -443,10 +443,12 @@ mod tests {
             },
             AuthRetryOperation::Commit {
                 repo_id: id,
-                message: "message".into(),
-                amend: false,
-                push_after_commit: false,
-                hooks: gitcomet_core::services::GitHooks::Run,
+                request: crate::model::CommitRequest {
+                    message: "message".into(),
+                    amend: false,
+                    push_after_commit: false,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
             },
         ] {
             for status in [

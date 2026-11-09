@@ -166,6 +166,25 @@ pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
     matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
 }
 
+/// Whether HEAD has a commit to amend: no merge or rebase is in progress and
+/// HEAD is detached, or its branch exists (an unloaded list counts as yes).
+pub(in crate::view) fn amend_allowed(repo: &RepoState) -> bool {
+    if merge_in_progress(repo) || matches!(repo.rebase_in_progress, Loadable::Ready(true)) {
+        return false;
+    }
+    if repo.detached_head_commit.is_some() {
+        return true;
+    }
+    match &repo.head_branch {
+        Loadable::Ready(head) if head == "HEAD" => true,
+        Loadable::Ready(head) => match &repo.branches {
+            Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
 /// The rebase, apply, cherry-pick, or revert the repository is part-way
 /// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
 pub(in crate::view) fn active_sequencer_state(
@@ -521,15 +540,16 @@ pub(super) fn main_diff_rendered_preview_toggle_kind(
     }
 }
 
+/// The collapsible panes beside the main view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PaneResizeHandle {
+pub(super) enum SidePane {
     Sidebar,
     Details,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PaneResizeState {
-    pub(super) handle: PaneResizeHandle,
+    pub(super) handle: SidePane,
     pub(super) start_x: Pixels,
     pub(super) start_width: Pixels,
     pub(super) other_width: Pixels,
@@ -546,7 +566,7 @@ pub(super) struct PaneResizeState {
 impl PaneResizeState {
     #[inline]
     pub(super) fn new(
-        handle: PaneResizeHandle,
+        handle: SidePane,
         start_x: Pixels,
         start_sidebar: Pixels,
         start_details: Pixels,
@@ -555,14 +575,14 @@ impl PaneResizeState {
         details_collapsed: bool,
     ) -> Self {
         let (min_width, start_width, other_width, other_collapsed, drag_delta_sign) = match handle {
-            PaneResizeHandle::Sidebar => (
+            SidePane::Sidebar => (
                 px(super::SIDEBAR_MIN_PX),
                 start_sidebar,
                 start_details,
                 details_collapsed,
                 1.0,
             ),
-            PaneResizeHandle::Details => (
+            SidePane::Details => (
                 px(super::DETAILS_MIN_PX),
                 start_details,
                 start_sidebar,
@@ -604,8 +624,8 @@ impl PaneResizeState {
         self.main_min_width = main;
         self.collapsed_width = collapsed;
         let other_collapsed = match self.handle {
-            PaneResizeHandle::Sidebar => self.bounds_details_collapsed,
-            PaneResizeHandle::Details => self.bounds_sidebar_collapsed,
+            SidePane::Sidebar => self.bounds_details_collapsed,
+            SidePane::Details => self.bounds_sidebar_collapsed,
         };
         self.max_width = super::pane_resize_drag_width_bounds_for_other_pane(
             minimum,
@@ -633,8 +653,8 @@ impl PaneResizeState {
             (self.min_width, self.max_width)
         } else {
             let other_collapsed = match self.handle {
-                PaneResizeHandle::Sidebar => details_collapsed,
-                PaneResizeHandle::Details => sidebar_collapsed,
+                SidePane::Sidebar => details_collapsed,
+                SidePane::Details => sidebar_collapsed,
             };
             super::pane_resize_drag_width_bounds_for_other_pane(
                 self.min_width,

@@ -172,13 +172,10 @@ impl Tab {
     /// contrast in the correct direction for both dark and light themes.
     pub fn outline_color(theme: AppTheme) -> gpui::Rgba {
         let amount = if theme.is_dark { 0.18 } else { 0.14 };
-        let border = theme.colors.stroke.default;
-        let text = theme.colors.foreground.primary;
-        gpui::Rgba::new(
-            border.red + (text.red - border.red) * amount,
-            border.green + (text.green - border.green) * amount,
-            border.blue + (text.blue - border.blue) * amount,
-            border.alpha + (text.alpha - border.alpha) * amount,
+        crate::theme::mix_rgba(
+            theme.colors.stroke.default,
+            theme.colors.foreground.primary,
+            amount,
         )
     }
 

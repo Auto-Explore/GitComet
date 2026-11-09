@@ -19,15 +19,18 @@ fn commit_emits_effect() {
         &mut state,
         Msg::Commit {
             repo_id: RepoId(1),
-            message: "hello".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "hello".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Commit { repo_id: RepoId(1), message, .. } ] if message == "hello"
+        [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { message, .. }, .. } ] if message == "hello"
     ));
 }
 
@@ -119,17 +122,20 @@ fn commit_amend_emits_effect() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitAmend {
+        Msg::Commit {
             repo_id: RepoId(1),
-            message: "amended".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: true,
+                message: "amended".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CommitAmend { repo_id: RepoId(1), message, .. }] if message == "amended"
+        [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { amend: true, message, .. }, .. }] if message == "amended"
     ));
 }
 
@@ -277,9 +283,12 @@ fn commit_bumps_ops_rev() {
         &mut state,
         Msg::Commit {
             repo_id,
-            message: "test commit".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "test commit".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
     assert!(
@@ -315,6 +324,12 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -378,6 +393,12 @@ fn commit_finished_invalidates_loaded_blame() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -599,6 +620,12 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -630,6 +657,12 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
         }),
@@ -649,7 +682,13 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -668,7 +707,13 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("amend boom".to_string()))),
         }),
@@ -687,6 +732,12 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id: RepoId(999),
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -696,7 +747,13 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: String::new(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id: RepoId(999),
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),

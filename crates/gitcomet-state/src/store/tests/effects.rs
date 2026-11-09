@@ -233,9 +233,6 @@ impl GitRepository for UnsupportedRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -262,7 +259,10 @@ impl GitRepository for UnsupportedRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -273,7 +273,7 @@ impl GitRepository for UnsupportedRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -465,9 +465,6 @@ impl GitRepository for MetadataSchedulingRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -493,7 +490,10 @@ impl GitRepository for MetadataSchedulingRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -504,7 +504,7 @@ impl GitRepository for MetadataSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -667,9 +667,6 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -695,7 +692,10 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -706,7 +706,7 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -886,9 +886,6 @@ impl GitRepository for RecordingLogRepo {
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -914,7 +911,10 @@ impl GitRepository for RecordingLogRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -925,7 +925,7 @@ impl GitRepository for RecordingLogRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -1155,9 +1155,6 @@ impl GitRepository for RecordingCheckoutRepo {
             .push(format!("checkout_commit {}", id.as_ref()));
         Ok(())
     }
-    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -1184,7 +1181,10 @@ impl GitRepository for RecordingCheckoutRepo {
     fn unstage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
-    fn commit(&self, _message: &str) -> Result<()> {
+    fn commit_with_outcome(
+        &self,
+        _message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
@@ -1193,7 +1193,7 @@ impl GitRepository for RecordingCheckoutRepo {
     fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         self.remote_call("pull")
     }
-    fn push(&self) -> Result<()> {
+    fn push_with_output(&self) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

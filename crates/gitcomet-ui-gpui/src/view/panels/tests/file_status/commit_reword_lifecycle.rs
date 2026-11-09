@@ -223,9 +223,6 @@ impl GitRepository for ControlledRewordRepo {
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {
         self.fallback.checkout_commit(id)
     }
-    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
-        self.fallback.cherry_pick(id)
-    }
     fn stash_create(&self, message: &str, untracked: bool) -> Result<()> {
         self.fallback.stash_create(message, untracked)
     }
@@ -241,8 +238,11 @@ impl GitRepository for ControlledRewordRepo {
     fn unstage(&self, paths: &[&Path]) -> Result<()> {
         self.fallback.unstage(paths)
     }
-    fn commit(&self, message: &str) -> Result<()> {
-        self.fallback.commit(message)
+    fn commit_with_outcome(
+        &self,
+        message: &str,
+    ) -> Result<gitcomet_core::services::CommitOperationOutcome> {
+        self.fallback.commit_with_outcome(message)
     }
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
         self.fallback.fetch_all(prune)
@@ -250,8 +250,8 @@ impl GitRepository for ControlledRewordRepo {
     fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
         self.fallback.pull(mode)
     }
-    fn push(&self) -> Result<()> {
-        self.fallback.push()
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.fallback.push_with_output()
     }
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
         self.fallback.discard_worktree_changes(paths)

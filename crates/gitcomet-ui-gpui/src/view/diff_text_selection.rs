@@ -211,7 +211,7 @@ impl Element for DiffTextSelectionTracker {
     }
 }
 
-/// section 30 split: zero-size element that ends a conflict row-drag on mouse-up
+/// Split: zero-size element that ends a conflict row-drag on mouse-up
 /// anywhere in the window (per-row handlers cover extend inside the columns).
 pub(super) struct ConflictRowSelectionTracker {
     pub(super) view: Entity<DiffRenderer>,

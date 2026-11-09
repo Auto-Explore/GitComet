@@ -1,4 +1,4 @@
-//! Phase 3C: Real-world merge extraction harness.
+//! Real-world merge extraction harness.
 //!
 //! Walks merge commits in a git repository, extracts base/contrib1/contrib2
 //! file contents for each non-trivial merge, runs the merge algorithm on them,
@@ -21,8 +21,13 @@ use gitcomet_core::merge_extraction::{
     ExtractedMergeCase, MergeExtractionOptions, discover_merge_commits, extract_merge_cases,
     extract_merge_cases_from_repo, write_fixture_files,
 };
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+#[path = "support/merge_markers.rs"]
+mod merge_markers;
+use merge_markers::{
+    contains_marker_like_line, validate_content_integrity, validate_marker_wellformedness,
+};
 
 // ---------------------------------------------------------------------------
 // Invariant validation
@@ -46,141 +51,6 @@ fn validate_merge_invariants(
         validate_marker_wellformedness(output, case_name);
     }
     validate_content_integrity(base, contrib1, contrib2, output, case_name);
-}
-
-/// Conflict markers must be well-formed: balanced and properly ordered.
-fn validate_marker_wellformedness(output: &str, case_name: &str) {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum State {
-        Outside,
-        InOurs,
-        InBase,
-        InTheirs,
-    }
-
-    let mut state = State::Outside;
-    let mut conflict_count = 0u32;
-
-    for line in output.lines() {
-        let trimmed = line.trim_end();
-
-        if state == State::Outside {
-            if is_open_marker(trimmed) {
-                state = State::InOurs;
-                conflict_count += 1;
-            }
-            continue;
-        }
-
-        // Marker-looking payload lines can appear inside conflict bodies
-        // (e.g. merged source containing literal "<<<<<<<"). Treat those as
-        // content unless they match the expected delimiter for the current
-        // conflict parser state.
-        match state {
-            State::InOurs => {
-                if is_base_marker(trimmed) {
-                    state = State::InBase;
-                } else if is_separator_marker(trimmed) {
-                    state = State::InTheirs;
-                }
-            }
-            State::InBase => {
-                if is_separator_marker(trimmed) {
-                    state = State::InTheirs;
-                }
-            }
-            State::InTheirs => {
-                if is_close_marker(trimmed) {
-                    state = State::Outside;
-                }
-            }
-            State::Outside => unreachable!("handled above"),
-        }
-    }
-
-    assert_eq!(
-        state,
-        State::Outside,
-        "[{}] unclosed conflict markers ({} opened)",
-        case_name,
-        conflict_count
-    );
-}
-
-/// Every non-marker line in output must trace to at least one input.
-fn validate_content_integrity(
-    base: &str,
-    contrib1: &str,
-    contrib2: &str,
-    output: &str,
-    case_name: &str,
-) {
-    let base_lines: HashSet<&str> = base.lines().collect();
-    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
-
-    for (line_num, line) in output.lines().enumerate() {
-        let trimmed = line.trim_end();
-        if is_open_marker(trimmed)
-            || is_close_marker(trimmed)
-            || is_separator_marker(trimmed)
-            || is_base_marker(trimmed)
-        {
-            continue;
-        }
-
-        assert!(
-            base_lines.contains(line)
-                || contrib1_lines.contains(line)
-                || contrib2_lines.contains(line),
-            "[{}] line {}: output line {:?} not found in any input",
-            case_name,
-            line_num + 1,
-            line
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Marker detection helpers
-// ---------------------------------------------------------------------------
-
-fn is_open_marker(line: &str) -> bool {
-    line.starts_with("<<<<<<<")
-        && line.len() >= 7
-        && line[7..]
-            .chars()
-            .all(|c| c == '<' || c == ' ' || c.is_alphanumeric() || "/.:-_".contains(c))
-}
-
-fn is_close_marker(line: &str) -> bool {
-    line.starts_with(">>>>>>>")
-        && line.len() >= 7
-        && line[7..]
-            .chars()
-            .all(|c| c == '>' || c == ' ' || c.is_alphanumeric() || "/.:-_".contains(c))
-}
-
-fn is_separator_marker(line: &str) -> bool {
-    line.starts_with("=======") && line[7..].chars().all(|c| c == '=')
-}
-
-fn is_base_marker(line: &str) -> bool {
-    line.starts_with("|||||||")
-        && line.len() >= 7
-        && line[7..]
-            .chars()
-            .all(|c| c == '|' || c == ' ' || c.is_alphanumeric() || "/.:-_".contains(c))
-}
-
-fn contains_marker_like_line(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim_end();
-        is_open_marker(trimmed)
-            || is_base_marker(trimmed)
-            || is_separator_marker(trimmed)
-            || is_close_marker(trimmed)
-    })
 }
 
 // ---------------------------------------------------------------------------

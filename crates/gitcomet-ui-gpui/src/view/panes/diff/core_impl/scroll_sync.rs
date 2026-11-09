@@ -447,7 +447,7 @@ impl DiffRenderer {
     ///
     /// The resolved output renders full merged lines, so it only joins the
     /// group when the columns render an unfolded whole-file row space — the
-    /// three-way unfolded columns or the section 30 aligned two-way full mode — and
+    /// three-way unfolded columns or the aligned two-way full mode — and
     /// only when the merge-tool output-scroll-sync setting is on. Folded
     /// column spaces (hide-resolved / collapsed context) and block-local
     /// giant-file two-way rows keep the output independent, because raw

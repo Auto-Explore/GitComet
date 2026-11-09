@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, PendingCommitRetry};
+use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, CommitRequest};
 use crate::msg::RepoCommandEffect;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{
@@ -409,7 +409,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].pending.commit_retry = Some(PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(CommitRequest {
         message: "ship it".to_string(),
         amend: false,
         push_after_commit: false,
@@ -421,6 +421,12 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: "ship it".to_string(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Err(auth_error(
                 "git commit failed: fatal: could not read Password for 'https://example.com': terminal prompts disabled",
@@ -436,33 +442,14 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
         prompt.operation,
         AuthRetryOperation::Commit {
             repo_id,
-            message: "ship it".to_string(),
-            amend: false,
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                message: "ship it".to_string(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run
+            }
         }
     );
-}
-
-#[test]
-fn commit_finished_auth_error_without_pending_retry_does_not_prompt() {
-    let repo_id = RepoId(1);
-    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
-    let id_alloc = AtomicU64::new(1);
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            repo_id,
-            result: Err(auth_error(
-                "git commit failed: fatal: could not read Password for 'https://example.com': terminal prompts disabled",
-            )),
-        }),
-    );
-
-    assert_terminal_failure(&state);
 }
 
 #[test]
@@ -471,7 +458,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].pending.commit_retry = Some(PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(CommitRequest {
         message: "fixup".to_string(),
         amend: true,
         push_after_commit: false,
@@ -482,7 +469,13 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: "fixup".to_string(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Skip,
+            },
             repo_id,
             result: Err(auth_error(
                 "git commit --amend failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
@@ -498,10 +491,56 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         prompt.operation,
         AuthRetryOperation::Commit {
             repo_id,
-            message: "fixup".to_string(),
-            amend: true,
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Skip,
+            request: crate::model::CommitRequest {
+                message: "fixup".to_string(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Skip
+            }
+        }
+    );
+}
+
+/// The auth retry replays the commit that failed, even when another commit
+/// was started before the failure came back.
+#[test]
+fn commit_auth_retry_replays_the_failed_commit_not_the_latest_one() {
+    let _lock = super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let failed = CommitRequest {
+        message: "first".to_string(),
+        amend: false,
+        push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Skip,
+    };
+    state.repos[0].pending.commit_retry = Some(CommitRequest {
+        message: "second".to_string(),
+        amend: true,
+        push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Run,
+    });
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            request: failed.clone(),
+            result: Err(auth_error(
+                "git commit failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::Commit {
+            repo_id,
+            request: failed
         }
     );
 }
@@ -735,10 +774,12 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Commit {
             repo_id,
-            message: "first".to_string(),
-            amend: false,
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                message: "first".to_string(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     });
     let commit_effects = reduce(
@@ -753,12 +794,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     );
     assert!(matches!(
         commit_effects.as_slice(),
-        [Effect::Commit {
-            repo_id: RepoId(1),
-            message,
-            hooks: gitcomet_core::services::GitHooks::Run,
-            ..
-        }] if message == "first"
+        [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { message, hooks: gitcomet_core::services::GitHooks::Run, .. }, .. }] if message == "first"
     ));
     let commit_auth = commit_effects[0]
         .git_auth()
@@ -767,7 +803,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert_eq!(commit_auth.secret, "passphrase");
     assert_eq!(
         state.repos[0].pending.commit_retry,
-        Some(PendingCommitRetry {
+        Some(CommitRequest {
             message: "first".to_string(),
             amend: false,
             push_after_commit: false,
@@ -783,10 +819,12 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Commit {
             repo_id,
-            message: "second".to_string(),
-            amend: true,
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Skip,
+            request: crate::model::CommitRequest {
+                message: "second".to_string(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Skip,
+            },
         },
     });
     let amend_effects = reduce(
@@ -802,12 +840,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert!(
         matches!(
             amend_effects.as_slice(),
-            [Effect::CommitAmend {
-                repo_id: RepoId(1),
-                message,
-                hooks: gitcomet_core::services::GitHooks::Skip,
-                ..
-            }] if message == "second"
+            [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { amend: true, message, hooks: gitcomet_core::services::GitHooks::Skip, .. }, .. }] if message == "second"
         ),
         "the replay keeps skipping hooks"
     );
@@ -818,7 +851,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert_eq!(amend_auth.secret, "passphrase");
     assert_eq!(
         state.repos[0].pending.commit_retry,
-        Some(PendingCommitRetry {
+        Some(CommitRequest {
             message: "second".to_string(),
             amend: true,
             push_after_commit: false,

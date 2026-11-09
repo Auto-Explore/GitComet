@@ -2122,20 +2122,6 @@ fn runtime_themes_are_reused_until_the_directory_changes() {
 }
 
 #[test]
-fn runtime_theme_dir_ignores_reserved_system_theme_filenames() {
-    let dir = tempdir().expect("temp dir should exist");
-    fs::write(dir.path().join("gitcomet.json"), "not parsed")
-        .expect("reserved theme file should be written");
-
-    let themes = merged_theme_options(Some(dir.path()));
-
-    assert_eq!(
-        themes,
-        available_themes(),
-        "custom themes in reserved bundled filenames should be ignored"
-    );
-}
-#[test]
 fn runtime_theme_dir_ignores_every_reserved_system_theme_filename() {
     let dir = tempdir().expect("temp dir should exist");
 

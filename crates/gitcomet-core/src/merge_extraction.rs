@@ -1,8 +1,4 @@
 //! Utilities for extracting non-trivial 3-way merge cases from git history.
-//!
-//! This module ports the core workflow described in
-//! `docs/REFERENCE_TEST_PORTABILITY.md` Phase 3C (real-world merge extraction)
-//! into production code so it can be reused outside ad-hoc test harnesses.
 
 use crate::merge::{MergeOptions, merge_file};
 use crate::process::{bytes_to_text_preserving_utf8, git_command};
@@ -288,7 +284,7 @@ pub fn extract_merge_cases_from_repo(
     Ok(all_cases)
 }
 
-/// Write extracted merge cases as fixture files compatible with the Phase 2 harness.
+/// Write extracted merge cases as fixture files the merge fixture harness reads.
 pub fn write_fixture_files(
     cases: &[ExtractedMergeCase],
     dest_dir: &Path,
@@ -325,7 +321,7 @@ pub fn write_fixture_files(
         if should_generate_expected_result(&expected_path)? {
             // Generate a golden expected result from the current merge engine
             // so newly extracted fixtures are immediately runnable in the
-            // Phase 2 fixture harness without manual bootstrapping.
+            // fixture harness without manual bootstrapping.
             let expected = merge_file(
                 &case.base,
                 &case.contrib1,

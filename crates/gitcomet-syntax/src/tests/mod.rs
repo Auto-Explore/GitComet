@@ -469,3 +469,27 @@ mod prepared;
 mod prepared_documents;
 mod razor;
 mod reparse;
+
+/// Pattern index of every match of `query` over `text` parsed as `lang`, and
+/// whether the cursor overflowed `TS_QUERY_MATCH_LIMIT`.
+pub(super) fn injection_matches(
+    lang: tree_sitter::Language,
+    query: &str,
+    text: &str,
+) -> (Vec<usize>, bool) {
+    let query = tree_sitter::Query::new(&lang, query).expect("injections query should compile");
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&lang).expect("grammar should load");
+    let tree = parser.parse(text, None).expect("text should parse");
+    let mut cursor = tree_sitter::QueryCursor::new();
+    cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+    let mut patterns = Vec::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+    tree_sitter::StreamingIterator::advance(&mut matches);
+    while let Some(m) = matches.get() {
+        patterns.push(m.pattern_index);
+        tree_sitter::StreamingIterator::advance(&mut matches);
+    }
+    drop(matches);
+    (patterns, cursor.did_exceed_match_limit())
+}

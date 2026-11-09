@@ -56,17 +56,6 @@ pub(super) fn model(
 mod tests {
     use super::*;
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn model_offers_the_three_reset_modes() {
         let commit_id = CommitId("deadbeefcafe".into());
@@ -74,7 +63,7 @@ mod tests {
         let model = model(RepoId(1), &selector, &commit_id);
 
         assert_eq!(
-            entry_labels(&model),
+            model.entry_labels(),
             vec![
                 "Reset (--soft) to here",
                 "Reset (--mixed) to here",

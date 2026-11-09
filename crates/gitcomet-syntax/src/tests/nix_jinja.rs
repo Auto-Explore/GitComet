@@ -638,31 +638,15 @@ fn jinja_injection_query_stays_under_the_match_limit_on_a_dense_template() {
     lines.push("</ul>".to_string());
     let text = lines.join("\n");
 
-    let lang: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
-    let query = tree_sitter::Query::new(&lang, JINJA_INJECTIONS_QUERY)
-        .expect("jinja_injections.scm should compile");
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&lang)
-        .expect("jinja grammar should load");
-    let tree = parser
-        .parse(&text, None)
-        .expect("dense template should parse");
-
-    let mut cursor = tree_sitter::QueryCursor::new();
-    cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
-    let mut matched = 0usize;
-    {
-        let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
-        tree_sitter::StreamingIterator::advance(&mut matches);
-        while matches.get().is_some() {
-            matched += 1;
-            tree_sitter::StreamingIterator::advance(&mut matches);
-        }
-    }
+    let (patterns, overflowed) = injection_matches(
+        tree_sitter_jinja_dialects::LANGUAGE.into(),
+        JINJA_INJECTIONS_QUERY,
+        &text,
+    );
+    let matched = patterns.len();
 
     assert!(
-        !cursor.did_exceed_match_limit(),
+        !overflowed,
         "the Jinja injection query overflowed the {TS_QUERY_MATCH_LIMIT}-match \
              in-progress pool on a {}-line template. A combined group that loses ranges \
              assembles a different HTML document, so the engine drops the whole group and \

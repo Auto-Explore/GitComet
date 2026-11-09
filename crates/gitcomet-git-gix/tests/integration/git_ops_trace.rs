@@ -1,60 +1,31 @@
+use crate::git_cli::run_git;
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::path::{Path, PathBuf};
 
-fn run_git(repo: &Path, args: &[&str], empty_config: &Path) {
-    let status = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", empty_config)
-        .env("GIT_CONFIG_SYSTEM", empty_config)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
-}
-
 #[test]
 fn git_op_trace_captures_backend_entry_points_once_per_operation() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path();
 
-    // Use an empty file instead of NUL/​/dev/null — Git on Windows ARM64
-    // cannot access the NUL device as a config path.
-    // Keep the config file in a separate tempdir so it does not appear as an
-    // untracked file inside the repo and skew the status assertion below.
-    let config_dir = tempfile::tempdir().expect("create config tempdir");
-    let empty_config = config_dir.path().join("empty.gitconfig");
-    std::fs::write(&empty_config, "").expect("create empty git config");
-
-    run_git(repo, &["init", "-b", "main"], &empty_config);
-    run_git(
-        repo,
-        &["config", "user.email", "you@example.com"],
-        &empty_config,
-    );
-    run_git(repo, &["config", "user.name", "You"], &empty_config);
-    run_git(repo, &["config", "commit.gpgsign", "false"], &empty_config);
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
 
     std::fs::write(repo.join("story.txt"), "one\ntwo\nthree\n").expect("write base file");
-    run_git(repo, &["add", "story.txt"], &empty_config);
+    run_git(repo, &["add", "story.txt"]);
     run_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
-        &empty_config,
     );
 
-    run_git(repo, &["checkout", "-b", "feature"], &empty_config);
+    run_git(repo, &["checkout", "-b", "feature"]);
     std::fs::write(repo.join("story.txt"), "one\ntwo feature\nthree\n")
         .expect("write branch commit");
-    run_git(repo, &["add", "story.txt"], &empty_config);
+    run_git(repo, &["add", "story.txt"]);
     run_git(
         repo,
         &[
@@ -64,7 +35,6 @@ fn git_op_trace_captures_backend_entry_points_once_per_operation() {
             "-m",
             "feature change",
         ],
-        &empty_config,
     );
 
     std::fs::write(

@@ -4,6 +4,8 @@
 #[path = "../support/extension_formats.rs"]
 #[allow(dead_code)]
 mod formats;
+#[path = "../support/git_cli.rs"]
+mod git_cli;
 #[path = "../support/source_audit.rs"]
 mod source_audit;
 #[path = "../support/test_git_env.rs"]

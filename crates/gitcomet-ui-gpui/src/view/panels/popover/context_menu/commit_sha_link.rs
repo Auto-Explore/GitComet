@@ -41,24 +41,13 @@ pub(super) fn model(repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
 mod tests {
     use super::*;
 
-    fn entry_labels(model: &ContextMenuModel) -> Vec<String> {
-        model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn model_offers_revealing_and_browsing() {
         let commit_id = CommitId("deadbeef".into());
         let model = model(RepoId(3), &commit_id);
 
         assert_eq!(
-            entry_labels(&model),
+            model.entry_labels(),
             vec!["Reveal commit", "Start file browsing", "Copy to clipboard"]
         );
         // The id is shown so a reference in prose can be checked before acting.

@@ -549,7 +549,7 @@ pub(super) struct TerminalCellStyle {
 
 impl TerminalCellStyle {
     fn foreground(cell: &AlacCell, palette: &TerminalAnsiPalette) -> gpui::Rgba {
-        color_to_rgba(cell.fg, palette, palette.foreground)
+        color_to_rgba(cell.fg, palette)
     }
 }
 
@@ -558,7 +558,7 @@ pub(super) fn alacritty_cell_style(
     palette: &TerminalAnsiPalette,
 ) -> TerminalCellStyle {
     let mut fg = TerminalCellStyle::foreground(cell, palette);
-    let mut bg = color_to_rgba(cell.bg, palette, palette.background);
+    let mut bg = color_to_rgba(cell.bg, palette);
     let flags = cell.flags;
 
     if flags.contains(Flags::INVERSE) {
@@ -596,7 +596,6 @@ pub(super) fn alacritty_cell_style(
 fn color_to_rgba(
     color: alacritty_terminal::vte::ansi::Color,
     palette: &TerminalAnsiPalette,
-    _default_val: gpui::Rgba,
 ) -> gpui::Rgba {
     use alacritty_terminal::vte::ansi::Color;
     use alacritty_terminal::vte::ansi::NamedColor;
@@ -638,33 +637,33 @@ fn color_to_rgba(
             rgb.b as f32 / 255.0,
             1.0,
         ),
-        Color::Indexed(i) => get_color_at_index(i as usize, palette),
+        Color::Indexed(i) => get_color_at_index(i, palette),
     }
 }
 
-fn get_color_at_index(index: usize, palette: &TerminalAnsiPalette) -> gpui::Rgba {
+/// xterm's 256-colour table: the 16 palette colours, a 6x6x6 cube, then 24 greys.
+fn get_color_at_index(index: u8, palette: &TerminalAnsiPalette) -> gpui::Rgba {
     match index {
-        0..=15 => match index {
-            0 => palette.black,
-            1 => palette.red,
-            2 => palette.green,
-            3 => palette.yellow,
-            4 => palette.blue,
-            5 => palette.magenta,
-            6 => palette.cyan,
-            7 => palette.white,
-            8 => palette.bright_black,
-            9 => palette.bright_red,
-            10 => palette.bright_green,
-            11 => palette.bright_yellow,
-            12 => palette.bright_blue,
-            13 => palette.bright_magenta,
-            14 => palette.bright_cyan,
-            15 => palette.bright_white,
-            _ => unreachable!(),
-        },
+        0..=15 => [
+            palette.black,
+            palette.red,
+            palette.green,
+            palette.yellow,
+            palette.blue,
+            palette.magenta,
+            palette.cyan,
+            palette.white,
+            palette.bright_black,
+            palette.bright_red,
+            palette.bright_green,
+            palette.bright_yellow,
+            palette.bright_blue,
+            palette.bright_magenta,
+            palette.bright_cyan,
+            palette.bright_white,
+        ][usize::from(index)],
         16..=231 => {
-            let (r, g, b) = rgb_for_index((index - 16) as u8);
+            let (r, g, b) = rgb_for_index(index - 16);
             let cube_level = |c: u8| {
                 if c == 0 {
                     0.0
@@ -675,13 +674,9 @@ fn get_color_at_index(index: usize, palette: &TerminalAnsiPalette) -> gpui::Rgba
             gpui::Rgba::new(cube_level(r), cube_level(g), cube_level(b), 1.0)
         }
         232..=255 => {
-            let i = (index - 232) as u8;
-            let v = (i as f32 * 10.0 + 8.0) / 255.0;
+            let v = (f32::from(index - 232) * 10.0 + 8.0) / 255.0;
             gpui::Rgba::new(v, v, v, 1.0)
         }
-        256 => palette.foreground,
-        257 => palette.background,
-        _ => palette.black,
     }
 }
 

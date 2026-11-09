@@ -399,7 +399,7 @@ fn resolved_single_cherry_pick_survives_unstage_all() {
             git(dir.path(), &["checkout", "main"]);
             commit_file(dir.path(), "main\n", "main");
             let repo = GixBackend.open(dir.path()).unwrap();
-            assert!(repo.cherry_pick(&source).is_err());
+            assert!(repo.cherry_pick_with_output(&source, true, None).is_err());
             assert_eq!(
                 repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())
                     .unwrap(),

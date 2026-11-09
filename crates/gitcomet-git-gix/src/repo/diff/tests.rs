@@ -713,3 +713,59 @@ fn diff_file_text_for_staged_gitlink_returns_empty_sources() {
     assert!(diff.old_source.is_none());
     assert!(diff.new_source.is_none());
 }
+
+/// An unmerged staged side is ours (stage 2) when present; theirs (stage 3)
+/// is only the fallback and must not be read or cached.
+#[test]
+fn unmerged_staged_side_prefers_stage_two_without_reading_stage_three() {
+    use std::io::Write as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    init_test_repo(dir);
+    std::fs::write(dir.join("a.txt"), "base\n").unwrap();
+    git_success(dir, &["add", "a.txt"]);
+    git_success(dir, &["commit", "-q", "-m", "base"]);
+    let blob = |contents: &str| {
+        std::fs::write(dir.join("side.txt"), contents).unwrap();
+        let id = crate::test_support::git_stdout(dir, &["hash-object", "-w", "side.txt"]);
+        std::fs::remove_file(dir.join("side.txt")).unwrap();
+        id
+    };
+    let base = crate::test_support::git_stdout(dir, &["rev-parse", "HEAD:a.txt"]);
+    let ours = blob("ours\n");
+    let theirs = blob("theirs\n");
+    let mut update = crate::test_support::git_command()
+        .arg("-C")
+        .arg(dir)
+        .args(["update-index", "--index-info"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        update.stdin.take().unwrap(),
+        "0 {zero} 0\ta.txt\n100644 {base} 1\ta.txt\n100644 {ours} 2\ta.txt\n100644 {theirs} 3\ta.txt\n",
+        zero = "0".repeat(base.len()),
+    )
+    .unwrap();
+    assert!(update.wait().unwrap().success());
+
+    let repo = open_repo(dir);
+    let target = DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged);
+    let diff = repo
+        .diff_file_text_impl_cancellable(&target, &CancellationToken::new())
+        .unwrap()
+        .expect("a text diff");
+
+    let cached = |id: &str| {
+        preview_blob_cache_path(
+            dir,
+            Path::new("a.txt"),
+            &gix::ObjectId::from_hex(id.as_bytes()).unwrap(),
+        )
+    };
+    assert_eq!(
+        diff.new_source.map(|source| source.path),
+        Some(cached(&ours))
+    );
+    assert!(!cached(&theirs).exists(), "stage 3 was read and cached");
+}

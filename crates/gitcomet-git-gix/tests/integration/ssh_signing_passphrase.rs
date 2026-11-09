@@ -1,5 +1,6 @@
 //! End-to-end coverage for session reuse of an SSH signing-key passphrase.
 
+use crate::git_cli::{git_stdout, run_git};
 use gitcomet_core::auth::{
     AuthOutcome, GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth,
     clear_session_passphrase, clear_staged_git_auth, load_session_passphrases,
@@ -16,27 +17,6 @@ use std::process::Command;
 use crate::{auth_test_lock, test_git_env};
 
 const PASSPHRASE: &str = "correct horse battery staple";
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    cmd.arg("-C").arg(repo).args(args);
-    test_git_env::apply(&mut cmd);
-    let output = cmd.output().expect("run git command");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 fn ssh_signing_available() -> bool {
     Command::new("ssh-keygen")
@@ -101,7 +81,7 @@ fn missing_ssh_signing_passphrase_preserves_the_observed_prompt() {
     let repo = init_signing_repo(dir.path());
 
     let error = open(&repo)
-        .commit("signed work")
+        .commit_with_outcome("signed work")
         .expect_err("commit should need a passphrase");
     let ErrorKind::Git(failure) = error.kind() else {
         panic!("expected structured Git failure, got {:?}", error.kind());
@@ -137,7 +117,7 @@ fn independently_validated_ssh_signing_passphrase_is_reused_for_the_session() {
     let repo = init_signing_repo(dir.path());
 
     let missing = open(&repo)
-        .commit("first signed commit")
+        .commit_with_outcome("first signed commit")
         .expect_err("the signer must request its passphrase");
     let ErrorKind::Git(missing) = missing.kind() else {
         panic!("expected structured signing failure: {missing:?}");
@@ -169,7 +149,7 @@ fn independently_validated_ssh_signing_passphrase_is_reused_for_the_session() {
     assert!(remember_verified_passphrase(&challenge, &auth));
     stage_git_auth_for_current_thread(auth);
     open(&repo)
-        .commit("first signed commit")
+        .commit_with_outcome("first signed commit")
         .expect("first signed commit should accept the staged passphrase");
     clear_staged_git_auth();
     let cached = load_session_passphrases();
@@ -183,7 +163,7 @@ fn independently_validated_ssh_signing_passphrase_is_reused_for_the_session() {
     fs::write(repo.join("file.txt"), "more contents").expect("update file");
     run_git(&repo, &["add", "."]);
     open(&repo)
-        .commit("second signed commit")
+        .commit_with_outcome("second signed commit")
         .expect("second signed commit should reuse the session passphrase");
 
     clear_session_passphrase();
@@ -208,14 +188,16 @@ fn successful_signing_does_not_promote_an_unvalidated_staged_answer_to_cache() {
         secret: PASSPHRASE.into(),
     });
     open(&repo)
-        .commit("signed commit")
+        .commit_with_outcome("signed commit")
         .expect("staged answer signs");
     clear_staged_git_auth();
     assert!(load_session_passphrases().is_empty());
 
     fs::write(repo.join("file.txt"), "another change").unwrap();
     run_git(&repo, &["add", "."]);
-    let missing = open(&repo).commit("another signed commit").unwrap_err();
+    let missing = open(&repo)
+        .commit_with_outcome("another signed commit")
+        .unwrap_err();
     let ErrorKind::Git(missing) = missing.kind() else {
         panic!("expected structured signing failure: {missing:?}");
     };

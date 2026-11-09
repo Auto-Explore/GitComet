@@ -371,14 +371,8 @@ fn open_repo_allows_same_basename_in_different_folders() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
-    let dir = std::env::temp_dir().join(format!(
-        "gitcomet-open-repo-same-basename-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let repo_a = dir.join("a").join("repo");
     let repo_b = dir.join("b").join("repo");
     let _ = std::fs::create_dir_all(&repo_a);

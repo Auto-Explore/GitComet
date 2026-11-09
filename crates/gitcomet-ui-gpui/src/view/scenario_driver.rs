@@ -967,8 +967,8 @@ impl Driver {
                     return Err("pane resize needs positive steps and travel".into());
                 }
                 let handle = match handle {
-                    ResizeTarget::Sidebar => PaneResizeHandle::Sidebar,
-                    ResizeTarget::Details => PaneResizeHandle::Details,
+                    ResizeTarget::Sidebar => SidePane::Sidebar,
+                    ResizeTarget::Details => SidePane::Details,
                 };
                 let start = self
                     .window
@@ -1636,7 +1636,7 @@ impl Driver {
 /// by the client-side frame inset.
 fn pane_resize_handle_center(
     view: &GitCometView,
-    handle: PaneResizeHandle,
+    handle: SidePane,
     window: &Window,
 ) -> Option<Point<Pixels>> {
     let insets = crate::kit::window_chrome::frame_insets(
@@ -1645,10 +1645,8 @@ fn pane_resize_handle_center(
     );
     let size = window.viewport_size();
     let x = match handle {
-        PaneResizeHandle::Sidebar if !view.sidebar_collapsed => {
-            insets.left + view.sidebar_render_width
-        }
-        PaneResizeHandle::Details if !view.details_collapsed => {
+        SidePane::Sidebar if !view.sidebar_collapsed => insets.left + view.sidebar_render_width,
+        SidePane::Details if !view.details_collapsed => {
             size.width - insets.right - px(1.0) - view.details_render_width
         }
         _ => return None,

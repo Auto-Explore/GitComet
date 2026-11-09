@@ -22,9 +22,6 @@ impl DiagramKind {
     fn for_token(token: &str) -> Option<Self> {
         matches!(token.to_ascii_lowercase().as_str(), "mmd" | "mermaid").then_some(Self::Mermaid)
     }
-    pub fn for_file(path: &Path, _source: &str) -> Option<Self> {
-        Self::for_path(path)
-    }
     pub fn for_fence(info: &str, source: &str) -> Option<Self> {
         let token = info
             .trim()

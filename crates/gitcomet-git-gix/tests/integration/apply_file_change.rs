@@ -1,4 +1,4 @@
-use crate::test_git_env;
+use crate::git_cli::{git_output, git_stdout, run_git};
 use gitcomet_core::domain::{ApplyChangeTarget, CommitId, DiffTarget};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::{
@@ -9,35 +9,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-fn run_git(repo: &Path, args: &[&str]) {
-    let output = git_output(repo, args);
-    assert!(
-        output.status.success(),
-        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-    test_git_env::apply(&mut cmd);
-    cmd.arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .output()
-        .expect("git command to run")
-}
-
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let output = git_output(repo, args);
-    assert!(output.status.success(), "git {:?} failed", args);
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
 
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).expect("create repo directory");

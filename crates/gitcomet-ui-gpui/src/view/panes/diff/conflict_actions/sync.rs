@@ -351,7 +351,7 @@ impl DiffRenderer {
             nav_targets,
             original_region_aligned_ranges,
             hovered_conflict: None,
-            // section 30 split: any pending row selection is invalidated by a source
+            // Split: any pending row selection is invalidated by a source
             // rebuild (which happens after a split changes the segmentation).
             row_selection: None,
             // Pending alignment marks are line numbers into the old source, so
@@ -432,7 +432,7 @@ impl DiffRenderer {
             self.conflict_jump_to_nav_target(target_index, cx);
         }
         self.announce_conflict_open_summary(cx);
-        // section 30 aligned row space: whole-file column rows (three-way and
+        // Aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably
         // sized text conflicts to a Full load in the background; this

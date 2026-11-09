@@ -6,7 +6,7 @@
 //! - `mergetool`: focused merge view, compatible with `git mergetool`
 //! - `setup`: configure git difftool/mergetool integration
 //! - `uninstall`: remove gitcomet difftool/mergetool integration
-//! - `extract-merge-fixtures`: generate Phase 3C real-world merge fixtures
+//! - `extract-merge-fixtures`: generate real-world merge fixtures
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use gitcomet_core::merge::{ConfigValueSource, ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};

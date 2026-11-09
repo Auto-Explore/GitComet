@@ -1,6 +1,6 @@
 use super::shortcut_keys::{compact_keycap_plate, compact_keycaps};
 use crate::icons::svg_spinner;
-use crate::theme::{AppTheme, composite_over};
+use crate::theme::{AppTheme, composite_over, mix_rgba};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
@@ -423,12 +423,12 @@ impl Button {
             ButtonStyle::Solid => {
                 let bg = theme.colors.surface.raised;
                 let hover_bg = if theme.is_dark {
-                    mix(bg, theme.colors.foreground.primary, 0.06)
+                    mix_rgba(bg, theme.colors.foreground.primary, 0.06)
                 } else {
                     composite_over(bg, hover_overlay)
                 };
                 let active_bg = if theme.is_dark {
-                    mix(bg, theme.colors.foreground.primary, 0.10)
+                    mix_rgba(bg, theme.colors.foreground.primary, 0.10)
                 } else {
                     composite_over(bg, active_overlay)
                 };
@@ -662,16 +662,6 @@ pub fn inline_icon_button(
 }
 
 use crate::theme::with_alpha;
-
-fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba::new(
-        a.red + (b.red - a.red) * t,
-        a.green + (b.green - a.green) * t,
-        a.blue + (b.blue - a.blue) * t,
-        a.alpha + (b.alpha - a.alpha) * t,
-    )
-}
 
 #[cfg(test)]
 mod tests {

@@ -599,26 +599,8 @@ fn vue_unquoted_directive_value_is_not_coloured_as_a_string() {
 fn vue_script_with_both_type_and_lang_injects_exactly_one_language() {
     let text = "<script type=\"module\" lang=\"ts\">\nconst x: number = 1;\n</script>\n";
 
-    let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
-    let query = tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
-        .expect("vendored Vue injections.scm should compile");
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&lang)
-        .expect("vendored Vue grammar should load");
-    let tree = parser.parse(text, None).expect("script should parse");
-
-    let mut cursor = tree_sitter::QueryCursor::new();
-    cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
-    let mut patterns = Vec::new();
-    {
-        let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
-        tree_sitter::StreamingIterator::advance(&mut matches);
-        while let Some(m) = matches.get() {
-            patterns.push(m.pattern_index);
-            tree_sitter::StreamingIterator::advance(&mut matches);
-        }
-    }
+    let (patterns, _) =
+        injection_matches(tree_sitter_vue::LANGUAGE.into(), VUE_INJECTIONS_QUERY, text);
 
     assert_eq!(
         patterns.len(),

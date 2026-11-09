@@ -5,7 +5,7 @@ use super::{
     actions_emit_effects, begin_commit_action, begin_local_action, external_and_history,
     maintenance, refresh_selected_head_gitlink, repo_management, util, worktree_removal,
 };
-use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
+use crate::model::{AppState, AuthPromptState, AuthRetryOperation, CommitRequest, RepoId};
 use crate::model::{AuthPromptKind, AuthPromptStatus};
 use crate::msg::{Effect, Msg, RepoCommandKind};
 use crate::store::reducer::prepared::ReducerInputs;
@@ -18,8 +18,7 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, GitHooks, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision,
+    CommandOutput, CommitOperationOutcome, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -50,20 +49,10 @@ fn auth_prompt_for_safe_push_after_commit(
 
 fn auth_prompt_for_commit(
     repo_id: RepoId,
-    pending: Option<PendingCommitRetry>,
+    request: CommitRequest,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let pending = pending?;
-    auth_prompt_for_error(
-        error,
-        AuthRetryOperation::Commit {
-            repo_id,
-            message: pending.message,
-            amend: pending.amend,
-            push_after_commit: pending.push_after_commit,
-            hooks: pending.hooks,
-        },
-    )
+    auth_prompt_for_error(error, AuthRetryOperation::Commit { repo_id, request })
 }
 
 fn auth_prompt_for_clone(
@@ -198,27 +187,7 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
         AuthRetryOperation::SafePushAfterCommit { repo_id, context } => {
             Some(Msg::SafePushAfterCommit { repo_id, context })
         }
-        AuthRetryOperation::Commit {
-            repo_id,
-            message,
-            amend,
-            push_after_commit,
-            hooks,
-        } => Some(if amend {
-            Msg::CommitAmend {
-                repo_id,
-                message,
-                push_after_commit,
-                hooks,
-            }
-        } else {
-            Msg::Commit {
-                repo_id,
-                message,
-                push_after_commit,
-                hooks,
-            }
-        }),
+        AuthRetryOperation::Commit { repo_id, request } => Some(Msg::Commit { repo_id, request }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
     }
 }
@@ -810,42 +779,17 @@ pub(super) fn clone_repo_finished(
     effects
 }
 
-pub(super) fn commit(
-    state: &mut AppState,
-    repo_id: RepoId,
-    message: String,
-    push_after_commit: bool,
-    hooks: GitHooks,
-) -> Vec<Effect> {
+pub(super) fn commit(state: &mut AppState, repo_id: RepoId, request: CommitRequest) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.pending.commit_retry = Some(PendingCommitRetry {
-            message: message.clone(),
-            amend: false,
-            push_after_commit,
-            hooks,
-        });
+        repo_state.pending.commit_retry = Some(request.clone());
     }
-    actions_emit_effects::commit(repo_id, message, hooks)
-}
-
-pub(super) fn commit_amend(
-    state: &mut AppState,
-    repo_id: RepoId,
-    message: String,
-    push_after_commit: bool,
-    hooks: GitHooks,
-) -> Vec<Effect> {
-    begin_commit_action(state, repo_id);
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.pending.commit_retry = Some(PendingCommitRetry {
-            message: message.clone(),
-            amend: true,
-            push_after_commit,
-            hooks,
-        });
-    }
-    actions_emit_effects::commit_amend(repo_id, message, hooks)
+    vec![Effect::Commit {
+        repo_id,
+        request,
+        identity: None,
+        auth: None,
+    }]
 }
 
 pub(super) fn commit_finished(
@@ -853,33 +797,28 @@ pub(super) fn commit_finished(
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
+    request: CommitRequest,
     result: Result<CommitOperationOutcome, Error>,
-    amend: bool,
 ) -> Vec<Effect> {
-    let pending_commit = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| r.pending.commit_retry.clone());
     let outcome = result.as_ref().ok().cloned();
-    let push_after_commit = outcome.is_some()
-        && pending_commit
-            .as_ref()
-            .is_some_and(|pending| pending.push_after_commit);
+    let push_after_commit = outcome.is_some() && request.push_after_commit;
     let auth_prompt = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error))
+        .and_then(|error| auth_prompt_for_commit(repo_id, request.clone(), error))
         .filter(|prompt| may_install_auth_prompt(state, prompt));
     let mut effects = actions_emit_effects::commit_finished(
         inputs,
         state,
         repo_id,
         result.map(|_| ()),
-        amend,
+        request.amend,
         auth_prompt.is_some(),
     );
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+    // A commit started while this one ran keeps its pending slot.
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.pending.commit_retry.as_ref() == Some(&request)
+    {
         repo_state.pending.commit_retry = None;
     }
     if let Some(prompt) = auth_prompt {
@@ -888,18 +827,16 @@ pub(super) fn commit_finished(
     }
     if push_after_commit && let Some(push) = annex_takeover(inputs, repos, state, repo_id, false) {
         effects.extend(push);
-    } else if push_after_commit
-        && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
-    {
+    } else if push_after_commit && let Some(outcome) = outcome {
         effects.extend(actions_emit_effects::safe_push_after_commit(
             state,
             repo_id,
             SafePushAfterCommitContext {
-                amend: pending_commit.amend,
+                amend: request.amend,
                 local_branch: outcome.local_branch,
                 pre_head: outcome.pre_head,
                 post_head: outcome.post_head,
-                hooks: pending_commit.hooks,
+                hooks: request.hooks,
             },
         ));
     }

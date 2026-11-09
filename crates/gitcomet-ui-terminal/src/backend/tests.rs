@@ -339,13 +339,10 @@ fn build_row_different_bg_not_merged() {
 #[test]
 fn color_to_rgba_resolves_named_ansi_colors() {
     let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
-    let fg = palette.foreground;
-    let _bg = palette.background;
 
     let red = color_to_rgba(
         alacritty_terminal::vte::ansi::Color::Named(alacritty_terminal::vte::ansi::NamedColor::Red),
         &palette,
-        fg,
     );
     assert_eq!(red, palette.red);
 
@@ -354,7 +351,6 @@ fn color_to_rgba_resolves_named_ansi_colors() {
             alacritty_terminal::vte::ansi::NamedColor::Green,
         ),
         &palette,
-        fg,
     );
     assert_eq!(green, palette.green);
 
@@ -363,7 +359,6 @@ fn color_to_rgba_resolves_named_ansi_colors() {
             alacritty_terminal::vte::ansi::NamedColor::Foreground,
         ),
         &palette,
-        fg,
     );
     assert_eq!(foreground, palette.foreground);
 }
@@ -371,7 +366,6 @@ fn color_to_rgba_resolves_named_ansi_colors() {
 #[test]
 fn color_to_rgba_resolves_spec_colors() {
     let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
-    let fg = palette.foreground;
     let spec = color_to_rgba(
         alacritty_terminal::vte::ansi::Color::Spec(alacritty_terminal::vte::ansi::Rgb {
             r: 100,
@@ -379,7 +373,6 @@ fn color_to_rgba_resolves_spec_colors() {
             b: 200,
         }),
         &palette,
-        fg,
     );
     assert!((spec.red - 100.0 / 255.0).abs() < 0.01);
     assert!((spec.green - 150.0 / 255.0).abs() < 0.01);

@@ -1,6 +1,6 @@
 use super::prepared::ReducerInputs;
-use super::util::{EffectAccumulator, push_diagnostic};
-use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoState};
+use super::util::{EffectAccumulator, error_loadable};
+use crate::model::{AppState, ConflictFileLoadMode, Loadable, RepoId, RepoState};
 use crate::msg::{ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictRegionResolution, ConflictResolverStrategy, ConflictSession,
@@ -53,10 +53,7 @@ pub(super) fn conflict_file_loaded(
             .is_some_and(conflict_session_uses_provisional_stage_inputs);
         let value = match result {
             Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
+            Err(e) => error_loadable(inputs, repo_state, &e),
         };
         let keep_stashed_session = session.is_none() && stashed_session.is_some();
         repo_state.set_conflict_file(value);

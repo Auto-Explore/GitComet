@@ -119,7 +119,7 @@ virga tua et baculus tuus ipsa me consolata sunt.
 ";
 
 // ===========================================================================
-// Phase 1A: t6403 merge-file algorithm-focused tests
+// t6403 merge-file algorithm-focused tests
 // ===========================================================================
 
 // ── Identity and clean merge ──
@@ -671,7 +671,7 @@ fn t6403_merge_only_theirs_changed() {
 }
 
 // ===========================================================================
-// Phase 1B: t6427 zdiff3 test cases
+// t6427 zdiff3 test cases
 // ===========================================================================
 
 #[test]

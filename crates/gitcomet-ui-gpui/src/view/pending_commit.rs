@@ -58,11 +58,8 @@ impl PendingCommit {
         let prompt_retries = state.auth_prompt.as_ref().is_some_and(|prompt| {
             matches!(
                 &prompt.operation,
-                AuthRetryOperation::Commit {
-                    repo_id,
-                    amend,
-                    ..
-                } if *repo_id == self.repo_id && *amend == self.amend
+                AuthRetryOperation::Commit { repo_id, request }
+                    if *repo_id == self.repo_id && request.amend == self.amend
             )
         });
         let retry_in_flight = state
@@ -94,7 +91,7 @@ impl PendingCommit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_state::model::{AuthPromptState, PendingCommitRetry};
+    use gitcomet_state::model::{AuthPromptState, CommitRequest};
     use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -145,10 +142,12 @@ mod tests {
             reason: "auth required".into(),
             operation: AuthRetryOperation::Commit {
                 repo_id: RepoId(1),
-                message: "message".into(),
-                amend,
-                push_after_commit: false,
-                hooks: gitcomet_core::services::GitHooks::Run,
+                request: gitcomet_state::model::CommitRequest {
+                    message: "message".into(),
+                    amend,
+                    push_after_commit: false,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
             },
         }
     }
@@ -276,7 +275,7 @@ mod tests {
         let mut p = pending(&state_with(repo.clone()), true);
         repo.feedback_mut()
             .push_command_result(entry("Amend", false, 1));
-        repo.pending.commit_retry = Some(PendingCommitRetry {
+        repo.pending.commit_retry = Some(CommitRequest {
             message: "message".into(),
             amend: true,
             push_after_commit: false,

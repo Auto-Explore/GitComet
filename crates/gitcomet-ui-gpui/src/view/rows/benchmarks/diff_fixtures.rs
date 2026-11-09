@@ -999,10 +999,10 @@ impl PaneResizeDragStepFixture {
         (h.finish(), metrics)
     }
 
-    fn handle(&self) -> PaneResizeHandle {
+    fn handle(&self) -> SidePane {
         match self.target {
-            PaneResizeTarget::Sidebar => PaneResizeHandle::Sidebar,
-            PaneResizeTarget::Details => PaneResizeHandle::Details,
+            PaneResizeTarget::Sidebar => SidePane::Sidebar,
+            PaneResizeTarget::Details => SidePane::Details,
         }
     }
 
