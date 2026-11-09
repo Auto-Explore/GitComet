@@ -988,7 +988,12 @@ fn cancelled_action_uses_its_inner_log_refresh_without_an_extra_head_query() {
             false,
             true,
             InternalMsg::CommitFinished {
-                amend: false,
+                request: crate::model::CommitRequest {
+                    message: String::new(),
+                    amend: false,
+                    push_after_commit: false,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
                 repo_id: RepoId(1),
                 result: Err(cancelled()),
             },

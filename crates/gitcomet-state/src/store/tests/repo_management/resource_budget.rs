@@ -46,7 +46,12 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             &ids,
             &mut state,
             Msg::Internal(InternalMsg::CommitFinished {
-                amend: false,
+                request: crate::model::CommitRequest {
+                    amend: false,
+                    message: "message".into(),
+                    push_after_commit: true,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
                 repo_id: id,
                 result: Ok(CommitOperationOutcome::default()),
             }),

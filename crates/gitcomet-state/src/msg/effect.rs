@@ -345,10 +345,8 @@ pub enum Effect {
     },
     Commit {
         repo_id: RepoId,
-        message: String,
-        amend: bool,
+        request: crate::model::CommitRequest,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
-        hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
     },
 

@@ -1842,7 +1842,7 @@ pub enum InternalMsg {
     },
     CommitFinished {
         repo_id: RepoId,
-        amend: bool,
+        request: CommitRequest,
         result: Result<CommitOperationOutcome, Error>,
     },
     SafePushAfterCommitFinished {

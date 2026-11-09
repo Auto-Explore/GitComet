@@ -970,13 +970,12 @@ pub(super) fn schedule_commit(
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    message: String,
-    amend: bool,
+    request: crate::model::CommitRequest,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
-    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) {
-    let context = commit_context(&message, hooks);
+    let context = commit_context(&request.message, request.hooks);
+    let (message, amend, hooks) = (request.message.clone(), request.amend, request.hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -995,7 +994,7 @@ pub(super) fn schedule_commit(
         },
         move |repo_id, result| InternalMsg::CommitFinished {
             repo_id,
-            amend,
+            request,
             result,
         },
     );

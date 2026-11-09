@@ -567,13 +567,13 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::Commit { repo_id, amend, .. } => {
-            send(Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-                repo_id,
-                amend,
-                result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+        Effect::Commit {
+            repo_id, request, ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            request,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::PreviewTagPush {
             repo_id,
             request,

@@ -593,18 +593,15 @@ fn review_commit_and_amend_push_wait_for_running_push() {
             pre_head: None,
             post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
         });
-        let message = if amend {
-            InternalMsg::CommitFinished {
-                amend: true,
-                repo_id,
-                result,
-            }
-        } else {
-            InternalMsg::CommitFinished {
-                amend: false,
-                repo_id,
-                result,
-            }
+        let message = InternalMsg::CommitFinished {
+            request: crate::model::CommitRequest {
+                message: "ship".into(),
+                amend,
+                push_after_commit: true,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
+            repo_id,
+            result,
         };
         let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Internal(message));
         assert!(!runs_annex(&effects, false));
@@ -970,7 +967,12 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            amend: false,
+            request: crate::model::CommitRequest {
+                message: "ship".to_string(),
+                amend: false,
+                push_after_commit: true,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
                 local_branch: context.local_branch.clone(),

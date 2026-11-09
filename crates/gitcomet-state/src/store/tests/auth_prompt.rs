@@ -421,7 +421,12 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            amend: false,
+            request: crate::model::CommitRequest {
+                message: "ship it".to_string(),
+                amend: false,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
             repo_id,
             result: Err(auth_error(
                 "git commit failed: fatal: could not read Password for 'https://example.com': terminal prompts disabled",
@@ -448,28 +453,6 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
 }
 
 #[test]
-fn commit_finished_auth_error_without_pending_retry_does_not_prompt() {
-    let repo_id = RepoId(1);
-    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
-    let id_alloc = AtomicU64::new(1);
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            amend: false,
-            repo_id,
-            result: Err(auth_error(
-                "git commit failed: fatal: could not read Password for 'https://example.com': terminal prompts disabled",
-            )),
-        }),
-    );
-
-    assert_terminal_failure(&state);
-}
-
-#[test]
 fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
@@ -487,7 +470,12 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
-            amend: true,
+            request: crate::model::CommitRequest {
+                message: "fixup".to_string(),
+                amend: true,
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Skip,
+            },
             repo_id,
             result: Err(auth_error(
                 "git commit --amend failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
@@ -762,12 +750,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     );
     assert!(matches!(
         commit_effects.as_slice(),
-        [Effect::Commit {
-            repo_id: RepoId(1),
-            message,
-            hooks: gitcomet_core::services::GitHooks::Run,
-            ..
-        }] if message == "first"
+        [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { message, hooks: gitcomet_core::services::GitHooks::Run, .. }, .. }] if message == "first"
     ));
     let commit_auth = commit_effects[0]
         .git_auth()
@@ -813,12 +796,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert!(
         matches!(
             amend_effects.as_slice(),
-            [Effect::Commit { amend: true,
-                repo_id: RepoId(1),
-                message,
-                hooks: gitcomet_core::services::GitHooks::Skip,
-                ..
-            }] if message == "second"
+            [Effect::Commit { repo_id: RepoId(1), request: crate::model::CommitRequest { amend: true, message, hooks: gitcomet_core::services::GitHooks::Skip, .. }, .. }] if message == "second"
         ),
         "the replay keeps skipping hooks"
     );

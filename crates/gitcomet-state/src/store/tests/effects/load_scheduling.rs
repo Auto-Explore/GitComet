@@ -2589,23 +2589,29 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::Commit {
-                amend: false,
                 repo_id,
-                message: "msg".to_string(),
                 identity: None,
-                hooks: gitcomet_core::services::GitHooks::Run,
                 auth: None,
+                request: crate::model::CommitRequest {
+                    amend: false,
+                    message: "msg".to_string(),
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                    push_after_commit: false,
+                },
             },
             1,
         ),
         (
             Effect::Commit {
-                amend: true,
                 repo_id,
-                message: "msg".to_string(),
                 identity: None,
-                hooks: gitcomet_core::services::GitHooks::Run,
                 auth: None,
+                request: crate::model::CommitRequest {
+                    amend: true,
+                    message: "msg".to_string(),
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                    push_after_commit: false,
+                },
             },
             1,
         ),

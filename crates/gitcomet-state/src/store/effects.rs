@@ -997,14 +997,12 @@ pub(super) fn schedule_effect(
         }
         Effect::Commit {
             repo_id,
-            message,
-            amend,
+            request,
             identity,
-            hooks,
             auth,
         } => {
             repo_actions::schedule_commit(
-                executor, repos, msg_tx, repo_id, message, amend, identity, hooks, auth,
+                executor, repos, msg_tx, repo_id, request, identity, auth,
             );
         }
         Effect::PreviewTagPush {

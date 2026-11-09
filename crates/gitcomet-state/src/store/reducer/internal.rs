@@ -521,9 +521,9 @@ pub(super) fn reduce(
         ),
         InternalMsg::CommitFinished {
             repo_id,
-            amend,
+            request,
             result,
-        } => auth::commit_finished(inputs, repos, state, repo_id, result, amend),
+        } => auth::commit_finished(inputs, repos, state, repo_id, request, result),
         InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context,

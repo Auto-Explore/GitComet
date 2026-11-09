@@ -687,12 +687,12 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::CommitFinished {
                 repo_id,
-                amend,
+                request,
                 result,
             } => f
                 .debug_struct("CommitFinished")
                 .field("repo_id", repo_id)
-                .field("amend", amend)
+                .field("request", request)
                 .field("result", result)
                 .finish(),
             InternalMsg::SafePushAfterCommitFinished {
