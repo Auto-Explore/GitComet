@@ -2919,5 +2919,4 @@ pub(super) fn commit_signatures_verified(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests;
