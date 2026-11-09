@@ -1,9 +1,8 @@
-use super::history::gix_head_id_or_none;
+use super::GixRepo;
 use super::remotes::{
     UpstreamBranch, tracking_refs_for_remote_branch, tracking_refs_of_remote,
     write_branch_upstream_config,
 };
-use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, command_output, git_command_failed_error, run_git_raw_output,
     run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
@@ -225,11 +224,6 @@ impl GixRepo {
         )
     }
 
-    pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
-        let repo = self.reopen_repo()?;
-        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
-    }
-
     fn validate_push_after_commit_target(&self, target: &SafePushAfterCommitTarget) -> Result<()> {
         validate_ref_like_arg(&target.remote, "remote name")?;
         validate_ref_like_arg(&target.branch, "branch name")?;
@@ -432,30 +426,6 @@ impl GixRepo {
         Ok(self
             .fetch_remote_branch_tip_with_output(remote, branch)?
             .map(|(tip, _)| tip))
-    }
-
-    pub(super) fn commit_is_ancestor(
-        &self,
-        ancestor: &CommitId,
-        descendant: &CommitId,
-    ) -> Result<bool> {
-        validate_hex_commit_id(ancestor)?;
-        validate_hex_commit_id(descendant)?;
-
-        let label = format!("git merge-base --is-ancestor {ancestor} {descendant}");
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("merge-base")
-            .arg("--is-ancestor")
-            .arg(ancestor.as_ref())
-            .arg(descendant.as_ref());
-        let output = run_git_raw_output(cmd, &label)?;
-        if output.status.success() {
-            return Ok(true);
-        }
-        if output.status.code() == Some(1) {
-            return Ok(false);
-        }
-        Err(git_command_failed_error(&label, output))
     }
 
     fn safe_push_decision_for_target(

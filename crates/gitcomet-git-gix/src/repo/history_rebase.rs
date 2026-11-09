@@ -1,8 +1,8 @@
 use super::GixRepo;
 use super::history::{gix_head_id_or_none, peel_commit};
 use crate::util::{
-    git_command_failed_error, run_git_capture, run_git_raw_output, run_git_with_output,
-    validate_hex_commit_id, validate_ref_like_arg, with_shared_git_auth,
+    command_output, git_command_failed_error, run_git_capture, run_git_raw_output,
+    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg, with_shared_git_auth,
 };
 use gitcomet_core::domain::{CommitId, short_commit_id};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -12,6 +12,7 @@ use gitcomet_core::services::{
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
 const PERSISTED_REWORD_STAGING_DIR: &str = "gitcomet-reword.staging";
@@ -252,6 +253,132 @@ fn reword_first_parent_distance(
 }
 
 impl GixRepo {
+    /// Shared message-editor setup. Dedicated rewords run this command
+    /// directly, without the generic Continue action's other sequencer fallbacks.
+    pub(super) fn rebase_continue_command(&self) -> Result<Command> {
+        let mut cmd = self.git_workdir_cmd();
+        let repo = self.repo();
+        match persisted_reword_state(repo.path()) {
+            PersistedReword::Ready {
+                editor,
+                messages,
+                plan,
+            } => {
+                // The persisted editor only services steps the plan knew
+                // about; a message-editing step added to the todo outside
+                // GitComet would silently keep its old message.
+                let comment_char = planned_messages_comment_char(&repo, &messages)?;
+                if rebase_unplanned_message_edit(repo.path(), &plan) {
+                    return Err(Error::new(ErrorKind::Backend(
+                        unplanned_rebase_edit_message(comment_char),
+                    )));
+                }
+                cmd.env("GIT_EDITOR", shell_quote_path(&editor));
+                if let Some(comment_char) = comment_char {
+                    cmd.arg("-c").arg(comment_char_config(comment_char));
+                }
+                cmd.env("GITCOMET_MSGS_DIR", messages);
+                cmd.env("GITCOMET_GIT_DIR", repo.path());
+            }
+            PersistedReword::Damaged { messages } => {
+                // The hint is all that is left to give; unreadable messages
+                // leave it without the override rather than hide it.
+                let comment_char = planned_messages_comment_char(&repo, &messages)
+                    .ok()
+                    .flatten();
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "{}'s reword data for this rebase is incomplete; continue it in a \
+                     terminal with `{}`, or abort the rebase",
+                    gitcomet_core::identity::current().display_name(),
+                    continue_command(comment_char)
+                ))));
+            }
+            PersistedReword::Absent => {
+                // `git rebase --continue` may open an editor to confirm the
+                // replayed commit's message. A GUI subprocess has no terminal
+                // to service it, so a no-op editor is used — but only when no
+                // message-editing step is pending: silently accepting a
+                // pending reword/squash message would finalize rewritten
+                // history the user still meant to edit (e.g. a rebase started
+                // in a terminal, continued here after a conflict).
+                if rebase_pending_message_edit(repo.path()) {
+                    return Err(Error::new(ErrorKind::Backend(
+                        unplanned_rebase_edit_message(None),
+                    )));
+                }
+                cmd.env("GIT_EDITOR", "true");
+            }
+        }
+        cmd.arg("rebase").arg("--continue");
+        Ok(cmd)
+    }
+
+    /// Run a rebase step (`rebase -i` / `rebase --continue`). A non-zero exit
+    /// can be a normal outcome: git advanced and paused at the next conflict
+    /// with the rebase left in progress. That case — and only that case — is
+    /// reported as success (with the captured output) so the UI treats it as
+    /// "paused at conflict": it clears the loading state, reloads status, and
+    /// surfaces the new conflict. A non-zero exit that made no sequencer
+    /// progress (unresolved conflicts on continue, hook/signing/editor
+    /// failures) keeps the original git error — as does an initial command
+    /// that progressed but left no conflict behind: GitComet plans only
+    /// pick/reword/squash/fixup/drop steps, so a conflict is the only
+    /// legitimate reason the initial `rebase -i` stops non-zero, and
+    /// anything else (a failing hook or signer) must keep git's message.
+    pub(super) fn run_rebase_step_output(
+        &self,
+        cmd: Command,
+        label: &str,
+    ) -> Result<CommandOutput> {
+        let steps_before = self.rebase_progress_marker();
+        let output = run_git_raw_output(cmd, label)?;
+        let paused_after_progress = !output.status.success()
+            && self.rebase_in_progress_impl()?
+            && match (steps_before, self.rebase_progress_marker()) {
+                // The command started the rebase and paused at a conflict.
+                (None, Some(_)) => self.index_has_conflicts(),
+                // The command advanced past the step it was stuck on. No
+                // conflict requirement here: a continue can legitimately
+                // stop without one (a failing `exec` in an externally
+                // planned todo).
+                (Some(before), Some(after)) => after > before,
+                (_, None) => false,
+            };
+        // A continue may advance and then need a different signing key.
+        // Keep that challenge as an error even though the sequencer moved:
+        // callers must ask for credentials, not mistake it for a conflict.
+        if paused_after_progress
+            && matches!(
+                output.auth_outcome,
+                gitcomet_core::auth::AuthOutcome::NeedsInput(_)
+                    | gitcomet_core::auth::AuthOutcome::Rejected(_)
+            )
+        {
+            return Err(git_command_failed_error(label, output));
+        }
+        if output.status.success() || paused_after_progress {
+            Ok(command_output(label, &output))
+        } else {
+            Err(git_command_failed_error(label, output))
+        }
+    }
+
+    /// Completed-step count of the rebase in progress, from the merge
+    /// backend's `done` file or the apply backend's `next` counter. `None`
+    /// when no rebase state exists.
+    fn rebase_progress_marker(&self) -> Option<usize> {
+        let repo = self.repo();
+        let git_dir = repo.path();
+        if let Ok(done) = fs::read_to_string(git_dir.join("rebase-merge").join("done")) {
+            return Some(done.lines().count());
+        }
+        fs::read_to_string(git_dir.join("rebase-apply").join("next"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
     pub(super) fn list_commits_for_interactive_rebase_impl(
         &self,
         base: &str,
@@ -763,10 +890,7 @@ fn read_planned_messages(msgs_dir: &Path) -> Result<Vec<Vec<u8>>> {
 }
 
 /// [`comment_char_override`] for the planned messages in `msgs_dir`.
-pub(super) fn planned_messages_comment_char(
-    repo: &gix::Repository,
-    msgs_dir: &Path,
-) -> Result<Option<u8>> {
+fn planned_messages_comment_char(repo: &gix::Repository, msgs_dir: &Path) -> Result<Option<u8>> {
     comment_char_override(
         &configured_comment_prefixes(repo),
         &read_planned_messages(msgs_dir)?,
@@ -786,7 +910,7 @@ fn configured_comment_prefixes(repo: &gix::Repository) -> Vec<Vec<u8>> {
     configured
 }
 
-pub(super) fn comment_char_config(comment_char: u8) -> String {
+fn comment_char_config(comment_char: u8) -> String {
     format!("core.commentChar={}", char::from(comment_char))
 }
 
@@ -915,11 +1039,11 @@ impl RebaseScripts {
 /// Git treats the value as a shell command run by `sh` — on Windows too, via
 /// Git for Windows' bundled shell — so an unquoted path containing spaces
 /// word-splits, and POSIX single-quote quoting applies on every platform.
-pub(super) fn shell_quote_path(path: &Path) -> String {
+fn shell_quote_path(path: &Path) -> String {
     gitcomet_core::text_utils::shell_single_quote(&path.to_string_lossy())
 }
 
-pub(super) enum PersistedReword {
+enum PersistedReword {
     /// No GitComet reword plan exists for this rebase.
     Absent,
     Ready {
@@ -933,7 +1057,7 @@ pub(super) enum PersistedReword {
     Damaged { messages: PathBuf },
 }
 
-pub(super) fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
+fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
     let state_dir = git_dir.join("rebase-merge").join(PERSISTED_REWORD_DIR);
     if !state_dir.exists() {
         return PersistedReword::Absent;
@@ -959,7 +1083,7 @@ pub(super) fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
 /// message instead of the editor session the user asked for. Ids are
 /// compared prefix-tolerantly: git may abbreviate ids when the todo is
 /// edited or regenerated.
-pub(super) fn rebase_unplanned_message_edit(git_dir: &Path, plan: &Path) -> bool {
+fn rebase_unplanned_message_edit(git_dir: &Path, plan: &Path) -> bool {
     use gitcomet_core::squash::{TodoLineRole, todo_line_commit_word, todo_line_role};
     let editing = |line: &str| {
         matches!(
@@ -995,7 +1119,7 @@ pub(super) fn rebase_unplanned_message_edit(git_dir: &Path, plan: &Path) -> bool
 /// (git opens the run's editor at its last squash/fixup step). Line
 /// classification lives in core ([`gitcomet_core::squash::todo_line_role`])
 /// so these rules cannot drift from the planner's.
-pub(super) fn rebase_pending_message_edit(git_dir: &Path) -> bool {
+fn rebase_pending_message_edit(git_dir: &Path) -> bool {
     use gitcomet_core::squash::{TodoLineRole, todo_line_role};
     let rebase_dir = git_dir.join("rebase-merge");
 
@@ -1180,7 +1304,7 @@ exit 0
 /// The terminal command that continues this rebase. A rebase started with a
 /// comment-character override wrote git's own instruction lines with it, so
 /// continuing without it would commit them.
-pub(super) fn continue_command(comment_char: Option<u8>) -> String {
+fn continue_command(comment_char: Option<u8>) -> String {
     match comment_char {
         Some(comment_char) => format!(
             "git -c {} rebase --continue",
@@ -1190,7 +1314,7 @@ pub(super) fn continue_command(comment_char: Option<u8>) -> String {
     }
 }
 
-pub(super) fn unplanned_rebase_edit_message(comment_char: Option<u8>) -> String {
+fn unplanned_rebase_edit_message(comment_char: Option<u8>) -> String {
     format!(
         "this rebase has pending reword/squash steps that {} did not \
          plan; continue it in a terminal with `{}`, or abort the rebase",
