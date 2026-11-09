@@ -12,12 +12,7 @@ use std::sync::Arc;
 /// What a link inside a read-only text input points at.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LinkTarget {
-    Commit {
-        commit_id: CommitId,
-        /// Whether the link may offer "Reveal commit". A commit's own SHA
-        /// field cannot reveal itself.
-        allow_navigate: bool,
-    },
+    Commit { commit_id: CommitId },
     Url(SharedString),
 }
 
@@ -106,13 +101,9 @@ impl CommitLinkMenu {
 
     fn popover_kind_for(&self, target: &LinkTarget) -> PopoverKind {
         match target {
-            LinkTarget::Commit {
-                commit_id,
-                allow_navigate,
-            } => PopoverKind::CommitShaLinkMenu {
+            LinkTarget::Commit { commit_id } => PopoverKind::CommitShaLinkMenu {
                 repo_id: self.repo_id,
                 commit_id: commit_id.clone(),
-                allow_navigate: *allow_navigate,
             },
             LinkTarget::Url(url) => PopoverKind::WebLinkMenu {
                 url: url.clone(),

@@ -770,14 +770,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             missing.hash(hasher);
             load_remote_image_url.hash(hasher);
         }
-        PopoverKind::CommitShaLinkMenu {
-            repo_id,
-            commit_id,
-            allow_navigate,
-        } => {
+        PopoverKind::CommitShaLinkMenu { repo_id, commit_id } => {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
-            allow_navigate.hash(hasher);
         }
         PopoverKind::DiffActionMenu => {}
         PopoverKind::MergetoolSettingsMenu => {}

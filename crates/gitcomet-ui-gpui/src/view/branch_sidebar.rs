@@ -30,6 +30,20 @@ const REMOTE_HEADER_GROUP_PREFIX: &str = "group:remote-header:";
 const LOCAL_GROUP_PREFIX: &str = "group:local:";
 const REMOTE_GROUP_PREFIX: &str = "group:remote:";
 
+/// A section that has nothing to list yet and offers a quick action instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EmptySection {
+    Branches,
+    Remotes,
+    Worktrees,
+    Submodules,
+    Stashes,
+}
+
+/// Rows an empty-section card spans; the list is uniform, so the card is
+/// drawn as one slice per row.
+pub(super) const EMPTY_CARD_ROWS: u8 = 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BranchSection {
     Local,
@@ -263,6 +277,11 @@ pub(super) enum BranchSidebarRow {
         collapse_key: SharedString,
     },
     SectionSpacer,
+    /// One row-high slice of an empty section's card.
+    EmptyCard {
+        section: EmptySection,
+        part: u8,
+    },
     Placeholder {
         section: BranchSection,
         message: SharedString,
@@ -1118,10 +1137,7 @@ fn sidebar_rows(
     if !local_collapsed {
         match &repo.branches {
             Loadable::Ready(branches) if branches.is_empty() => {
-                rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Local,
-                    message: "No branches".into(),
-                });
+                push_empty_card(&mut rows, EmptySection::Branches);
             }
             Loadable::Ready(branches) => {
                 let mut tree = SlashTree::default();
@@ -1257,10 +1273,7 @@ fn sidebar_rows(
 
             if remotes.is_empty() {
                 if !filtering {
-                    rows.push(BranchSidebarRow::Placeholder {
-                        section: BranchSection::Remote,
-                        message: "No remotes".into(),
-                    });
+                    push_empty_card(&mut rows, EmptySection::Remotes);
                 }
             } else {
                 if remote_names_need_sort {
@@ -1311,9 +1324,7 @@ fn sidebar_rows(
                     });
                 }
                 if !any {
-                    rows.push(BranchSidebarRow::WorktreePlaceholder {
-                        message: "No worktrees".into(),
-                    });
+                    push_empty_card(&mut rows, EmptySection::Worktrees);
                 }
             }
             Loadable::Loading | Loadable::NotLoaded => {
@@ -1338,10 +1349,7 @@ fn sidebar_rows(
     if !submodules_collapsed {
         match &repo.submodules {
             Loadable::Ready(submodules) if submodules.is_empty() => {
-                rows.push(BranchSidebarRow::SubmodulePlaceholder {
-                    message: "No submodules".into(),
-                    can_load: false,
-                });
+                push_empty_card(&mut rows, EmptySection::Submodules);
             }
             Loadable::Ready(submodules) => {
                 for submodule in submodules.iter() {
@@ -1381,9 +1389,7 @@ fn sidebar_rows(
     if !stash_collapsed {
         match &repo.stashes {
             Loadable::Ready(stashes) if stashes.is_empty() => {
-                rows.push(BranchSidebarRow::StashPlaceholder {
-                    message: "No stashes".into(),
-                });
+                push_empty_card(&mut rows, EmptySection::Stashes);
             }
             Loadable::Ready(stashes) => {
                 for stash in stashes.iter() {
@@ -2368,3 +2374,7 @@ fn push_branch_sidebar_branch_row(
 
 #[cfg(test)]
 mod tests;
+
+fn push_empty_card(rows: &mut Vec<BranchSidebarRow>, section: EmptySection) {
+    rows.extend((0..EMPTY_CARD_ROWS).map(|part| BranchSidebarRow::EmptyCard { section, part }));
+}

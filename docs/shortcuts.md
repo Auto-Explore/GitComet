@@ -148,6 +148,7 @@ Compatibility note:
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
+| Commit staged changes and push | `Cmd-Shift-Enter` | `Ctrl-Shift-Enter` | Commit message input only, and only when the Commit & Push action is enabled. |
 
 ### Commit message editor
 

@@ -306,17 +306,7 @@ impl SidebarPaneView {
     ) -> AnyElement {
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
-        div()
-            .id(("submodule_placeholder", ix))
-            .h(ctx.row_height())
-            .w_full()
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .gap(ctx.px(6.0))
-            .text_size(theme.ui_text(14.0))
-            .text_color(theme.colors.foreground.secondary)
+        let inner = div()
             .child(
                 div()
                     .flex_1()
@@ -336,7 +326,8 @@ impl SidebarPaneView {
                         this.store.dispatch(Msg::LoadSubmodules { repo_id });
                     }),
                 )
-            })
+            });
+        ctx.placeholder_card("submodule_placeholder", ix, inner)
             .into_any_element()
     }
 

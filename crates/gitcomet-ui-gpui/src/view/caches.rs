@@ -614,6 +614,11 @@ impl HistoryWhenVm {
 /// Characters of a commit id the history list shows.
 pub(in crate::view) const HISTORY_SHORT_SHA_LEN: usize = 8;
 
+/// A commit id cut to the length the history list shows.
+pub(in crate::view) fn short_commit_sha(sha: &str) -> &str {
+    sha.get(..HISTORY_SHORT_SHA_LEN).unwrap_or(sha)
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct HistoryShortShaVm {
     bytes: [u8; HISTORY_SHORT_SHA_LEN],

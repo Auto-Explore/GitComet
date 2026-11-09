@@ -668,11 +668,9 @@ impl PopoverHost {
                     load_remote_image_url,
                 ))
             }
-            PopoverKind::CommitShaLinkMenu {
-                repo_id,
-                commit_id,
-                allow_navigate,
-            } => Some(commit_sha_link::model(*repo_id, commit_id, *allow_navigate)),
+            PopoverKind::CommitShaLinkMenu { repo_id, commit_id } => {
+                Some(commit_sha_link::model(*repo_id, commit_id))
+            }
             PopoverKind::StashMenu {
                 repo_id,
                 index,

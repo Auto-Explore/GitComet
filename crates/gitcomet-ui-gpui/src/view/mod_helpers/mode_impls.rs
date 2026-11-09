@@ -287,6 +287,9 @@ pub(crate) enum PopoverKind {
     },
     PullPicker,
     PushPicker,
+    // The commit box now has Commit / Commit & Push buttons and an amend
+    // checkbox, so nothing opens this menu any more.
+    #[allow(dead_code)]
     CommitOptionsMenu {
         repo_id: RepoId,
     },
@@ -366,12 +369,11 @@ pub(crate) enum PopoverKind {
         /// approved through its link menu.
         load_remote_image_url: Option<SharedString>,
     },
-    /// Actions for a commit id clicked in a commit message or a SHA field.
+    /// Actions for a commit id clicked in a commit message or from a commit
+    /// card SHA chip.
     CommitShaLinkMenu {
         repo_id: RepoId,
         commit_id: CommitId,
-        /// A commit's own SHA field cannot navigate to itself.
-        allow_navigate: bool,
     },
     DiffEditorMenu {
         context_actions: Vec<gitcomet_extension_api::HostedAction>,

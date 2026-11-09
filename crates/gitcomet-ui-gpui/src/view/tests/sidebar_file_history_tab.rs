@@ -309,7 +309,7 @@ fn copy_sha_keeps_the_tab_open(cx: &mut gpui::TestAppContext) {
     activate(
         &view,
         cx,
-        |a| matches!(a, ContextMenuAction::CopyText { text } if text == sha.as_ref()),
+        |a| matches!(a, ContextMenuAction::CopyCommitSha { commit_id } if commit_id == &sha),
     );
     assert!(shows(cx, "sidebar_file_history_content"));
     let host = cx.update(|_w, app| view.read(app).popover_host.clone());

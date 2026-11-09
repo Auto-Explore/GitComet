@@ -113,6 +113,7 @@ actions!(
         DiffPrevChange,
         DiffNextChange,
         TextInputCommitSubmit,
+        TextInputCommitAndPushSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
         TextInputDiffPrevSearchMatchOrChange,

@@ -659,12 +659,26 @@ impl Render for GitCometView {
                     return;
                 }
                 let handled = this.details_pane.update(cx, |pane, cx| {
-                    pane.handle_commit_submit_shortcut(window, cx)
+                    pane.handle_commit_submit_shortcut(false, window, cx)
                 });
                 if handled {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &TextInputCommitAndPushSubmit, window, cx| {
+                    if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let handled = this.details_pane.update(cx, |pane, cx| {
+                        pane.handle_commit_submit_shortcut(true, window, cx)
+                    });
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
                 if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
                     cx.stop_propagation();

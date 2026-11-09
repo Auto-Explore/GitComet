@@ -141,11 +141,6 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_reword_scroll: ScrollHandle,
     pub(in super::super) commit_reword: Option<CommitRewordDraft>,
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
@@ -433,9 +428,12 @@ impl DetailsPaneView {
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Enter commit message".into(),
+                    placeholder: "What changed and why".into(),
                     multiline: true,
                     soft_wrap: true,
+                    // The commit box draws the card around the input.
+                    chromeless: true,
+                    min_lines: 4,
                     ..Default::default()
                 },
                 window,
@@ -501,43 +499,6 @@ impl DetailsPaneView {
                 RepoId(0),
                 Arc::<[components::MessageLink]>::from([]),
                 "commit_details_message_link_menu",
-                root_view.clone(),
-            )
-        });
-
-        let commit_details_sha_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-
-        let commit_details_date_input = cx.new(|cx| {
-            components::TextInput::new(components::TextInputOptions::selectable(), window, cx)
-        });
-
-        let commit_details_parent_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-        let commit_details_parent_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_parent_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_parent_link_menu",
-                root_view.clone(),
-            )
-        });
-
-        let commit_details_sha_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_sha_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_sha_link_menu",
                 root_view.clone(),
             )
         });
@@ -654,11 +615,6 @@ impl DetailsPaneView {
             commit_reword_scroll,
             commit_reword: None,
             commit_details_message_link_menu,
-            commit_details_sha_link_menu,
-            commit_details_sha_input,
-            commit_details_date_input,
-            commit_details_parent_input,
-            commit_details_parent_link_menu,
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
@@ -900,6 +856,55 @@ impl DetailsPaneView {
             self.prefill_commit_message_for_amend(cx);
         }
         cx.notify();
+    }
+
+    /// Toggle amend from the commit box and keep the rest of the window (the
+    /// popover host mirrors the flag) in step.
+    pub(in super::super) fn toggle_commit_amend(&mut self, cx: &mut gpui::Context<Self>) {
+        let enabled = !self.commit_amend_enabled;
+        self.set_commit_amend_enabled(enabled, cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| root.set_commit_amend_enabled(enabled, cx));
+        });
+    }
+
+    /// Toggle hook skipping from the commit box; the root view keeps the
+    /// popover host in step.
+    pub(in super::super) fn toggle_commit_skip_hooks(&mut self, cx: &mut gpui::Context<Self>) {
+        let enabled = !self.commit_skip_hooks_enabled;
+        self.set_commit_skip_hooks_enabled(enabled, cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_commit_skip_hooks_enabled(enabled, cx)
+            });
+        });
+    }
+
+    pub(in super::super) fn copy_commit_sha(
+        &self,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| root.copy_commit_sha(commit_id, cx));
+        });
+    }
+
+    pub(in super::super) fn reveal_commit_in_history(
+        &self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.reveal_commit_in_history(repo_id, commit_id, cx)
+            });
+        });
     }
 
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {

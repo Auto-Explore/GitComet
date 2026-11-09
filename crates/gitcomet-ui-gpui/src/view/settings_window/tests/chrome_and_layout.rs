@@ -521,7 +521,7 @@ fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn settings_window_professional_edition_waitlist_row_opens_editions_page(
+fn settings_window_professional_edition_upgrade_row_opens_editions_page(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
@@ -564,8 +564,8 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
     });
 
     let row_bounds = settings_cx
-        .debug_bounds("settings_window_professional_edition_waitlist")
-        .expect("expected professional edition waitlist row bounds");
+        .debug_bounds("settings_window_professional_edition_upgrade")
+        .expect("expected professional edition upgrade row bounds");
     settings_cx.simulate_click(row_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
