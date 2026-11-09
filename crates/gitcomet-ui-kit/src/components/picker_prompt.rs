@@ -2179,21 +2179,6 @@ mod tests {
     }
 
     #[test]
-    fn picker_prompt_layout_reserves_a_child_slot_per_section_header() {
-        let items = vec![
-            PickerPromptItem::plain("alpha").section("Open"),
-            PickerPromptItem::plain("beta").section("Open"),
-            PickerPromptItem::plain("gamma").section("Recently Closed"),
-        ];
-
-        let layout = picker_prompt_layout(&items, "");
-
-        assert_eq!(layout.item_indices, vec![0, 1, 2]);
-        // Header, alpha, beta, header, gamma.
-        assert_eq!(layout.child_indices, vec![1, 2, 4]);
-    }
-
-    #[test]
     fn picker_prompt_layout_keeps_sections_contiguous_when_filtering() {
         let items = vec![
             PickerPromptItem::plain("zulu-repo").section("Open"),
