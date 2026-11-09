@@ -175,7 +175,6 @@ pub fn text_has_mixed_line_endings(text: &str) -> bool {
         > 1
 }
 
-/// Validation error for sync-point-constrained matching.
 #[cfg(test)]
 mod tests {
     #[test]
