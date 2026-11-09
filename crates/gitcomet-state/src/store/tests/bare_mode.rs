@@ -29,25 +29,22 @@ fn bare_fast_stage_and_unstage_refuse_before_counters_or_effects() {
     for mode in [RepositoryMode::Bare, RepositoryMode::WorkingTree] {
         for action in 0..4 {
             let (_, _, mut state, repo_id) = fixture(mode);
-            let mut effects = reducer::SinglePathActionEffects::new();
+            let mut effects = reducer::PathActionEffects::new();
             let path = PathBuf::from("config");
-            match action {
-                0 => reducer::fill_stage_path_inline(&mut state, repo_id, path, &mut effects),
-                1 => reducer::fill_stage_paths_inline(
-                    &mut state,
+            let effect = match action {
+                0 => Effect::StagePath { repo_id, path },
+                1 => Effect::StagePaths {
                     repo_id,
-                    RepoPathList::from(vec![path]),
-                    &mut effects,
-                ),
-                2 => reducer::fill_unstage_path_inline(&mut state, repo_id, path, &mut effects),
-                3 => reducer::fill_unstage_paths_inline(
-                    &mut state,
+                    paths: RepoPathList::from(vec![path]),
+                },
+                2 => Effect::UnstagePath { repo_id, path },
+                3 => Effect::UnstagePaths {
                     repo_id,
-                    RepoPathList::from(vec![path]),
-                    &mut effects,
-                ),
+                    paths: RepoPathList::from(vec![path]),
+                },
                 _ => unreachable!(),
-            }
+            };
+            reducer::fill_path_action_inline(&mut state, repo_id, effect, &mut effects);
             assert_eq!(
                 effects.len(),
                 usize::from(mode == RepositoryMode::WorkingTree)

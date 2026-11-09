@@ -43,9 +43,8 @@ use reducer::prepared::PreparedReduction;
 #[cfg(any(test, feature = "benchmarks"))]
 use reducer::reduce;
 use reducer::{
-    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
-    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce_prepared,
-    reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
+    fill_path_action_inline, fill_reorder_repo_tabs_inline, fill_set_active_repo_inline,
+    reduce_prepared, reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
 use repository_runtime::RepositoryRuntimes;
@@ -1151,29 +1150,33 @@ impl AppStore {
                     }
                     Msg::StagePath { repo_id, path } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
-                            let mut effects = reducer::SinglePathActionEffects::new();
-                            fill_stage_path_inline(app_state, repo_id, path, &mut effects);
+                            let mut effects = reducer::PathActionEffects::new();
+                            let effect = crate::msg::Effect::StagePath { repo_id, path };
+                            fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
                     }
                     Msg::StagePaths { repo_id, paths } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
-                            let mut effects = reducer::BatchPathActionEffects::new();
-                            fill_stage_paths_inline(app_state, repo_id, paths, &mut effects);
+                            let mut effects = reducer::PathActionEffects::new();
+                            let effect = crate::msg::Effect::StagePaths { repo_id, paths };
+                            fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
                     }
                     Msg::UnstagePath { repo_id, path } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
-                            let mut effects = reducer::SinglePathActionEffects::new();
-                            fill_unstage_path_inline(app_state, repo_id, path, &mut effects);
+                            let mut effects = reducer::PathActionEffects::new();
+                            let effect = crate::msg::Effect::UnstagePath { repo_id, path };
+                            fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
                     }
                     Msg::UnstagePaths { repo_id, paths } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
-                            let mut effects = reducer::BatchPathActionEffects::new();
-                            fill_unstage_paths_inline(app_state, repo_id, paths, &mut effects);
+                            let mut effects = reducer::PathActionEffects::new();
+                            let effect = crate::msg::Effect::UnstagePaths { repo_id, paths };
+                            fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
                     }
@@ -1538,53 +1541,14 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
 
 #[cfg(feature = "benchmarks")]
 #[inline]
-pub(crate) fn with_stage_path_inline_for_bench<T>(
+pub(crate) fn with_path_action_inline_for_bench<T>(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    effect: crate::msg::Effect,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
-    let mut effects = reducer::SinglePathActionEffects::new();
-    fill_stage_path_inline(state, repo_id, path, &mut effects);
-    f(state, &effects)
-}
-
-#[cfg(feature = "benchmarks")]
-#[inline]
-pub(crate) fn with_stage_paths_inline_for_bench<T>(
-    state: &mut AppState,
-    repo_id: RepoId,
-    paths: crate::msg::RepoPathList,
-    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
-) -> T {
-    let mut effects = reducer::BatchPathActionEffects::new();
-    fill_stage_paths_inline(state, repo_id, paths, &mut effects);
-    f(state, &effects)
-}
-
-#[cfg(feature = "benchmarks")]
-#[inline]
-pub(crate) fn with_unstage_path_inline_for_bench<T>(
-    state: &mut AppState,
-    repo_id: RepoId,
-    path: PathBuf,
-    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
-) -> T {
-    let mut effects = reducer::SinglePathActionEffects::new();
-    fill_unstage_path_inline(state, repo_id, path, &mut effects);
-    f(state, &effects)
-}
-
-#[cfg(feature = "benchmarks")]
-#[inline]
-pub(crate) fn with_unstage_paths_inline_for_bench<T>(
-    state: &mut AppState,
-    repo_id: RepoId,
-    paths: crate::msg::RepoPathList,
-    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
-) -> T {
-    let mut effects = reducer::BatchPathActionEffects::new();
-    fill_unstage_paths_inline(state, repo_id, paths, &mut effects);
+    let mut effects = reducer::PathActionEffects::new();
+    fill_path_action_inline(state, repo_id, effect, &mut effects);
     f(state, &effects)
 }
 

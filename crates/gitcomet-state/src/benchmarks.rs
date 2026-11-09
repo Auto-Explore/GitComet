@@ -39,7 +39,12 @@ pub fn with_stage_path_sync<T>(
     path: std::path::PathBuf,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    crate::store::with_stage_path_inline_for_bench(state, repo_id, path, f)
+    crate::store::with_path_action_inline_for_bench(
+        state,
+        repo_id,
+        Effect::StagePath { repo_id, path },
+        f,
+    )
 }
 
 #[inline]
@@ -49,7 +54,12 @@ pub fn with_stage_paths_sync<T>(
     paths: RepoPathList,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    crate::store::with_stage_paths_inline_for_bench(state, repo_id, paths, f)
+    crate::store::with_path_action_inline_for_bench(
+        state,
+        repo_id,
+        Effect::StagePaths { repo_id, paths },
+        f,
+    )
 }
 
 #[inline]
@@ -59,7 +69,12 @@ pub fn with_unstage_path_sync<T>(
     path: std::path::PathBuf,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    crate::store::with_unstage_path_inline_for_bench(state, repo_id, path, f)
+    crate::store::with_path_action_inline_for_bench(
+        state,
+        repo_id,
+        Effect::UnstagePath { repo_id, path },
+        f,
+    )
 }
 
 #[inline]
@@ -69,7 +84,12 @@ pub fn with_unstage_paths_sync<T>(
     paths: RepoPathList,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    crate::store::with_unstage_paths_inline_for_bench(state, repo_id, paths, f)
+    crate::store::with_path_action_inline_for_bench(
+        state,
+        repo_id,
+        Effect::UnstagePaths { repo_id, paths },
+        f,
+    )
 }
 
 #[inline]

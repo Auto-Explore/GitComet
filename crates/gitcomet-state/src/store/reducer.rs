@@ -45,7 +45,7 @@ mod util;
 mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
+use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, WorktreeSaveBaseline};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -59,11 +59,8 @@ pub(crate) use diff_selection::SelectDiffEffects;
 pub(super) use repo_management::park_repository;
 pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
 
-pub(crate) const SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY: usize = 1;
-pub(crate) type SinglePathActionEffects =
-    SmallVec<[Effect; SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY]>;
-pub(crate) type BatchPathActionEffects =
-    SmallVec<[Effect; SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY]>;
+/// A stage or unstage emits at most its one effect.
+pub(crate) type PathActionEffects = SmallVec<[Effect; 1]>;
 
 #[cfg(test)]
 pub(super) fn normalize_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -478,60 +475,19 @@ pub(crate) fn fill_select_diff_inline(
     diff_selection::fill_select_diff_inline(inputs, state, repo_id, target, mode, effects)
 }
 
+/// Starts a stage or unstage `effect` unless the repository is bare.
 #[inline]
-pub(crate) fn fill_stage_path_inline(
+pub(crate) fn fill_path_action_inline(
     state: &mut AppState,
     repo_id: RepoId,
-    path: std::path::PathBuf,
-    effects: &mut SinglePathActionEffects,
+    effect: Effect,
+    effects: &mut PathActionEffects,
 ) {
     if refuse_bare_worktree_action(state, repo_id) {
         return;
     }
     begin_local_action(state, repo_id);
-    effects.push(Effect::StagePath { repo_id, path });
-}
-
-#[inline]
-pub(crate) fn fill_stage_paths_inline(
-    state: &mut AppState,
-    repo_id: RepoId,
-    paths: RepoPathList,
-    effects: &mut BatchPathActionEffects,
-) {
-    if refuse_bare_worktree_action(state, repo_id) {
-        return;
-    }
-    begin_local_action(state, repo_id);
-    effects.push(Effect::StagePaths { repo_id, paths });
-}
-
-#[inline]
-pub(crate) fn fill_unstage_path_inline(
-    state: &mut AppState,
-    repo_id: RepoId,
-    path: std::path::PathBuf,
-    effects: &mut SinglePathActionEffects,
-) {
-    if refuse_bare_worktree_action(state, repo_id) {
-        return;
-    }
-    begin_local_action(state, repo_id);
-    effects.push(Effect::UnstagePath { repo_id, path });
-}
-
-#[inline]
-pub(crate) fn fill_unstage_paths_inline(
-    state: &mut AppState,
-    repo_id: RepoId,
-    paths: RepoPathList,
-    effects: &mut BatchPathActionEffects,
-) {
-    if refuse_bare_worktree_action(state, repo_id) {
-        return;
-    }
-    begin_local_action(state, repo_id);
-    effects.push(Effect::UnstagePaths { repo_id, paths });
+    effects.push(effect);
 }
 
 #[inline]
