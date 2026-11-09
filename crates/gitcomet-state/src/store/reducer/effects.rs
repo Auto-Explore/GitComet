@@ -1229,22 +1229,9 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
 /// already running. Returns `None` when a scan is in flight, so callers can
 /// fire this from several triggers without stacking up repeated full scans.
 ///
-/// The watcher-driven trigger fires on every git-state flush, and a full scan
-/// runs `status` on every other worktree, so what bounds the cost is worth
-/// spelling out. First, what does *not* reach here: `.git/index` is classified
-/// as `RepoExternalChange::Index`, not `git_state` (`repo_monitor.rs`,
-/// `is_git_index_path`), so the common edit-stage-unstage loop -- which writes
-/// nothing else -- costs no scan at all. A linked worktree's own index sits at
-/// `.git/worktrees/<name>/index` and is deliberately outside that test, so
-/// changes there do still arrive as git-state and do still earn a scan.
-/// Then, for what does reach here: the monitor debounces raw events at 250ms
-/// with a 2s ceiling
-/// (`repo_monitor.rs`), and `request` admits at most one scan in flight plus one
-/// queued. A storm therefore costs one scan at a time, never a growing queue,
-/// and always ends with one trailing scan — dropping the queued repeat instead
-/// would be cheaper but could leave the counts stale after the last event.
-/// There is deliberately no time-based throttle here: this reducer has no clock,
-/// and the ones that do (window focus, `view/mod.rs`) ride their own.
+/// At most one scan runs with one queued, so an event storm ends in one
+/// trailing scan. This checkout's own index never triggers it
+/// (repo_monitor/policy.rs), and this reducer has no clock to throttle by.
 pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Option<Effect> {
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return None;
