@@ -1359,86 +1359,16 @@ pub(super) fn submodule_summary_loaded(
     effects.into_vec()
 }
 
-pub(super) fn inline_submodule_diff_loaded(
+/// Stores an inline submodule diff load in the slot `slot` picks (its rev
+/// counter and value), unless the inline view moved on since the request.
+pub(super) fn inline_submodule_load_finished<V>(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     inline_rev: u64,
     target: DiffTarget,
-    result: std::result::Result<Diff, Error>,
-) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let (next_diff, diagnostic) = match result {
-            Ok(diff) => (Loadable::Ready(Arc::new(diff)), None),
-            Err(e) => {
-                let message = e.to_string();
-                (Loadable::Error(message.clone()), Some(message))
-            }
-        };
-        {
-            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
-                return Vec::new();
-            };
-            if inline.rev != inline_rev || inline.target != target {
-                return Vec::new();
-            }
-            inline.diff_rev = inline.diff_rev.wrapping_add(1);
-            inline.diff = next_diff;
-        }
-        if let Some(message) = diagnostic {
-            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
-        }
-        repo_state.bump_diff_state_rev();
-    }
-    Vec::new()
-}
-
-pub(super) fn inline_submodule_diff_file_loaded(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    inline_rev: u64,
-    target: DiffTarget,
-    result: std::result::Result<Option<FileDiffText>, Error>,
-) -> Vec<Effect> {
-    inline_submodule_diff_side_loaded(
-        inputs,
-        state,
-        repo_id,
-        inline_rev,
-        target,
-        result,
-        |inline| &mut inline.diff_file,
-    )
-}
-
-pub(super) fn inline_submodule_diff_file_image_loaded(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    inline_rev: u64,
-    target: DiffTarget,
-    result: std::result::Result<Option<FileDiffImage>, Error>,
-) -> Vec<Effect> {
-    inline_submodule_diff_side_loaded(
-        inputs,
-        state,
-        repo_id,
-        inline_rev,
-        target,
-        result,
-        |inline| &mut inline.diff_file_image,
-    )
-}
-
-fn inline_submodule_diff_side_loaded<T>(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    inline_rev: u64,
-    target: DiffTarget,
-    result: std::result::Result<Option<T>, Error>,
-    slot: impl FnOnce(&mut InlineSubmoduleDiffState) -> &mut Loadable<Option<Arc<T>>>,
+    result: std::result::Result<V, Error>,
+    slot: impl FnOnce(&mut InlineSubmoduleDiffState) -> (&mut u64, &mut Loadable<V>),
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1449,12 +1379,13 @@ fn inline_submodule_diff_side_loaded<T>(
     if inline.rev != inline_rev || inline.target != target {
         return Vec::new();
     }
-    inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+    let (rev, value) = slot(inline);
+    *rev = rev.wrapping_add(1);
     match result {
-        Ok(file) => *slot(inline) = Loadable::Ready(file.map(Arc::new)),
+        Ok(loaded) => *value = Loadable::Ready(loaded),
         Err(e) => {
             let message = e.to_string();
-            *slot(inline) = Loadable::Error(message.clone());
+            *value = Loadable::Error(message.clone());
             super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
         }
     }

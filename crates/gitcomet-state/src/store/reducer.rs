@@ -2818,24 +2818,42 @@ fn reduce_inner(
             inline_rev,
             target,
             result,
-        }) => diff_selection::inline_submodule_diff_loaded(
-            inputs, state, repo_id, inline_rev, target, result,
+        }) => diff_selection::inline_submodule_load_finished(
+            inputs,
+            state,
+            repo_id,
+            inline_rev,
+            target,
+            result.map(Arc::new),
+            |inline| (&mut inline.diff_rev, &mut inline.diff),
         ),
         Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
             repo_id,
             inline_rev,
             target,
             result,
-        }) => diff_selection::inline_submodule_diff_file_loaded(
-            inputs, state, repo_id, inline_rev, target, result,
+        }) => diff_selection::inline_submodule_load_finished(
+            inputs,
+            state,
+            repo_id,
+            inline_rev,
+            target,
+            result.map(|file| file.map(Arc::new)),
+            |inline| (&mut inline.diff_file_rev, &mut inline.diff_file),
         ),
         Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
             repo_id,
             inline_rev,
             target,
             result,
-        }) => diff_selection::inline_submodule_diff_file_image_loaded(
-            inputs, state, repo_id, inline_rev, target, result,
+        }) => diff_selection::inline_submodule_load_finished(
+            inputs,
+            state,
+            repo_id,
+            inline_rev,
+            target,
+            result.map(|image| image.map(Arc::new)),
+            |inline| (&mut inline.diff_file_rev, &mut inline.diff_file_image),
         ),
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
