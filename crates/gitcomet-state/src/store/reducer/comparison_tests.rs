@@ -626,17 +626,23 @@ fn selecting_two_branch_tips_compares_them_directly() {
         next_cursor: None,
     }));
 
-    select(&mut state, repo_id, "a1", CommitSelectMode::Single);
-    select(&mut state, repo_id, "b1", CommitSelectMode::Toggle);
+    for [first, second] in [["a1", "b1"], ["b1", "a1"]] {
+        select(&mut state, repo_id, first, CommitSelectMode::Single);
+        select(&mut state, repo_id, second, CommitSelectMode::Toggle);
 
-    let range = repo(&state, repo_id)
-        .history_state
-        .range_selection
-        .clone()
-        .expect("two branch tips start a comparison");
-    assert_eq!(range.from, CommitId("b1".into()));
-    assert_eq!(range.to, Some(CommitId("a1".into())));
-    assert_eq!(range.source, ComparisonSource::SelectedPair);
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("two branch tips start a comparison");
+        assert_eq!(range.from, CommitId("b1".into()), "{first} then {second}");
+        assert_eq!(
+            range.to,
+            Some(CommitId("a1".into())),
+            "{first} then {second}"
+        );
+        assert_eq!(range.source, ComparisonSource::SelectedPair);
+    }
 }
 
 /// Three or more commits with a gap have no single diff holding exactly their
