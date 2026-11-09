@@ -910,12 +910,12 @@ fn resolved_output_conflict_block_ranges_match_point_lookup() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a\n".to_string(), "x\n".to_string())
+            ..ConflictBlock::unresolved("a\n", "x\n")
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("b\nc\n".to_string(), "y\n".to_string())
+            ..ConflictBlock::unresolved("b\nc\n", "y\n")
         }),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -938,12 +938,12 @@ fn output_line_range_for_conflict_block_in_text_maps_middle_blocks_exactly() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a\n".to_string(), "x\ny\n".to_string())
+            ..ConflictBlock::unresolved("a\n", "x\ny\n")
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("b\nc\n".to_string(), "z\n".to_string())
+            ..ConflictBlock::unresolved("b\nc\n", "z\n")
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -965,7 +965,7 @@ fn output_line_range_for_conflict_block_in_text_maps_eof_block_without_newline()
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("tail".to_string(), "other".to_string())
+            ..ConflictBlock::unresolved("tail", "other")
         }),
     ];
 
@@ -982,12 +982,12 @@ fn output_line_range_for_conflict_block_in_text_returns_none_when_output_drifts(
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a\n".to_string(), "x\n".to_string())
+            ..ConflictBlock::unresolved("a\n", "x\n")
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("b\n".to_string(), "y\n".to_string())
+            ..ConflictBlock::unresolved("b\n", "y\n")
         }),
     ];
 
@@ -1004,12 +1004,12 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a\n".to_string(), "x\ny\n".to_string())
+            ..ConflictBlock::unresolved("a\n", "x\ny\n")
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("b\nc\n".to_string(), "z\n".to_string())
+            ..ConflictBlock::unresolved("b\nc\n", "z\n")
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1134,7 +1134,7 @@ fn build_resolved_output_conflict_markers_cover_a_multi_line_block() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("a1\na2\na3\n".to_string(), "x1\n".to_string())
+            ..ConflictBlock::unresolved("a1\na2\na3\n", "x1\n")
         }),
         ConflictSegment::Text("bottom\n".to_string().into()),
     ];
@@ -1178,7 +1178,7 @@ fn build_resolved_output_conflict_markers_stop_at_a_file_final_block() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("a\n".to_string(), "x\n".to_string())
+            ..ConflictBlock::unresolved("a\n", "x\n")
         }),
     ];
 
@@ -1220,7 +1220,7 @@ fn build_resolved_output_conflict_markers_cover_a_file_final_block_without_newli
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a".to_string(), "x".to_string())
+            ..ConflictBlock::unresolved("a", "x")
         }),
     ];
 
@@ -1261,7 +1261,7 @@ fn remapped_resolved_output_conflict_markers_cover_inserted_rows() {
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("a\nb\n".to_string(), "x\n".to_string())
+            ..ConflictBlock::unresolved("a\nb\n", "x\n")
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1639,7 +1639,7 @@ fn append_choice_after_conflict_block_appends_selected_order_for_single_marker()
         ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             resolved: true,
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1667,7 +1667,7 @@ fn append_choice_after_conflict_block_from_same_marker_keeps_single_choice_per_s
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::Base,
             resolved: true,
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1725,13 +1725,13 @@ fn non_contiguous_matching_blocks_do_not_share_choice_group() {
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("middle\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1757,12 +1757,12 @@ fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::Theirs,
             resolved: true,
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
     ];
     let mut region_indices = vec![10, 11];
@@ -1800,7 +1800,7 @@ fn pick_sequence_is_reversible_to_original_unpicked_state() {
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".to_string().into()),
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1879,7 +1879,7 @@ fn pick_and_deselect_multiple_orders_always_restore_original_state() {
             ConflictSegment::Block(ConflictBlock {
                 base: Some("base\n".to_string().into()),
                 choice: ConflictChoice::empty(),
-                ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+                ..ConflictBlock::unresolved("ours\n", "theirs\n")
             }),
             ConflictSegment::Text("post\n".to_string().into()),
         ]
@@ -2034,7 +2034,7 @@ fn conflict_choice_hints_override_identical_text_to_selected_source() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: Some("same\n".to_string().into()),
         resolved: true,
-        ..ConflictBlock::unresolved("same\n".to_string(), "same\n".to_string())
+        ..ConflictBlock::unresolved("same\n", "same\n")
     })];
     let output = conflict_resolver::generate_resolved_text(&segments);
     let output_lines = conflict_resolver::split_output_lines_for_outline(&output);
@@ -2070,7 +2070,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
         ConflictSegment::Block(ConflictBlock {
             base: Some(String::new().into()),
             resolved: true,
-            ..ConflictBlock::unresolved("dup\n".to_string(), "other\n".to_string())
+            ..ConflictBlock::unresolved("dup\n", "other\n")
         }),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -2213,7 +2213,7 @@ fn conflict_markers_survive_a_manual_edit_outside_the_blocks() {
         ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             choice: ConflictChoice::empty(),
-            ..ConflictBlock::unresolved("ours\n".to_string(), "theirs\n".to_string())
+            ..ConflictBlock::unresolved("ours\n", "theirs\n")
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];

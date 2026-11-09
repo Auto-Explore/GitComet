@@ -13,22 +13,18 @@ fn clear_session_repos_snapshot_cache() {
     });
 }
 
-fn unique_session_test_dir(label: &str) -> PathBuf {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-session-unit-test-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
-    dir
+/// A fresh scratch directory, removed when the guard drops.
+fn unique_session_test_dir(label: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("gitcomet-session-unit-test-{label}-"))
+        .tempdir()
+        .expect("create tempdir")
 }
 
 #[test]
 fn image_sampling_settings_round_trip_and_survive_other_writers() {
-    let dir = unique_session_test_dir("image-sampling");
+    let dir_guard = unique_session_test_dir("image-sampling");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     assert!(load_from_path(&path).image_sampling_mode.is_none());
     persist_ui_settings_to_path(
@@ -52,12 +48,12 @@ fn image_sampling_settings_round_trip_and_survive_other_writers() {
     assert_eq!(session.image_sampling_mode.as_deref(), Some("smooth"));
     assert_eq!(session.image_smooth_filter.as_deref(), Some("hann"));
     assert_eq!(session.theme_mode.as_deref(), Some("dark"));
-    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
-    let dir = unique_session_test_dir("signature-opt-in");
+    let dir_guard = unique_session_test_dir("signature-opt-in");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     for legacy in ["true", "false", "null"] {
         fs::write(&path, format!(r#"{{"version":3,"open_repos":[],"active_repo":null,"history_verify_commit_signatures":{legacy}}}"#)).unwrap();
@@ -106,7 +102,8 @@ fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
 
 #[test]
 fn history_branch_names_survives_other_session_writers() {
-    let dir = unique_session_test_dir("history-branch-names");
+    let dir_guard = unique_session_test_dir("history-branch-names");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     assert_eq!(load_from_path(&path).history_branch_names, None);
     for mode in ["inline", "separate_column"] {
@@ -134,14 +131,14 @@ fn history_branch_names_survives_other_session_writers() {
         assert_eq!(loaded.history_show_graph, Some(false));
         assert_eq!(loaded.window_width, Some(1200));
     }
-    fs::remove_dir_all(dir).unwrap();
 }
 
 fn assert_session_writer_waits_for_shared_lock(
     label: &str,
     persist: impl FnOnce(PathBuf) -> io::Result<()> + Send + 'static,
 ) {
-    let path = unique_session_test_dir(label).join("session.json");
+    let dir_guard = unique_session_test_dir(label);
+    let path = dir_guard.path().join("session.json");
     let guard = session_file_persist_lock()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
@@ -246,8 +243,8 @@ fn session_file_persist_lock_is_shared_by_session_writers() {
 
 #[test]
 fn session_file_round_trips() {
-    let dir = env::temp_dir().join(format!("gitcomet-session-test-{}", std::process::id()));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let file = UiSessionFileV1 {
@@ -287,7 +284,8 @@ fn path_storage_key_round_trips_non_utf8_unix_bytes() {
 
 #[test]
 fn load_repo_session_preferences_collects_current_and_legacy_history_settings() {
-    let dir = unique_session_test_dir("repo-session-preferences");
+    let dir_guard = unique_session_test_dir("repo-session-preferences");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let repo_mode = dir.join("repo-mode");
     let repo_legacy = dir.join("repo-legacy");
@@ -328,15 +326,8 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
 
 #[test]
 fn persist_ui_settings_round_trips_sidebar_collapsed() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-session-sidebar-collapsed-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
 
     // Default (unset) leaves the field absent.
@@ -372,13 +363,12 @@ fn persist_ui_settings_round_trips_sidebar_collapsed() {
     )
     .expect("persist expanded");
     assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(false));
-
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
-    let dir = unique_session_test_dir("repo-history-mode-batch");
+    let dir_guard = unique_session_test_dir("repo-history-mode-batch");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let missing_file = dir.join("missing.json");
     let repo_a = dir.join("repo-a");
@@ -459,7 +449,8 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
 #[test]
 fn survey_prompt_requires_recorded_repository() {
     const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
-    let dir = unique_session_test_dir("survey-empty-session");
+    let dir_guard = unique_session_test_dir("survey-empty-session");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
 
     assert!(!should_show_survey_prompt_from_path(
@@ -526,7 +517,8 @@ fn survey_prompt_requires_recorded_repository() {
 #[test]
 fn survey_prompt_accepts_recorded_repository_sources() {
     const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
-    let dir = unique_session_test_dir("survey-repository-sources");
+    let dir_guard = unique_session_test_dir("survey-repository-sources");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
 
     persist_to_path(
@@ -580,7 +572,8 @@ fn survey_prompt_respects_id_opened_and_postponed_state() {
     const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
     const NEXT_SURVEY_ID: &str = "gitcomet_user_survey_2026_05";
     const POSTPONE_SECONDS: u64 = 60 * 60 * 24 * 7;
-    let dir = unique_session_test_dir("survey-prompt-state");
+    let dir_guard = unique_session_test_dir("survey-prompt-state");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
 
     persist_to_path(
@@ -673,7 +666,8 @@ fn survey_prompt_respects_id_opened_and_postponed_state() {
 #[test]
 fn survey_prompt_persistence_preserves_existing_session_fields() {
     const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
-    let dir = unique_session_test_dir("survey-preserves-session");
+    let dir_guard = unique_session_test_dir("survey-preserves-session");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let repo = dir.join("repo");
 
@@ -744,15 +738,8 @@ fn detects_test_harness_executable_paths() {
 
 #[test]
 fn persist_from_state_and_load_from_path_round_trip() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-session-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1070,15 +1057,8 @@ fn snapshot_repos_from_state_cache_invalidates_when_repo_spec_changes() {
 
 #[test]
 fn load_from_path_migrates_v1_files() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-session-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1113,15 +1093,8 @@ fn load_from_path_migrates_v2_scaled_dimensions_to_design_units() {
     ];
 
     for (percent, sidebar_width, details_width, change_tracking_height, untracked_height) in cases {
-        let dir = env::temp_dir().join(format!(
-            "gitcomet-session-v2-migration-test-{}-{}-{percent}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = fs::create_dir_all(&dir);
+        let dir_guard = tempfile::tempdir().expect("create tempdir");
+        let dir = dir_guard.path().to_path_buf();
         let path = dir.join("session.json");
 
         persist_to_path(
@@ -1151,15 +1124,8 @@ fn load_from_path_migrates_v2_scaled_dimensions_to_design_units() {
 
 #[test]
 fn load_from_path_migrates_v2_scaled_dimensions_without_saved_zoom_as_100_percent() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-session-v2-migration-default-scale-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -1186,15 +1152,8 @@ fn load_from_path_migrates_v2_scaled_dimensions_without_saved_zoom_as_100_percen
 
 #[test]
 fn persist_recent_repo_round_trips_dedup_and_reorders() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-recent-repos-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1231,15 +1190,8 @@ fn persist_recent_repo_round_trips_dedup_and_reorders() {
 
 #[test]
 fn history_highlight_commit_chain_round_trips_and_defaults_to_unset() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-highlight-chain-setting-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
 
     // Absent from the file, so the UI applies its own default rather than
@@ -1384,15 +1336,8 @@ fn history_hidden_refs_settings_convert_through_the_session() {
 
 #[test]
 fn remove_recent_repo_drops_matching_entry() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-remove-recent-repo-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1420,7 +1365,8 @@ fn remove_recent_repo_drops_matching_entry() {
 
 #[test]
 fn load_if_changed_rereads_only_a_written_file() {
-    let dir = unique_session_test_dir("stamp");
+    let dir_guard = unique_session_test_dir("stamp");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repo = dir.join("repo");
     let _ = fs::create_dir_all(&repo);
@@ -1449,20 +1395,12 @@ fn load_if_changed_rereads_only_a_written_file() {
     fs::remove_file(&path).expect("remove session file");
     let session = load_from_path_if_changed(&path, &mut stamp).expect("a removal is read");
     assert!(session.recent_repos.is_empty());
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn persist_pinned_repo_appends_in_pin_order_and_dedupes() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-pinned-repos-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1499,15 +1437,8 @@ fn persist_pinned_repo_appends_in_pin_order_and_dedupes() {
 /// promotion as a second entry.
 #[test]
 fn persist_recent_repo_collapses_a_padded_duplicate() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-recent-padded-dupe-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repo = dir.join("repo-padded");
 
@@ -1535,15 +1466,8 @@ fn persist_recent_repo_collapses_a_padded_duplicate() {
 
 #[test]
 fn pinned_repos_survive_the_recent_repository_cap() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-pinned-repo-cap-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let pinned = dir.join("repo-pinned");
 
@@ -1572,7 +1496,8 @@ fn pinned_repos_survive_the_recent_repository_cap() {
 fn recent_repos_keep_the_last_150_repositories() {
     assert_eq!(MAX_RECENT_REPOS, 150);
 
-    let dir = unique_session_test_dir("recent-repos-keep-150");
+    let dir_guard = unique_session_test_dir("recent-repos-keep-150");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repos: Vec<PathBuf> = (0..150)
         .map(|ix| dir.join(format!("repo-{ix:03}")))
@@ -1605,15 +1530,8 @@ fn recent_repos_keep_the_last_150_repositories() {
 /// afterwards — including at the cap, where the file drops its tail.
 #[test]
 fn promote_recent_repo_matches_the_file_at_the_cap() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-promote-recent-cap-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     // One more repository than the list can hold, so the cap is in play.
@@ -1660,15 +1578,8 @@ fn promote_recent_repo_matches_the_file_at_the_cap() {
 
 #[test]
 fn persist_ui_settings_round_trips_repo_picker_collapsed_sections() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-picker-collapse-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     assert!(
@@ -1708,15 +1619,8 @@ fn persist_ui_settings_round_trips_repo_picker_collapsed_sections() {
 
 #[test]
 fn remove_recent_repo_drops_entries_written_uncanonicalized() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-remove-recent-legacy-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo = dir.join("repo-a");
@@ -1756,15 +1660,8 @@ fn remove_recent_repo_drops_entries_written_uncanonicalized() {
 /// alone misses it, so removal normalizes the stored side too.
 #[test]
 fn remove_recent_repo_matches_an_entry_spelled_through_a_symlink() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-remove-recent-normalized-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo = dir.join("repo-a");
@@ -1813,15 +1710,8 @@ fn remove_recent_repo_matches_an_entry_spelled_through_a_symlink() {
 #[cfg(unix)]
 #[test]
 fn remove_recent_repo_normalizes_an_encoded_entry_through_its_decoder() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-remove-recent-encoded-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo = dir.join("repo-a");
@@ -1869,15 +1759,8 @@ fn remove_recent_repo_normalizes_an_encoded_entry_through_its_decoder() {
 /// the process working directory.
 #[test]
 fn remove_recent_repo_leaves_relative_entries_alone() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-remove-recent-relative-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -1907,15 +1790,8 @@ fn remove_recent_repo_leaves_relative_entries_alone() {
 
 #[test]
 fn persist_recent_repo_truncates_to_max_entries_and_skips_blank_values() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-recent-repo-truncate-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repo_new = dir.join("repo-new");
 
@@ -1959,15 +1835,8 @@ fn persist_recent_repo_truncates_to_max_entries_and_skips_blank_values() {
 
 #[test]
 fn load_from_path_filters_blank_and_duplicate_recent_repos() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-recent-repo-load-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -1997,15 +1866,8 @@ fn load_from_path_filters_blank_and_duplicate_recent_repos() {
 
 #[test]
 fn persist_ui_settings_round_trips_repo_sidebar_collapsed_items() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repo_a = dir.join("repo-a");
     let repo_b = dir.join("repo-b");
@@ -2071,15 +1933,8 @@ fn persist_ui_settings_round_trips_repo_sidebar_collapsed_items() {
 
 #[test]
 fn persist_ui_settings_round_trips_repo_sidebar_pinned_branches() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let repo_a = dir.join("repo-a");
 
@@ -2123,15 +1978,8 @@ fn persist_ui_settings_round_trips_repo_sidebar_pinned_branches() {
 
 #[test]
 fn persist_ui_settings_round_trips_date_time_format() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2179,15 +2027,8 @@ fn persist_ui_settings_round_trips_date_time_format() {
 
 #[test]
 fn persist_ui_settings_round_trips_show_timezone() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2235,15 +2076,8 @@ fn persist_ui_settings_round_trips_show_timezone() {
 
 #[test]
 fn persist_ui_settings_round_trips_font_ligatures() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2291,15 +2125,8 @@ fn persist_ui_settings_round_trips_font_ligatures() {
 
 #[test]
 fn persist_ui_settings_round_trips_change_tracking_view() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2350,15 +2177,8 @@ fn persist_ui_settings_round_trips_change_tracking_view() {
 
 #[test]
 fn persist_ui_settings_round_trips_diff_scroll_sync() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2406,15 +2226,8 @@ fn persist_ui_settings_round_trips_diff_scroll_sync() {
 
 #[test]
 fn persist_ui_settings_round_trips_diff_content_mode() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2466,15 +2279,8 @@ fn persist_ui_settings_round_trips_diff_content_mode() {
 
 #[test]
 fn persist_ui_settings_round_trips_diff_engine_and_whitespace_mode() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2526,15 +2332,8 @@ fn persist_ui_settings_round_trips_diff_engine_and_whitespace_mode() {
 
 #[test]
 fn persist_ui_settings_round_trips_diff_render_settings() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2571,7 +2370,8 @@ fn persist_ui_settings_round_trips_diff_render_settings() {
 
 #[test]
 fn persist_ui_settings_round_trips_auto_save_file_edits() {
-    let dir = unique_session_test_dir("auto-save-file-edits");
+    let dir_guard = unique_session_test_dir("auto-save-file-edits");
+    let dir = dir_guard.path().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("session.json");
 
@@ -2612,7 +2412,8 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 
 #[test]
 fn persist_ui_settings_round_trips_open_next_file_after_last_change() {
-    let dir = unique_session_test_dir("open-next-file-after-last-change");
+    let dir_guard = unique_session_test_dir("open-next-file-after-last-change");
+    let dir = dir_guard.path().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("session.json");
     assert_eq!(load_from_path(&path).open_next_file_after_last_change, None);
@@ -2647,7 +2448,8 @@ fn persist_ui_settings_round_trips_open_next_file_after_last_change() {
 
 #[test]
 fn persist_ui_settings_round_trips_security_preferences() {
-    let dir = unique_session_test_dir("security-preferences");
+    let dir_guard = unique_session_test_dir("security-preferences");
+    let dir = dir_guard.path().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("session.json");
 
@@ -2683,15 +2485,8 @@ fn persist_ui_settings_round_trips_security_preferences() {
 
 #[test]
 fn persist_ui_settings_round_trips_change_tracking_heights() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2740,15 +2535,8 @@ fn persist_ui_settings_round_trips_change_tracking_heights() {
 
 #[test]
 fn persist_ui_settings_round_trips_theme_mode() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2796,15 +2584,8 @@ fn persist_ui_settings_round_trips_theme_mode() {
 
 #[test]
 fn persist_ui_settings_round_trips_terminal_preferences() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2856,15 +2637,8 @@ fn persist_ui_settings_round_trips_terminal_preferences() {
 
 #[test]
 fn persist_ui_settings_round_trips_ui_scale_percent() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2893,15 +2667,8 @@ fn persist_ui_settings_round_trips_ui_scale_percent() {
 
 #[test]
 fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -2949,15 +2716,8 @@ fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
 
 #[test]
 fn persist_ui_settings_round_trips_commit_push_after_enabled() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -3015,15 +2775,8 @@ fn persist_ui_settings_round_trips_recommend_repo_maintenance() {
 
 #[test]
 fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_to_path(
@@ -3052,7 +2805,8 @@ fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
 
 #[test]
 fn automatic_fetch_settings_survive_other_preference_writers() {
-    let dir = unique_session_test_dir("automatic-fetch-preferences");
+    let dir_guard = unique_session_test_dir("automatic-fetch-preferences");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     persist_ui_settings_to_path(
         UiSettings {
@@ -3103,7 +2857,8 @@ fn automatic_fetch_settings_survive_other_preference_writers() {
 
 #[test]
 fn malformed_automatic_fetch_intervals_do_not_discard_the_session() {
-    let dir = unique_session_test_dir("automatic-fetch-invalid-interval");
+    let dir_guard = unique_session_test_dir("automatic-fetch-invalid-interval");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     for invalid in [
         serde_json::json!(0),
@@ -3131,7 +2886,8 @@ fn malformed_automatic_fetch_intervals_do_not_discard_the_session() {
 
 #[test]
 fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
-    let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
+    let dir_guard = unique_session_test_dir("legacy-repo-fetch-prune-migration");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
     let legacy_session = serde_json::json!({
         "version": SESSION_FILE_VERSION_V3,
@@ -3178,15 +2934,8 @@ fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
 
 #[test]
 fn persist_repo_history_scope_round_trips() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-repo-history-scope-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let session_path = dir.join("session.json");
 
     let repo_a = dir.join("repo-a");
@@ -3212,15 +2961,8 @@ fn persist_repo_history_scope_round_trips() {
 
 #[test]
 fn persist_repo_history_scope_skips_rewriting_unchanged_value() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-repo-history-scope-noop-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let session_path = dir.join("session.json");
     let repo_a = dir.join("repo-a");
     let _ = fs::create_dir_all(&repo_a);
@@ -3263,15 +3005,8 @@ fn persist_repo_history_scope_skips_rewriting_unchanged_value() {
 
 #[test]
 fn persist_ui_settings_round_trips_window_controls_mode() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-window-controls-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir_guard = tempfile::tempdir().expect("create tempdir");
+    let dir = dir_guard.path().to_path_buf();
     let path = dir.join("session.json");
 
     persist_ui_settings_to_path(
@@ -3390,7 +3125,8 @@ fn saved_workspace_automatic_name_uses_the_first_repository_and_count() {
 
 #[test]
 fn v3_open_repositories_migrate_to_one_restorable_workspace() {
-    let path = unique_session_test_dir("window-group-v3-migration").join("session.json");
+    let dir_guard = unique_session_test_dir("window-group-v3-migration");
+    let path = dir_guard.path().join("session.json");
     persist_to_path(
         &path,
         &UiSessionFile {
@@ -3425,8 +3161,8 @@ fn v3_open_repositories_migrate_to_one_restorable_workspace() {
 #[test]
 fn legacy_fetch_prune_and_workspaces_migrate_together() {
     for version in [SESSION_FILE_VERSION_V2, SESSION_FILE_VERSION_V3] {
-        let path =
-            unique_session_test_dir("window-group-fetch-prune-migration").join("session.json");
+        let dir_guard = unique_session_test_dir("window-group-fetch-prune-migration");
+        let path = dir_guard.path().join("session.json");
         persist_to_path(
             &path,
             &serde_json::json!({
@@ -3456,7 +3192,8 @@ fn legacy_fetch_prune_and_workspaces_migrate_together() {
 
 #[test]
 fn multiple_workspaces_round_trip_without_last_writer_loss() {
-    let path = unique_session_test_dir("window-group-round-trip").join("session.json");
+    let dir_guard = unique_session_test_dir("window-group-round-trip");
+    let path = dir_guard.path().join("session.json");
     let mut group_a = Workspace::new(vec![PathBuf::from("/work/a"), PathBuf::from("/work/b")]);
     group_a.id = WorkspaceId::from_u128(10);
     group_a.custom_name = Some("  Backend  ".to_string());
@@ -3523,7 +3260,8 @@ fn multiple_workspaces_round_trip_without_last_writer_loss() {
 
 #[test]
 fn overlapping_workspaces_preserve_independent_membership_and_active_repositories() {
-    let path = unique_session_test_dir("overlapping-workspaces").join("session.json");
+    let dir_guard = unique_session_test_dir("overlapping-workspaces");
+    let path = dir_guard.path().join("session.json");
     let shared = PathBuf::from("/work/shared");
     let other = PathBuf::from("/work/other");
     let mut first = Workspace::new(vec![shared.clone(), other.clone()]);
@@ -3547,7 +3285,8 @@ fn overlapping_workspaces_preserve_independent_membership_and_active_repositorie
 
 #[test]
 fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
-    let path = unique_session_test_dir("closed-window-groups").join("session.json");
+    let dir_guard = unique_session_test_dir("closed-window-groups");
+    let path = dir_guard.path().join("session.json");
     let mut group = Workspace::new(vec![PathBuf::from("/work/closed")]);
     group.restore_on_launch = false;
     persist_workspaces_to_path(&[group.clone()], &path).expect("persist closed group");
@@ -3571,7 +3310,8 @@ fn first_write_over_an_unreadable_session_keeps_a_backup() {
         ),
         ("session-not-json", "{not json", ".unreadable.bak"),
     ] {
-        let path = unique_session_test_dir(name).join("session.json");
+        let dir_guard = unique_session_test_dir(name);
+        let path = dir_guard.path().join("session.json");
         fs::write(&path, contents).expect("seed session");
         assert!(
             load_from_path(&path).open_repos.is_empty(),
@@ -3598,7 +3338,8 @@ fn first_write_over_an_unreadable_session_keeps_a_backup() {
 #[test]
 fn a_session_file_that_cannot_be_read_is_never_replaced() {
     use std::os::unix::fs::PermissionsExt as _;
-    let path = unique_session_test_dir("session-unreadable-file").join("session.json");
+    let dir_guard = unique_session_test_dir("session-unreadable-file");
+    let path = dir_guard.path().join("session.json");
     let contents = r#"{"version":6,"open_repos":["/work/kept"]}"#;
     fs::write(&path, contents).expect("seed session");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make unreadable");
@@ -3632,7 +3373,8 @@ fn a_value_this_build_cannot_parse_resets_only_that_value() {
         if matches!(key.as_str(), "version" | "open_repos") {
             continue;
         }
-        let path = unique_session_test_dir("session-unparsable-value").join("session.json");
+        let dir_guard = unique_session_test_dir("session-unparsable-value");
+        let path = dir_guard.path().join("session.json");
         let contents = serde_json::json!({
             "version": CURRENT_SESSION_FILE_VERSION,
             "open_repos": ["/work/kept"],
@@ -3650,7 +3392,8 @@ fn a_value_this_build_cannot_parse_resets_only_that_value() {
 
 #[test]
 fn first_current_write_preserves_one_v3_backup() {
-    let path = unique_session_test_dir("workspace-v3-backup").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-v3-backup");
+    let path = dir_guard.path().join("session.json");
     persist_to_path(
         &path,
         &UiSessionFile {
@@ -3694,7 +3437,8 @@ fn first_current_write_preserves_one_v3_backup() {
 
 #[test]
 fn empty_customized_workspace_round_trips() {
-    let path = unique_session_test_dir("workspace-empty-customized").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-empty-customized");
+    let path = dir_guard.path().join("session.json");
     let mut named = Workspace::new(Vec::new());
     named.custom_name = Some("Client work".to_string());
     let mut colored = Workspace::new(Vec::new());
@@ -3712,7 +3456,8 @@ fn empty_customized_workspace_round_trips() {
 
 #[test]
 fn empty_anonymous_workspace_is_dropped_on_persist() {
-    let path = unique_session_test_dir("workspace-empty-anonymous").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-empty-anonymous");
+    let path = dir_guard.path().join("session.json");
     let mut blank_name = Workspace::new(Vec::new());
     blank_name.custom_name = Some("   ".to_string());
     assert!(
@@ -3732,7 +3477,8 @@ fn empty_anonymous_workspace_is_dropped_on_persist() {
 
 #[test]
 fn legacy_projection_skips_empty_workspaces() {
-    let path = unique_session_test_dir("workspace-projection-empty").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-projection-empty");
+    let path = dir_guard.path().join("session.json");
     let mut with_repos = Workspace::new(vec![PathBuf::from("/work/a")]);
     with_repos.last_activation_order = 1;
     with_repos.layout.sidebar_width = Some(300);
@@ -3753,7 +3499,8 @@ fn legacy_projection_skips_empty_workspaces() {
 
 #[test]
 fn theme_mode_and_timestamps_round_trip() {
-    let path = unique_session_test_dir("workspace-theme-timestamps").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-theme-timestamps");
+    let path = dir_guard.path().join("session.json");
     let mut workspace = Workspace::new(vec![PathBuf::from("/work/a")]);
     assert!(
         workspace.created_at.is_some(),
@@ -3780,7 +3527,8 @@ fn theme_mode_and_timestamps_round_trip() {
 
 #[test]
 fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
-    let path = unique_session_test_dir("workspace-v4-migration").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-v4-migration");
+    let path = dir_guard.path().join("session.json");
     fs::create_dir_all(path.parent().expect("session dir")).expect("create session dir");
     let id = WorkspaceId::new();
     let v4 = serde_json::json!({
@@ -3828,7 +3576,8 @@ fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
 
 #[test]
 fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
-    let dir = unique_session_test_dir("file-browser-follow-selected-commit");
+    let dir_guard = unique_session_test_dir("file-browser-follow-selected-commit");
+    let dir = dir_guard.path().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("session.json");
 
@@ -3871,7 +3620,8 @@ fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
 /// normalised — that is what lets a newer build's choice come back.
 #[test]
 fn an_unknown_density_survives_the_session_round_trip() {
-    let path = unique_session_test_dir("density_forward_compat").join("session.json");
+    let dir_guard = unique_session_test_dir("density_forward_compat");
+    let path = dir_guard.path().join("session.json");
 
     for density in ["compact", "comfortable", "spacious", "something-newer"] {
         persist_ui_settings_to_path(
@@ -3889,7 +3639,8 @@ fn an_unknown_density_survives_the_session_round_trip() {
 
 #[test]
 fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
-    let path = unique_session_test_dir("appearance").join("session.json");
+    let dir_guard = unique_session_test_dir("appearance");
+    let path = dir_guard.path().join("session.json");
     let default = load_from_path(&path);
     assert_eq!(default.ui_density, None);
     assert_eq!(default.ui_font_size_px, None);
@@ -3924,7 +3675,8 @@ fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes(
 #[test]
 fn pre_v5_compact_density_is_the_old_default_not_a_choice() {
     let seed = |label: &str, version: u32, density: &str| {
-        let path = unique_session_test_dir(label).join("session.json");
+        let dir_guard = unique_session_test_dir(label);
+        let path = dir_guard.path().join("session.json");
         persist_to_path(
             &path,
             &UiSessionFile {
@@ -3934,10 +3686,10 @@ fn pre_v5_compact_density_is_the_old_default_not_a_choice() {
             },
         )
         .unwrap();
-        path
+        (dir_guard, path)
     };
 
-    let v3_compact = seed("density-v3-compact", SESSION_FILE_VERSION_V3, "compact");
+    let (_v3_dir, v3_compact) = seed("density-v3-compact", SESSION_FILE_VERSION_V3, "compact");
     assert_eq!(load_from_path(&v3_compact).ui_density, None);
     persist_ui_settings_to_path(
         UiSettings {
@@ -3958,13 +3710,15 @@ fn pre_v5_compact_density_is_the_old_default_not_a_choice() {
         (SESSION_FILE_VERSION_V4, "spacious"),
         (SESSION_FILE_VERSION_V5, "compact"),
     ] {
-        let path = seed(&format!("density-v{version}-{density}"), version, density);
+        let (_dir, path) = seed(&format!("density-v{version}-{density}"), version, density);
         assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
     }
 }
 
-fn seed_v3_session(label: &str, open_repos: &[&str]) -> PathBuf {
-    let path = unique_session_test_dir(label).join("session.json");
+/// A v3 session file in a scratch directory that lives as long as the guard.
+fn seed_v3_session(label: &str, open_repos: &[&str]) -> (tempfile::TempDir, PathBuf) {
+    let dir_guard = unique_session_test_dir(label);
+    let path = dir_guard.path().join("session.json");
     persist_to_path(
         &path,
         &UiSessionFile {
@@ -3975,7 +3729,7 @@ fn seed_v3_session(label: &str, open_repos: &[&str]) -> PathBuf {
         },
     )
     .expect("seed v3 session");
-    path
+    (dir_guard, path)
 }
 
 fn repos_snapshot(open_repos: &[&str]) -> SessionReposSnapshot {
@@ -3992,7 +3746,7 @@ fn repos_snapshot(open_repos: &[&str]) -> SessionReposSnapshot {
 // emptied workspace must not drop that workspace from disk.
 #[test]
 fn store_repo_snapshot_keeps_an_empty_customized_legacy_workspace() {
-    let path = seed_v3_session("workspace-store-keeps-customized", &["/work/alpha"]);
+    let (_dir, path) = seed_v3_session("workspace-store-keeps-customized", &["/work/alpha"]);
     let mut workspace = load_from_path(&path).workspaces.remove(0);
     assert_eq!(workspace.id, LEGACY_WORKSPACE_ID);
     workspace.custom_name = Some("Client work".to_string());
@@ -4009,7 +3763,8 @@ fn store_repo_snapshot_keeps_an_empty_customized_legacy_workspace() {
 // mergetool process) must not rewrite their repositories.
 #[test]
 fn store_repo_snapshot_does_not_rewrite_workspaces_the_ui_saved() {
-    let path = seed_v3_session("workspace-store-no-rewrite", &["/work/alpha", "/work/beta"]);
+    let (_dir, path) =
+        seed_v3_session("workspace-store-no-rewrite", &["/work/alpha", "/work/beta"]);
     let workspaces = load_from_path(&path).workspaces;
     persist_workspaces_to_path(&workspaces, &path).expect("UI persist");
 
@@ -4023,7 +3778,7 @@ fn store_repo_snapshot_does_not_rewrite_workspaces_the_ui_saved() {
 // store's repo list is what loads, even after an unrelated writer.
 #[test]
 fn store_repo_snapshot_is_what_loads_until_the_ui_saves_workspaces() {
-    let path = seed_v3_session(
+    let (_dir, path) = seed_v3_session(
         "workspace-store-owns-until-ui",
         &["/work/alpha", "/work/beta"],
     );
@@ -4054,7 +3809,8 @@ fn store_repo_snapshot_is_what_loads_until_the_ui_saves_workspaces() {
 // unknown values degrade and an unparseable entry is dropped on its own.
 #[test]
 fn unknown_or_broken_workspace_entries_do_not_reset_the_session() {
-    let path = unique_session_test_dir("workspace-lenient").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-lenient");
+    let path = dir_guard.path().join("session.json");
     let kept_id = WorkspaceId::from_u128(21);
     let sparse_id = WorkspaceId::from_u128(22);
     let session = serde_json::json!({
@@ -4125,7 +3881,8 @@ fn unknown_or_broken_workspace_entries_do_not_reset_the_session() {
 // older build rewrote after this process went current still gets backed up.
 #[test]
 fn older_build_rewrite_after_a_current_write_is_still_backed_up() {
-    let path = unique_session_test_dir("workspace-backup-after-downgrade").join("session.json");
+    let dir_guard = unique_session_test_dir("workspace-backup-after-downgrade");
+    let path = dir_guard.path().join("session.json");
     persist_ui_settings_to_path(
         UiSettings {
             theme_mode: Some("dark".to_string()),
@@ -4161,7 +3918,8 @@ fn older_build_rewrite_after_a_current_write_is_still_backed_up() {
 fn timing_session_persist_cost_by_file_size() {
     const ITERATIONS: u32 = 400;
     for repo_count in [10_usize, 300] {
-        let path = unique_session_test_dir("timing-session-persist").join("session.json");
+        let dir_guard = unique_session_test_dir("timing-session-persist");
+        let path = dir_guard.path().join("session.json");
         let repos: Vec<String> = (0..repo_count)
             .map(|ix| format!("/home/user/src/team-{:02}/repository-{ix:04}", ix % 17))
             .collect();
@@ -4261,7 +4019,8 @@ fn timing_session_persist_cost_by_file_size() {
 // nor a running main app's workspace or settings writes may replace it.
 #[test]
 fn mergetool_window_size_survives_workspace_frames_and_main_app_writes() {
-    let path = unique_session_test_dir("mergetool-window-size").join("session.json");
+    let dir_guard = unique_session_test_dir("mergetool-window-size");
+    let path = dir_guard.path().join("session.json");
     let mut workspace = Workspace::new(vec![PathBuf::from("/work/alpha")]);
     workspace.placement.normal_frame = Some(SavedWindowFrame {
         x: 0,
@@ -4300,7 +4059,8 @@ fn mergetool_window_size_survives_workspace_frames_and_main_app_writes() {
 // Before the mergetool saves its own size it opens at the shared legacy one.
 #[test]
 fn mergetool_window_size_falls_back_to_the_legacy_size() {
-    let path = unique_session_test_dir("mergetool-window-fallback").join("session.json");
+    let dir_guard = unique_session_test_dir("mergetool-window-fallback");
+    let path = dir_guard.path().join("session.json");
     persist_ui_settings_to_path(
         UiSettings {
             window_width: Some(900),
@@ -4323,7 +4083,8 @@ fn mergetool_window_size_falls_back_to_the_legacy_size() {
 
 #[test]
 fn repo_maintenance_check_is_claimed_once_a_day() {
-    let path = unique_session_test_dir("maintenance-claim").join("session.json");
+    let dir_guard = unique_session_test_dir("maintenance-claim");
+    let path = dir_guard.path().join("session.json");
     let repo = Path::new("/work/alpha/.git");
     let day = MAINTENANCE_CHECK_INTERVAL_SECONDS;
 
@@ -4338,7 +4099,8 @@ fn repo_maintenance_check_is_claimed_once_a_day() {
 
 #[test]
 fn repo_maintenance_snooze_holds_off_the_next_check() {
-    let path = unique_session_test_dir("maintenance-snooze").join("session.json");
+    let dir_guard = unique_session_test_dir("maintenance-snooze");
+    let path = dir_guard.path().join("session.json");
     let repo = Path::new("/work/alpha/.git");
     let day = MAINTENANCE_CHECK_INTERVAL_SECONDS;
     assert!(claim_repo_maintenance_check_to_path(&path, repo, 1_000).unwrap());
@@ -4358,7 +4120,8 @@ fn repo_maintenance_snooze_holds_off_the_next_check() {
 
 #[test]
 fn malformed_repo_maintenance_entry_keeps_the_session() {
-    let path = unique_session_test_dir("maintenance-lenient").join("session.json");
+    let dir_guard = unique_session_test_dir("maintenance-lenient");
+    let path = dir_guard.path().join("session.json");
     let session = serde_json::json!({
         "version": CURRENT_SESSION_FILE_VERSION,
         "theme_mode": "dark",
@@ -4382,7 +4145,8 @@ fn malformed_repo_maintenance_entry_keeps_the_session() {
 
 #[test]
 fn repo_maintenance_entries_are_pruned_oldest_first() {
-    let path = unique_session_test_dir("maintenance-prune").join("session.json");
+    let dir_guard = unique_session_test_dir("maintenance-prune");
+    let path = dir_guard.path().join("session.json");
     for index in 0..300u64 {
         let repo = PathBuf::from(format!("/work/repo-{index:03}/.git"));
         claim_repo_maintenance_check_to_path(&path, &repo, 1_000 + index).unwrap();
@@ -4396,7 +4160,8 @@ fn repo_maintenance_entries_are_pruned_oldest_first() {
 
 #[test]
 fn repo_history_focus_round_trips_and_clears() {
-    let dir = unique_session_test_dir("repo-history-focus");
+    let dir_guard = unique_session_test_dir("repo-history-focus");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let repo = dir.join("repo");
     let _ = fs::create_dir_all(&repo);
@@ -4438,7 +4203,8 @@ fn repo_history_focus_round_trips_and_clears() {
 /// garbage -- must cost at most that one entry, never the whole session.
 #[test]
 fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
-    let dir = unique_session_test_dir("repo-history-focus-tolerance");
+    let dir_guard = unique_session_test_dir("repo-history-focus-tolerance");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let _ = fs::create_dir_all(&dir);
 
@@ -4488,7 +4254,8 @@ fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
 /// "solo"; a session written then must still restore its focus.
 #[test]
 fn a_session_written_under_the_solo_key_still_restores_its_focus() {
-    let dir = unique_session_test_dir("repo-history-focus-solo-alias");
+    let dir_guard = unique_session_test_dir("repo-history-focus-solo-alias");
+    let dir = dir_guard.path().to_path_buf();
     let session_file = dir.join("session.json");
     let _ = fs::create_dir_all(&dir);
 

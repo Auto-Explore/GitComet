@@ -735,11 +735,7 @@ pub(crate) fn split_ready_state_with_synthetic_base(
                 // Synthetic display base populated from the ancestor; the
                 // serialized marker remains the ordinary two-marker form.
                 base: Some(block_base.to_string().into()),
-                ours: "shared1\nshared2\n".into(),
-                theirs: "shared1\nshared2\n".into(),
-                choice: ConflictChoice::Ours,
-                resolved: false,
-                whitespace_only: false,
+                ..ConflictBlock::unresolved("shared1\nshared2\n", "shared1\nshared2\n")
             }),
             ConflictSegment::Text("tail\n".into()),
         ],

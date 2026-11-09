@@ -189,9 +189,15 @@ fn decode_merge_inputs(
     ))
 }
 
-/// The local, base and remote pane labels: given ones, else the file names,
-/// with Git's "empty tree" for a missing base.
-pub(crate) fn mergetool_labels(config: &MergetoolConfig) -> [String; 3] {
+/// The merge panes' labels: given ones, else the file names, with Git's
+/// "empty tree" for a missing base.
+pub(crate) struct MergetoolLabels {
+    pub(crate) local: String,
+    pub(crate) base: String,
+    pub(crate) remote: String,
+}
+
+pub(crate) fn mergetool_labels(config: &MergetoolConfig) -> MergetoolLabels {
     let local = config
         .label_local
         .clone()
@@ -205,15 +211,19 @@ pub(crate) fn mergetool_labels(config: &MergetoolConfig) -> [String; 3] {
         (None, Some(base_path)) => path_label(base_path),
         (None, None) => format_base_label(&BaseLabelScenario::NoBase),
     };
-    [local, base, remote]
+    MergetoolLabels {
+        local,
+        base,
+        remote,
+    }
 }
 
 fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
-    let [ours, base, theirs] = mergetool_labels(config);
+    let labels = mergetool_labels(config);
     MergeLabels {
-        ours: Some(ours),
-        base: Some(base),
-        theirs: Some(theirs),
+        ours: Some(labels.local),
+        base: Some(labels.base),
+        theirs: Some(labels.remote),
     }
 }
 
