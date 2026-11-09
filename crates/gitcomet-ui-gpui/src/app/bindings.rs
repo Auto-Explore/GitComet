@@ -472,6 +472,11 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
             Some("HistoryFind > TextInput"),
         ),
         KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
+        KeyBinding::new(
+            "secondary-shift-enter",
+            TextInputCommitAndPushSubmit,
+            Some("TextInput"),
+        ),
         KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
         KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
         KeyBinding::new(

@@ -47,16 +47,18 @@ impl SidebarPaneView {
             .relative()
             .h(ctx.row_height())
             .w_full()
-            .pl(ctx.indent_px(0))
+            .pl(ctx.header_indent_px())
             .pr(ctx.trailing_pad())
             .flex()
             .items_center()
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .interactive_row(row_style, row_state)
-            .child(
-                ctx.tree_toggle_slot(is_collapsed_popover.then_some(collapsed))
-                    .debug_selector(move || format!("sidebar_header_toggle_{ix}")),
-            )
+            .when(is_collapsed_popover, |row| {
+                row.child(
+                    ctx.tree_toggle_slot(Some(collapsed))
+                        .debug_selector(move || format!("sidebar_header_toggle_{ix}")),
+                )
+            })
             .child(
                 ctx.tree_icon_slot(icon_path, ctx.icon_primary, 14.0)
                     .debug_selector(move || format!("sidebar_header_icon_{ix}")),
@@ -138,13 +140,15 @@ impl SidebarPaneView {
             .relative()
             .h(ctx.row_height())
             .w_full()
-            .pl(ctx.indent_px(0))
+            .pl(ctx.header_indent_px())
             .pr(ctx.trailing_pad())
             .flex()
             .items_center()
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .interactive_row(row_style, row_state)
-            .child(ctx.tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
+            .when(is_collapsed_popover, |row| {
+                row.child(ctx.tree_toggle_slot(Some(collapsed)))
+            })
             .child(ctx.tree_icon_slot(STASH_ICON_PATH, ctx.icon_primary, 14.0))
             .child(
                 div()
@@ -232,13 +236,15 @@ impl SidebarPaneView {
             .relative()
             .h(ctx.row_height())
             .w_full()
-            .pl(ctx.indent_px(0))
+            .pl(ctx.header_indent_px())
             .pr(ctx.trailing_pad())
             .flex()
             .items_center()
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .interactive_row(row_style, row_state)
-            .child(ctx.tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
+            .when(is_collapsed_popover, |row| {
+                row.child(ctx.tree_toggle_slot(Some(collapsed)))
+            })
             .child(ctx.tree_icon_slot(WORKTREE_ICON_PATH, ctx.icon_primary, 14.0))
             .child(
                 div()
@@ -328,13 +334,15 @@ impl SidebarPaneView {
             .relative()
             .h(ctx.row_height())
             .w_full()
-            .pl(ctx.indent_px(0))
+            .pl(ctx.header_indent_px())
             .pr(ctx.trailing_pad())
             .flex()
             .items_center()
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .interactive_row(row_style, row_state)
-            .child(ctx.tree_toggle_slot(is_collapsed_popover.then_some(collapsed)))
+            .when(is_collapsed_popover, |row| {
+                row.child(ctx.tree_toggle_slot(Some(collapsed)))
+            })
             .child(ctx.tree_icon_slot("icons/box.svg", ctx.icon_primary, 14.0))
             .child(
                 div()

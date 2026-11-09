@@ -543,7 +543,7 @@ impl SettingsCategory {
             }
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
-                 waitlist"
+                 upgrade waitlist"
             }
         }
     }

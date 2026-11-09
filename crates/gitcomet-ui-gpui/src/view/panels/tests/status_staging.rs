@@ -941,7 +941,7 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
             crate::view::test_support::drain_store_worker(&view, cx);
             super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
             store.insert_repo_for_test(REPO, backend);
-            cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+            cx.simulate_resize(gpui::size(px(1600.0), px(1400.0)));
             cx.update(|_, app| {
                 view.update(app, |root, cx| {
                     root.set_change_tracking_view(

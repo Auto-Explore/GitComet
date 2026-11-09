@@ -87,8 +87,9 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
         for _ in 0..4 {
             crate::test_support::refresh_and_draw(cx);
         }
-        let mut heights = [px(0.0); 3];
-        let mut two_row_end = 0;
+        // The input starts four rows tall, so growth begins at the fifth row.
+        let mut heights = [px(0.0); 6];
+        let mut five_row_end = 0;
         let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
         for (index, word) in message
             .split_whitespace()
@@ -101,27 +102,27 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
             }
             cx.simulate_input(word);
             let rows = draw_and_assert_commit_end_caret(&input, cx);
-            assert!(rows <= 3, "fixture must pass through each row");
+            assert!(rows <= 6, "fixture must pass through each row");
             heights[rows - 1] = scroll.bounds().size.height;
-            if rows == 2 {
-                two_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
+            if rows == 5 {
+                five_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
             }
-            if rows == 3 {
+            if rows == 6 {
                 break;
             }
         }
         assert!(
-            heights[1] > heights[0] && heights[2] > heights[1],
+            heights[3] == heights[0] && heights[4] > heights[3] && heights[5] > heights[4],
             "commit input must grow: {heights:?}"
         );
         cx.update(|window, app| {
             input.update(app, |input, cx| {
                 let end = input.text().encode_utf16().count();
-                input.replace_text_in_range(Some(two_row_end..end), "", window, cx);
+                input.replace_text_in_range(Some(five_row_end..end), "", window, cx);
             })
         });
-        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 2);
-        assert_eq!(scroll.bounds().size.height, heights[1]);
+        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 5);
+        assert_eq!(scroll.bounds().size.height, heights[4]);
     }
 }
 
@@ -698,13 +699,15 @@ fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppConte
             (rows, scroll.bounds().size.height)
         })
     };
-    let (rows, one_row_height) = rows_and_height(cx);
+    // The box is four rows tall at rest and grows from the fifth row.
+    const MIN_ROWS: usize = 4;
+    let (rows, min_height) = rows_and_height(cx);
     assert_eq!(rows, 1);
     let line_height =
         cx.update(|_window, app| input.read(app).hotspot_bounds(&(0..1)).unwrap().size.height);
     let assert_box_fits = |cx: &mut gpui::VisualTestContext, context: &str| {
         let (rows, height) = rows_and_height(cx);
-        let expected = one_row_height + line_height * (rows - 1) as f32;
+        let expected = min_height + line_height * rows.saturating_sub(MIN_ROWS) as f32;
         assert!(
             (height - expected).abs() <= px(0.5),
             "{context}: {rows} rows painted into a {height:?} box, expected {expected:?}"
@@ -717,11 +720,11 @@ fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppConte
     for character in typed.chars().cycle().take(4 * typed.len()) {
         cx.simulate_input(&character.to_string());
         max_rows = max_rows.max(assert_box_fits(cx, &format!("after typing {character:?}")));
-        if max_rows == 4 {
+        if max_rows == MIN_ROWS + 2 {
             break;
         }
     }
-    assert_eq!(max_rows, 4, "fixture must wrap onto four rows");
+    assert_eq!(max_rows, MIN_ROWS + 2, "fixture must grow past the minimum");
 
     cx.update(|window, app| {
         input.update(app, |input, cx| {
@@ -729,14 +732,18 @@ fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppConte
             input.replace_text_in_range(
                 Some(0..end),
                 "Subject\n\nA pasted body paragraph that is long enough to wrap onto more than \
-                 one row of the commit box",
+                 one row of the commit box\n\nA second paragraph so the paste grows the box \
+                 past its resting height",
                 window,
                 cx,
             );
         })
     });
     let rows = assert_box_fits(cx, "after pasting");
-    assert!(rows > 3, "fixture must wrap the pasted body: {rows} rows");
+    assert!(
+        rows > MIN_ROWS,
+        "fixture must wrap the pasted body: {rows} rows"
+    );
 }
 
 /// Typing into the focused commit box re-renders the details pane only. The
@@ -1117,7 +1124,7 @@ fn submit_commit_box(cx: &mut gpui::VisualTestContext, view: &CommitView) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                assert!(pane.handle_commit_submit_shortcut(window, cx));
+                assert!(pane.handle_commit_submit_shortcut(false, window, cx));
             });
         });
     });
@@ -1305,4 +1312,35 @@ fn background_repo_commit_success_drops_its_draft(cx: &mut gpui::TestAppContext)
     push(cx, two_repo_state(acknowledged, repo_b, repo_a_id));
 
     assert_eq!(commit_box_text_of(cx, &view), "");
+}
+
+/// Each commit action is drawn as a framed rectangle; a click anywhere inside
+/// that frame has to land on the button.
+#[gpui::test]
+fn commit_buttons_fill_their_frames(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(staged_repo(45), RepoId(45)), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    for (button, frame) in [
+        ("commit_button", "commit_button_frame"),
+        ("commit_and_push_button", "commit_and_push_button_frame"),
+    ] {
+        let button_bounds = cx.debug_bounds(button).expect(button);
+        let frame_bounds = cx.debug_bounds(frame).expect(frame);
+        // The frame's 1px border sits outside the button on each side.
+        assert!(
+            (frame_bounds.size.width - button_bounds.size.width).abs() <= px(2.0),
+            "{button} is {:?} wide inside a {:?} frame",
+            button_bounds.size.width,
+            frame_bounds.size.width
+        );
+    }
 }

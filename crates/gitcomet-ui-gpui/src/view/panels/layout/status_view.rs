@@ -49,7 +49,9 @@ struct StatusSectionNames {
     header_id: &'static str,
     controls_id_prefix: &'static str,
     spinner_id: &'static str,
-    empty_message: &'static str,
+    empty_icon: &'static str,
+    empty_title: &'static str,
+    empty_hint: &'static str,
 }
 
 const COMBINED_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
@@ -57,7 +59,9 @@ const COMBINED_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
     header_id: "unstaged_header",
     controls_id_prefix: "status_unstaged",
     spinner_id: "unstaged_actions_spinner",
-    empty_message: "No unstaged changes.",
+    empty_icon: "icons/check.svg",
+    empty_title: "No unstaged changes",
+    empty_hint: "Edits to tracked files show up here.",
 };
 
 const UNTRACKED_NAMES: StatusSectionNames = StatusSectionNames {
@@ -65,7 +69,9 @@ const UNTRACKED_NAMES: StatusSectionNames = StatusSectionNames {
     header_id: "untracked_header",
     controls_id_prefix: "status_untracked",
     spinner_id: "untracked_actions_spinner",
-    empty_message: "No untracked files.",
+    empty_icon: "icons/plus.svg",
+    empty_title: "No untracked files",
+    empty_hint: "New files show up here.",
 };
 
 const SPLIT_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
@@ -73,7 +79,9 @@ const SPLIT_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
     header_id: "split_unstaged_header",
     controls_id_prefix: "status_split_unstaged",
     spinner_id: "split_unstaged_actions_spinner",
-    empty_message: "No unstaged changes.",
+    empty_icon: "icons/check.svg",
+    empty_title: "No unstaged changes",
+    empty_hint: "Edits to tracked files show up here.",
 };
 
 const STAGED_NAMES: StatusSectionNames = StatusSectionNames {
@@ -81,7 +89,9 @@ const STAGED_NAMES: StatusSectionNames = StatusSectionNames {
     header_id: "staged_header",
     controls_id_prefix: "status_staged",
     spinner_id: "staged_actions_spinner",
-    empty_message: "Nothing staged yet.",
+    empty_icon: "icons/check.svg",
+    empty_title: "Nothing staged yet",
+    empty_hint: "Stage files to include them in your commit.",
 };
 
 impl DetailsPaneView {
@@ -117,7 +127,16 @@ impl DetailsPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(status_sections)
-                    .child(div().px_2().py_2().child(self.commit_box(cx)))
+                    .child(
+                        // A rule above the commit box, in the same hairline as
+                        // the pane dividers.
+                        div()
+                            .px_2()
+                            .py_2()
+                            .border_t_1()
+                            .border_color(v.theme.colors.stroke.subtle)
+                            .child(self.commit_box(cx)),
+                    )
                     .into_any_element()
             } else {
                 components::empty_state(v.theme, "Changes", "No repository selected.")
@@ -454,6 +473,47 @@ impl DetailsPaneView {
         actions.child(all_button).into_any_element()
     }
 
+    /// The dashed card an empty section shows, in the style of the sidebar's
+    /// empty sections.
+    fn status_empty_card(
+        theme: AppTheme,
+        ui_scale: crate::ui_scale::UiScale,
+        names: StatusSectionNames,
+    ) -> Div {
+        div().w_full().px_2().py_2().child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .border_1()
+                .border_dashed()
+                .border_color(theme.colors.stroke.default)
+                .rounded(px(6.0))
+                .text_size(theme.ui_text(13.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.colors.foreground.primary)
+                        .child(svg_icon(
+                            names.empty_icon,
+                            theme.colors.foreground.secondary,
+                            ui_scale.px(14.0),
+                        ))
+                        .child(names.empty_title),
+                )
+                .child(
+                    div()
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(names.empty_hint),
+                ),
+        )
+    }
+
     /// A section's file list, or its loading or empty message.
     fn status_section_body(
         &mut self,
@@ -465,7 +525,7 @@ impl DetailsPaneView {
         if state.loading {
             components::empty_state_message(v.theme, "Loading…").into_any_element()
         } else if state.count == 0 {
-            components::empty_state_message(v.theme, names.empty_message).into_any_element()
+            Self::status_empty_card(v.theme, v.ui_scale, names).into_any_element()
         } else {
             self.status_list(cx, names.section, state.count)
         }
@@ -893,7 +953,7 @@ impl DetailsPaneView {
                 id,
                 components::ResizeGripAxis::Horizontal,
                 dragging,
-                Some(theme.colors.stroke.default),
+                Some(theme.colors.stroke.subtle),
             ))
             .on_mouse_down(
                 MouseButton::Left,

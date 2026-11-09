@@ -138,11 +138,8 @@ impl DetailsPaneView {
                 .selected(selected, theme.colors.interaction.selected_background)
                 .disabled(disabled);
             let icon_color = interaction.color(commit_file_filter_color(filter, theme), state);
-            let selected_border = if theme.is_dark {
-                gpui::rgba(0x00000000)
-            } else {
-                interaction.color(theme.colors.interaction.selected_indicator, state)
-            };
+            // The same hairline the sidebar's Branches/Files switch draws.
+            let selected_border = interaction.color(theme.colors.stroke.subtle, state);
             let tab = div()
                 .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
                 .debug_selector(move || format!("{id_prefix}_filter_tab_{ix}"))

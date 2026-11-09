@@ -198,14 +198,17 @@ impl Render for TextInput {
         }
         let text_surface = text_surface.child(TextElement { input: cx.entity() });
         let text_content = if let Some((max_height, scroll)) = internal_scroll.as_ref() {
+            let border = if chromeless { px(0.0) } else { px(2.0) };
             let surface = div()
                 .id(ElementId::from(("text_input_scroll", entity_id)))
                 .w_full()
                 .min_w(px(0.0))
-                .max_h(
-                    (scaled_px(*max_height) - if chromeless { px(0.0) } else { px(2.0) })
-                        .max(px(0.0)),
-                )
+                // The viewport fills the field's min_lines height, not just the text.
+                .when(multiline && self.min_lines > 0, |d| {
+                    let line_height = self.effective_line_height(window);
+                    d.min_h(line_height * self.min_lines as f32 + pad_y * 2.0 - border)
+                })
+                .max_h((scaled_px(*max_height) - border).max(px(0.0)))
                 .pr(crate::Scrollbar::gutter(crate::ScrollbarAxis::Vertical))
                 .overflow_hidden()
                 .overflow_y_scroll()

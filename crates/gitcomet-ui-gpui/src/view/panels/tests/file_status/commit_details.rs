@@ -1,20 +1,18 @@
-//! Commit details: selectable fields, message links, signatures, input focus.
+//! Commit details: message links, signatures, text selection, input focus.
 
 use super::*;
 
 #[path = "commit_reword_lifecycle.rs"]
 mod reword_lifecycle;
 
-/// A window showing one commit's details, with the sha/date/parent fields
-/// populated. Returns the fields' expected text.
+const FIXTURE_MESSAGE: &str = "subject";
+
+/// A window showing one commit's details, its message input drawn.
 fn commit_details_metadata_fixture(
     cx: &mut gpui::TestAppContext,
 ) -> (
     gpui::Entity<crate::view::GitCometView>,
     &mut gpui::VisualTestContext,
-    String,
-    String,
-    String,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -22,25 +20,24 @@ fn commit_details_metadata_fixture(
     });
 
     let repo_id = gitcomet_state::model::RepoId(33);
-    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
-    let parent_sha = "89abcdef0123456789abcdef0123456789abcdef".to_string();
-    let commit_date = "2026-03-08 12:34:56 +0200".to_string();
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567";
+    let parent_sha = "89abcdef0123456789abcdef0123456789abcdef";
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-metadata-copy"));
             repo.history_state.selected_commit =
-                Some(gitcomet_core::domain::CommitId(commit_sha.clone().into()));
+                Some(gitcomet_core::domain::CommitId(commit_sha.into()));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
                 gitcomet_core::domain::CommitDetails {
-                    id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
-                    message: "subject".to_string(),
+                    id: gitcomet_core::domain::CommitId(commit_sha.into()),
+                    message: FIXTURE_MESSAGE.to_string(),
                     author_name: String::new(),
                     author_email: String::new(),
                     authored_at_unix: 0,
-                    committed_at: commit_date.clone(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
                     committed_at_unix: 0,
-                    parent_ids: vec![gitcomet_core::domain::CommitId(parent_sha.clone().into())],
+                    parent_ids: vec![gitcomet_core::domain::CommitId(parent_sha.into())],
                     files: vec![],
                 },
             ));
@@ -55,54 +52,61 @@ fn commit_details_metadata_fixture(
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        let pane = details_pane.read(app);
-        assert_eq!(pane.commit_details_sha_input.read(app).text(), commit_sha);
-        assert_eq!(pane.commit_details_date_input.read(app).text(), commit_date);
-        assert_eq!(
-            pane.commit_details_parent_input.read(app).text(),
-            parent_sha
-        );
+    let message = cx.update(|_window, app| {
+        let input = details_message_input(&view, app);
+        input.read(app).text().to_string()
     });
+    assert_eq!(message, FIXTURE_MESSAGE);
 
-    (view, cx, commit_sha, commit_date, parent_sha)
+    (view, cx)
 }
 
-#[gpui::test]
-fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, commit_date, parent_sha) = commit_details_metadata_fixture(cx);
+/// The details message input, checked to be on screen so the tests act on a
+/// drawn input.
+fn drawn_details_message_input(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> gpui::Entity<components::TextInput> {
+    assert!(
+        cx.debug_bounds("commit_details_message_scroll_surface")
+            .is_some(),
+        "the message input must be drawn"
+    );
+    cx.update(|_window, app| details_message_input(view, app))
+}
 
-    // One field at a time: only one surface may hold a selection, so selecting
-    // all three at once would leave just the last one highlighted.
-    for (label, expected) in [
-        ("sha", commit_sha),
-        ("date", commit_date),
-        ("parent", parent_sha),
-    ] {
-        cx.update(|window, app| {
-            let details_pane = view.read(app).details_pane.clone();
-            details_pane.update(app, |pane, cx| {
-                let input = match label {
-                    "sha" => pane.commit_details_sha_input.clone(),
-                    "date" => pane.commit_details_date_input.clone(),
-                    _ => pane.commit_details_parent_input.clone(),
-                };
-                input.update(cx, |input, cx| input.select_all_text(window, cx));
-            });
-        });
+fn details_message_input(
+    view: &gpui::Entity<crate::view::GitCometView>,
+    app: &gpui::App,
+) -> gpui::Entity<components::TextInput> {
+    view.read(app)
+        .details_pane
+        .read(app)
+        .commit_details_message_input
+        .clone()
+}
 
-        cx.update(|_window, app| {
-            let details_pane = view.read(app).details_pane.clone();
-            let pane = details_pane.read(app);
-            let actual = match label {
-                "sha" => pane.commit_details_sha_input.read(app).selected_text(),
-                "date" => pane.commit_details_date_input.read(app).selected_text(),
-                _ => pane.commit_details_parent_input.read(app).selected_text(),
-            };
-            assert_eq!(actual, Some(expected), "{label} field must be selectable");
-        });
-    }
+/// Selects the whole details message and checks it took.
+fn select_details_message(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) {
+    let input = drawn_details_message_input(cx, view);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| input.select_all_text(window, cx));
+    });
+    assert_eq!(
+        details_message_selection(cx, view),
+        Some(FIXTURE_MESSAGE.to_string()),
+        "precondition: the message input holds a selection"
+    );
+}
+
+fn details_message_selection(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> Option<String> {
+    cx.update(|_window, app| details_message_input(view, app).read(app).selected_text())
 }
 
 /// Any other surface taking the window's selection clears a text input's
@@ -110,26 +114,8 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
 /// terminal, and any future selectable surface.
 #[gpui::test]
 fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
-
-    cx.update(|window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
-        });
-    });
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            Some(commit_sha)
-        );
-    });
+    let (view, cx) = commit_details_metadata_fixture(cx);
+    select_details_message(cx, &view);
 
     cx.update(|window, app| {
         let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
@@ -137,18 +123,11 @@ fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestA
     });
     cx.run_until_parked();
 
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            None,
-            "the input must drop its highlight once another surface owns the selection"
-        );
-    });
+    assert_eq!(
+        details_message_selection(cx, &view),
+        None,
+        "the input must drop its highlight once another surface owns the selection"
+    );
 }
 
 /// The browser rule end to end: a real press on a surface that does not own the
@@ -157,31 +136,19 @@ fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestA
 /// the capture-phase invalidator actually fires.
 #[gpui::test]
 fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
-
-    cx.update(|window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
-        });
-    });
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            Some(commit_sha),
-            "precondition: the input holds a selection"
-        );
-    });
+    let (view, cx) = commit_details_metadata_fixture(cx);
+    select_details_message(cx, &view);
 
     // Mid-window, clear of the titlebar and of any selectable text surface.
     let size = cx.update(|window, _app| window.viewport_size());
     let elsewhere = gpui::point(size.width * 0.5, size.height * 0.25);
+    let message = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("the message input is drawn");
+    assert!(
+        !message.contains(&elsewhere),
+        "the press must land outside the input that owns the selection"
+    );
     cx.simulate_mouse_move(elsewhere, None, gpui::Modifiers::default());
     cx.simulate_event(gpui::MouseDownEvent {
         position: elsewhere,
@@ -192,33 +159,20 @@ fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::Test
     });
     cx.run_until_parked();
 
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            None,
-            "a press outside the owning surface must collapse the selection"
-        );
-    });
+    assert_eq!(
+        details_message_selection(cx, &view),
+        None,
+        "a press outside the owning surface must collapse the selection"
+    );
 }
 
 /// The overlay flag must fall back to closed on every dismiss path: one that
 /// forgot would latch it on and disable click-away blur for the session.
 #[gpui::test]
 fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx) = commit_details_metadata_fixture(cx);
 
-    let input = cx.update(|_window, app| {
-        view.read(app)
-            .details_pane
-            .read(app)
-            .commit_details_sha_input
-            .clone()
-    });
+    let input = drawn_details_message_input(cx, &view);
 
     // Stand in for a dismiss path that forgot to clear the flag: no popover is
     // open, but the flag says one is. The next render must correct it.
@@ -254,15 +208,8 @@ fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
 /// highlight alone even though it is a press outside the owning surface.
 #[gpui::test]
 fn a_preserved_press_leaves_a_text_input_selection_alone(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
-
-    cx.update(|window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
-        });
-    });
+    let (view, cx) = commit_details_metadata_fixture(cx);
+    select_details_message(cx, &view);
 
     // The titlebar, a real `preserve` site -- dragging the window is chrome,
     // not content. Pressed for real so the whole capture/bubble/resolve chain
@@ -278,68 +225,11 @@ fn a_preserved_press_leaves_a_text_input_selection_alone(cx: &mut gpui::TestAppC
     });
     cx.run_until_parked();
 
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            Some(commit_sha),
-            "a preserved press must not collapse the selection"
-        );
-    });
-}
-
-/// Selecting one commit-details field must drop the highlight on the previous
-/// one, the way a browser only ever shows one selection.
-#[gpui::test]
-fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, commit_date, _parent_sha) = commit_details_metadata_fixture(cx);
-
-    cx.update(|window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
-        });
-    });
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        assert_eq!(
-            details_pane
-                .read(app)
-                .commit_details_sha_input
-                .read(app)
-                .selected_text(),
-            Some(commit_sha)
-        );
-    });
-
-    cx.update(|window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.commit_details_date_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
-        });
-    });
-    cx.run_until_parked();
-
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        let pane = details_pane.read(app);
-        assert_eq!(
-            pane.commit_details_date_input.read(app).selected_text(),
-            Some(commit_date),
-            "the newly selected field keeps its selection"
-        );
-        assert_eq!(
-            pane.commit_details_sha_input.read(app).selected_text(),
-            None,
-            "the previously selected field must have been cleared"
-        );
-    });
+    assert_eq!(
+        details_message_selection(cx, &view),
+        Some(FIXTURE_MESSAGE.to_string()),
+        "a preserved press must not collapse the selection"
+    );
 }
 
 /// Wait for the store worker to apply the selection a reveal dispatched.
@@ -726,7 +616,6 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
             popover,
             Some(PopoverKind::CommitShaLinkMenu {
                 ref commit_id,
-                allow_navigate: true,
                 ..
             }) if commit_id.as_ref() == target_sha
         ),
@@ -1132,10 +1021,10 @@ fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
     });
 }
 
+/// The parent can sit far below the selected commit; following it must
+/// scroll the history to its row, not just select it off screen.
 #[gpui::test]
-fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
-    cx: &mut gpui::TestAppContext,
-) {
+fn commit_card_parent_click_selects_and_scrolls_to_the_parent(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1152,23 +1041,18 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            let commit = |id: String, summary: String| gitcomet_core::domain::Commit {
+                id: gitcomet_core::domain::CommitId(id.into()),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: summary.into(),
+                author: "Alice".into(),
+                time: std::time::SystemTime::UNIX_EPOCH,
+            };
+            let mut commits = vec![commit(current_sha.into(), "current".into())];
+            commits.extend((0..158).map(|ix| commit(format!("{ix:040x}"), format!("filler {ix}"))));
+            commits.push(commit(parent_sha.into(), "parent".into()));
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
-                commits: vec![
-                    gitcomet_core::domain::Commit {
-                        id: gitcomet_core::domain::CommitId(current_sha.into()),
-                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-                        summary: "current".into(),
-                        author: "Alice".into(),
-                        time: std::time::SystemTime::UNIX_EPOCH,
-                    },
-                    gitcomet_core::domain::Commit {
-                        id: gitcomet_core::domain::CommitId(parent_sha.into()),
-                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-                        summary: "parent".into(),
-                        author: "Alice".into(),
-                        time: std::time::SystemTime::UNIX_EPOCH,
-                    },
-                ],
+                commits,
                 next_cursor: None,
             }));
             repo.log_rev = 1;
@@ -1198,30 +1082,9 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-    assert!(
-        matches!(
-            popover,
-            Some(PopoverKind::CommitShaLinkMenu {
-                ref commit_id,
-                allow_navigate: true,
-                ..
-            }) if commit_id.as_ref() == parent_sha
-        ),
-        "clicking the parent id should open its menu, got {popover:?}"
-    );
-
-    let reveal_bounds = cx
-        .debug_bounds("context_menu_reveal_commit")
-        .expect("expected parent reveal commit entry");
-    simulate_counted_click(cx, reveal_bounds.center(), 1);
+        .debug_bounds("commit_card_parent")
+        .expect("expected the parent chip in the commit card");
+    simulate_counted_click(cx, parent_bounds.center(), 1);
     cx.run_until_parked();
     wait_for_store_selected_commit(cx, &view, repo_id, parent_sha);
     cx.update(|window, app| {
@@ -1242,10 +1105,155 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let expected = gitcomet_core::domain::CommitId(parent_sha.into());
         assert_eq!(selected, Some(&expected));
     });
+    draw_and_drain_test_window(cx);
+    let offset_y = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .y
+    });
+    assert!(
+        offset_y < px(-0.5),
+        "the history must scroll down to the parent's row, offset {offset_y:?}"
+    );
+}
+
+/// A window showing one commit with a parent, for the card's SHA chips.
+fn commit_card_chip_fixture(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<crate::view::GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(41);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-card-chips"));
+            repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into()));
+            repo.history_state.commit_details =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into()),
+                    message: "subject".into(),
+                    author_name: "Alice Example-Lastname".into(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![gitcomet_core::domain::CommitId(CHIP_PARENT_SHA.into())],
+                    files: vec![],
+                }));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    (view, cx)
+}
+
+const CHIP_COMMIT_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const CHIP_PARENT_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+#[gpui::test]
+fn commit_card_sha_click_copies_the_full_sha_and_says_so(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let sha_bounds = cx
+        .debug_bounds("commit_card_sha")
+        .expect("expected the SHA chip in the commit card");
+    simulate_counted_click(cx, sha_bounds.center(), 1);
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("0123456789abcdef0123456789abcdef01234567".to_string())
+    );
+    let toasts = cx.update(|_window, app| {
+        let view = view.read(app);
+        view.toast_host.read(app).toasts_for_tests(app)
+    });
+    assert_eq!(
+        toasts,
+        vec![(
+            components::ToastKind::Success,
+            "Commit 01234567 copied to clipboard".to_string()
+        )]
+    );
 }
 
 #[gpui::test]
-fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext) {
+fn commit_card_chevrons_open_the_commit_menu_for_their_sha(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    for (menu, sha) in [
+        ("commit_card_sha_menu", CHIP_COMMIT_SHA),
+        ("commit_card_parent_menu", CHIP_PARENT_SHA),
+    ] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+        assert_eq!(
+            kind,
+            Some(PopoverKind::CommitShaLinkMenu {
+                repo_id: gitcomet_state::model::RepoId(41),
+                commit_id: gitcomet_core::domain::CommitId(sha.into()),
+            }),
+            "{menu}"
+        );
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        draw_and_drain_test_window(cx);
+    }
+}
+
+/// While the card still shows the previous commit, its menus must not act on
+/// it: Reveal there would undo the selection the user just made.
+#[gpui::test]
+fn commit_card_chevrons_are_inert_while_the_card_is_stale(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut state = (*this.state).clone();
+            let repo = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == gitcomet_state::model::RepoId(41))
+                .expect("fixture repo");
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(CHIP_PARENT_SHA.into()));
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    for menu in ["commit_card_sha_menu", "commit_card_parent_menu"] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+        assert_eq!(kind, None, "{menu} opened a menu for the previous commit");
+    }
+}
+
+#[gpui::test]
+fn commit_card_root_commit_has_no_parent_chip(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1297,19 +1305,9 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-
     assert!(
-        popover.is_none(),
-        "expected placeholder parent value to stay non-interactive, got {popover:?}"
+        cx.debug_bounds("commit_card_parent").is_none(),
+        "a root commit has no parent chip to click"
     );
 }
 
@@ -1317,15 +1315,9 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
 /// focused input, the way clicking page background does in a browser.
 #[gpui::test]
 fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx) = commit_details_metadata_fixture(cx);
 
-    let input = cx.update(|_window, app| {
-        view.read(app)
-            .details_pane
-            .read(app)
-            .commit_details_sha_input
-            .clone()
-    });
+    let input = drawn_details_message_input(cx, &view);
     cx.update(|window, app| {
         let handle = input.read(app).focus_handle();
         handle.focus(window, app);
@@ -1367,20 +1359,18 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
 /// titlebar while typing is not "clicking away".
 #[gpui::test]
 fn a_preserved_press_does_not_blur_a_focused_input(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx) = commit_details_metadata_fixture(cx);
 
-    let input = cx.update(|_window, app| {
-        view.read(app)
-            .details_pane
-            .read(app)
-            .commit_details_sha_input
-            .clone()
-    });
+    let input = drawn_details_message_input(cx, &view);
     cx.update(|window, app| {
         let handle = input.read(app).focus_handle();
         handle.focus(window, app);
     });
     cx.run_until_parked();
+    assert!(
+        cx.update(|window, app| input.read(app).focus_handle().is_focused(window)),
+        "precondition: the input is focused"
+    );
 
     // The titlebar: a real `preserve` site.
     let titlebar = gpui::point(gpui::px(2.0), gpui::px(2.0));
@@ -1565,7 +1555,7 @@ fn status_row_shows_large_file_chip_for_managed_paths(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn commit_details_pane_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx) = commit_details_metadata_fixture(cx);
     // One legitimate re-render, as any status publication causes: the menus
     // are tracked by the window from here on.
     cx.update(|_window, app| {
@@ -2396,5 +2386,111 @@ fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
             .commit_reword
             .is_some()),
         "a failure keeps the edit"
+    );
+}
+
+/// A narrow pane moves the badges under the author rather than squeezing
+/// the name and date out of view; a wide one keeps them on one row.
+#[gpui::test]
+fn commit_card_badges_wrap_below_the_author_when_narrow(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let mut layout_at = |width: f32| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.details_width = px(width);
+                cx.notify();
+            });
+        });
+        draw_and_drain_test_window(cx);
+        let author = cx
+            .debug_bounds("commit_card_author")
+            .expect("expected the author block");
+        let sha = cx
+            .debug_bounds("commit_card_sha")
+            .expect("expected the SHA chip");
+        (author, sha)
+    };
+
+    let (author, sha) = layout_at(700.0);
+    assert!(
+        sha.top() < author.bottom(),
+        "wide: the SHA chip shares the author's row, author {author:?}, sha {sha:?}"
+    );
+
+    let (author, sha) = layout_at(260.0);
+    assert!(
+        sha.top() >= author.bottom(),
+        "narrow: the SHA chip moves below the author, author {author:?}, sha {sha:?}"
+    );
+}
+
+/// A branch badge's chevron opens the sidebar's menu for that branch; a tag
+/// badge has no menu.
+#[gpui::test]
+fn commit_card_branch_badges_open_the_sidebar_branch_menu(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let repo_id = gitcomet_state::model::RepoId(41);
+    let target = gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut state = (*this.state).clone();
+            let repo = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .expect("fixture repo");
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature".into(),
+                target: target.clone(),
+                upstream: None,
+                divergence: None,
+            }]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".into(),
+                    name: "feature".into(),
+                    target: target.clone(),
+                }]));
+            repo.tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
+                name: "v1.0".into(),
+                target: target.clone(),
+            }]));
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    for (menu, expected) in [
+        (
+            "commit_card_ref_menu_feature",
+            crate::view::branch_sidebar::BranchMenuTarget::local("feature"),
+        ),
+        (
+            "commit_card_ref_menu_origin/feature",
+            crate::view::branch_sidebar::BranchMenuTarget::remote("origin", "feature"),
+        ),
+    ] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+        assert_eq!(
+            kind,
+            Some(PopoverKind::BranchMenu {
+                repo_id,
+                target: expected,
+            }),
+            "{menu}"
+        );
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        draw_and_drain_test_window(cx);
+    }
+    assert!(
+        cx.debug_bounds("commit_card_ref_menu_v1.0").is_none(),
+        "a tag badge has no branch menu"
     );
 }

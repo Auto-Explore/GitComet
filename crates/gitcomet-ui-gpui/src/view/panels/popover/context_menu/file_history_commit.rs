@@ -96,8 +96,8 @@ pub(in super::super) fn model(
         "Copy SHA",
         "icons/copy.svg",
         false,
-        ContextMenuAction::CopyText {
-            text: sha.to_owned(),
+        ContextMenuAction::CopyCommitSha {
+            commit_id: commit_id.clone(),
         },
     );
     items.push(ContextMenuItem::Separator);

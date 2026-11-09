@@ -105,17 +105,7 @@ impl SidebarPaneView {
     ) -> AnyElement {
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
-        div()
-            .id(("annex_placeholder", slot.ix))
-            .h(ctx.row_height())
-            .w_full()
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .gap(ctx.px(6.0))
-            .text_size(theme.ui_text(14.0))
-            .text_color(theme.colors.foreground.secondary)
+        let inner = div()
             .child(
                 div()
                     .flex_1()
@@ -156,7 +146,8 @@ impl SidebarPaneView {
                         });
                     }),
                 )
-            })
+            });
+        ctx.placeholder_card("annex_placeholder", slot.ix, inner)
             .into_any_element()
     }
 

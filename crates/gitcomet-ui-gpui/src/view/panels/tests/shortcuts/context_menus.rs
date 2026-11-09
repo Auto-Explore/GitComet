@@ -978,7 +978,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         commit_model,
         "C",
-        ContextMenuAction::CopyText { text } if text == commit_id.as_ref()
+        ContextMenuAction::CopyCommitSha { commit_id: copied } if copied == &commit_id
     );
     assert_shortcut_action!(
         commit_model,

@@ -8,6 +8,7 @@ use super::{
     UnsavedFileEditsAction, WeakEntity, Window, components,
 };
 use crate::view::date_time::{DateTimeFormat, Timezone};
+use gitcomet_core::domain::CommitId;
 use gitcomet_core::filesystem::ConflictChoice;
 use gitcomet_core::git_operation::GitOperationId;
 use std::path::PathBuf;
@@ -95,6 +96,7 @@ pub(in crate::view) enum RootRequest {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     InstallLinuxDesktopIntegration,
     Toast(components::ToastKind, String),
+    CopyCommitSha(CommitId),
     ClearPendingTerminalShutdownPrompt,
     ConfirmTerminalShutdown(TerminalShutdownPrompt),
     ResolveUnsavedFileEdits {
@@ -236,6 +238,7 @@ impl GitCometView {
                 self.install_linux_desktop_integration(cx)
             }
             RootRequest::Toast(kind, message) => self.push_toast(kind, message, cx),
+            RootRequest::CopyCommitSha(commit_id) => self.copy_commit_sha(commit_id, cx),
             RootRequest::ClearPendingTerminalShutdownPrompt => {
                 self.clear_pending_terminal_shutdown_prompt(cx)
             }

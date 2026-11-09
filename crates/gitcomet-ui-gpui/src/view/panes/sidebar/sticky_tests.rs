@@ -1852,15 +1852,14 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                 assert_eq!(row.right(), panel.right());
             }
             let pin = cx.debug_bounds("sidebar_pin_marker_0").unwrap();
-            let header_toggle = cx
-                .debug_bounds(format!("sidebar_header_toggle_{local}").leak())
-                .unwrap();
             let pin_icon = cx.debug_bounds("sidebar_branch_icon_Pins_0").unwrap();
             let header_icon = cx
                 .debug_bounds(format!("sidebar_header_icon_{local}").leak())
                 .unwrap();
-            assert_eq!(pin.left(), header_toggle.left());
-            assert_eq!(pin_icon.left(), header_icon.left());
+            // Section headers sit closer to the left edge than the rows
+            // below them: they have no toggle slot of their own.
+            assert!(header_icon.left() < pin.left());
+            assert!(header_icon.left() < pin_icon.left());
             assert_eq!(pin_icon.size.width, header_icon.size.width);
             assert!(cx.debug_bounds("sidebar_pinned_heading").is_none());
         }
