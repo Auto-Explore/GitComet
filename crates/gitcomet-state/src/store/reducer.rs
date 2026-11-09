@@ -1555,7 +1555,7 @@ fn reduce_inner(
                 repo_state.set_detached_head_commit(Some(commit_id.clone()));
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::checkout_commit(repo_id, commit_id)
+            vec![Effect::CheckoutCommit { repo_id, commit_id }]
         }
         Msg::CherryPickCommit {
             repo_id,
@@ -1565,7 +1565,14 @@ fn reduce_inner(
             summary,
         } => {
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
+            vec![Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
+                repo_id,
+                commit_id,
+                commit,
+                mainline,
+                summary,
+                auth: None,
+            })]
         }
         Msg::RevertCommit {
             repo_id,
@@ -1575,7 +1582,14 @@ fn reduce_inner(
             summary,
         } => {
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::revert_commit(repo_id, commit_id, commit, mainline, summary)
+            vec![Effect::RepoCommand(RepoCommandEffect::RevertCommit {
+                repo_id,
+                commit_id,
+                commit,
+                mainline,
+                summary,
+                auth: None,
+            })]
         }
         Msg::ApplyFileChange {
             repo_id,
@@ -1588,7 +1602,13 @@ fn reduce_inner(
             } else {
                 begin_local_action(state, repo_id);
             }
-            actions_emit_effects::apply_file_change(repo_id, target, commit, commit_retry)
+            vec![Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
+                repo_id,
+                target,
+                commit,
+                commit_retry,
+                auth: None,
+            })]
         }
         Msg::CreateBranch {
             repo_id,
@@ -1596,7 +1616,11 @@ fn reduce_inner(
             target,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch(repo_id, name, target)
+            vec![Effect::CreateBranch {
+                repo_id,
+                name,
+                target,
+            }]
         }
         Msg::CreateBranchAndCheckout {
             repo_id,
@@ -1651,7 +1675,7 @@ fn reduce_inner(
                 state.force_delete_branch_prompt = None;
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::force_delete_branch(repo_id, name)
+            vec![Effect::ForceDeleteBranch { repo_id, name }]
         }
         Msg::DeleteBranches {
             repo_id,
@@ -1662,7 +1686,11 @@ fn reduce_inner(
                 return Vec::new();
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::delete_branches(repo_id, names, force)
+            vec![Effect::DeleteBranches {
+                repo_id,
+                names,
+                force,
+            }]
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
         Msg::AbortCloneRepo { dest } => repo_management::abort_clone_repo(state, dest),
@@ -1678,11 +1706,18 @@ fn reduce_inner(
             dest,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::export_patch(repo_id, commit_id, dest)
+            vec![Effect::RepoCommand(RepoCommandEffect::ExportPatch {
+                repo_id,
+                commit_id,
+                dest,
+            })]
         }
         Msg::ApplyPatch { repo_id, patch } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::apply_patch(repo_id, patch)
+            vec![Effect::RepoCommand(RepoCommandEffect::ApplyPatch {
+                repo_id,
+                patch,
+            })]
         }
         Msg::AddWorktree {
             repo_id,
@@ -1693,7 +1728,12 @@ fn reduce_inner(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
-            actions_emit_effects::add_worktree(repo_id, path, checkout, open_after)
+            vec![Effect::RepoCommand(RepoCommandEffect::AddWorktree {
+                repo_id,
+                path,
+                checkout,
+                open_after,
+            })]
         }
         Msg::RemoveWorktree {
             repo_id,
@@ -1786,35 +1826,44 @@ fn reduce_inner(
             reference,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::change_submodule_pointer(repo_id, path, reference)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::ChangeSubmodulePointer {
+                    repo_id,
+                    path,
+                    reference,
+                },
+            )]
         }
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::remove_submodule(repo_id, path)
+            vec![Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
+                repo_id,
+                path,
+            })]
         }
         Msg::StagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::stage_path(repo_id, path)
+            vec![Effect::StagePath { repo_id, path }]
         }
         Msg::StagePaths { repo_id, paths } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::stage_paths(repo_id, paths)
+            vec![Effect::StagePaths { repo_id, paths }]
         }
         Msg::UnstagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::unstage_path(repo_id, path)
+            vec![Effect::UnstagePath { repo_id, path }]
         }
         Msg::UnstagePaths { repo_id, paths } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::unstage_paths(repo_id, paths)
+            vec![Effect::UnstagePaths { repo_id, paths }]
         }
         Msg::DiscardWorktreeChangesPath { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::discard_worktree_changes_path(repo_id, path)
+            vec![Effect::DiscardWorktreeChangesPath { repo_id, path }]
         }
         Msg::DiscardWorktreeChangesPaths { repo_id, paths } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::discard_worktree_changes_paths(repo_id, paths)
+            vec![Effect::DiscardWorktreeChangesPaths { repo_id, paths }]
         }
         Msg::SaveWorktreeFile {
             repo_id,
@@ -1845,18 +1894,20 @@ fn reduce_inner(
                 WorktreeSaveBaseline::Present(contents) => Some(contents),
             };
             begin_local_action(state, repo_id);
-            actions_emit_effects::save_worktree_file(
+            vec![Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
                 path,
                 contents,
                 expected_contents,
                 stage,
                 completion,
-            )
+            })]
         }
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns },
+            )]
         }
         Msg::RunLargeFileCommand { repo_id, command } => {
             actions_emit_effects::run_large_file_command(inputs, repos, state, repo_id, command)
@@ -1972,14 +2023,20 @@ fn reduce_inner(
                 return effects;
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::merge_ref(repo_id, reference)
+            vec![Effect::RepoCommand(RepoCommandEffect::MergeRef {
+                repo_id,
+                reference,
+            })]
         }
         Msg::SquashRef { repo_id, reference } => {
             if let Some(effects) = annex_adjusted_refusal(inputs, state, repo_id, "Squash merge") {
                 return effects;
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::squash_ref(repo_id, reference)
+            vec![Effect::RepoCommand(RepoCommandEffect::SquashRef {
+                repo_id,
+                reference,
+            })]
         }
         Msg::PushWithTags { repo_id, request } => {
             match annex_adjusted_refusal(inputs, state, repo_id, "Push with tags") {
@@ -2045,11 +2102,17 @@ fn reduce_inner(
             upstream,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::set_upstream_branch(repo_id, branch, upstream)
+            vec![Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
+                repo_id,
+                branch,
+                upstream,
+            })]
         }
         Msg::UnsetUpstreamBranch { repo_id, branch } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::unset_upstream_branch(repo_id, branch)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::UnsetUpstreamBranch { repo_id, branch },
+            )]
         }
         Msg::DeleteRemoteBranch {
             repo_id,
@@ -2072,7 +2135,11 @@ fn reduce_inner(
             mode,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::reset(repo_id, target, mode)
+            vec![Effect::RepoCommand(RepoCommandEffect::Reset {
+                repo_id,
+                target,
+                mode,
+            })]
         }
         Msg::PrepareSquash { repo_id } => effects::prepare_squash(state, repo_id),
         Msg::SquashCommits {
@@ -2111,7 +2178,10 @@ fn reduce_inner(
         }
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::rebase(repo_id, onto)
+            vec![Effect::RepoCommand(RepoCommandEffect::Rebase {
+                repo_id,
+                onto,
+            })]
         }
         Msg::RebaseContinue { repo_id } => {
             if let Some(request_id) = state
@@ -2129,14 +2199,19 @@ fn reduce_inner(
                 return Vec::new();
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::rebase_continue(repo_id)
+            vec![Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
+                repo_id,
+                auth: None,
+            })]
         }
         Msg::RebaseAbort { repo_id } => {
             if sequencer_step_blocked(inputs, state, repo_id) {
                 return Vec::new();
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::rebase_abort(repo_id)
+            vec![Effect::RepoCommand(RepoCommandEffect::RebaseAbort {
+                repo_id,
+            })]
         }
         Msg::LoadInteractiveRebaseSetup { repo_id, base } => {
             actions_emit_effects::load_interactive_rebase_setup(state, repo_id, base)
@@ -2157,7 +2232,12 @@ fn reduce_inner(
             entries,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::interactive_rebase(repo_id, base, entries)
+            vec![Effect::RepoCommand(RepoCommandEffect::InteractiveRebase {
+                repo_id,
+                base,
+                entries,
+                interactive: true,
+            })]
         }
         Msg::InteractiveCherryPick {
             repo_id,
@@ -2169,7 +2249,13 @@ fn reduce_inner(
             // invalidated up front like the single-pick path — the error
             // completion path does not clear them.
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::interactive_cherry_pick(repo_id, entries, commit)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::InteractiveCherryPick {
+                    repo_id,
+                    entries,
+                    commit,
+                },
+            )]
         }
         Msg::CancelInteractiveRebaseSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_rebase_setup(state, repo_id)
@@ -2180,7 +2266,9 @@ fn reduce_inner(
         Msg::MergeAbort { repo_id } if sequencer_step_blocked(inputs, state, repo_id) => Vec::new(),
         Msg::MergeAbort { repo_id } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::merge_abort(repo_id)
+            vec![Effect::RepoCommand(RepoCommandEffect::MergeAbort {
+                repo_id,
+            })]
         }
         Msg::CreateTag {
             repo_id,
@@ -2190,11 +2278,20 @@ fn reduce_inner(
             annotated,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_tag(repo_id, name, target, message, annotated)
+            vec![Effect::RepoCommand(RepoCommandEffect::CreateTag {
+                repo_id,
+                name,
+                target,
+                message,
+                annotated,
+            })]
         }
         Msg::DeleteTag { repo_id, name } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::delete_tag(repo_id, name)
+            vec![Effect::RepoCommand(RepoCommandEffect::DeleteTag {
+                repo_id,
+                name,
+            })]
         }
         Msg::PushTag {
             repo_id,
@@ -2212,7 +2309,10 @@ fn reduce_inner(
         }
         Msg::RemoveRemote { repo_id, name } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::remove_remote(repo_id, name)
+            vec![Effect::RepoCommand(RepoCommandEffect::RemoveRemote {
+                repo_id,
+                name,
+            })]
         }
         Msg::SetRemoteUrl {
             repo_id,
@@ -2229,19 +2329,32 @@ fn reduce_inner(
             side,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::checkout_conflict_side(repo_id, path, side)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::CheckoutConflictSide {
+                    repo_id,
+                    path,
+                    side,
+                },
+            )]
         }
         Msg::AcceptConflictDeletion { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::accept_conflict_deletion(repo_id, path)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::AcceptConflictDeletion { repo_id, path },
+            )]
         }
         Msg::CheckoutConflictBase { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::checkout_conflict_base(repo_id, path)
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::CheckoutConflictBase { repo_id, path },
+            )]
         }
         Msg::LaunchMergetool { repo_id, path } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::launch_mergetool(repo_id, path)
+            vec![Effect::RepoCommand(RepoCommandEffect::LaunchMergetool {
+                repo_id,
+                path,
+            })]
         }
         Msg::RecordConflictAutosolveTelemetry {
             repo_id,
@@ -2414,19 +2527,23 @@ fn reduce_inner(
             include_untracked,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::stash(repo_id, message, include_untracked)
+            vec![Effect::Stash {
+                repo_id,
+                message,
+                include_untracked,
+            }]
         }
         Msg::ApplyStash { repo_id, index } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::apply_stash(repo_id, index)
+            vec![Effect::ApplyStash { repo_id, index }]
         }
         Msg::PopStash { repo_id, index } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::pop_stash(repo_id, index)
+            vec![Effect::PopStash { repo_id, index }]
         }
         Msg::DropStash { repo_id, index } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::drop_stash(repo_id, index)
+            vec![Effect::DropStash { repo_id, index }]
         }
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repository_mode,
