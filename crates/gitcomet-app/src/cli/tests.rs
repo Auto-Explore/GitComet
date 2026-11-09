@@ -162,7 +162,7 @@ fn difftool_resolves_from_env_fallback() {
     env.set("REMOTE", &remote);
     env.set("MERGED", "file.txt");
 
-    let args = DifftoolArgs { ..difftool_args() };
+    let args = difftool_args();
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.local, local);
@@ -181,7 +181,7 @@ fn difftool_uses_base_env_as_display_path_fallback() {
     env.set("REMOTE", &remote);
     env.set("BASE", "base-name.txt");
 
-    let args = DifftoolArgs { ..difftool_args() };
+    let args = difftool_args();
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("base-name.txt"));
@@ -199,7 +199,7 @@ fn difftool_prefers_merged_over_base_for_display_path() {
     env.set("MERGED", "merged-name.txt");
     env.set("BASE", "base-name.txt");
 
-    let args = DifftoolArgs { ..difftool_args() };
+    let args = difftool_args();
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("merged-name.txt"));
@@ -344,7 +344,7 @@ fn difftool_empty_merged_env_is_ignored_for_display_path() {
     env.set("MERGED", "");
     env.set("BASE", "fallback-name.txt");
 
-    let args = DifftoolArgs { ..difftool_args() };
+    let args = difftool_args();
 
     let config = resolve_difftool_with_env(args, &env).unwrap();
     assert_eq!(config.display_path.as_deref(), Some("fallback-name.txt"));
@@ -555,7 +555,7 @@ fn mergetool_resolves_from_env_fallback() {
     env.set("REMOTE", &remote);
     env.set("BASE", &base);
 
-    let args = MergetoolArgs { ..mergetool_args() };
+    let args = mergetool_args();
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -599,7 +599,7 @@ fn mergetool_empty_base_env_treated_as_missing() {
     env.set("REMOTE", &remote);
     env.set("BASE", "");
 
-    let args = MergetoolArgs { ..mergetool_args() };
+    let args = mergetool_args();
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert!(
@@ -1103,7 +1103,7 @@ fn mergetool_env_resolution_with_subdirectory_paths() {
         .set("REMOTE", &remote)
         .set("BASE", &base);
 
-    let args = MergetoolArgs { ..mergetool_args() };
+    let args = mergetool_args();
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -1128,7 +1128,7 @@ fn mergetool_env_only_resolution_with_all_four_vars() {
         .set("REMOTE", &remote)
         .set("BASE", &base);
 
-    let args = MergetoolArgs { ..mergetool_args() };
+    let args = mergetool_args();
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert_eq!(config.merged, merged);
@@ -1148,7 +1148,7 @@ fn mergetool_env_only_resolution_without_base() {
         .set("REMOTE", &remote);
     // Deliberately no BASE
 
-    let args = MergetoolArgs { ..mergetool_args() };
+    let args = mergetool_args();
 
     let config = resolve_mergetool_with_env(args, &env).unwrap();
     assert!(config.base.is_none());

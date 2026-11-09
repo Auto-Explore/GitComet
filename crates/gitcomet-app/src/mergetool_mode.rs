@@ -189,7 +189,6 @@ fn decode_merge_inputs(
     ))
 }
 
-/// Extract a human-readable display name from the MERGED output path.
 fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
     let ours = Some(
         config
