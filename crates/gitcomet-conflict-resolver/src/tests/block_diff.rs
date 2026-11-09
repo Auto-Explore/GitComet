@@ -525,7 +525,7 @@ fn projection_multiple_collapsed_blocks() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: ConflictSplitRowIndex and TwoWaySplitProjection tests
+// ConflictSplitRowIndex and TwoWaySplitProjection tests
 // ---------------------------------------------------------------------------
 
 #[test]

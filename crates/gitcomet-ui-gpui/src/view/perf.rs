@@ -285,7 +285,7 @@ fn row_stats(lane: ViewPerfRenderLane) -> &'static AtomicRowBatchStats {
 }
 
 // ---------------------------------------------------------------------------
-// Frame timing capture – Phase 0 benchmark infrastructure
+// Frame timing capture for the benchmarks
 // ---------------------------------------------------------------------------
 
 #[cfg(any(test, feature = "benchmarks"))]

@@ -192,7 +192,7 @@ impl ScrollbarDragStepFixture {
 }
 
 // ---------------------------------------------------------------------------
-// Search / commit filter benchmarks (Phase 4)
+// Search / commit filter benchmarks
 // ---------------------------------------------------------------------------
 
 /// Metrics emitted as sidecar JSON for commit search/filter benchmarks.

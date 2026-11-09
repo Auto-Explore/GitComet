@@ -1985,7 +1985,7 @@ fn streamed_provider_fixture_reuses_first_page_cache() {
     );
 }
 
-/// Phase 8 RSS invariant: streamed provider metadata is much smaller than
+/// RSS invariant: streamed provider metadata is much smaller than
 /// what eager mode would allocate.  Verifies that memory scales with
 /// metadata (anchors, spans, line starts) not with rendered rows.
 #[test]
@@ -2018,7 +2018,7 @@ fn streamed_provider_metadata_is_sublinear_in_line_count() {
     );
 }
 
-/// Phase 8 RSS invariant: page cache stays bounded regardless of how many
+/// RSS invariant: page cache stays bounded regardless of how many
 /// distinct positions are accessed.
 #[test]
 fn streamed_provider_page_cache_stays_bounded() {

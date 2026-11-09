@@ -1,4 +1,4 @@
-//! Phase 3C: Real-world merge extraction harness.
+//! Real-world merge extraction harness.
 //!
 //! Walks merge commits in a git repository, extracts base/contrib1/contrib2
 //! file contents for each non-trivial merge, runs the merge algorithm on them,
