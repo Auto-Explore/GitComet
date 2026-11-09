@@ -1,7 +1,7 @@
 //! git-annex operations against real repositories. Skipped when git-annex is
 //! not installed; a `directory` special remote stands in for a server.
 
-use crate::git_cli::{git_command, git_output, git_stdout_raw};
+use crate::git_cli::{git_command, git_output, git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
 };
@@ -48,7 +48,7 @@ fn git_annex_available() -> bool {
 fn init_annex_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     fs::create_dir_all(&repo).unwrap();
-    git_stdout_raw(&repo, &["init", "-q"]);
+    run_git(&repo, &["init", "-q"]);
     gitcomet_core::test_support::git_fixture::append_config(
         &repo,
         &[
@@ -57,13 +57,13 @@ fn init_annex_repo(dir: &Path) -> PathBuf {
             ("commit.gpgsign", "false"),
         ],
     );
-    git_stdout_raw(&repo, &["annex", "init", "-q", "laptop"]);
+    run_git(&repo, &["annex", "init", "-q", "laptop"]);
     fs::write(repo.join("big.bin"), vec![7u8; 4096]).unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "big.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "add big.bin"]);
+    run_git(&repo, &["annex", "add", "-q", "big.bin"]);
+    run_git(&repo, &["commit", "-qm", "add big.bin"]);
     let store = dir.join("store");
     fs::create_dir_all(&store).unwrap();
-    git_stdout_raw(
+    run_git(
         &repo,
         &[
             "annex",
@@ -258,11 +258,11 @@ fn unlocked_presence_comes_from_git_annex_find() {
     )
     .unwrap();
     if was_locked {
-        git_stdout_raw(&repo, &["commit", "-qam", "unlock"]);
+        run_git(&repo, &["commit", "-qam", "unlock"]);
     }
     // Touch the index entry so it is a staged row of an unlocked pointer.
     fs::write(repo.join("other.bin"), vec![9u8; 2048]).unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "other.bin"]);
+    run_git(&repo, &["annex", "add", "-q", "other.bin"]);
     run(
         &repo,
         LargeFileCommand::AnnexUnlock {
@@ -270,7 +270,7 @@ fn unlocked_presence_comes_from_git_annex_find() {
         },
     )
     .unwrap();
-    git_stdout_raw(&repo, &["add", "other.bin"]);
+    run_git(&repo, &["add", "other.bin"]);
 
     let files = open(&repo)
         .uncommitted_large_files_for_status(&staged_row("other.bin"), &CancellationToken::new())
@@ -287,7 +287,7 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     fs::write(repo.join("notes.txt"), "first version\n").unwrap();
-    git_stdout_raw(
+    run_git(
         &repo,
         &[
             "-c",
@@ -305,13 +305,13 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
         },
     )
     .unwrap();
-    git_stdout_raw(&repo, &["commit", "-qm", "notes"]);
+    run_git(&repo, &["commit", "-qm", "notes"]);
     fs::write(repo.join("notes.txt"), "second version\n").unwrap();
-    git_stdout_raw(
+    run_git(
         &repo,
         &["-c", "annex.largefiles=anything", "add", "notes.txt"],
     );
-    git_stdout_raw(&repo, &["commit", "-qm", "edit notes"]);
+    run_git(&repo, &["commit", "-qm", "edit notes"]);
     let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"])
         .trim()
         .to_string();
@@ -359,12 +359,12 @@ fn add_unlock_lock_and_move_to_a_remote() {
 
     run(&repo, LargeFileCommand::AnnexAdd { paths: paths(name) }).unwrap();
     assert_eq!(
-        git_stdout_raw(&repo, &["diff", "--cached", "--name-only"]).trim(),
+        git_stdout(&repo, &["diff", "--cached", "--name-only"]),
         name
     );
     assert!(is_link(), "added locked");
     assert!(git_stdout_raw(&repo, &["annex", "find", "--in=here"]).contains(name));
-    git_stdout_raw(&repo, &["commit", "-qm", "add clip"]);
+    run_git(&repo, &["commit", "-qm", "add clip"]);
 
     run(&repo, LargeFileCommand::AnnexUnlock { paths: paths(name) }).unwrap();
     assert!(!is_link(), "unlocked files are regular files");
@@ -410,8 +410,8 @@ fn hide_missing_adjusted_branch_hides_files_without_content() {
         .trim()
         .to_string();
     fs::write(repo.join("kept.bin"), vec![5u8; 1024]).unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "kept.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "add kept.bin"]);
+    run_git(&repo, &["annex", "add", "-q", "kept.bin"]);
+    run_git(&repo, &["commit", "-qm", "add kept.bin"]);
     run(
         &repo,
         LargeFileCommand::AnnexMove {
@@ -444,10 +444,7 @@ fn hide_missing_adjusted_branch_hides_files_without_content() {
         LargeFileCommand::AnnexLeaveAdjusted { base: base.clone() },
     )
     .unwrap();
-    assert_eq!(
-        git_stdout_raw(&repo, &["branch", "--show-current"]).trim(),
-        base
-    );
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), base);
     assert!(
         fs::symlink_metadata(repo.join("big.bin")).is_ok(),
         "the link is back, still without content"
@@ -479,20 +476,17 @@ fn adjust_and_leave_adjusted_branch() {
     // A commit made on the adjusted branch reaches the base branch only when
     // git-annex propagates it; leaving must not strand it.
     fs::write(repo.join("notes.txt"), "made while adjusted\n").unwrap();
-    git_stdout_raw(&repo, &["add", "notes.txt"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "adjusted commit"]);
+    run_git(&repo, &["add", "notes.txt"]);
+    run_git(&repo, &["commit", "-qm", "adjusted commit"]);
 
     run(
         &repo,
         LargeFileCommand::AnnexLeaveAdjusted { base: base.clone() },
     )
     .unwrap();
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), base);
     assert_eq!(
-        git_stdout_raw(&repo, &["branch", "--show-current"]).trim(),
-        base
-    );
-    assert_eq!(
-        git_stdout_raw(&repo, &["log", "-1", "--format=%s"]).trim(),
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
         "adjusted commit"
     );
     assert_eq!(
@@ -511,7 +505,7 @@ fn amending_the_adjustment_commit_is_refused() {
     let repo = init_annex_repo(dir.path());
     // Initialization may already have entered an adjusted branch. Propagate
     // the fixture's own commit so HEAD is an adjustment commit in either mode.
-    git_stdout_raw(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
+    run_git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     run(
         &repo,
         LargeFileCommand::AnnexAdjust {
@@ -521,7 +515,7 @@ fn amending_the_adjustment_commit_is_refused() {
     .unwrap();
     let head = git_stdout_raw(&repo, &["rev-parse", "HEAD"]);
     fs::write(repo.join("notes.txt"), "one\n").unwrap();
-    git_stdout_raw(&repo, &["add", "notes.txt"]);
+    run_git(&repo, &["add", "notes.txt"]);
     let error = open(&repo)
         .commit_amend_with_outcome("rewritten")
         .expect_err("amending the adjustment commit loses the change");
@@ -534,7 +528,7 @@ fn amending_the_adjustment_commit_is_refused() {
         .commit_amend_with_outcome("one, reworded")
         .unwrap();
     assert_eq!(
-        git_stdout_raw(&repo, &["log", "-1", "--format=%s"]).trim(),
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
         "one, reworded"
     );
 }
@@ -546,7 +540,7 @@ fn sync_never_commits_and_describe_trust_apply() {
     let repo = init_annex_repo(dir.path());
     // Settle propagation of fixture commits made on an automatic adjusted
     // branch before checking that a new uncommitted file stays uncommitted.
-    git_stdout_raw(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
+    run_git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     fs::write(repo.join("draft.txt"), "uncommitted\n").unwrap();
     let before = git_stdout_raw(&repo, &["rev-parse", "HEAD"]);
     run(&repo, LargeFileCommand::AnnexSync { content: false }).unwrap();
@@ -694,7 +688,7 @@ fn get_by_key_restores_a_dropped_historical_version() {
     )
     .unwrap();
     assert_eq!(
-        git_stdout_raw(&repo, &["annex", "find", "--format=${key}", "big.bin"]).trim(),
+        git_stdout(&repo, &["annex", "find", "--format=${key}", "big.bin"]),
         key.trim(),
         "the requested key is present again, including with an unlocked pointer"
     );
@@ -717,8 +711,8 @@ fn get_multiple_keys_attempts_later_keys_after_failure_regression() {
     let key = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"])
         .trim()
         .to_string();
-    git_stdout_raw(&repo, &["annex", "copy", "-q", "--to=backup", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "drop", "-q", "big.bin"]);
+    run_git(&repo, &["annex", "copy", "-q", "--to=backup", "big.bin"]);
+    run_git(&repo, &["annex", "drop", "-q", "big.bin"]);
     let missing = format!("SHA256E-s1--{}.bin", "0".repeat(64));
     let result = open(&repo).run_large_file_command(&LargeFileCommand::AnnexGetKeys {
         keys: vec![missing, key],
@@ -740,13 +734,13 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
     // Git preserves link text when moving a directory to another depth.
     fs::create_dir(repo.join("sub")).unwrap();
     fs::write(repo.join("sub/pic.png"), b"\x89PNG\r\n\x1a\ncontent").unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "sub/pic.png"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "nested annex file"]);
+    run_git(&repo, &["annex", "add", "-q", "sub/pic.png"]);
+    run_git(&repo, &["commit", "-qm", "nested annex file"]);
     // A plain Git move can be committed without git-annex repairing links.
-    git_stdout_raw(&repo, &["config", "core.hooksPath", "no-hooks"]);
+    run_git(&repo, &["config", "core.hooksPath", "no-hooks"]);
     fs::create_dir(repo.join("moved")).unwrap();
-    git_stdout_raw(&repo, &["mv", "sub", "moved/sub"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "move directory"]);
+    run_git(&repo, &["mv", "sub", "moved/sub"]);
+    run_git(&repo, &["commit", "-qm", "move directory"]);
     assert!(!repo.join("moved/sub/pic.png").is_file());
     let opened = open(&repo);
     let head = CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into());
@@ -811,7 +805,7 @@ fn watch_info_only_excludes_annex_content_and_databases() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
-    git_stdout_raw(&repo, &["init", "-q"]);
+    run_git(&repo, &["init", "-q"]);
     // Watch dirs are canonical (macOS /private/var, Windows long names).
     let repo = gitcomet_core::path_utils::canonicalize_or_original(repo);
     let info = GixBackend
@@ -863,11 +857,11 @@ fn status_and_line_stats_never_start_the_annex_filter() {
     )
     .unwrap();
     fs::write(repo.join("notes.txt"), "before\n").unwrap();
-    git_stdout_raw(
+    run_git(
         &repo,
         &["-c", "annex.largefiles=nothing", "add", "notes.txt"],
     );
-    git_stdout_raw(&repo, &["commit", "-qam", "unlock"]);
+    run_git(&repo, &["commit", "-qam", "unlock"]);
     fs::write(repo.join("notes.txt"), "after\nextra\n").unwrap();
     // Same size, new mtime: Git would have to hash the file to know.
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
@@ -882,7 +876,7 @@ fn status_and_line_stats_never_start_the_annex_filter() {
         "sh -c 'echo launch >> {}; exec git-annex filter-process'",
         log.display()
     );
-    git_stdout_raw(&repo, &["config", "filter.annex.process", &wrapper]);
+    run_git(&repo, &["config", "filter.annex.process", &wrapper]);
 
     let opened = open(&repo);
     let status = opened
@@ -914,11 +908,11 @@ fn make_stale_unlocked_file(repo: &Path) {
         },
     )
     .unwrap();
-    git_stdout_raw(repo, &["commit", "-qam", "unlock"]);
-    git_stdout_raw(repo, &["annex", "copy", "-q", "--to", "backup", "big.bin"]);
-    git_stdout_raw(repo, &["annex", "drop", "-q", "big.bin"]);
+    run_git(repo, &["commit", "-qam", "unlock"]);
+    run_git(repo, &["annex", "copy", "-q", "--to", "backup", "big.bin"]);
+    run_git(repo, &["annex", "drop", "-q", "big.bin"]);
     fs::write(repo.join(".git/index.lock"), "").unwrap();
-    git_stdout_raw(repo, &["annex", "get", "-q", "big.bin"]);
+    run_git(repo, &["annex", "get", "-q", "big.bin"]);
     fs::remove_file(repo.join(".git/index.lock")).unwrap();
     assert_eq!(fs::metadata(repo.join("big.bin")).unwrap().len(), 4096);
     wait_out_racy_second(&repo.join("big.bin"));
@@ -1001,10 +995,10 @@ fn special_remote_types_come_from_the_annex_branch() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     fs::write(repo.join("extra.bin"), "extra version\n").unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "extra.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "extra file"]);
+    run_git(&repo, &["annex", "add", "extra.bin"]);
+    run_git(&repo, &["commit", "-qm", "extra file"]);
     let clone = dir.path().join("clone");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &[
             "clone",
@@ -1014,7 +1008,7 @@ fn special_remote_types_come_from_the_annex_branch() {
         ],
     );
     for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com")] {
-        git_stdout_raw(&clone, &["config", key, value]);
+        run_git(&clone, &["config", key, value]);
     }
     let opened = open(&clone);
     let fresh = opened
@@ -1117,10 +1111,10 @@ fn unused_lists_old_versions_and_drop_unused_honours_numcopies() {
     let unused = || open(&repo).annex_unused(&CancellationToken::new()).unwrap();
     assert!(unused().entries.is_empty());
 
-    git_stdout_raw(&repo, &["annex", "unlock", "-q", "big.bin"]);
+    run_git(&repo, &["annex", "unlock", "-q", "big.bin"]);
     fs::write(repo.join("big.bin"), vec![8u8; 100]).unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "big.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "new big.bin"]);
+    run_git(&repo, &["annex", "add", "-q", "big.bin"]);
+    run_git(&repo, &["commit", "-qm", "new big.bin"]);
     let listed = unused();
     assert_eq!(listed.entries.len(), 1, "{listed:?}");
     assert_eq!(
@@ -1144,7 +1138,7 @@ fn unused_lists_old_versions_and_drop_unused_honours_numcopies() {
         "a refused drop keeps the content"
     );
 
-    git_stdout_raw(
+    run_git(
         &repo,
         &["annex", "copy", "-q", "--unused", "--to", "backup"],
     );
@@ -1165,10 +1159,10 @@ fn unused_drop_refuses_a_listing_that_changed_after_confirmation() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let replace = |byte| {
-        git_stdout_raw(&repo, &["annex", "unlock", "-q", "big.bin"]);
+        run_git(&repo, &["annex", "unlock", "-q", "big.bin"]);
         fs::write(repo.join("big.bin"), vec![byte; 100]).unwrap();
-        git_stdout_raw(&repo, &["annex", "add", "-q", "big.bin"]);
-        git_stdout_raw(&repo, &["commit", "-qm", "replace big.bin"]);
+        run_git(&repo, &["annex", "add", "-q", "big.bin"]);
+        run_git(&repo, &["commit", "-qm", "replace big.bin"]);
     };
     replace(8);
     let listed = open(&repo).annex_unused(&CancellationToken::new()).unwrap();
@@ -1276,18 +1270,18 @@ fn support_load_never_merges_fetched_annex_branches() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let origin = dir.path().join("origin.git");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &["init", "-q", "--bare", origin.to_str().unwrap()],
     );
-    git_stdout_raw(
+    run_git(
         &repo,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
-    git_stdout_raw(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
+    run_git(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
 
     let other = dir.path().join("other");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &[
             "clone",
@@ -1297,11 +1291,11 @@ fn support_load_never_merges_fetched_annex_branches() {
         ],
     );
     for (key, value) in [("user.name", "Other"), ("user.email", "other@example.com")] {
-        git_stdout_raw(&other, &["config", key, value]);
+        run_git(&other, &["config", key, value]);
     }
-    git_stdout_raw(&other, &["annex", "init", "-q", "other"]);
-    git_stdout_raw(&other, &["annex", "sync", "-q", "--no-content", "origin"]);
-    git_stdout_raw(&repo, &["fetch", "-q", "origin"]);
+    run_git(&other, &["annex", "init", "-q", "other"]);
+    run_git(&other, &["annex", "sync", "-q", "--no-content", "origin"]);
+    run_git(&repo, &["fetch", "-q", "origin"]);
 
     let head_before = git_stdout_raw(&repo, &["rev-parse", "refs/heads/git-annex"]);
     assert_ne!(
@@ -1364,8 +1358,8 @@ fn transfer_progress_is_coalesced_for_many_small_files() {
             name
         })
         .collect();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "small"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "small files"]);
+    run_git(&repo, &["annex", "add", "-q", "small"]);
+    run_git(&repo, &["commit", "-qm", "small files"]);
     run(
         &repo,
         LargeFileCommand::AnnexCopy {
@@ -1374,7 +1368,7 @@ fn transfer_progress_is_coalesced_for_many_small_files() {
         },
     )
     .unwrap();
-    git_stdout_raw(&repo, &["annex", "drop", "-q", "small"]);
+    run_git(&repo, &["annex", "drop", "-q", "small"]);
 
     let (sender, receiver) = std::sync::mpsc::channel();
     let context =
@@ -1559,10 +1553,10 @@ fn status_rows_never_run_git_annex() {
         }
     };
     let repo = init_annex_repo(&root);
-    git_stdout_raw(&repo, &["annex", "unlock", "big.bin"]);
+    run_git(&repo, &["annex", "unlock", "big.bin"]);
     fs::write(repo.join("other.bin"), vec![9u8; 2048]).unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "-q", "other.bin"]);
-    git_stdout_raw(&repo, &["annex", "unlock", "other.bin"]);
+    run_git(&repo, &["annex", "add", "-q", "other.bin"]);
+    run_git(&repo, &["annex", "unlock", "other.bin"]);
     let shim = root.join("shim");
     let before = shim_calls(&shim, &repo).len();
 
@@ -1650,7 +1644,7 @@ fn a_silent_content_transfer_outlives_the_silence_deadline() {
         }
     };
     let repo = init_annex_repo(&root);
-    git_stdout_raw(
+    run_git(
         &repo,
         &[
             "annex",
@@ -1671,7 +1665,7 @@ fn a_silent_content_transfer_outlives_the_silence_deadline() {
         })
         .map(|_| ())
         .unwrap_or_else(|e| panic!("copy with JSON progress was cut off: {e}"));
-    git_stdout_raw(&repo, &["annex", "drop", "-q", "--from", "slow", "big.bin"]);
+    run_git(&repo, &["annex", "drop", "-q", "--from", "slow", "big.bin"]);
     open(&repo)
         .run_large_file_command(&LargeFileCommand::AnnexPush { content: true })
         .unwrap_or_else(|e| panic!("push --content was cut off: {e}"));
@@ -1687,20 +1681,20 @@ fn repositories_read_from_logs_match_git_annex_info() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let origin = dir.path().join("origin.git");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &["init", "-q", "--bare", origin.to_str().unwrap()],
     );
-    git_stdout_raw(&origin, &["annex", "init", "-q", "shared store"]);
-    git_stdout_raw(
+    run_git(&origin, &["annex", "init", "-q", "shared store"]);
+    run_git(
         &repo,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
-    git_stdout_raw(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
-    git_stdout_raw(&repo, &["annex", "untrust", "-q", "backup"]);
-    git_stdout_raw(&repo, &["annex", "trust", "-q", "--force", "origin"]);
-    git_stdout_raw(&repo, &["annex", "describe", "-q", "here", "my laptop"]);
-    git_stdout_raw(&repo, &["annex", "dead", "-q", "web"]);
+    run_git(&repo, &["annex", "sync", "-q", "--no-content", "origin"]);
+    run_git(&repo, &["annex", "untrust", "-q", "backup"]);
+    run_git(&repo, &["annex", "trust", "-q", "--force", "origin"]);
+    run_git(&repo, &["annex", "describe", "-q", "here", "my laptop"]);
+    run_git(&repo, &["annex", "dead", "-q", "web"]);
     run(&repo, LargeFileCommand::AnnexNumcopies { copies: 3 }).unwrap();
 
     let support = open(&repo)
@@ -1807,9 +1801,9 @@ fn whereis_preserves_untrusted_and_empty_locations() {
     let repo = init_annex_repo(dir.path());
     let opened = open(&repo);
     let key = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "drop", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "untrust", "backup"]);
+    run_git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
+    run_git(&repo, &["annex", "drop", "big.bin"]);
+    run_git(&repo, &["annex", "untrust", "backup"]);
     let locations = opened
         .annex_whereis(key.trim(), &CancellationToken::new())
         .unwrap();
@@ -1818,7 +1812,7 @@ fn whereis_preserves_untrusted_and_empty_locations() {
     assert_eq!(locations.untrusted.len(), 1);
     assert!(locations.untrusted[0].description.contains("backup"));
 
-    git_stdout_raw(
+    run_git(
         &repo,
         &["annex", "drop", "--force", "--from", "backup", "big.bin"],
     );
@@ -1842,14 +1836,14 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let old = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
-    git_stdout_raw(&repo, &["annex", "unlock", "big.bin"]);
+    run_git(&repo, &["annex", "copy", "--to", "backup", "big.bin"]);
+    run_git(&repo, &["annex", "unlock", "big.bin"]);
     fs::write(repo.join("big.bin"), b"a new version").unwrap();
-    git_stdout_raw(&repo, &["annex", "add", "big.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "new version"]);
+    run_git(&repo, &["annex", "add", "big.bin"]);
+    run_git(&repo, &["commit", "-qm", "new version"]);
     let new = git_stdout_raw(&repo, &["annex", "lookupkey", "big.bin"]);
-    git_stdout_raw(&repo, &["rm", "big.bin"]);
-    git_stdout_raw(&repo, &["commit", "-qm", "remove path"]);
+    run_git(&repo, &["rm", "big.bin"]);
+    run_git(&repo, &["commit", "-qm", "remove path"]);
     let opened = open(&repo);
     for (key, in_backup) in [(old.trim(), true), (new.trim(), false)] {
         let locations = opened
@@ -1878,13 +1872,13 @@ fn sha3_annex_backends_resolve_staged_content_when_locked_and_unlocked() {
         let name = format!("{backend}.txt");
         let content = "SHA-3 annex content\n";
         fs::write(repo.join(&name), content).unwrap();
-        git_stdout_raw(
+        run_git(
             &repo,
             &["annex", "add", &format!("--backend={backend}"), &name],
         );
         for unlocked in [false, true] {
             if unlocked {
-                git_stdout_raw(&repo, &["annex", "unlock", &name]);
+                run_git(&repo, &["annex", "unlock", &name]);
             }
             let files = opened
                 .uncommitted_large_files_for_status(
@@ -1931,7 +1925,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
     let cancellation = CancellationToken::new();
     for name in ["a:b.txt", "percent%.txt"] {
         fs::write(repo.join(name), "escaped content\n").unwrap();
-        git_stdout_raw(&repo, &["annex", "add", "--backend=WORM", name]);
+        run_git(&repo, &["annex", "add", "--backend=WORM", name]);
         let raw = git_stdout_raw(&repo, &["annex", "lookupkey", name])
             .trim()
             .to_string();
@@ -1949,7 +1943,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
                 .iter()
                 .any(|path| objects.join(path).is_file())
         );
-        git_stdout_raw(&repo, &["annex", "unlock", name]);
+        run_git(&repo, &["annex", "unlock", name]);
         let pointer = git_stdout_raw(&repo, &["show", &format!(":{name}")]);
         assert_eq!(
             annex::key_from_pointer(pointer.as_bytes())
@@ -1958,7 +1952,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
                 .as_ref(),
             raw
         );
-        git_stdout_raw(&repo, &["commit", "-qm", "escaped key"]);
+        run_git(&repo, &["commit", "-qm", "escaped key"]);
         let target = DiffTarget::commit(
             CommitId(git_stdout_raw(&repo, &["rev-parse", "HEAD"]).trim().into()),
             name.into(),
@@ -1980,8 +1974,8 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
             .uncommitted_large_files_for_status(&staged_row(name), &cancellation)
             .unwrap();
         assert_eq!(rows.staged[Path::new(name)].in_local_store, Some(true));
-        git_stdout_raw(&repo, &["annex", "copy", "--to=backup", name]);
-        git_stdout_raw(&repo, &["annex", "drop", name]);
+        run_git(&repo, &["annex", "copy", "--to=backup", name]);
+        run_git(&repo, &["annex", "drop", name]);
         let diff = opened
             .diff_file_text(
                 &target,
@@ -2054,7 +2048,7 @@ printf '{"command":"unused","unused-list":{"1":"WORM-s1-m1--old"},"success":true
         SCRIPT,
         &[("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "1")],
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let listed = open(repo)
                 .annex_unused(&CancellationToken::new())
                 .unwrap_or_else(|e| panic!("silent scan was cut off: {e}"));
@@ -2090,7 +2084,7 @@ esac
             };
             let repo = root.join("repo");
             fs::create_dir_all(&repo).unwrap();
-            git_stdout_raw(&repo, &["init", "-q"]);
+            run_git(&repo, &["init", "-q"]);
             let opened = open(&repo);
             let started = Instant::now();
             opened
@@ -2137,7 +2131,7 @@ esac
         "drop_unused_passes_ranges_and_keeps_the_rescan_quiet",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let opened = open(repo);
             let listed = opened.annex_unused(&CancellationToken::new()).unwrap();
             assert_eq!(listed.entries.len(), 10_001);
@@ -2190,7 +2184,7 @@ printf '{"command":"get","file":"big.bin","success":true}\n'
         "successful_annex_commands_do_not_spawn_an_extra_restage",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             open(repo)
                 .run_large_file_command(&LargeFileCommand::AnnexGet {
                     paths: paths("big.bin"),
@@ -2218,7 +2212,7 @@ printf '{"command":"get","file":"big.bin","success":true}\n'
         "annex_transfer_ignores_non_utf8_lines_and_reads_later_results",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let output = open(repo)
                 .run_large_file_command(&LargeFileCommand::AnnexGet {
                     paths: paths("big.bin"),
@@ -2245,7 +2239,7 @@ fn annex_descriptions_round_trip_without_local_remote_names() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    git_stdout_raw(&repo, &["annex", "describe", "backup", "usb"]);
+    run_git(&repo, &["annex", "describe", "backup", "usb"]);
     let opened = open(&repo);
     let support = opened
         .large_file_support(&CancellationToken::new())
@@ -2299,7 +2293,7 @@ fi
         "annex_failed_items_preserve_auth_diagnostics_and_allow_retry",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let opened = open(repo);
             let command = LargeFileCommand::AnnexGet {
                 paths: paths("big.bin"),
@@ -2348,7 +2342,7 @@ printf '{"command":"get","file":"big.bin","success":false,"error-messages":["Tra
         "annex_failed_items_are_errors_even_with_a_successful_exit",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let error = open(repo)
                 .run_large_file_command(&LargeFileCommand::AnnexGet {
                     paths: paths("big.bin"),
@@ -2382,7 +2376,7 @@ printf '%s\n' "$sub" >> "$GITCOMET_ANNEX_TEST_ROOT/authenticated"
         "annex_credentials_survive_fallback_and_multiple_keys_without_leaking",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let opened = open(repo);
             let keys = vec!["WORM-s1-m1--first".into(), "WORM-s1-m1--second".into()];
             for command in [
@@ -2436,7 +2430,7 @@ exec sleep 30
         "silent_annex_commands_announce_activity_before_they_can_stall",
         SCRIPT,
         |repo| {
-            git_stdout_raw(repo, &["init", "-q"]);
+            run_git(repo, &["init", "-q"]);
             let opened = open(repo);
             for command in [
                 LargeFileCommand::AnnexPull { content: true },
@@ -2488,12 +2482,12 @@ fn a_special_remote_someone_else_configured_waits_for_confirmation() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let source = init_annex_repo(dir.path());
-    git_stdout_raw(
+    run_git(
         &source,
         &["annex", "copy", "-q", "--to", "backup", "big.bin"],
     );
     let clone = dir.path().join("clone");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &[
             "clone",
@@ -2502,11 +2496,11 @@ fn a_special_remote_someone_else_configured_waits_for_confirmation() {
             clone.to_str().unwrap(),
         ],
     );
-    git_stdout_raw(&clone, &["config", "user.name", "Test"]);
-    git_stdout_raw(&clone, &["config", "user.email", "test@example.com"]);
-    git_stdout_raw(&clone, &["annex", "init", "-q", "desktop"]);
+    run_git(&clone, &["config", "user.name", "Test"]);
+    run_git(&clone, &["config", "user.email", "test@example.com"]);
+    run_git(&clone, &["annex", "init", "-q", "desktop"]);
     let store = format!("directory={}", dir.path().join("store").display());
-    git_stdout_raw(&clone, &["annex", "enableremote", "backup", &store]);
+    run_git(&clone, &["annex", "enableremote", "backup", &store]);
     let pending = || {
         open(&clone)
             .large_file_support(&CancellationToken::new())

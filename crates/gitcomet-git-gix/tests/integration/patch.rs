@@ -1,4 +1,4 @@
-use crate::git_cli::{git_stdout_raw, run_git};
+use crate::git_cli::{git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -168,8 +168,5 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
 
     assert_eq!(output.command, "git am --continue");
     assert!(!repo.join(".git/rebase-apply").exists(), "am finished");
-    assert_eq!(
-        git_stdout_raw(&repo, &["log", "-1", "--format=%s"]).trim(),
-        "patched"
-    );
+    assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%s"]), "patched");
 }

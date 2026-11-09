@@ -1,4 +1,4 @@
-use crate::git_cli::{git_cmd, git_output, git_stdout_raw, run_git};
+use crate::git_cli::{git_cmd, git_output, git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::{HistoryMode, Upstream, UpstreamDivergence};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::test_support::git_fixture::{
@@ -214,11 +214,11 @@ fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
             .expect("set exact upstream");
 
         assert_eq!(
-            git_stdout_raw(&repo, &["config", "--get", "branch.feature.remote"]).trim(),
+            git_stdout(&repo, &["config", "--get", "branch.feature.remote"]),
             target.remote
         );
         assert_eq!(
-            git_stdout_raw(&repo, &["config", "--get", "branch.feature.merge"]).trim(),
+            git_stdout(&repo, &["config", "--get", "branch.feature.merge"]),
             format!("refs/heads/{}", target.branch)
         );
         assert_eq!(
@@ -282,7 +282,7 @@ fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
         .expect("checkout should resolve the mapped local tracking ref");
 
     assert_eq!(
-        git_stdout_raw(&repo, &["branch", "--show-current"]).trim(),
+        git_stdout(&repo, &["branch", "--show-current"]),
         "review-local"
     );
     assert_eq!(
@@ -749,11 +749,11 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         "setting upstream must not push or create the remote ref"
     );
     assert_eq!(
-        git_stdout_raw(&work_repo, &["config", "--get", "branch.feature.remote"]).trim(),
+        git_stdout(&work_repo, &["config", "--get", "branch.feature.remote"]),
         "origin"
     );
     assert_eq!(
-        git_stdout_raw(&work_repo, &["config", "--get", "branch.feature.merge"]).trim(),
+        git_stdout(&work_repo, &["config", "--get", "branch.feature.merge"]),
         "refs/heads/review/feature"
     );
     assert_eq!(
@@ -1337,16 +1337,16 @@ fn changing_upstream_replaces_repeated_merge_entries() {
             .set_upstream_branch_with_output("main", &upstream("origin", "new"))
             .unwrap();
         assert_eq!(
-            git_stdout_raw(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]).trim(),
+            git_stdout(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
             "origin/new",
             "separate sections: {separate_sections}"
         );
         assert_eq!(
-            git_stdout_raw(repo, &["config", "--get-all", "branch.main.merge"]).trim(),
+            git_stdout(repo, &["config", "--get-all", "branch.main.merge"]),
             "refs/heads/new"
         );
         assert_eq!(
-            git_stdout_raw(repo, &["config", "branch.main.description"]).trim(),
+            git_stdout(repo, &["config", "branch.main.description"]),
             "keep-me"
         );
         let branches = opened

@@ -10,9 +10,9 @@ fn bare_annex_all_versions_commands_transfer_content_without_checkout() {
     let key = git_stdout_raw(&source, &["annex", "lookupkey", "big.bin"])
         .trim()
         .to_string();
-    git_stdout_raw(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
-    git_stdout_raw(&bare, &["config", "user.name", "Test"]);
-    git_stdout_raw(&bare, &["config", "user.email", "test@example.com"]);
+    run_git(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
+    run_git(&bare, &["config", "user.name", "Test"]);
+    run_git(&bare, &["config", "user.email", "test@example.com"]);
     let repo = open(&bare);
     repo.run_large_file_command(&LargeFileCommand::AnnexInit)
         .unwrap();
@@ -85,9 +85,9 @@ fn bare_annex_all_versions_commands_transfer_content_without_checkout() {
 fn bare_annex_sync_and_repository_management_remain_available() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
-    git_stdout_raw(dir.path(), &["init", "--bare", "-b", "main"]);
-    git_stdout_raw(dir.path(), &["config", "user.name", "Test"]);
-    git_stdout_raw(dir.path(), &["config", "user.email", "test@example.com"]);
+    run_git(dir.path(), &["init", "--bare", "-b", "main"]);
+    run_git(dir.path(), &["config", "user.name", "Test"]);
+    run_git(dir.path(), &["config", "user.email", "test@example.com"]);
     let repo = open(dir.path());
     repo.run_large_file_command(&LargeFileCommand::AnnexInit)
         .unwrap();

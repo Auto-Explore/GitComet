@@ -12,7 +12,7 @@ fn bare_lfs_committed_fetches_pushes_and_maintenance_preserve_absent_checkout() 
     let dir = tempfile::tempdir().unwrap();
     let (remote, middle) = seed_lfs_history(dir.path());
     let bare = dir.path().join("bare");
-    git_stdout_raw(
+    run_git(
         dir.path(),
         &[
             "clone",
@@ -53,7 +53,7 @@ fn bare_lfs_committed_fetches_pushes_and_maintenance_preserve_absent_checkout() 
         repo.run_large_file_command(&command).unwrap();
     }
     let backup = dir.path().join("backup.git");
-    git_stdout_raw(dir.path(), &["init", "--bare", backup.to_str().unwrap()]);
+    run_git(dir.path(), &["init", "--bare", backup.to_str().unwrap()]);
     repo.add_remote_with_output("backup", &file_url(&backup), RemoteUrlPolicy::default())
         .unwrap();
     repo.run_large_file_command(&LargeFileCommand::LfsPushAll {
@@ -78,8 +78,8 @@ fn bare_lfs_unlock_requires_explicit_force_and_preserves_remote_lock_on_refusal(
     }
     let server = LockServer::start(&[("theirs.psd", "alice")]);
     let dir = tempfile::tempdir().unwrap();
-    git_stdout_raw(dir.path(), &["init", "--bare", "-b", "main"]);
-    git_stdout_raw(dir.path(), &["config", "lfs.url", &server.url]);
+    run_git(dir.path(), &["init", "--bare", "-b", "main"]);
+    run_git(dir.path(), &["config", "lfs.url", &server.url]);
     let repo = GixBackend.open(dir.path()).unwrap();
     let held = server.held();
     let error = repo
