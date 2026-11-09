@@ -656,15 +656,8 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-clone-effect-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let src = base.join("src");
     let dest = base.join("dest");
@@ -945,15 +938,8 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-save-worktree-file-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("dir/out.txt");
     std::fs::create_dir(base.join("dir")).unwrap();
@@ -1808,15 +1794,8 @@ fn load_stashes_effect_truncates_results_to_limit() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-stash-load-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let stashes = (0..5)
         .map(|i| StashEntry {

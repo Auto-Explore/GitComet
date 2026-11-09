@@ -469,15 +469,8 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("conflict.txt");
     let current = "a\n<<<<<<<\nours\n=======\ntheirs\n>>>>>>>\nb\n";
@@ -687,15 +680,8 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.txt");
     let base_text = "base\n";
@@ -931,15 +917,8 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-binary-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("session_reuse.bin");
     let base_bytes = vec![0xff, 0x00, 0x01];
@@ -1192,15 +1171,8 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
 
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-session-reuse-absent-current-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("removed.txt");
     let base_text = "base\n";
@@ -1453,15 +1425,8 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _trace = mergetool_trace::capture();
-    let base = std::env::temp_dir().join(format!(
-        "gitcomet-conflict-load-trace-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&base);
+    let base_dir = tempfile::tempdir().expect("create tempdir");
+    let base = base_dir.path().to_path_buf();
 
     let rel = PathBuf::from("trace_conflict.html");
     let base_text = "<div>base</div>\n<section>common</section>\n<footer>end</footer>\n";
