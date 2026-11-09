@@ -1350,12 +1350,9 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                     .expect("expected diff editor menu model");
 
                 let labels: Vec<String> = model
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                        _ => None,
-                    })
+                    .entry_labels()
+                    .into_iter()
+                    .map(str::to_string)
                     .collect();
                 for expected in [
                     "Unstage line",
@@ -2448,12 +2445,9 @@ fn annex_menu_labels_on(
             })
             .expect("annex menu");
         model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
+            .entry_labels()
+            .into_iter()
+            .map(str::to_string)
             .collect()
     })
 }

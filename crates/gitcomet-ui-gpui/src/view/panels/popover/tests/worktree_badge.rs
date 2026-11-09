@@ -860,12 +860,9 @@ mod badges {
             host.update(app, |host, cx| {
                 let entries = |model: ContextMenuModel| {
                     model
-                        .items
+                        .entry_labels()
                         .into_iter()
-                        .filter_map(|item| match item {
-                            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                            _ => None,
-                        })
+                        .map(str::to_string)
                         .collect::<Vec<_>>()
                 };
                 let menu = host

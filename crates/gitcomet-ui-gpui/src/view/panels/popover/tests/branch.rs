@@ -2788,12 +2788,9 @@ mod checkout_picker {
             host.update(app, |host, cx| {
                 let entries = |model: ContextMenuModel| {
                     model
-                        .items
+                        .entry_labels()
                         .into_iter()
-                        .filter_map(|item| match item {
-                            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                            _ => None,
-                        })
+                        .map(str::to_string)
                         .collect::<Vec<_>>()
                 };
                 let menu = host
@@ -2865,12 +2862,9 @@ mod checkout_picker {
 
 fn branch_group_entry_labels(model: &ContextMenuModel) -> Vec<String> {
     model
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-            _ => None,
-        })
+        .entry_labels()
+        .into_iter()
+        .map(str::to_string)
         .collect()
 }
 

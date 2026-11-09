@@ -85,14 +85,7 @@ mod tests {
         let repo_id = RepoId(7);
         let model = super::model_for_section(repo_id, BranchSection::Remote, 0);
 
-        let labels: Vec<&str> = model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
-                _ => None,
-            })
-            .collect();
+        let labels: Vec<&str> = model.entry_labels().into_iter().collect();
 
         assert!(!labels.contains(&"Edit fetch URL…"));
         assert!(!labels.contains(&"Edit push URL…"));

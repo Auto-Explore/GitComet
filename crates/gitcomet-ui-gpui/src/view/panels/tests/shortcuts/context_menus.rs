@@ -138,14 +138,7 @@ fn extension_ref_menu_entries_run_with_the_menus_target(cx: &mut gpui::TestAppCo
     ];
     for (kind, expected, next) in cases {
         let model = cx.update(|_window, app| context_menu_model_for(&view, app, kind.clone()));
-        let labels: Vec<&str> = model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
-                _ => None,
-            })
-            .collect();
+        let labels: Vec<&str> = model.entry_labels().into_iter().collect();
         let at = labels
             .iter()
             .position(|label| *label == "Mark reviewed here")

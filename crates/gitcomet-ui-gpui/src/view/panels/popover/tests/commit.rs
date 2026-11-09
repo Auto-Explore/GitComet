@@ -451,12 +451,9 @@ fn copy_branch_name_entries_follow_the_commits_branches(cx: &mut gpui::TestAppCo
             })
             .expect("expected a commit context menu model");
         let labels: Vec<String> = model
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
-                _ => None,
-            })
+            .entry_labels()
+            .into_iter()
+            .map(str::to_string)
             .collect();
         // The copy entries sit directly under "Copy commit SHA".
         if let Some(first) = labels
