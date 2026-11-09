@@ -685,14 +685,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("worktree_path", worktree_path)
                 .field("result", result)
                 .finish(),
-            InternalMsg::CommitFinished { repo_id, result } => f
+            InternalMsg::CommitFinished {
+                repo_id,
+                amend,
+                result,
+            } => f
                 .debug_struct("CommitFinished")
                 .field("repo_id", repo_id)
-                .field("result", result)
-                .finish(),
-            InternalMsg::CommitAmendFinished { repo_id, result } => f
-                .debug_struct("CommitAmendFinished")
-                .field("repo_id", repo_id)
+                .field("amend", amend)
                 .field("result", result)
                 .finish(),
             InternalMsg::SafePushAfterCommitFinished {

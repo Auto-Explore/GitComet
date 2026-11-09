@@ -25,7 +25,6 @@ impl Msg {
             | Self::CheckoutRemoteBranch { repo_id, .. }
             | Self::CherryPickCommit { repo_id, .. }
             | Self::Commit { repo_id, .. }
-            | Self::CommitAmend { repo_id, .. }
             | Self::CompareWithWorkingTree { repo_id, .. }
             | Self::ConflictAddManualAlignment { repo_id, .. }
             | Self::ConflictApplyAutosolve { repo_id, .. }

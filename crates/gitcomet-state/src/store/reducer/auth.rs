@@ -203,20 +203,12 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
             amend,
             push_after_commit,
             hooks,
-        } => Some(if amend {
-            Msg::CommitAmend {
-                repo_id,
-                message,
-                push_after_commit,
-                hooks,
-            }
-        } else {
-            Msg::Commit {
-                repo_id,
-                message,
-                push_after_commit,
-                hooks,
-            }
+        } => Some(Msg::Commit {
+            repo_id,
+            message,
+            amend,
+            push_after_commit,
+            hooks,
         }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
     }
@@ -819,24 +811,14 @@ pub(super) fn commit(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.pending.commit_retry = Some(request);
     }
-    let effect = if amend {
-        Effect::CommitAmend {
-            repo_id,
-            message,
-            identity: None,
-            hooks,
-            auth: None,
-        }
-    } else {
-        Effect::Commit {
-            repo_id,
-            message,
-            identity: None,
-            hooks,
-            auth: None,
-        }
-    };
-    vec![effect]
+    vec![Effect::Commit {
+        repo_id,
+        message,
+        amend,
+        identity: None,
+        hooks,
+        auth: None,
+    }]
 }
 
 pub(super) fn commit_finished(

@@ -957,6 +957,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
                 local_branch: Some("main".to_string()),
@@ -993,6 +994,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
         }),
@@ -1026,6 +1028,7 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
         &id_alloc,
         &mut state,
         Msg::Commit {
+            amend: false,
             repo_id,
             message: "wip".to_string(),
             push_after_commit: true,
@@ -1056,6 +1059,7 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
                 local_branch: Some("main".to_string()),

@@ -331,7 +331,6 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RunLargeFileCommand { .. }
             | Msg::AppendGitattributesRule { .. }
             | Msg::Commit { .. }
-            | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
             | Msg::Fetch(crate::msg::FetchMsg::All { .. })
             | Msg::Fetch(crate::msg::FetchMsg::Remote { .. })
@@ -1974,6 +1973,7 @@ fn reduce_inner(
         Msg::Commit {
             repo_id,
             message,
+            amend,
             push_after_commit,
             hooks,
         } => auth::commit(
@@ -1981,22 +1981,7 @@ fn reduce_inner(
             repo_id,
             PendingCommitRetry {
                 message,
-                amend: false,
-                push_after_commit,
-                hooks,
-            },
-        ),
-        Msg::CommitAmend {
-            repo_id,
-            message,
-            push_after_commit,
-            hooks,
-        } => auth::commit(
-            state,
-            repo_id,
-            PendingCommitRetry {
-                message,
-                amend: true,
+                amend,
                 push_after_commit,
                 hooks,
             },
@@ -2893,12 +2878,11 @@ fn reduce_inner(
             worktree_path,
             result,
         ),
-        Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            auth::commit_finished(inputs, repos, state, repo_id, result, false)
-        }
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
-            auth::commit_finished(inputs, repos, state, repo_id, result, true)
-        }
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            amend,
+            result,
+        }) => auth::commit_finished(inputs, repos, state, repo_id, result, amend),
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context,

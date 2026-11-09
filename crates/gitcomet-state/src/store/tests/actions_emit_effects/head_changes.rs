@@ -18,6 +18,7 @@ fn commit_emits_effect() {
         &id_alloc,
         &mut state,
         Msg::Commit {
+            amend: false,
             repo_id: RepoId(1),
             message: "hello".to_string(),
             push_after_commit: false,
@@ -119,7 +120,8 @@ fn commit_amend_emits_effect() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitAmend {
+        Msg::Commit {
+            amend: true,
             repo_id: RepoId(1),
             message: "amended".to_string(),
             push_after_commit: false,
@@ -129,7 +131,7 @@ fn commit_amend_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CommitAmend { repo_id: RepoId(1), message, .. }] if message == "amended"
+        [Effect::Commit { amend: true, repo_id: RepoId(1), message, .. }] if message == "amended"
     ));
 }
 
@@ -276,6 +278,7 @@ fn commit_bumps_ops_rev() {
         &id_alloc,
         &mut state,
         Msg::Commit {
+            amend: false,
             repo_id,
             message: "test commit".to_string(),
             push_after_commit: false,
@@ -315,6 +318,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -378,6 +382,7 @@ fn commit_finished_invalidates_loaded_blame() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -599,6 +604,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -630,6 +636,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
         }),
@@ -649,7 +656,8 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: true,
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -668,7 +676,8 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: true,
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("amend boom".to_string()))),
         }),
@@ -687,6 +696,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: false,
             repo_id: RepoId(999),
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
@@ -696,7 +706,8 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            amend: true,
             repo_id: RepoId(999),
             result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),

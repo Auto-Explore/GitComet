@@ -1073,7 +1073,7 @@ pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
     }
 }
 
-/// Completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
+/// Completion handling for `InternalMsg::CommitFinished`.
 pub(super) fn commit_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,

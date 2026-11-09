@@ -989,6 +989,7 @@ fn cancelled_action_uses_its_inner_log_refresh_without_an_extra_head_query() {
             false,
             true,
             InternalMsg::CommitFinished {
+                amend: false,
                 repo_id: RepoId(1),
                 result: Err(cancelled()),
             },

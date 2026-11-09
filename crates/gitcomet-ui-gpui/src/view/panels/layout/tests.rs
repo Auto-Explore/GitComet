@@ -457,20 +457,11 @@ fn commit_options_carry_the_hook_choice_to_commit_and_amend() {
                     Msg::Commit {
                         repo_id: id,
                         message,
+                        amend: sent_amend,
                         push_after_commit,
                         hooks,
                     } => {
-                        assert!(!amend, "{options:?} should amend");
-                        assert_eq!((id, message.as_str()), (repo_id, "message"));
-                        assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
-                    }
-                    Msg::CommitAmend {
-                        repo_id: id,
-                        message,
-                        push_after_commit,
-                        hooks,
-                    } => {
-                        assert!(amend, "{options:?} should not amend");
+                        assert_eq!(sent_amend, amend, "{options:?}");
                         assert_eq!((id, message.as_str()), (repo_id, "message"));
                         assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
                     }

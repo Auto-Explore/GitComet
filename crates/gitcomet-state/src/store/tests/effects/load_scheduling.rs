@@ -2624,6 +2624,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::Commit {
+                amend: false,
                 repo_id,
                 message: "msg".to_string(),
                 identity: None,
@@ -2633,7 +2634,8 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::CommitAmend {
+            Effect::Commit {
+                amend: true,
                 repo_id,
                 message: "msg".to_string(),
                 identity: None,

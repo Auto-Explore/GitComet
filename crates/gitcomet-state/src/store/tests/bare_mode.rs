@@ -71,6 +71,7 @@ fn bare_worktree_commands_refuse_without_mutating_operation_counters() {
     let (mut repos, ids, mut state, repo_id) = fixture(RepositoryMode::Bare);
     for message in [
         Msg::Commit {
+            amend: false,
             repo_id,
             message: "message".into(),
             push_after_commit: false,

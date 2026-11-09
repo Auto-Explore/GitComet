@@ -285,6 +285,7 @@ impl PopoverHost {
         self.store.dispatch(Msg::Commit {
             repo_id,
             message,
+            amend: false,
             push_after_commit: false,
             hooks: gitcomet_core::services::GitHooks::Run,
         });

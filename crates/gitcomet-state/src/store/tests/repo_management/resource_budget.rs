@@ -23,6 +23,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             &ids,
             &mut state,
             Msg::Commit {
+                amend: false,
                 repo_id: id,
                 message: "message".into(),
                 push_after_commit: true,
@@ -43,6 +44,7 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             &ids,
             &mut state,
             Msg::Internal(InternalMsg::CommitFinished {
+                amend: false,
                 repo_id: id,
                 result: Ok(CommitOperationOutcome::default()),
             }),

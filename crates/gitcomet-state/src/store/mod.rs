@@ -593,9 +593,6 @@ impl WorkerLoopContext<'_> {
         for mut effect in effects {
             if let crate::msg::Effect::Commit {
                 repo_id, identity, ..
-            }
-            | crate::msg::Effect::CommitAmend {
-                repo_id, identity, ..
             } = &mut effect
             {
                 let resolver = self

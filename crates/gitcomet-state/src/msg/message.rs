@@ -1055,13 +1055,7 @@ pub enum Msg {
     Commit {
         repo_id: RepoId,
         message: String,
-        push_after_commit: bool,
-        /// Kept by the push after this commit.
-        hooks: GitHooks,
-    },
-    CommitAmend {
-        repo_id: RepoId,
-        message: String,
+        amend: bool,
         push_after_commit: bool,
         /// Kept by the push after this commit.
         hooks: GitHooks,
@@ -1851,10 +1845,7 @@ pub enum InternalMsg {
     },
     CommitFinished {
         repo_id: RepoId,
-        result: Result<CommitOperationOutcome, Error>,
-    },
-    CommitAmendFinished {
-        repo_id: RepoId,
+        amend: bool,
         result: Result<CommitOperationOutcome, Error>,
     },
     SafePushAfterCommitFinished {

@@ -291,6 +291,7 @@ fn repo_operations_emit_effects() {
         &id_alloc,
         &mut state,
         Msg::Commit {
+            amend: false,
             repo_id: RepoId(1),
             message: "m".to_string(),
             push_after_commit: false,

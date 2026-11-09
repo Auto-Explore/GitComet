@@ -23,20 +23,12 @@ pub(super) struct CommitOptions {
 impl CommitOptions {
     pub(super) fn msg(self, repo_id: RepoId, message: String) -> Msg {
         let hooks = GitHooks::from_skip(self.skip_hooks);
-        if self.amend {
-            Msg::CommitAmend {
-                repo_id,
-                message,
-                push_after_commit: self.push_after,
-                hooks,
-            }
-        } else {
-            Msg::Commit {
-                repo_id,
-                message,
-                push_after_commit: self.push_after,
-                hooks,
-            }
+        Msg::Commit {
+            repo_id,
+            message,
+            amend: self.amend,
+            push_after_commit: self.push_after,
+            hooks,
         }
     }
 

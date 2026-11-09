@@ -11,9 +11,7 @@ macro_rules! match_git_auth {
     ($effect:expr, $auth:ident => $then:expr, $work:ident => $command:expr) => {
         match $effect {
             Effect::RepoCommand($work) => $command,
-            Effect::CloneRepo { auth: $auth, .. }
-            | Effect::Commit { auth: $auth, .. }
-            | Effect::CommitAmend { auth: $auth, .. } => $then,
+            Effect::CloneRepo { auth: $auth, .. } | Effect::Commit { auth: $auth, .. } => $then,
             _ => None,
         }
     };
@@ -348,13 +346,7 @@ pub enum Effect {
     Commit {
         repo_id: RepoId,
         message: String,
-        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
-        hooks: gitcomet_core::services::GitHooks,
-        auth: Option<StagedGitAuth>,
-    },
-    CommitAmend {
-        repo_id: RepoId,
-        message: String,
+        amend: bool,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
@@ -469,7 +461,6 @@ impl Effect {
             | Self::DiscardWorktreeChangesPath { .. }
             | Self::DiscardWorktreeChangesPaths { .. }
             | Self::Commit { .. }
-            | Self::CommitAmend { .. }
             | Self::PreviewTagPush { .. }
             | Self::LoadInteractiveRebaseSetup { .. }
             | Self::LoadInteractiveCherryPickMessages { .. }
