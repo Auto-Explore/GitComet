@@ -64,6 +64,7 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod history_rebase;
 mod history_transaction;
 mod large_files;
 mod lfs;
