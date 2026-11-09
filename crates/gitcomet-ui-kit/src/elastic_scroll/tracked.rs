@@ -52,7 +52,7 @@ impl Element for TrackedElasticScroll {
             (scroll.clone(), scroll)
         });
         let mut surface = self.surface.take().expect("tracked scroll surface");
-        if cfg!(target_os = "macos") && crate::ui_runtime::current().uses_pane_animations() {
+        if ElasticScroll::uses_precise_wheel_routing() {
             surface.style().restrict_scroll_to_axis = Some(self.axis == ScrollbarAxis::Vertical);
         }
         let surface = surface.track_scroll(&scroll);

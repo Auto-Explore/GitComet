@@ -177,6 +177,13 @@ impl ElasticScrollState {
 }
 
 impl ElasticScroll {
+    /// Whether this platform/runtime installs the precise-wheel router.
+    /// Custom logical scrollers must leave even axis-rejected precise packets
+    /// to that router. Reduce Motion disables stretching, not input routing.
+    pub fn uses_precise_wheel_routing() -> bool {
+        cfg!(target_os = "macos") && crate::ui_runtime::current().uses_pane_animations()
+    }
+
     /// Tracks an ordinary overflow area without adding state to its owning view.
     /// The handle lives with this element's scoped id across rendered frames.
     pub fn tracked_vertical(
@@ -415,7 +422,7 @@ impl Element for ElasticScroll {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        if !cfg!(target_os = "macos") || !crate::ui_runtime::current().uses_pane_animations() {
+        if !Self::uses_precise_wheel_routing() {
             if let Some(state) = &self.shared_motion {
                 let mut state = state.0.borrow_mut();
                 state.motion.reset();

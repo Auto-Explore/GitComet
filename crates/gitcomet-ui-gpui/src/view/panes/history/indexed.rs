@@ -1379,7 +1379,17 @@ impl HistoryView {
                         .h_full()
                         .mr(super::history_scrollbar_gutter())
                         .overflow_hidden()
-                        .on_scroll_wheel(cx.listener(Self::history_wheel))
+                        .on_scroll_wheel(cx.listener(
+                            |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                                // The live router owns precise packets, including
+                                // ones rejected by the gesture's current axis lock.
+                                if !event.delta.precise()
+                                    || !crate::kit::elastic_scroll::ElasticScroll::uses_precise_wheel_routing()
+                                {
+                                    this.history_wheel(event, window, cx);
+                                }
+                            },
+                        ))
                         .child(measure)
                         .children(rows),
                 )
