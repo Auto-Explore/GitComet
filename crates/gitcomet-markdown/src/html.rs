@@ -482,10 +482,6 @@ fn html_entity(name: &str) -> Option<char> {
 }
 
 pub(crate) fn is_html_open_tag(lower_html: &str, tag_name: &str) -> bool {
-    if !lower_html.starts_with('<') || lower_html.starts_with("</") {
-        return false;
-    }
-
     let Some(rest) = lower_html.strip_prefix('<') else {
         return false;
     };
