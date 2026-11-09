@@ -2,7 +2,7 @@ use crate::model::{AppState, Loadable};
 use crate::msg::RepoCommandEffect;
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use crate::store::repository_runtime::RepositoryRuntimes;
-use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -17,8 +17,9 @@ use std::sync::RwLock;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, send_or_log,
-    short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
+    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error,
+    run_with_git_auth, send_or_log, short_commit_id, single_line_context, spawn_with_repo,
+    spawn_with_repo_or_else,
 };
 
 const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
@@ -472,19 +473,6 @@ fn resolve_worktree_save_target(workdir: &Path, path: &Path) -> Result<(PathBuf,
             )
         })?;
     Ok((relative_path, full))
-}
-
-fn run_with_git_auth<R>(
-    auth: Option<StagedGitAuth>,
-    run: impl FnOnce() -> Result<R, Error>,
-) -> Result<R, Error> {
-    if let Some(auth) = auth {
-        // The guard clears the staged auth on success, error, and panic.
-        let _scoped = ScopedStagedGitAuth::stage(auth);
-        run()
-    } else {
-        run()
-    }
 }
 
 struct AddSubmoduleRequest {

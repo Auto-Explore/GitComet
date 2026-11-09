@@ -1,7 +1,7 @@
 use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
 use crate::store::repository_runtime::RepositoryRuntimes;
-use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitHooks, GitRepository};
 use std::path::{Path, PathBuf};
@@ -10,8 +10,8 @@ use std::sync::Arc;
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
     GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, path_context,
-    paths_context, send_or_log, short_commit_id, single_line_context, spawn_with_repo,
-    spawn_with_repo_or_else,
+    paths_context, run_with_git_auth, send_or_log, short_commit_id, single_line_context,
+    spawn_with_repo, spawn_with_repo_or_else,
 };
 
 /// Runs a repo action against the repo's handle, or finishes it at once when
@@ -197,19 +197,6 @@ fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
     paths
-}
-
-fn run_with_git_auth<R>(
-    auth: Option<StagedGitAuth>,
-    run: impl FnOnce() -> Result<R, Error>,
-) -> Result<R, Error> {
-    if let Some(auth) = auth {
-        // The guard clears the staged auth on success, error, and panic.
-        let _scoped = ScopedStagedGitAuth::stage(auth);
-        run()
-    } else {
-        run()
-    }
 }
 
 /// Where an action on a branch runs: here, or in the other worktree that has
