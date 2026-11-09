@@ -67,11 +67,11 @@ pub(super) fn worktrees_loaded(
                 Err(e) => {
                     // Only explicit loads publish errors. Cancelled replies are
                     // suppressed by the worker's repo-load guard.
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    let failed = error_loadable(inputs, repo_state, &e);
                     // An unavailable listing is not evidence that the worktrees
                     // disappeared. Keep rows and badges until a read succeeds.
                     if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
-                        repo_state.set_worktrees(Loadable::Error(e.to_string()));
+                        repo_state.set_worktrees(failed);
                     }
                 }
             }
@@ -350,8 +350,7 @@ pub(super) fn submodules_loaded(
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+                    error_loadable(inputs, repo_state, &e)
                 }
             }
         };
@@ -1994,8 +1993,8 @@ pub(super) fn status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_status(failed);
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
@@ -2022,8 +2021,8 @@ pub(super) fn worktree_status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_worktree_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_worktree_status(failed);
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
@@ -2240,8 +2239,8 @@ pub(super) fn staged_status_loaded(
                 }
             }
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.set_staged_status(Loadable::Error(e.to_string()));
+                let failed = error_loadable(inputs, repo_state, &e);
+                repo_state.set_staged_status(failed);
             }
         }
         StatusLane::Staged.finish(repo_state, &mut effects);
@@ -2470,8 +2469,7 @@ pub(super) fn tags_loaded(
                     if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                         Loadable::NotLoaded
                     } else {
-                        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                        Loadable::Error(e.to_string())
+                        error_loadable(inputs, repo_state, &e)
                     }
                 }
             };
@@ -2500,8 +2498,7 @@ pub(super) fn remote_tags_loaded(
                 } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+                    error_loadable(inputs, repo_state, &e)
                 }
             }
         };

@@ -1,5 +1,5 @@
 use super::prepared::ReducerInputs;
-use super::util::push_diagnostic;
+use super::util::{error_loadable, push_diagnostic};
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
 use gitcomet_core::domain::{LogCursor, LogPage};
@@ -35,8 +35,7 @@ pub(super) fn file_history_loaded(
         None => match result {
             Ok(page) => page,
             Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                repo_state.history_state.file_history = Loadable::Error(e.to_string());
+                repo_state.history_state.file_history = error_loadable(inputs, repo_state, &e);
                 return Vec::new();
             }
         },

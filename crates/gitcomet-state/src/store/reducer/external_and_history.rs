@@ -932,9 +932,9 @@ pub(super) fn log_loaded(
                     super::auto_fetch::refresh_failed(inputs, repo_state, e);
                     return finish_log_load(repo_state, seq);
                 }
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                let failed = error_loadable(inputs, repo_state, &e);
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
-                    repo_state.set_log(Loadable::Error(e.to_string()));
+                    repo_state.set_log(failed);
                 }
                 return finish_log_load(repo_state, seq);
             }
