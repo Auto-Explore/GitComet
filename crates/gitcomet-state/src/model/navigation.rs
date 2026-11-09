@@ -306,7 +306,7 @@ pub struct RepoNavigationState {
 /// A point marked for comparison via the "Mark for comparison" context-menu
 /// action. `commit_id` is the resolved commit (branch/tag tips resolve to their
 /// target); `label` is what the menu shows (short sha, branch, or tag name).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ComparisonMark {
     pub commit_id: CommitId,
     pub label: String,

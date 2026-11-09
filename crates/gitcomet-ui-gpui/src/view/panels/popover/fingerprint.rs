@@ -532,10 +532,7 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
             repo.history_rewrite_busy().hash(hasher);
-            if let Some(mark) = &repo.navigation.comparison_mark {
-                mark.commit_id.hash(hasher);
-                mark.label.hash(hasher);
-            }
+            repo.navigation.comparison_mark.hash(hasher);
         }
         PopoverKind::TagMenu { .. } => {
             repo.tags_rev.hash(hasher);
