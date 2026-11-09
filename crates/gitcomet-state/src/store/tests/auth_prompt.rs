@@ -501,6 +501,50 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     );
 }
 
+/// The auth retry replays the commit that failed, even when another commit
+/// was started before the failure came back.
+#[test]
+fn commit_auth_retry_replays_the_failed_commit_not_the_latest_one() {
+    let _lock = super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let failed = CommitRequest {
+        message: "first".to_string(),
+        amend: false,
+        push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Skip,
+    };
+    state.repos[0].pending.commit_retry = Some(CommitRequest {
+        message: "second".to_string(),
+        amend: true,
+        push_after_commit: false,
+        hooks: gitcomet_core::services::GitHooks::Run,
+    });
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            request: failed.clone(),
+            result: Err(auth_error(
+                "git commit failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::Commit {
+            repo_id,
+            request: failed
+        }
+    );
+}
+
 #[test]
 fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
     let _lock = super::staged_auth_test_lock();
