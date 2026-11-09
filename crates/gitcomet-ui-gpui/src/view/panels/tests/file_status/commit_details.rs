@@ -2423,3 +2423,74 @@ fn commit_card_badges_wrap_below_the_author_when_narrow(cx: &mut gpui::TestAppCo
         "narrow: the SHA chip moves below the author, author {author:?}, sha {sha:?}"
     );
 }
+
+/// A branch badge's chevron opens the sidebar's menu for that branch; a tag
+/// badge has no menu.
+#[gpui::test]
+fn commit_card_branch_badges_open_the_sidebar_branch_menu(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    let repo_id = gitcomet_state::model::RepoId(41);
+    let target = gitcomet_core::domain::CommitId(CHIP_COMMIT_SHA.into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut state = (*this.state).clone();
+            let repo = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .expect("fixture repo");
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature".into(),
+                target: target.clone(),
+                upstream: None,
+                divergence: None,
+            }]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".into(),
+                    name: "feature".into(),
+                    target: target.clone(),
+                }]));
+            repo.tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
+                name: "v1.0".into(),
+                target: target.clone(),
+            }]));
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    for (menu, expected) in [
+        (
+            "commit_card_ref_menu_0",
+            crate::view::branch_sidebar::BranchMenuTarget::local("feature"),
+        ),
+        (
+            "commit_card_ref_menu_1",
+            crate::view::branch_sidebar::BranchMenuTarget::remote("origin", "feature"),
+        ),
+    ] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind =
+            cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+        assert_eq!(
+            kind,
+            Some(PopoverKind::BranchMenu {
+                repo_id,
+                target: expected,
+            }),
+            "{menu}"
+        );
+        cx.update(|_window, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        draw_and_drain_test_window(cx);
+    }
+    assert!(
+        cx.debug_bounds("commit_card_ref_menu_2").is_none(),
+        "a tag badge has no branch menu"
+    );
+}
