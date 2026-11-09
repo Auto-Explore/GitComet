@@ -921,7 +921,7 @@ impl GitCometView {
                                         .child(self.pane_resize_handle(
                                             theme,
                                             "pane_resize_details",
-                                            PaneResizeHandle::Details,
+                                            SidePane::Details,
                                             cx,
                                         )),
                                 )
@@ -951,7 +951,7 @@ impl GitCometView {
                                 .child(self.pane_resize_handle(
                                     theme,
                                     "pane_resize_sidebar",
-                                    PaneResizeHandle::Sidebar,
+                                    SidePane::Sidebar,
                                     cx,
                                 )),
                         )

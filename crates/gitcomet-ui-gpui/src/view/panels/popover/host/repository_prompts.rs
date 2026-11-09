@@ -368,7 +368,7 @@ impl PopoverHost {
                 && (repo
                     .staged_status_entries()
                     .is_some_and(|entries| !entries.is_empty())
-                    || matches!(repo.merge_commit_message, Loadable::Ready(Some(_))))
+                    || merge_in_progress(repo))
         }) && self
             .commit_prompt_message_input
             .read_with(cx, |input, _| !input.text().trim().is_empty())

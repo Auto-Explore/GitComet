@@ -4,10 +4,6 @@ use super::*;
 use crate::view::pending_commit::PendingCommit;
 use gitcomet_core::services::GitHooks;
 
-pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
-    repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
-}
-
 pub(super) fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
@@ -65,25 +61,6 @@ impl CommitOptions {
     }
 }
 
-/// Whether HEAD has a commit to amend: no merge or rebase is in progress and
-/// HEAD is detached, or its branch exists (an unloaded list counts as yes).
-pub(in crate::view::panels) fn amend_allowed(repo: &RepoState) -> bool {
-    if merge_active(Some(repo)) || matches!(repo.rebase_in_progress, Loadable::Ready(true)) {
-        return false;
-    }
-    if repo.detached_head_commit.is_some() {
-        return true;
-    }
-    match &repo.head_branch {
-        Loadable::Ready(head) if head == "HEAD" => true,
-        Loadable::Ready(head) => match &repo.branches {
-            Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
-            _ => true,
-        },
-        _ => true,
-    }
-}
-
 impl DetailsPaneView {
     pub(super) fn can_submit_commit(&self, message: &str) -> bool {
         let Some(repo) = self.active_repo() else {
@@ -104,7 +81,7 @@ impl DetailsPaneView {
         let staged_count = repo
             .staged_status_entries()
             .map_or(0, |entries| entries.len());
-        let is_merge_active = merge_active(Some(repo));
+        let is_merge_active = merge_in_progress(repo);
         commit_allowed(is_merge_active, staged_count)
     }
 

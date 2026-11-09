@@ -7,7 +7,7 @@ use crate::view::components::{ControlInteractionExt, InteractionState, Interacti
 use gpui::{AnyElement, Div, Stateful};
 
 mod commit_details;
-pub(in crate::view::panels) mod commit_form;
+mod commit_form;
 mod commit_metadata;
 mod commit_reword;
 mod comparison;

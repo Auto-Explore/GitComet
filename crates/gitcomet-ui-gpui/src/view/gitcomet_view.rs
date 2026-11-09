@@ -1591,7 +1591,10 @@ impl GitCometView {
     }
 
     /// The render width, animation sequence and animating flag of `pane`.
-    fn side_pane_width_anim(&mut self, pane: SidePane) -> (&mut Pixels, &mut u64, &mut bool) {
+    pub(super) fn side_pane_width_anim(
+        &mut self,
+        pane: SidePane,
+    ) -> (&mut Pixels, &mut u64, &mut bool) {
         match pane {
             SidePane::Sidebar => (
                 &mut self.sidebar_render_width,
@@ -1723,7 +1726,7 @@ impl GitCometView {
         if matches!(
             self.pane_resize,
             Some(PaneResizeState {
-                handle: PaneResizeHandle::Sidebar,
+                handle: SidePane::Sidebar,
                 ..
             })
         ) {
@@ -1845,7 +1848,7 @@ impl GitCometView {
         if matches!(
             self.pane_resize,
             Some(PaneResizeState {
-                handle: PaneResizeHandle::Details,
+                handle: SidePane::Details,
                 ..
             })
         ) {
@@ -2883,11 +2886,4 @@ impl GitCometView {
 pub(in crate::view) enum NavKeyFocus {
     TextInput,
     Elsewhere,
-}
-
-/// The collapsible panes beside the main view.
-#[derive(Clone, Copy)]
-enum SidePane {
-    Sidebar,
-    Details,
 }

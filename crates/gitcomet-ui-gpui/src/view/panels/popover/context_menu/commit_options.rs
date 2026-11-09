@@ -1,7 +1,5 @@
 use super::*;
 
-use crate::view::panels::layout::commit_form::amend_allowed;
-
 fn can_amend(repo: Option<&RepoState>) -> bool {
     let Some(repo) = repo else {
         return false;

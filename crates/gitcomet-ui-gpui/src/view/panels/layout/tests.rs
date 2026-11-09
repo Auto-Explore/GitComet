@@ -427,7 +427,7 @@ fn commit_allowed_when_staged_changes_exist() {
 fn commit_allowed_when_merge_is_active_without_staged_changes() {
     let mut repo = test_repo();
     repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'feature'".to_string()));
-    assert!(commit_allowed(merge_active(Some(&repo)), 0));
+    assert!(commit_allowed(merge_in_progress(&repo), 0));
 }
 
 #[test]

@@ -167,7 +167,7 @@ fn header_minimum_follows_scale_history_and_sidebar_expansion(cx: &mut gpui::Tes
 #[test]
 fn pane_drag_uses_the_scaled_header_minimum_after_window_resize() {
     let state = PaneResizeState::new(
-        PaneResizeHandle::Sidebar,
+        SidePane::Sidebar,
         px(0.0),
         px(450.0),
         px(420.0),

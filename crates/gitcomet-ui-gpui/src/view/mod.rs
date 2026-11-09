@@ -770,7 +770,7 @@ fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
 
 #[cfg(test)]
 pub(in crate::view) fn pane_resize_drag_width_bounds(
-    handle: PaneResizeHandle,
+    handle: SidePane,
     start_sidebar: Pixels,
     start_details: Pixels,
     total_w: Pixels,
@@ -778,8 +778,8 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
     details_collapsed: bool,
 ) -> (Pixels, Pixels) {
     let (min_width, other_width, other_collapsed) = match handle {
-        PaneResizeHandle::Sidebar => (px(SIDEBAR_MIN_PX), start_details, details_collapsed),
-        PaneResizeHandle::Details => (px(DETAILS_MIN_PX), start_sidebar, sidebar_collapsed),
+        SidePane::Sidebar => (px(SIDEBAR_MIN_PX), start_details, details_collapsed),
+        SidePane::Details => (px(DETAILS_MIN_PX), start_sidebar, sidebar_collapsed),
     };
     pane_resize_drag_width_bounds_for_other_pane(
         min_width,
