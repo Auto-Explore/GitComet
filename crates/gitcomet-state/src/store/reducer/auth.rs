@@ -90,7 +90,7 @@ fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option
             Some(AuthOutcome::Rejected(challenge)) => (
                 Some(challenge.clone()),
                 AuthPromptStatus::Rejected {
-                    message: rejected_auth_reason(kind, Some(challenge)).to_string(),
+                    message: rejected_auth_message(kind, Some(challenge)).to_string(),
                 },
             ),
             _ => (None, AuthPromptStatus::AwaitingInput),
@@ -111,7 +111,7 @@ fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option
     })
 }
 
-fn rejected_auth_reason(kind: AuthPromptKind, challenge: Option<&AuthChallenge>) -> &'static str {
+fn rejected_auth_message(kind: AuthPromptKind, challenge: Option<&AuthChallenge>) -> &'static str {
     match kind {
         AuthPromptKind::Passphrase if challenge.is_some_and(AuthChallenge::is_pin) => {
             "The security key PIN was not accepted. Try again."
@@ -694,7 +694,7 @@ pub(super) fn auth_prompt_validated(
         .expect("validated authentication prompt");
     if result == PassphraseValidation::Rejected {
         prompt.status = AuthPromptStatus::Rejected {
-            message: rejected_auth_reason(prompt.kind, prompt.challenge.as_ref()).to_string(),
+            message: rejected_auth_message(prompt.kind, prompt.challenge.as_ref()).to_string(),
         };
         install_auth_prompt(state, prompt);
         return Vec::new();
