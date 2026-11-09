@@ -222,7 +222,7 @@ impl SidebarPaneView {
         gitcomet_state::explorer::Selection::destination(path, is_directory)
     }
 
-    fn explorer_focused_path(&self) -> Option<&Path> {
+    pub(super) fn explorer_focused_path(&self) -> Option<&Path> {
         self.explorer_pending_focus
             .as_ref()
             .filter(|(id, _)| self.active_repo_id() == Some(*id))

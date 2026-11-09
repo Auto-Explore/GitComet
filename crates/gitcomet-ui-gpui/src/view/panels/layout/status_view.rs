@@ -479,7 +479,7 @@ impl DetailsPaneView {
         title: AnyElement,
         actions: AnyElement,
         body: AnyElement,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Div {
         self.status_section_container(names.section, cx)
             .flex()

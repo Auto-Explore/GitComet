@@ -55,6 +55,11 @@ impl GitCometView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if super::command_shortcuts::is_terminal_toggle(keystroke)
+            || super::command_shortcuts::is_shortcut_help(keystroke)
+        {
+            return;
+        }
         let Some(viewport) = self.focused_terminal_viewport(window, cx) else {
             return;
         };
@@ -66,7 +71,8 @@ impl GitCometView {
     /// Installs an app-level keystroke interceptor that forwards keystrokes to a
     /// focused embedded terminal. Interceptors run before key bindings resolve
     /// to actions, so this is what lets the terminal swallow shortcuts that the
-    /// app would otherwise claim (Ctrl+P, function keys, etc.). The returned
+    /// app would otherwise claim (Ctrl+P, function keys, etc.). It also notes
+    /// whether the key typed a character, for builtin shortcuts. The returned
     /// [`gpui::Subscription`] must be stored for the interceptor to stay active.
     pub(super) fn install_terminal_keystroke_interceptor(
         cx: &mut gpui::Context<Self>,
@@ -77,6 +83,8 @@ impl GitCometView {
                 return;
             };
             view.update(cx, |this, cx| {
+                this.keystroke_types_character =
+                    super::command_shortcuts::types_character(&event.keystroke);
                 this.forward_keystroke_to_focused_terminal(&event.keystroke, window, cx);
             });
         })

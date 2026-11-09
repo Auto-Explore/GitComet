@@ -102,6 +102,8 @@ pub(in crate::view) struct FileListController {
     pub(in crate::view) sort: CommitFileSort,
     pub(in crate::view) kind_filter: CommitFileFilter,
     pub(in crate::view) query: SharedString,
+    /// Match case, whole word and regex for `query`.
+    pub(in crate::view) search_options: gitcomet_core::text_search::TextSearchOptions,
     pub(in crate::view) mode: FileListMode,
     pub(in crate::view) collapsed: CollapsedDirs,
     grouping: Grouping,
@@ -131,6 +133,7 @@ impl FileListController {
             sort: CommitFileSort::default(),
             kind_filter: CommitFileFilter::default(),
             query: SharedString::default(),
+            search_options: Default::default(),
             mode,
             collapsed: CollapsedDirs::default(),
             grouping: Grouping::ByKind,
@@ -345,6 +348,7 @@ impl FileListController {
         self.sort.hash(&mut hasher);
         self.kind_filter.hash(&mut hasher);
         self.query.hash(&mut hasher);
+        self.search_options.hash(&mut hasher);
         if let Some(visible) = &self.visible {
             visible.revision.hash(&mut hasher);
             Arc::as_ptr(&visible.paths).hash(&mut hasher);
@@ -360,16 +364,20 @@ impl FileListController {
         {
             return Arc::clone(shown);
         }
-        let projection =
-            self.projection_cache
-                .projection_for(&key, &self.files, self.sort, self.kind_filter);
-        let query = self.query.to_lowercase();
+        let projection = self.projection_cache.projection_for_query(
+            &key,
+            &self.files,
+            self.sort,
+            self.kind_filter,
+            self.query.as_ref(),
+            self.search_options,
+        );
         // Hashed once per rebuild: path comparisons in a tree set are slow.
         let visible: Option<rustc_hash::FxHashSet<&Path>> = self
             .visible
             .as_ref()
             .map(|visible| visible.paths.iter().map(PathBuf::as_path).collect());
-        let shown: Arc<[usize]> = if query.is_empty() && visible.is_none() {
+        let shown: Arc<[usize]> = if visible.is_none() {
             Arc::clone(&projection.source_indices)
         } else {
             projection
@@ -381,8 +389,6 @@ impl FileListController {
                     visible
                         .as_ref()
                         .is_none_or(|visible| visible.contains(path.as_path()))
-                        && (query.is_empty()
-                            || path.to_string_lossy().to_lowercase().contains(&query))
                 })
                 .collect()
         };

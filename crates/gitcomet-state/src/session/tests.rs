@@ -2611,6 +2611,41 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_open_next_file_after_last_change() {
+    let dir = unique_session_test_dir("open-next-file-after-last-change");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+    assert_eq!(load_from_path(&path).open_next_file_after_last_change, None);
+
+    let persist = |value: Option<bool>| {
+        persist_ui_settings_to_path(
+            UiSettings {
+                open_next_file_after_last_change: value,
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+    };
+    persist(Some(false));
+    assert_eq!(
+        load_from_path(&path).open_next_file_after_last_change,
+        Some(false)
+    );
+    // A write that says nothing about the toggle keeps it.
+    persist(None);
+    assert_eq!(
+        load_from_path(&path).open_next_file_after_last_change,
+        Some(false)
+    );
+    persist(Some(true));
+    assert_eq!(
+        load_from_path(&path).open_next_file_after_last_change,
+        Some(true)
+    );
+}
+
+#[test]
 fn persist_ui_settings_round_trips_security_preferences() {
     let dir = unique_session_test_dir("security-preferences");
     let _ = fs::create_dir_all(&dir);

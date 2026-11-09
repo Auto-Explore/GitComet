@@ -189,7 +189,55 @@ impl DetailsPaneView {
                     scroll.clone(),
                     move |range, window, cx| {
                         parent
-                            .update(cx, |pane, cx| render_rows(pane, range, window, cx))
+                            .update(cx, |pane, cx| {
+                                let start = range.start;
+                                let rows = render_rows(pane, range, window, cx);
+                                let plan = pane
+                                    .file_controllers
+                                    .borrow()
+                                    .get(&(repo_id, list))
+                                    .and_then(|entry| {
+                                        entry.controller.borrow().plan_cache.current()
+                                    });
+                                rows.into_iter()
+                                    .enumerate()
+                                    .map(|(ix, element)| {
+                                        let focused = plan
+                                            .as_ref()
+                                            .and_then(|plan| {
+                                                plan.row_at(crate::view::rows::RowIx(start + ix))
+                                            })
+                                            .is_some_and(|row| {
+                                                pane.review_row_is_focused(
+                                                    repo_id, list, &row, window,
+                                                )
+                                            });
+                                        if focused {
+                                            div()
+                                                .relative()
+                                                .child(element)
+                                                .child(
+                                                    div()
+                                                        .debug_selector(|| {
+                                                            "review_file_focus".to_owned()
+                                                        })
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .border_1()
+                                                        .border_color(
+                                                            pane.theme
+                                                                .colors
+                                                                .interaction
+                                                                .focus_ring,
+                                                        ),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            element
+                                        }
+                                    })
+                                    .collect()
+                            })
                             .unwrap_or_default()
                     },
                 )

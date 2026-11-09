@@ -656,5 +656,6 @@ mod window_and_file_actions;
 mod context_menus;
 mod file_navigation;
 mod focus_contexts;
+mod review_navigation;
 mod search;
 mod staging_conflicts;

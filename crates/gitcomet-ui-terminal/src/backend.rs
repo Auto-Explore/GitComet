@@ -950,7 +950,7 @@ pub(super) fn encode_control_key(key: &str) -> Option<u8> {
         "\\" => Some(0x1c),
         "]" => Some(0x1d),
         "^" => Some(0x1e),
-        "_" => Some(0x1f),
+        "_" | "/" => Some(0x1f),
         _ => None,
     }
 }

@@ -62,6 +62,7 @@ impl DiffRenderer {
         self.ensure_diff_visible_indices();
         self.ensure_diff_wrap_visible_rows(window, cx);
         self.maybe_autoscroll_diff_to_first_change();
+        self.maybe_advance_after_stage();
 
         if self.collapsed_difftastic_has_only_text_changes() {
             return components::empty_state(

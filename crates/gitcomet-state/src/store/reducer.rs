@@ -1532,6 +1532,11 @@ fn reduce_inner(
                         )
                 });
             if !valid {
+                // A refused action still settles: the diff's next-file
+                // advance waits for `ops_rev` to move.
+                if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                    repo.bump_ops_rev();
+                }
                 util::push_notification(
                     inputs,
                     state,

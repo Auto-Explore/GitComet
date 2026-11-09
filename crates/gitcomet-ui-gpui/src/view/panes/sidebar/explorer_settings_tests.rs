@@ -58,21 +58,18 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
-fn files_settings_cog_sits_between_search_and_locate_on_the_files_tab_only(
-    cx: &mut gpui::TestAppContext,
-) {
+fn files_settings_cog_sits_before_locate_on_the_files_tab_only(cx: &mut gpui::TestAppContext) {
     let (view, cx) = sidebar_window(cx, files_state(SidebarMode::Files));
 
-    let search = cx.debug_bounds("sidebar_search_toggle").unwrap();
     let cog = cx
         .debug_bounds("sidebar_explorer_settings")
         .expect("the Files tab strip shows the settings cog");
     let locate = cx.debug_bounds("sidebar_locate_open_file").unwrap();
     assert!(
-        search.right() <= cog.left() && cog.right() <= locate.left(),
-        "search {search:?}, cog {cog:?}, locate {locate:?}"
+        cog.right() <= locate.left(),
+        "cog {cog:?}, locate {locate:?}"
     );
-    assert_eq!(cog.center().y, search.center().y);
+    assert_eq!(cog.center().y, locate.center().y);
 
     let state = files_state(SidebarMode::Branches);
     cx.update(|_window, app| {

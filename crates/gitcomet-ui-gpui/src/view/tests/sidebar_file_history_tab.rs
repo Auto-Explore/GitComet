@@ -49,7 +49,10 @@ fn opening_the_tab_selects_it_and_shows_its_content(cx: &mut gpui::TestAppContex
     open_history(&view, cx);
     assert!(shows(cx, "sidebar_tab_file_history"));
     assert!(shows(cx, "sidebar_file_history_content"));
-    assert!(!shows(cx, "sidebar_search_toggle"), "no tools on History");
+    assert!(
+        !shows(cx, "sidebar_explorer_settings"),
+        "no tools on History"
+    );
     assert_eq!(
         cx.update(|_window, app| view.read(app).ui_model.read(app).state.sidebar_mode),
         mode,
@@ -63,7 +66,6 @@ fn files_shows_the_browser_and_the_tab_stays_until_closed(cx: &mut gpui::TestApp
     open_history(&view, cx);
     click(cx, "sidebar_tab_files");
     assert!(!shows(cx, "sidebar_file_history_content"));
-    assert!(shows(cx, "sidebar_search_toggle"));
     assert!(shows(cx, "sidebar_tab_file_history"));
 
     click(cx, "sidebar_tab_file_history");
@@ -74,7 +76,6 @@ fn files_shows_the_browser_and_the_tab_stays_until_closed(cx: &mut gpui::TestApp
     test_support::redraw(cx);
     assert!(!shows(cx, "sidebar_tab_file_history"));
     assert!(!shows(cx, "sidebar_file_history_content"));
-    assert!(shows(cx, "sidebar_search_toggle"), "back on sidebar_mode");
 }
 
 #[gpui::test]

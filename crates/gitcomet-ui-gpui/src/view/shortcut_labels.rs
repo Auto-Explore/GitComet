@@ -5,7 +5,7 @@
 pub(crate) fn previous_file_shortcuts() -> Vec<gpui::SharedString> {
     vec![
         "F1".into(),
-        crate::kit::components::alt_shortcut("Left").into(),
+        crate::kit::components::alt_shortcut("Up").into(),
     ]
 }
 
@@ -13,24 +13,16 @@ pub(crate) fn previous_file_shortcuts() -> Vec<gpui::SharedString> {
 pub(crate) fn next_file_shortcuts() -> Vec<gpui::SharedString> {
     vec![
         "F4".into(),
-        crate::kit::components::alt_shortcut("Right").into(),
+        crate::kit::components::alt_shortcut("Down").into(),
     ]
 }
 
 /// The keys for every diff surface's previous-change button.
 pub(crate) fn previous_change_shortcuts() -> Vec<gpui::SharedString> {
-    vec![
-        "F2".into(),
-        "Shift+F7".into(),
-        crate::kit::components::alt_shortcut("Up").into(),
-    ]
+    vec!["F2".into(), "Shift+F7".into(), "Up".into()]
 }
 
 /// The keys for every diff surface's next-change button.
 pub(crate) fn next_change_shortcuts() -> Vec<gpui::SharedString> {
-    vec![
-        "F3".into(),
-        "F7".into(),
-        crate::kit::components::alt_shortcut("Down").into(),
-    ]
+    vec!["F3".into(), "F7".into(), "Down".into()]
 }

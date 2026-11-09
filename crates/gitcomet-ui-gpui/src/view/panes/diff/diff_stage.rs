@@ -111,7 +111,7 @@ impl DiffRenderer {
                 _ => DiffTextRegion::SplitRight,
             };
             if let Some(row) = self.diff_mapped_ix_for_visible_ix(visible_ix) {
-                let selection = self.structural_row_lines(row, region);
+                let selection = self.structural_row_lines(row, Some(region));
                 let operation = match area {
                     DiffArea::Unstaged => gitcomet_core::patch_action::PatchOperation::Stage,
                     DiffArea::Staged => gitcomet_core::patch_action::PatchOperation::Unstage,
@@ -135,9 +135,10 @@ impl DiffRenderer {
             return;
         };
 
-        self.store.dispatch(match area {
+        let msg = match area {
             DiffArea::Unstaged => Msg::StageHunk { repo_id, patch },
             DiffArea::Staged => Msg::UnstageHunk { repo_id, patch },
-        });
+        };
+        self.dispatch_open_file_change(msg, cx);
     }
 }

@@ -321,6 +321,9 @@ impl SidebarExtensionTabs {
     }
 }
 
+/// A visible-row list and the indices of its rows the file search matches.
+type FileSearchMatchRows = (Rc<[FileBrowserVisibleRow]>, Rc<[usize]>);
+
 pub(in super::super) struct SidebarPaneView {
     /// Tabs contributed after Branches and Files; `None` without any.
     extension_tabs: Option<SidebarExtensionTabs>,
@@ -352,7 +355,7 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
-    sidebar_focus: gpui::FocusHandle,
+    pub(in crate::view) sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
     documents: crate::view::documents::buffers::DocumentOwner,
     _documents_subscription: gpui::Subscription,
@@ -377,8 +380,17 @@ pub(in super::super) struct SidebarPaneView {
     branch_search_open: bool,
     pub(in crate::view) file_search_open: bool,
     branch_search_options: TextSearchOptions,
+    /// Each search bar's own layout: its width tier and overflow menu.
+    file_search_bar: Rc<components::QuickSearchState>,
+    branch_search_bar: Rc<components::QuickSearchState>,
+    /// The multi-line file query grows to three lines, then scrolls.
+    file_search_scroll: ScrollHandle,
+    /// The row (in the branch presentation) the last ↑/↓ step landed on;
+    /// cleared whenever the query or options change.
+    branch_search_cursor: Option<usize>,
     file_matchers_cache: FileSearchMatcherCache,
-    file_match_count_cache: std::cell::RefCell<Option<(Rc<[FileBrowserVisibleRow]>, usize)>>,
+    /// The visible rows that match the file search, by their row index.
+    file_match_count_cache: std::cell::RefCell<Option<FileSearchMatchRows>>,
     section_locator_cache: std::cell::RefCell<Option<search::SectionLocatorCache>>,
     sidebar_presentation_cache: SidebarPresentationCache,
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
@@ -558,17 +570,26 @@ impl SidebarPaneView {
             }
         });
 
+        let file_search_scroll = ScrollHandle::new();
         let file_browser_search_input = cx.new(|cx| {
-            TextInput::new_inert(
+            let mut input = TextInput::new_inert(
                 TextInputOptions {
-                    placeholder: "Search files...".into(),
-                    leading_icon: Some("icons/zoom.svg"),
+                    placeholder: "Search files".into(),
                     chromeless: true,
                     multiline: true,
                     ..Default::default()
                 },
                 cx,
-            )
+            );
+            input.set_vertical_scroll_handle(Some(file_search_scroll.clone()));
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(
+                    search::FILE_SEARCH_LINE_HEIGHT_PX,
+                    ui_scale::current(cx).percent,
+                )),
+                cx,
+            );
+            input
         });
         let store_for_search = Arc::clone(&store);
         let search_input_subscription = cx.subscribe(
@@ -595,8 +616,7 @@ impl SidebarPaneView {
         let branch_filter_input = cx.new(|cx| {
             TextInput::new_inert(
                 TextInputOptions {
-                    placeholder: "Search sidebar...".into(),
-                    leading_icon: Some("icons/zoom.svg"),
+                    placeholder: "Search branches".into(),
                     chromeless: true,
                     ..Default::default()
                 },
@@ -610,6 +630,7 @@ impl SidebarPaneView {
                 // local query used by the row builder, never writing back.
                 let text = input.read(cx).text().to_string();
                 if this.branch_filter_query != text {
+                    this.branch_search_cursor = None;
                     this.sticky_context = None;
                     this.pending_sidebar_navigation = None;
                     this.sidebar_scroll_animation = None;
@@ -648,7 +669,7 @@ impl SidebarPaneView {
             store,
             state,
             theme,
-            sidebar_focus: cx.focus_handle(),
+            sidebar_focus: cx.focus_handle().tab_stop(true),
             _ui_model_subscription: subscription,
             documents,
             _documents_subscription: documents_subscription,
@@ -668,6 +689,10 @@ impl SidebarPaneView {
             branch_search_open: false,
             file_search_open: false,
             branch_search_options: TextSearchOptions::default(),
+            file_search_bar: components::QuickSearchState::new(),
+            branch_search_bar: components::QuickSearchState::new(),
+            file_search_scroll,
+            branch_search_cursor: None,
             file_matchers_cache: Default::default(),
             file_match_count_cache: Default::default(),
             section_locator_cache: Default::default(),
@@ -1477,6 +1502,8 @@ impl SidebarPaneView {
             .flex_col()
             .size_full()
             .min_h(px(0.0))
+            .track_focus(&self.sidebar_focus)
+            .capture_any_mouse_down(cx.listener(Self::focus_sidebar_on_press))
             .on_key_down(cx.listener(Self::on_sidebar_key_down))
             .child(tab_bar)
             .child(content)
@@ -1526,11 +1553,6 @@ impl SidebarPaneView {
                     .text_color(theme.colors.foreground.primary)
                     .child(section.title()),
             )
-            .child(self.render_search_toggle(
-                section == CollapsedSidebarSection::Files,
-                "collapsed_popover_filter_toggle",
-                cx,
-            ))
             .child(self.render_section_locator(section, cx))
             .when_some(section_menu.clone(), |header, (invoker, kind)| {
                 header.child(
@@ -1582,6 +1604,7 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .text_color(theme.colors.foreground.primary)
             .track_focus(&self.sidebar_focus)
+            .capture_any_mouse_down(cx.listener(Self::focus_sidebar_on_press))
             .on_key_down(cx.listener(Self::on_sidebar_key_down))
             .child(title)
             .child(div().flex_none().h(px(1.0)).bg(theme.colors.stroke.subtle))
@@ -1946,6 +1969,7 @@ impl SidebarPaneView {
         self.sticky_context = None;
         self.pending_sidebar_navigation = None;
         self.sidebar_scroll_animation = None;
+        self.branch_search_cursor = None;
         self.branch_filter_query.clear();
         self.sync_popover_branch_filter(cx);
         cx.notify();
@@ -2070,6 +2094,7 @@ impl SidebarPaneView {
                     self.branches_scroll.clone(),
                 )
                 .auto_hide()
+                .focus_on_press(self.sidebar_focus.clone())
                 .render(theme),
             )
             .into_any_element();

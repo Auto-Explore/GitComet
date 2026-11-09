@@ -1,6 +1,23 @@
 use super::*;
 use crate::view::components::{QuickSearchBar, QuickSearchStatus};
 
+/// The file query's line height; it grows to three lines, then scrolls.
+pub(super) const FILE_SEARCH_LINE_HEIGHT_PX: f32 = 18.0;
+const FILE_SEARCH_MAX_LINES: f32 = 3.0;
+
+/// Whether a branch-list row is something a search finds, rather than a
+/// heading grouping what it found.
+fn is_searchable_branch_row(row: &BranchSidebarRow) -> bool {
+    matches!(
+        row,
+        BranchSidebarRow::Branch { .. }
+            | BranchSidebarRow::WorktreeItem { .. }
+            | BranchSidebarRow::SubmoduleItem { .. }
+            | BranchSidebarRow::AnnexRepositoryItem { .. }
+            | BranchSidebarRow::StashItem { .. }
+    )
+}
+
 pub(super) struct SectionLocatorCache {
     state: Arc<AppState>,
     section: CollapsedSidebarSection,
@@ -8,61 +25,125 @@ pub(super) struct SectionLocatorCache {
 }
 
 impl SidebarPaneView {
-    pub(super) fn render_search_toggle(
-        &self,
-        files: bool,
-        id: &'static str,
+    /// Any press in the sidebar moves focus into it, so Cmd/Ctrl-F opens its
+    /// search. Capture runs before children, which may stop the press (a
+    /// scrollbar does); a child that focuses itself still wins.
+    pub(super) fn focus_sidebar_on_press(
+        &mut self,
+        _: &gpui::MouseDownEvent,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let scale = ui_scale::UiScale::current(cx);
+    ) {
+        if !self.sidebar_focus.contains_focused(window, cx) {
+            window.focus(&self.sidebar_focus, cx);
+        }
+    }
+
+    /// Whether keyboard focus is anywhere in the sidebar.
+    pub(in crate::view) fn contains_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.sidebar_focus.contains_focused(window, cx)
+    }
+
+    /// Whether this pane's search shows the file list (the Files mode or the
+    /// collapsed Files flyout) rather than the branch list.
+    fn search_targets_files(&self) -> bool {
+        self.collapsed_popover_section
+            .map_or(self.state.sidebar_mode == SidebarMode::Files, |section| {
+                section == CollapsedSidebarSection::Files
+            })
+    }
+
+    /// Cmd/Ctrl-F with focus in the sidebar: open the search of the list it
+    /// shows, or refocus it with its query selected when already open.
+    /// Returns false where there is no list to search (the History tab, an
+    /// extension tab).
+    pub(in crate::view) fn open_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let files = self.search_targets_files();
+        if self.collapsed_popover_section.is_none()
+            && !matches!(
+                self.state.sidebar_mode,
+                SidebarMode::Files | SidebarMode::Branches
+            )
+        {
+            return false;
+        }
+        if files {
+            self.file_search_open = true;
+        } else {
+            self.branch_search_open = true;
+        }
+        let input = if files {
+            self.file_browser_search_input.clone()
+        } else {
+            self.branch_filter_input.clone()
+        };
+        input.update(cx, |input, cx| input.select_all_text(window, cx));
+        window.focus(&input.read(cx).focus_handle(), cx);
+        cx.notify();
+        true
+    }
+
+    /// F2/F3 with focus in the sidebar: step its open search. Returns false
+    /// when it is closed, so the keys keep their main-pane meaning.
+    pub(in crate::view) fn step_search(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let files = self.search_targets_files();
         let open = if files {
             self.file_search_open
         } else {
             self.branch_search_open
         };
-        components::Button::new(id, "")
-            .borderless()
-            .style(components::ButtonStyle::Subtle)
-            .open(open)
-            .selected_bg(with_alpha(
-                theme.colors.accent.foreground,
-                if theme.is_dark { 0.34 } else { 0.24 },
-            ))
-            .start_slot(icons::svg_icon(
-                "icons/zoom.svg",
-                if open {
-                    theme.colors.accent.foreground
-                } else {
-                    theme.colors.foreground.secondary
-                },
-                scale.px(13.0),
-            ))
-            .on_click(theme, cx, move |this, _, window, cx| {
-                let open = if files {
-                    &mut this.file_search_open
-                } else {
-                    &mut this.branch_search_open
-                };
-                *open = !*open;
-                if *open {
-                    let input = if files {
-                        &this.file_browser_search_input
-                    } else {
-                        &this.branch_filter_input
-                    };
-                    window.focus(&input.read(cx).focus_handle(), cx);
-                } else {
-                    this.clear_sidebar_search(files, cx);
-                    this.focus_after_search(window, cx);
-                }
-                cx.notify();
-            })
-            .w(components::control_height(scale))
-            .h(components::control_height(scale))
-            .gitcomet_tooltip(theme, if open { "Hide search" } else { "Search" }.into())
-            .debug_selector(move || id.to_owned())
-            .into_any_element()
+        if open {
+            self.sidebar_search_step(files, forward, window, cx);
+        }
+        open
+    }
+
+    /// Close the search: clear its query and hand focus back to the sidebar,
+    /// so another Cmd/Ctrl-F reopens it.
+    fn close_sidebar_search(
+        &mut self,
+        files: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if files {
+            self.file_search_open = false;
+            self.file_search_bar.dismiss_menu();
+        } else {
+            self.branch_search_open = false;
+            self.branch_search_bar.dismiss_menu();
+        }
+        self.clear_sidebar_search(files, cx);
+        self.focus_after_search(window, cx);
+        cx.notify();
+    }
+
+    /// Escape in the bar: close its overflow menu first, then the bar.
+    fn sidebar_search_escape(
+        &mut self,
+        files: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let bar = if files {
+            &self.file_search_bar
+        } else {
+            &self.branch_search_bar
+        };
+        if bar.dismiss_menu() {
+            cx.notify();
+        } else {
+            self.close_sidebar_search(files, window, cx);
+        }
     }
 
     fn clear_sidebar_search(&mut self, files: bool, cx: &mut gpui::Context<Self>) {
@@ -83,15 +164,10 @@ impl SidebarPaneView {
         }
     }
 
+    /// Keep focus in the sidebar: Escape can then dismiss a flyout, and
+    /// Cmd/Ctrl-F routes back to this pane's search.
     fn focus_after_search(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.collapsed_popover_section.is_some() {
-            // Keep Escape available for dismissing the flyout after its input
-            // is hidden. The expanded panel otherwise keeps its passive focus
-            // behavior when the user clicks outside an editor/input.
-            window.focus(&self.sidebar_focus, cx);
-        } else {
-            window.blur(cx);
-        }
+        window.focus(&self.sidebar_focus, cx);
     }
 
     pub(super) fn on_sidebar_key_down(
@@ -103,20 +179,14 @@ impl SidebarPaneView {
         if event.keystroke.key != "escape" || event.keystroke.modifiers.modified() {
             return;
         }
-        let files = self
-            .collapsed_popover_section
-            .map_or(self.state.sidebar_mode == SidebarMode::Files, |section| {
-                section == CollapsedSidebarSection::Files
-            });
+        let files = self.search_targets_files();
         let open = if files {
-            &mut self.file_search_open
+            self.file_search_open
         } else {
-            &mut self.branch_search_open
+            self.branch_search_open
         };
-        if *open {
-            *open = false;
-            self.clear_sidebar_search(files, cx);
-            self.focus_after_search(window, cx);
+        if open {
+            self.sidebar_search_escape(files, window, cx);
         } else if self.collapsed_popover_section.is_some() {
             let root = self.root_view.clone();
             cx.defer(move |cx| {
@@ -148,6 +218,173 @@ impl SidebarPaneView {
         matchers
     }
 
+    /// The path a file-browser row shows, for matching and selecting it.
+    fn file_browser_row_path(&self, row: &FileBrowserVisibleRow) -> Option<std::path::PathBuf> {
+        match row {
+            FileBrowserVisibleRow::FileSetFile { path, .. } => Some(path.to_path_buf()),
+            FileBrowserVisibleRow::Entry { entry_index, .. } => self
+                .active_repo()
+                .and_then(|repo| repo.file_browser.entries.ready())
+                .and_then(|entries| entries.get(*entry_index))
+                .map(|entry| entry.path.to_path_buf()),
+            FileBrowserVisibleRow::FileSetHeader { .. }
+            | FileBrowserVisibleRow::NameEntry { .. } => None,
+        }
+    }
+
+    /// Indices of the visible file rows the search matches, cached per row
+    /// list (the list is rebuilt whenever the query or options change).
+    fn file_search_match_rows(&self, cx: &gpui::App) -> Rc<[usize]> {
+        let rows = self.file_browser_visible_rows(cx);
+        if let Some((_, matches)) = self
+            .file_match_count_cache
+            .borrow()
+            .as_ref()
+            .filter(|(source, _)| Rc::ptr_eq(source, &rows))
+        {
+            return Rc::clone(matches);
+        }
+        let matchers = self.cached_file_matchers();
+        let entries = self
+            .active_repo()
+            .and_then(|repo| repo.file_browser.entries.ready());
+        let matches: Rc<[usize]> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| match row {
+                FileBrowserVisibleRow::FileSetFile { path, .. } => {
+                    file_search_matches(&matchers, &path.to_string_lossy())
+                }
+                FileBrowserVisibleRow::Entry { entry_index, .. } => {
+                    entries.is_some_and(|entries| {
+                        file_search_matches(
+                            &matchers,
+                            &entries[*entry_index].path.to_string_lossy(),
+                        )
+                    })
+                }
+                FileBrowserVisibleRow::FileSetHeader { .. }
+                | FileBrowserVisibleRow::NameEntry { .. } => false,
+            })
+            .map(|(ix, _)| ix)
+            .collect();
+        *self.file_match_count_cache.borrow_mut() = Some((rows, Rc::clone(&matches)));
+        matches
+    }
+
+    /// The branch-list rows a search can land on: refs, worktrees,
+    /// submodules, annex repositories and stashes, not group headers.
+    fn branch_search_match_rows(&mut self) -> Vec<usize> {
+        let Some(presentation) = self.branch_sidebar_presentation_cached() else {
+            return Vec::new();
+        };
+        if presentation.search.matcher.is_empty() {
+            return Vec::new();
+        }
+        presentation
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| is_searchable_branch_row(row))
+            .map(|(ix, _)| ix)
+            .collect()
+    }
+
+    /// The zero-based position of the current match among all matches.
+    fn sidebar_search_current(&mut self, files: bool, cx: &gpui::App) -> Option<usize> {
+        if files {
+            let focused = self.explorer_focused_path()?.to_path_buf();
+            let rows = self.file_browser_visible_rows(cx);
+            self.file_search_match_rows(cx).iter().position(|&ix| {
+                self.file_browser_row_path(&rows[ix]).as_deref() == Some(focused.as_path())
+            })
+        } else {
+            let cursor = self.branch_search_cursor?;
+            self.branch_search_match_rows()
+                .iter()
+                .position(|&ix| ix == cursor)
+        }
+    }
+
+    /// ↑/↓ (and Enter, F2/F3) in the bar: move to the previous or next
+    /// matching row, wrapping around, as if it had been clicked.
+    fn sidebar_search_step(
+        &mut self,
+        files: bool,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let current = self.sidebar_search_current(files, cx);
+        let matches: Vec<usize> = if files {
+            self.file_search_match_rows(cx).to_vec()
+        } else {
+            self.branch_search_match_rows()
+        };
+        if matches.is_empty() {
+            return;
+        }
+        let next = match (current, forward) {
+            (None, true) => 0,
+            (None, false) => matches.len() - 1,
+            (Some(ix), true) => (ix + 1) % matches.len(),
+            (Some(ix), false) => (ix + matches.len() - 1) % matches.len(),
+        };
+        let row_ix = matches[next];
+        let input = if files {
+            let rows = self.file_browser_visible_rows(cx);
+            if let Some(path) = self.file_browser_row_path(&rows[row_ix]) {
+                self.explorer_select(path, gpui::Modifiers::default(), false, window, cx);
+            }
+            self.file_browser_scroll
+                .scroll_to_item(row_ix, gpui::ScrollStrategy::Center);
+            self.file_browser_search_input.clone()
+        } else {
+            self.branch_search_cursor = Some(row_ix);
+            self.select_branch_search_row(row_ix, cx);
+            self.sidebar_scroll_animation = None;
+            self.branches_scroll
+                .scroll_to_item(row_ix, gpui::ScrollStrategy::Center);
+            self.branch_filter_input.clone()
+        };
+        // Keep typing in the bar while stepping.
+        window.focus(&input.read(cx).focus_handle(), cx);
+        cx.notify();
+    }
+
+    /// Select a matched branch row the way a click does; other rows (a
+    /// worktree, a stash) are only scrolled to.
+    fn select_branch_search_row(&mut self, row_ix: usize, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let Some(presentation) = self.branch_sidebar_presentation_cached() else {
+            return;
+        };
+        let BranchSidebarRow::Branch {
+            target, is_head, ..
+        } = &presentation.rows[row_ix]
+        else {
+            return;
+        };
+        let (target, is_head) = (target.clone(), *is_head);
+        let pin_key =
+            (row_ix < presentation.pins.len()).then(|| presentation.row_keys[row_ix].clone());
+        let Some(reveal) = self.active_repo().and_then(|repo| {
+            crate::view::rows::sidebar::branch_click_history_reveal_target(repo, &target, is_head)
+        }) else {
+            return;
+        };
+        self.select_branch_and_reveal_tip(
+            repo_id,
+            target,
+            reveal.commit_id,
+            reveal.fallback_scope,
+            pin_key,
+            cx,
+        );
+    }
+
     pub(super) fn render_sidebar_search(
         &mut self,
         files: bool,
@@ -157,37 +394,7 @@ impl SidebarPaneView {
         let scale = ui_scale::UiScale::current(cx);
         let (empty, invalid, total, complete) = if files {
             let matchers = self.cached_file_matchers();
-            let rows = self.file_browser_visible_rows(cx);
-            let mut cache = self.file_match_count_cache.borrow_mut();
-            let count = if let Some((_, count)) = cache
-                .as_ref()
-                .filter(|(source, _)| Rc::ptr_eq(source, &rows))
-            {
-                *count
-            } else {
-                let entries = self
-                    .active_repo()
-                    .and_then(|repo| repo.file_browser.entries.ready());
-                let count =
-                    rows.iter()
-                        .filter(|row| match row {
-                            FileBrowserVisibleRow::FileSetFile { path, .. } => {
-                                file_search_matches(&matchers, &path.to_string_lossy())
-                            }
-                            FileBrowserVisibleRow::Entry { entry_index, .. } => entries
-                                .is_some_and(|entries| {
-                                    file_search_matches(
-                                        &matchers,
-                                        &entries[*entry_index].path.to_string_lossy(),
-                                    )
-                                }),
-                            FileBrowserVisibleRow::FileSetHeader { .. }
-                            | FileBrowserVisibleRow::NameEntry { .. } => false,
-                        })
-                        .count();
-                *cache = Some((Rc::clone(&rows), count));
-                count
-            };
+            let count = self.file_search_match_rows(cx).len();
             (
                 matchers.is_empty(),
                 matchers.iter().any(|m| m.regex_error().is_some()),
@@ -256,7 +463,7 @@ impl SidebarPaneView {
             QuickSearchStatus::Empty
         } else if total > 0 {
             QuickSearchStatus::Position {
-                current: None,
+                current: self.sidebar_search_current(files, cx),
                 total,
                 complete,
             }
@@ -265,15 +472,48 @@ impl SidebarPaneView {
         } else {
             QuickSearchStatus::Searching
         };
-        let input = if files {
-            self.file_browser_search_input.clone()
+        let (input, options, bar) = if files {
+            (
+                self.file_browser_search_input.clone(),
+                self.file_search_options,
+                Rc::clone(&self.file_search_bar),
+            )
         } else {
-            self.branch_filter_input.clone()
+            (
+                self.branch_filter_input.clone(),
+                self.branch_search_options,
+                Rc::clone(&self.branch_search_bar),
+            )
         };
-        let options = if files {
-            self.file_search_options
+        // Pad the first line onto the centre of the bar's control row.
+        let file_line = scale.px(FILE_SEARCH_LINE_HEIGHT_PX);
+        let file_pad =
+            ((components::quick_search_row_height(scale) - file_line) / 2.0).max(px(0.0));
+        // An explicit height: the multi-line input fills its parent, so an
+        // auto height would take the bar's row instead of the text's lines.
+        let file_lines = input.read(cx).text().matches('\n').count() + 1;
+        let file_input_height =
+            file_line * (file_lines as f32).min(FILE_SEARCH_MAX_LINES) + file_pad * 2.0;
+        let input: AnyElement = if files {
+            // The multi-line file query grows to three lines, then scrolls.
+            div()
+                .id("file_search_input_scroll")
+                .relative()
+                .w_full()
+                .min_w(px(0.0))
+                .h(file_input_height)
+                .py(file_pad)
+                .overflow_y_scroll()
+                .track_scroll(&self.file_search_scroll)
+                .child(input)
+                .into_any_element()
         } else {
-            self.branch_search_options
+            input.into_any_element()
+        };
+        let step = move |forward: bool| {
+            move |this: &mut Self, window: &mut Window, cx: &mut gpui::Context<Self>| {
+                this.sidebar_search_step(files, forward, window, cx);
+            }
         };
         let bar = QuickSearchBar::new(
             if files {
@@ -281,9 +521,9 @@ impl SidebarPaneView {
             } else {
                 "branch_filter"
             },
+            &bar,
             status,
         )
-        .sidebar()
         .input(input)
         .options(
             components::search_toggles(options),
@@ -295,6 +535,7 @@ impl SidebarPaneView {
                         .scroll_to_item(0, gpui::ScrollStrategy::Top);
                 } else {
                     this.branch_search_options = options;
+                    this.branch_search_cursor = None;
                     this.sticky_context = None;
                     this.pending_sidebar_navigation = None;
                     this.sidebar_scroll_animation = None;
@@ -305,7 +546,8 @@ impl SidebarPaneView {
                 cx.notify();
             },
         )
-        .on_clear(move |this, _, cx| this.clear_sidebar_search(files, cx))
+        .navigation(total > 0, step(false), step(true))
+        .on_close(move |this, window, cx| this.close_sidebar_search(files, window, cx))
         .render(theme, scale, cx);
         div()
             .id(if files {
@@ -328,16 +570,22 @@ impl SidebarPaneView {
             .py(scale.px(6.0))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape" && !event.keystroke.modifiers.modified() {
-                        if files {
-                            this.file_search_open = false;
-                        } else {
-                            this.branch_search_open = false;
-                        }
-                        this.clear_sidebar_search(files, cx);
-                        this.focus_after_search(window, cx);
-                        cx.stop_propagation();
+                    let key = &event.keystroke;
+                    if key.modifiers.modified() && !(key.modifiers.shift && key.key == "enter") {
+                        return;
                     }
+                    match key.key.as_str() {
+                        "escape" => this.sidebar_search_escape(files, window, cx),
+                        // A file query takes newlines; branch queries step back.
+                        "enter" if key.modifiers.shift && !files => {
+                            this.sidebar_search_step(files, false, window, cx)
+                        }
+                        "enter" if !key.modifiers.shift => {
+                            this.sidebar_search_step(files, true, window, cx)
+                        }
+                        _ => return,
+                    }
+                    cx.stop_propagation();
                 }),
             )
             .child(bar)
@@ -549,6 +797,13 @@ mod tests {
     use super::*;
     use crate::view::test_support::{self, TestBackend};
 
+    /// The production keymap, so Cmd/Ctrl-F and Escape route as in the app.
+    fn bind_keys(app: &mut gpui::App) {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::bind_text_input_keys_for_test(app);
+    }
+
     #[gpui::test]
     fn sidebar_files_search_shares_options_and_clears_on_close(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -564,12 +819,19 @@ mod tests {
                 view.store.replace_snapshot_for_test(state.clone());
                 test_support::push_test_state(view, state, cx);
                 view.set_sidebar_collapsed(false, cx);
+                // Wide enough for the bar to show its toggles inline.
+                test_support::set_sidebar_width_for_test(view, px(520.0), cx);
             })
         });
         test_support::redraw(cx);
         assert!(cx.debug_bounds("sidebar_files_search").is_none());
-        let toggle = cx.debug_bounds("sidebar_search_toggle").unwrap();
-        cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+        cx.update(|window, app| {
+            bind_keys(app);
+            let focus = pane.read(app).sidebar_focus.clone();
+            window.focus(&focus, app)
+        });
+        cx.simulate_keystrokes("secondary-f");
+        test_support::redraw(cx);
         test_support::redraw(cx);
         cx.simulate_keystrokes("f i l e _ 0 0 0 0 0 3");
         for id in [
@@ -606,32 +868,30 @@ mod tests {
             assert!(!pane.branch_search_open);
             assert!(pane.branch_filter_query.is_empty());
         });
-        let clear = cx.debug_bounds("file_search_clear").unwrap();
-        cx.simulate_click(clear.center(), gpui::Modifiers::default());
+        let close = cx.debug_bounds("file_search_close").unwrap();
+        cx.simulate_click(close.center(), gpui::Modifiers::default());
         test_support::drain_store_worker(&view, cx);
         cx.update(|_, app| {
             view.update(app, |view, cx| test_support::sync_store_snapshot(view, cx))
         });
         test_support::redraw(cx);
-        assert!(cx.debug_bounds("sidebar_files_search").is_some());
+        assert!(cx.debug_bounds("sidebar_files_search").is_none());
         cx.update(|window, app| {
+            let pane = pane.read(app);
             assert!(
-                pane.read(app)
-                    .active_repo()
+                pane.active_repo()
                     .unwrap()
                     .file_browser
                     .search_query
                     .is_empty()
             );
-            window.focus(
-                &pane
-                    .read(app)
-                    .file_browser_search_input
-                    .read(app)
-                    .focus_handle(),
-                app,
-            );
+            // Closing hands focus back to the sidebar, so Cmd/Ctrl-F reopens
+            // this search rather than the main pane's.
+            assert!(pane.contains_focus(window, app));
         });
+        cx.simulate_keystrokes("secondary-f");
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("sidebar_files_search").is_some());
         cx.simulate_keystrokes("f i l e");
         test_support::drain_store_worker(&view, cx);
         cx.simulate_keystrokes("escape");
@@ -671,12 +931,19 @@ mod tests {
                 view.store.replace_snapshot_for_test(state.clone());
                 test_support::push_test_state(view, state, cx);
                 view.set_sidebar_collapsed(false, cx);
+                // Wide enough for the bar to show its toggles inline.
+                test_support::set_sidebar_width_for_test(view, px(520.0), cx);
             })
         });
         test_support::redraw(cx);
         assert!(cx.debug_bounds("sidebar_branches_search").is_none());
-        let button = cx.debug_bounds("sidebar_search_toggle").unwrap();
-        cx.simulate_click(button.center(), gpui::Modifiers::default());
+        cx.update(|window, app| {
+            bind_keys(app);
+            let focus = pane.read(app).sidebar_focus.clone();
+            window.focus(&focus, app)
+        });
+        cx.simulate_keystrokes("secondary-f");
+        test_support::redraw(cx);
         test_support::redraw(cx);
         cx.simulate_keystrokes("t o p i c - 0 0 0 0 0 3");
         test_support::redraw(cx);
@@ -798,13 +1065,11 @@ mod tests {
                     });
                 });
                 test_support::redraw(cx);
-                let bar = cx.debug_bounds("sidebar_branches_search").unwrap();
                 let panel = cx.debug_bounds("sidebar_pane").unwrap();
                 let mut previous_right = panel.left();
                 for id in [
                     "sidebar_tab_branches",
                     "sidebar_tab_files",
-                    "sidebar_search_toggle",
                     "sidebar_locate_active_branch",
                 ] {
                     let bounds = cx.debug_bounds(id).unwrap();
@@ -814,15 +1079,14 @@ mod tests {
                     );
                     previous_right = bounds.right();
                 }
+                // The bar settles on its width tier a frame after it is measured.
+                test_support::redraw(cx);
+                let bar = cx.debug_bounds("sidebar_branches_search").unwrap();
                 let input = cx.debug_bounds("branch_filter_input_slot").unwrap();
                 assert!(input.size.width > px(80.0));
-                for id in [
-                    "branch_filter_match_case",
-                    "branch_filter_whole_word",
-                    "branch_filter_regex",
-                    "branch_filter_clear",
-                    "branch_filter_match_label",
-                ] {
+                // At this width the toggles live in the "⋮" menu.
+                assert!(cx.debug_bounds("branch_filter_match_case").is_none());
+                for id in ["branch_filter_more", "branch_filter_close"] {
                     let bounds = cx.debug_bounds(id).unwrap();
                     assert!(
                         bounds.left() >= bar.left() && bounds.right() <= bar.right(),

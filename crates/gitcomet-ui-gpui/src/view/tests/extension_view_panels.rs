@@ -158,6 +158,72 @@ pub(super) fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
+fn review_cycle_uses_the_mounted_extension_and_skips_replaced_details(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = open_view(cx);
+    cx.update(|_, app| {
+        view.update(app, |root, cx| {
+            let mut state = (*root.state).clone();
+            state.repos[0].status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: Arc::new(vec![]),
+                    unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                        path: "changed.rs".into(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }]),
+                }
+                .into(),
+            );
+            test_support::push_test_state(root, Arc::new(state), cx);
+            root.set_details_collapsed(false, cx);
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.update(|_, app| {
+        !view
+            .read(app)
+            .details_pane
+            .read(app)
+            .visible_review_focus_handles()
+            .is_empty()
+    }));
+    click(cx, "repository_view_0");
+    assert!(shows(cx, "panels_review"));
+    cx.update(|window, app| {
+        let sidebar = view.read(app).sidebar_pane.read(app).sidebar_focus.clone();
+        window.focus(&sidebar, app);
+        view.update(app, |root, cx| {
+            root.navigate_review(
+                crate::view::review_navigation::ReviewNavigation::Cycle(false),
+                window,
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.update(|window, app| view.read(app).repository_view_focus.is_focused(window)));
+    cx.update(|window, app| {
+        view.update(app, |root, cx| {
+            root.navigate_review(
+                crate::view::review_navigation::ReviewNavigation::Cycle(false),
+                window,
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .sidebar_focus
+            .is_focused(window)
+    }));
+}
+
+#[gpui::test]
 fn a_views_own_tabs_open_with_it_and_give_way_when_it_is_left(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = open_view(cx);
     // History lists only the tab that belongs to every view.

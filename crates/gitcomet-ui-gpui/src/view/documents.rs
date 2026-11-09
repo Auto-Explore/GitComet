@@ -1571,6 +1571,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_hover_popovers(cx);
         self.document_picker
             .update(cx, |picker, cx| picker.toggle(anchor, window, cx));
         self.notify_bottom_status_bar(cx);

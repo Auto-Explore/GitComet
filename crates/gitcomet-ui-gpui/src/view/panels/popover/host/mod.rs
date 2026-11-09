@@ -892,6 +892,7 @@ impl PopoverHost {
             error_details_text: Default::default(),
             error_details_scroll: ScrollHandle::new(),
             error_details_rail_scroll: ScrollHandle::new(),
+            keyboard_shortcuts: keyboard_shortcuts::State::new(),
             commit_mainline: None,
             force_push_lease: None,
             context_menu_focus_handle,
@@ -1982,6 +1983,7 @@ impl PopoverHost {
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
+                PopoverKind::KeyboardShortcuts => keyboard_shortcuts::open(self, window, cx),
                 PopoverKind::ErrorDetails { toast_id } => {
                     self.error_details_selected = Some(*toast_id);
                     self.error_details_text = Default::default();

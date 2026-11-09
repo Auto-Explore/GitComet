@@ -7,6 +7,25 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     install_global_diff_shortcut_fallback(cx);
     install_global_diff_navigation_actions(cx);
 
+    cx.on_action(
+        |action: &crate::view::command_shortcuts::RunBuiltinCommand, cx| {
+            let window_id = cx
+                .current_window_id()
+                .or_else(|| cx.active_window().map(|window| window.window_id()));
+            let Some(entry) = window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
+                return;
+            };
+            let id = action.id.clone();
+            cx.defer(move |cx| {
+                let _ = entry.handle.update(cx, |_, window, cx| {
+                    let _ = entry
+                        .view
+                        .update(cx, |view, cx| view.run_builtin_shortcut(&id, window, cx));
+                });
+            });
+        },
+    );
+
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
         let backend = Arc::clone(&new_window_backend);
@@ -165,6 +184,12 @@ fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
 /// Navigation also reaches a visible diff when focus is outside the
 /// window's view tree. A window handler stops propagation when it acts.
 pub(super) fn install_global_diff_navigation_actions(cx: &mut App) {
+    cx.on_action(|_: &crate::view::FocusNextReviewPane, cx| {
+        defer_global_diff_navigation(cx, |view, cx| view.defer_review_cycle(false, cx));
+    });
+    cx.on_action(|_: &crate::view::FocusPreviousReviewPane, cx| {
+        defer_global_diff_navigation(cx, |view, cx| view.defer_review_cycle(true, cx));
+    });
     cx.on_action(|_: &DiffPrevFile, cx| {
         defer_global_diff_navigation(cx, |view, cx| {
             view.defer_adjacent_diff_file_navigation(-1, cx);
@@ -209,10 +234,15 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         // Observers also run after a bound action handled the keystroke (gpui
         // passes that action here); acting again would run F3 twice and skip
         // every other change block.
+        let line_key = crate::view::is_diff_line_key(&event.keystroke);
         if event.action.is_some()
-            || !is_diff_shortcut_candidate(&event.keystroke)
+            || !(line_key || is_diff_shortcut_candidate(&event.keystroke))
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
+                    // File lists own their navigation keys but not S/U,
+                    // which act on the diff's outlined block from there.
+                    || (context.contains("ChangedFiles") && !line_key)
+                    || context.contains("ReviewDiff")
                     || context.contains("Terminal")
                     || context.contains("ContextMenu")
                     || context.contains("PopoverPrompt")
@@ -232,6 +262,22 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         else {
             return;
         };
+
+        // Bare S/U/D from outside the diff act only on its outlined change
+        // block, never through the full diff shortcut table (conflict picks).
+        if line_key {
+            let handled = entry
+                .view
+                .update(cx, |view, cx| {
+                    view.handle_outlined_change_line_key(&event.keystroke, window, cx)
+                })
+                .unwrap_or(false);
+            if handled {
+                window.refresh();
+                cx.stop_propagation();
+            }
+            return;
+        }
 
         let handled = entry
             .diff_renderer
@@ -267,6 +313,7 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-r", OpenWorkspace, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
+        KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
         KeyBinding::new("secondary-k", OpenRemoteInBrowser, None),
@@ -284,11 +331,11 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("f1", DiffPrevFile, None),
+        KeyBinding::new("f6", crate::view::FocusNextReviewPane, None),
+        KeyBinding::new("shift-f6", crate::view::FocusPreviousReviewPane, None),
         KeyBinding::new("f4", DiffNextFile, None),
-        KeyBinding::new("alt-left", DiffPrevFile, None),
-        KeyBinding::new("alt-right", DiffNextFile, None),
-        KeyBinding::new("alt-up", DiffPrevChange, None),
-        KeyBinding::new("alt-down", DiffNextChange, None),
+        KeyBinding::new("shift-f7", DiffPrevChange, None),
+        KeyBinding::new("f7", DiffNextChange, None),
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
@@ -312,6 +359,7 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
+    crate::view::command_shortcuts::bind_keys(cx);
     refresh_external_editor_key_binding(cx);
 }
 
@@ -438,8 +486,6 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("shift-f7", TextInputDiffPrevChange, Some("TextInput")),
         KeyBinding::new("f7", TextInputDiffNextChange, Some("TextInput")),
-        KeyBinding::new("alt-up", TextInputDiffPrevChange, Some("TextInput")),
-        KeyBinding::new("alt-down", TextInputDiffNextChange, Some("TextInput")),
         KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
         KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
         KeyBinding::new("up", crate::kit::Up, Some("TextInput")),

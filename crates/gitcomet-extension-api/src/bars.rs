@@ -41,6 +41,7 @@ pub enum BuiltinBarItem {
     DetailsToggle,
     HookActivity,
     Documents,
+    KeyboardShortcuts,
     Zoom,
     /// The edition strip, or the host's community, edition, brand and version links.
     Branding,
@@ -65,6 +66,7 @@ impl BuiltinBarItem {
             Self::DetailsToggle
             | Self::HookActivity
             | Self::Documents
+            | Self::KeyboardShortcuts
             | Self::Zoom
             | Self::Branding => StatusBarEnd,
         }

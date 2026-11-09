@@ -22,6 +22,7 @@ mod markdown_state;
 mod media;
 pub(in crate::view) use media::image_menu_request;
 mod preview;
+mod review_navigation;
 pub(in crate::view) mod services;
 pub(in crate::view) use preview::{
     TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_for_editing,

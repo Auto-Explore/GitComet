@@ -1027,6 +1027,38 @@ impl SettingsWindowView {
             ));
         }
         change_tracking_card
+            .child(
+                self.toggle_row(
+                    "settings_window_open_next_file_after_last_change",
+                    "Automatically open the next file when the current one has no changes left",
+                    self.open_next_file_after_last_change,
+                    theme,
+                )
+                .border_color(no_separator)
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_open_next_file_after_last_change(
+                            !this.open_next_file_after_last_change,
+                            cx,
+                        );
+                    }),
+                ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| {
+                        "settings_window_open_next_file_after_last_change_help".to_string()
+                    })
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "When S, U, the gutter buttons, a diff menu or Discard leaves the open file with no changes in its list, the diff opens the next file in that list, or the previous one at the end. When off, the diff stays on the file, or closes if you discarded the whole file. Space and the Stage/Unstage button move to the next file either way.",
+                    ),
+            )
     }
 
     fn diff_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {

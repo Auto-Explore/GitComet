@@ -118,6 +118,8 @@ pub(crate) enum PopoverKind {
     ErrorDetails {
         toast_id: u64,
     },
+    /// The searchable keyboard shortcut reference.
+    KeyboardShortcuts,
     RepoPicker {
         scope: RepoPickerScope,
     },

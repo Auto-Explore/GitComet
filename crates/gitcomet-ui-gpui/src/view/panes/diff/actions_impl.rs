@@ -34,6 +34,11 @@ impl DiffRenderer {
         if !self.store.policy.select_lines {
             return;
         }
+        // A mouse selection replaces the block navigation outlined, and the
+        // lines the last right-click menu acted on.
+        self.diff_focused_change_block = None;
+        self.diff_editor_menu_column = None;
+        self.diff_stage_advance = None;
         if self.select_hosted_row(clicked_visible_ix, shift) {
             return;
         }
@@ -238,7 +243,7 @@ impl DiffRenderer {
 
     /// Remembers the block navigation landed on at visual row `target`, for
     /// the accent bar that marks it.
-    fn focus_change_block_at(&mut self, target: usize) {
+    pub(in crate::view::panes::diff) fn focus_change_block_at(&mut self, target: usize) {
         let rows = if self.is_rendered_markdown_diff_active() {
             None
         } else {
@@ -398,6 +403,18 @@ impl DiffRenderer {
         true
     }
 
+    /// Change navigation from outside the diff hands it keyboard focus once
+    /// it outlines a block, so S and U then act on that block.
+    pub(in crate::view) fn focus_diff_after_navigation(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_search_active && self.live_focused_change_block().is_some() {
+            window.focus(&self.diff_panel_focus_handle, cx);
+        }
+    }
+
     pub(in crate::view) fn navigate_prev_diff_change(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -445,6 +462,7 @@ impl DiffRenderer {
     }
 
     fn diff_jump(&mut self, entries: Vec<usize>, previous: bool) {
+        self.diff_stage_advance = None;
         if entries.is_empty() {
             return;
         }
@@ -473,12 +491,59 @@ impl DiffRenderer {
         self.focus_change_block_at(target);
     }
 
+    fn diff_content_revs(&self) -> (u64, u64) {
+        (
+            self.rendered_patch_diff_rev(),
+            self.rendered_file_diff_rev(),
+        )
+    }
+
+    /// S staged lines from `first_row` (a visual row) on: once the diff
+    /// reloads, outline the block that then sits where they were.
+    pub(in crate::view) fn arm_stage_advance(&mut self, first_row: usize) {
+        let blocks_above = self
+            .diff_change_blocks()
+            .into_iter()
+            .filter(|rows| self.diff_visual_ix_for_source_visible_ix(rows.end - 1) < first_row)
+            .count();
+        self.diff_stage_advance = Some(DiffStageAdvance {
+            blocks_above,
+            revs: self.diff_content_revs(),
+        });
+    }
+
+    /// Runs the advance S armed, once the reloaded diff's rows are built.
+    pub(in crate::view) fn maybe_advance_after_stage(&mut self) {
+        let Some(advance) = self.diff_stage_advance else {
+            return;
+        };
+        let revs = self.diff_content_revs();
+        let rows_built = self.diff_cache_rev == revs.0
+            && (!self.lists_file_diff_rows()
+                || (self.file_diff_cache_rev == revs.1 && self.file_diff_cache_inflight.is_none()));
+        if revs == advance.revs || self.diff_actions_busy() || !rows_built {
+            return;
+        }
+        self.diff_stage_advance = None;
+        let entries = self.diff_nav_entries();
+        // Past the last block, the one before it; none left, no outline.
+        let Some(&target) = entries.get(advance.blocks_above).or(entries.last()) else {
+            self.diff_focused_change_block = None;
+            return;
+        };
+        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.clear_diff_navigation_selection();
+        self.diff_selection_anchor = Some(target);
+        self.focus_change_block_at(target);
+    }
+
     pub(in crate::view) fn maybe_autoscroll_diff_to_first_change(&mut self) {
-        if !self.diff_autoscroll_pending {
+        if !self.diff_autoscroll_pending || self.review_diff_is_loading() {
             return;
         }
         if self.diff_search_has_query() {
             self.diff_autoscroll_pending = false;
+            self.review_file_jump = None;
             return;
         }
         let visible_len = if self.is_rendered_markdown_diff_active() {
@@ -489,9 +554,25 @@ impl DiffRenderer {
         if visible_len == 0 {
             return;
         }
+        if self.review_file_jump.is_none() && self.restore_review_position() {
+            return;
+        }
 
         let entries = self.diff_nav_entries();
-        let target = entries.first().copied().unwrap_or(0);
+        let review_landing = self.review_file_jump.as_ref().filter(|jump| {
+            self.active_repo_id() == Some(jump.repo)
+                && self.rendered_diff_target() == Some(&jump.to)
+        });
+        let target = if review_landing.is_some_and(|jump| jump.last) {
+            entries.last()
+        } else {
+            entries.first()
+        }
+        .copied()
+        .unwrap_or(0);
+        if review_landing.is_some() {
+            self.review_file_jump = None;
+        }
 
         // Strict: the scroll offset survives a target change, and centring
         // clamps to the top when the first block is near it, keeping a

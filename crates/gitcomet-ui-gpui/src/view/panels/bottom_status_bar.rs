@@ -660,6 +660,24 @@ impl BarItemOwner for BottomStatusBarView {
                 .debug_selector(|| "bottom_documents".into())
         };
         items.push(BuiltinBarItem::Documents, documents);
+        items.push(
+            BuiltinBarItem::KeyboardShortcuts,
+            components::Button::new("bottom_keyboard_shortcuts", "")
+                .start_slot(svg_icon(
+                    "icons/keyboard.svg",
+                    theme.colors.foreground.secondary,
+                    scaled_px(16.0),
+                ))
+                .style(components::ButtonStyle::Subtle)
+                .borderless()
+                .on_click(theme, cx, |this, _, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.toggle_shortcut_help(window, cx);
+                    });
+                })
+                .gitcomet_tooltip(theme, "Keyboard shortcuts".into())
+                .debug_selector(|| "bottom_keyboard_shortcuts".into()),
+        );
         items.push(BuiltinBarItem::Zoom, zoom_button);
         let branding = div()
             .flex()

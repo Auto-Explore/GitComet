@@ -21,7 +21,7 @@ fn all_sidebar_tabs_share_one_track_and_keep_the_active_label(cx: &mut gpui::Tes
     });
     test_support::redraw(cx);
     let track = cx.debug_bounds("sidebar_view_toggle").unwrap();
-    let search = cx.debug_bounds("sidebar_search_toggle").unwrap();
+    let tools = cx.debug_bounds("sidebar_locate_active_branch").unwrap();
     for selector in [
         "sidebar_tab_branches",
         "sidebar_tab_files",
@@ -34,7 +34,7 @@ fn all_sidebar_tabs_share_one_track_and_keep_the_active_label(cx: &mut gpui::Tes
             cx.debug_bounds("sidebar_tab_branches").unwrap().top()
         );
         assert!(tab.left() >= track.left());
-        assert!(tab.right() <= search.left());
+        assert!(tab.right() <= tools.left());
         assert!(tab.bottom() <= track.bottom());
     }
     assert!(shows(cx, "sidebar_tab_branches_label"));
@@ -45,7 +45,7 @@ fn all_sidebar_tabs_share_one_track_and_keep_the_active_label(cx: &mut gpui::Tes
     click(cx, "sidebar_tab_extension_1");
     assert!(shows(cx, "panels_extra_history"));
     assert!(shows(cx, "sidebar_tab_extension_1_label"));
-    assert!(!shows(cx, "sidebar_search_toggle"));
+    assert!(!shows(cx, "sidebar_locate_active_branch"));
     let expanded = cx.update(|_, app| view.read(app).sidebar_width);
     let label = cx.debug_bounds("sidebar_tab_extension_1_label").unwrap();
     let tab = cx.debug_bounds("sidebar_tab_extension_1").unwrap();
@@ -60,7 +60,10 @@ fn all_sidebar_tabs_share_one_track_and_keep_the_active_label(cx: &mut gpui::Tes
         })
     });
     sync_view_snapshot(cx, &view);
-    assert!(shows(cx, "sidebar_search_toggle"));
+    assert!(
+        !shows(cx, "sidebar_search_toggle"),
+        "search opens with Cmd/Ctrl-F"
+    );
     assert!(shows(cx, "sidebar_explorer_settings"));
     assert!(shows(cx, "sidebar_locate_open_file"));
     assert!(cx.update(|_, app| view.read(app).sidebar_width) >= expanded);

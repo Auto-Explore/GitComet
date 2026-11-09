@@ -76,7 +76,11 @@ pub use picker_prompt::{
     picker_prompt_layout_ordered, picker_row, remove_row_button, row_height as picker_row_height,
     selected_hint_pill,
 };
-pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus, SearchToggles};
+pub use quick_search_bar::{
+    QUICK_SEARCH_CLOSE_TOOLTIP, QUICK_SEARCH_NEXT_MATCH_TOOLTIP, QUICK_SEARCH_PREV_MATCH_TOOLTIP,
+    QuickSearchBar, QuickSearchFeatures, QuickSearchState, QuickSearchStatus, QuickSearchTier,
+    SearchToggles, quick_search_row_height, quick_search_tier_for_width,
+};
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_behind_box, repository_behind_box_width,
     repository_initials, repository_initials_box,
@@ -91,8 +95,8 @@ pub use settings_rows::{
     settings_summary_row, settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::{
-    Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, secondary_shortcut,
-    shortcut_keys, shortcut_keys_compact,
+    Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, ordered_shortcut_label,
+    secondary_shortcut, shortcut_keys, shortcut_keys_compact,
 };
 pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle, filled_action_frame};

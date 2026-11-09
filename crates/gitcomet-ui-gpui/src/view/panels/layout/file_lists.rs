@@ -308,6 +308,10 @@ impl DetailsPaneView {
                 ("commit_details_files_container", repo_id.0),
                 ("commit_details_files_scrollbar", repo_id.0),
                 &self.commit_files_scroll,
+                Some(
+                    self.review_file_focus(crate::view::rows::FileListId::CommitFiles)
+                        .clone(),
+                ),
                 self.changed_file_list(
                     repo_id,
                     crate::view::rows::FileListId::CommitFiles,
@@ -384,7 +388,14 @@ impl DetailsPaneView {
             .child(visible_bounds_probe())
             .child(heading)
             .child(filters)
-            .child(files)
+            .child(
+                self.review_file_container(crate::view::rows::FileListId::CommitFiles, cx)
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(files),
+            )
             .into_any_element()
     }
 }

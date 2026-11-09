@@ -203,6 +203,7 @@ impl DiffRenderer {
                 components::TextInputOptions {
                     placeholder: "Search diff".into(),
                     multiline: true,
+                    chromeless: true,
                     ..Default::default()
                 },
                 window,
@@ -210,7 +211,6 @@ impl DiffRenderer {
             );
             input.set_submit_on_enter(true);
             input.set_vertical_scroll_handle(Some(diff_search_scroll.clone()));
-            input.set_vertical_padding(Some(4.0), cx);
             input.set_line_height(
                 Some(ui_scale::design_px_from_percent(
                     18.0,
@@ -335,6 +335,8 @@ impl DiffRenderer {
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
+            review_file_jump: None,
+            review_position: None,
             diff_raw_input,
             diff_raw_scroll,
             submodule_hash_inputs,
@@ -371,6 +373,9 @@ impl DiffRenderer {
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_focused_change_block: None,
+            diff_editor_menu_column: None,
+            diff_stage_advance: None,
+            next_file_advance: None,
             diff_text_selecting: false,
             diff_text_selection_owner: Default::default(),
             diff_text_anchor: None,
@@ -407,6 +412,7 @@ impl DiffRenderer {
             diff_search_probe_action: 0,
             diff_search_probe_render: 0,
             diff_search_scroll,
+            diff_search_bar: components::QuickSearchState::new(),
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
             file_diff_cache_repo_id: None,
@@ -553,6 +559,7 @@ impl DiffRenderer {
             file_editor_blame_width: px(0.0),
             file_editor_wrap_row_starts: Vec::new(),
             auto_save_file_edits,
+            open_next_file_after_last_change: preferences.staging.open_next_file_after_last_change,
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),

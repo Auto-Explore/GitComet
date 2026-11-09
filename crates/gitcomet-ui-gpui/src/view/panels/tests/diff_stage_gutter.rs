@@ -345,6 +345,92 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
     );
 }
 
+/// The diff editor menu shows S and U beside its line entries, and those
+/// letters apply the selected lines with the menu closed. The patch a key
+/// builds has to be the very one its menu entry applies.
+#[gpui::test]
+fn line_keys_build_the_patch_their_menu_entries_apply(cx: &mut gpui::TestAppContext) {
+    use crate::view::panes::diff::diff_text::DiffLineAction;
+
+    let text = |patch: Option<gitcomet_state::msg::ContentBytes>| {
+        patch.map(|patch| String::from_utf8(patch.as_bytes().to_vec()).expect("UTF-8 patch"))
+    };
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+            let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
+            let keyed = cx.update(|window, app| {
+                let diff_renderer = view.read(app).diff_renderer.clone();
+                diff_renderer.update(app, |pane, cx| {
+                    let removed = visible_ix_for_text(pane, "-old one");
+                    let added = visible_ix_for_text(pane, "+new one");
+                    let (first, last) = (removed.min(added), removed.max(added));
+                    pane.diff_selection_anchor = Some(first);
+                    pane.diff_selection_range = Some((first, last));
+                    let keyed = [
+                        DiffLineAction::Stage,
+                        DiffLineAction::Unstage,
+                        DiffLineAction::Discard,
+                    ]
+                    .map(|action| pane.selected_diff_lines_patch(action));
+                    let region = match mode {
+                        DiffViewMode::Inline => DiffTextRegion::Inline,
+                        DiffViewMode::Split => DiffTextRegion::SplitRight,
+                    };
+                    pane.open_diff_editor_context_menu(
+                        last,
+                        region,
+                        point(px(40.0), px(40.0)),
+                        window,
+                        cx,
+                    );
+                    keyed
+                })
+            });
+            let [stage, unstage, discard] = keyed.map(text);
+            let (lines_patch, discard_lines_patch) = cx.update(|_window, app| {
+                match view
+                    .read(app)
+                    .popover_host
+                    .read(app)
+                    .popover_kind_for_tests()
+                {
+                    Some(PopoverKind::DiffEditorMenu {
+                        lines_patch,
+                        discard_lines_patch,
+                        ..
+                    }) => (text(lines_patch), text(discard_lines_patch)),
+                    other => panic!("expected the diff editor menu, got {other:?}"),
+                }
+            });
+            let case = format!("{area:?} {mode:?}");
+            let line_key = match area {
+                DiffArea::Unstaged => &stage,
+                DiffArea::Staged => &unstage,
+            };
+            let line_patch = line_key
+                .as_deref()
+                .unwrap_or_else(|| panic!("{case}: the selection holds two changed lines"));
+            assert!(
+                line_patch.contains("+new one\n") && !line_patch.contains("+new two\n"),
+                "{case}: the key must take only the selected lines: {line_patch}"
+            );
+            assert_eq!(line_key, &lines_patch, "{case}: S/U and the line entry");
+            match area {
+                DiffArea::Unstaged => {
+                    assert!(discard.is_some(), "{case}: U has lines to discard");
+                    assert_eq!(
+                        discard, discard_lines_patch,
+                        "{case}: U and the discard entry"
+                    );
+                }
+                DiffArea::Staged => {
+                    assert_eq!(discard_lines_patch, None, "{case}: no discard entry");
+                }
+            }
+        }
+    }
+}
+
 #[gpui::test]
 fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_stage_gutter_view(

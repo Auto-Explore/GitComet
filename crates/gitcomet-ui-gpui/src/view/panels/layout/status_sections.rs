@@ -316,10 +316,6 @@ impl DetailsPaneView {
         if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
             return true;
         }
-        if let Some(step) = DiffFileStep::from_keystroke(keystroke) {
-            self.defer_status_file_step(repo_id, step, window, cx);
-            return true;
-        }
         if keystroke.key == "a" {
             let paths = self.status_display_order_paths(repo_id, section);
             let order_rev = self.status_anchor_order_rev(repo, section);
@@ -330,10 +326,26 @@ impl DetailsPaneView {
             cx.notify();
             return true;
         }
-        if repo.local_actions_in_flight > 0
-            || (keystroke.key == "s" && area != DiffArea::Unstaged)
-            || (keystroke.key == "u" && area != DiffArea::Staged)
+        if repo.local_actions_in_flight > 0 || (keystroke.key == "s" && area != DiffArea::Unstaged)
         {
+            return true;
+        }
+        // Ctrl/Cmd+U unstages in the staged list and discards (after the
+        // confirmation) in the unstaged ones, as their menus show.
+        if keystroke.key == "u" && area == DiffArea::Unstaged {
+            let selection = self.status_section_action_selection(repo_id, section);
+            if !selection.paths.is_empty() {
+                self.open_popover_at(
+                    PopoverKind::DiscardChangesConfirm {
+                        repo_id,
+                        area,
+                        path: selection.popover_path(),
+                    },
+                    crate::view::conflict_markers::centered_dialog_anchor(window),
+                    window,
+                    cx,
+                );
+            }
             return true;
         }
         if keystroke.key == "space"
@@ -700,7 +712,10 @@ impl DetailsPaneView {
             count,
             cx,
         );
-        Self::vertical_scroll_frame_content(theme, container, scrollbar, scroll, list)
+        let focus = self
+            .review_file_focus(crate::view::rows::FileListId::Status(section))
+            .clone();
+        Self::vertical_scroll_frame_content(theme, container, scrollbar, scroll, Some(focus), list)
             .into_any_element()
     }
 }

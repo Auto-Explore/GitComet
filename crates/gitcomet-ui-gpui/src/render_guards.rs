@@ -55,6 +55,7 @@ mod tests {
                     "view/panels/popover/mod.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/details.rs",
+                    "view/panes/details/review.rs",
                     "view/panes/file_history.rs",
                     "view/panes/diff/hosted_views.rs",
                     "view/panes/history/history_panel.rs",

@@ -206,6 +206,89 @@ impl TerminalMenuFixture {
 }
 
 #[gpui::test]
+fn terminal_app_shortcuts_work_from_terminal_without_sending_shell_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (fixture, cx) = fixture(cx);
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::bind_text_input_keys_for_test(app);
+    });
+    cx.simulate_keystrokes("ctrl-p");
+    assert_eq!(
+        fixture.take_input(),
+        vec![0x10],
+        "other shell shortcuts stay in the terminal"
+    );
+    for key in ["f6", "shift-f6"] {
+        cx.simulate_keystrokes(key);
+        refresh_and_draw(cx);
+        assert!(
+            !fixture.take_input().is_empty(),
+            "{key} belongs to the terminal"
+        );
+        cx.update(|window, app| {
+            assert!(fixture.viewport.read(app).focus_handle.is_focused(window))
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    for (chord, byte) in [("ctrl-j", 0x0a), ("ctrl-/", 0x1f)] {
+        cx.simulate_keystrokes(chord);
+        refresh_and_draw(cx);
+        assert_eq!(
+            fixture.take_input(),
+            vec![byte],
+            "{chord} belongs to the terminal"
+        );
+        cx.update(|window, app| {
+            assert!(fixture.viewport.read(app).focus_handle.is_focused(window))
+        });
+    }
+    // Windows and Linux deliver Ctrl+Shift+/ as `ctrl-?`, dropping the Shift.
+    let help_chords: &[&str] = if cfg!(target_os = "macos") {
+        &["cmd-/"]
+    } else {
+        &["ctrl-?", "ctrl-shift-/"]
+    };
+    for chord in help_chords {
+        cx.simulate_keystrokes(chord);
+        refresh_and_draw(cx);
+        cx.update(|_, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(fixture.root.read(app), app),
+                Some(PopoverKind::KeyboardShortcuts),
+                "{chord}"
+            )
+        });
+        assert!(fixture.take_input().is_empty(), "{chord}");
+        cx.simulate_keystrokes("escape");
+        refresh_and_draw(cx);
+        cx.update(|window, app| {
+            assert!(fixture.viewport.read(app).focus_handle.is_focused(window))
+        });
+    }
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-j"
+    } else {
+        "ctrl-shift-j"
+    });
+    refresh_and_draw(cx);
+    assert!(
+        fixture.take_input().is_empty(),
+        "the toggle must not send a newline to the shell"
+    );
+    cx.update(|_, app| {
+        assert!(
+            !fixture
+                .root
+                .read(app)
+                .terminal_sessions
+                .contains_key(&fixture.repo_id)
+        );
+    });
+}
+
+#[gpui::test]
 fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());

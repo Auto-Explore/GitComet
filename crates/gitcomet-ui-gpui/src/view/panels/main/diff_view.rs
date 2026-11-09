@@ -6,6 +6,11 @@ use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
 use crate::view::panes::diff::{DiffBody, DiskSurface, EngineNotice};
 use gpui::Focusable;
 
+/// The search input's line height; it grows to three lines as newlines are
+/// typed, then scrolls, while the bar's controls stay on the first row.
+const DIFF_SEARCH_LINE_HEIGHT_PX: f32 = 18.0;
+const DIFF_SEARCH_MAX_LINES: f32 = 3.0;
+
 struct DiffSearchOverlayLayer {
     child: AnyElement,
 }
@@ -393,6 +398,10 @@ impl DiffRenderer {
         }
 
         if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
+            if self.diff_search_active && self.diff_search_bar.dismiss_menu() {
+                cx.notify();
+                return true;
+            }
             if self.diff_search_active {
                 self.deactivate_diff_search(window, cx);
                 handled = true;
@@ -403,6 +412,22 @@ impl DiffRenderer {
             {
                 self.store
                     .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
+                handled = true;
+            }
+            if !handled
+                && self.diff_panel_focus_handle.is_focused(window)
+                && self
+                    .commands
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|nav| nav.can_focus_review_files(window, cx))
+            {
+                self.commands.defer(
+                    DiffCommand::FocusReviewFiles {
+                        window: window.window_handle(),
+                    },
+                    cx,
+                );
                 handled = true;
             }
             if !handled
@@ -497,10 +522,28 @@ impl DiffRenderer {
         }
 
         if !handled
-            && let Some(step) = DiffFileStep::from_keystroke(keystroke)
-            && let Some(repo_id) = self.active_repo_id()
+            && self.diff_panel_focus_handle.is_focused(window)
+            && mods.alt
+            && mods.number_of_modifiers() == 1
+            && matches!(key, "up" | "down")
         {
-            handled = self.try_step_diff_file(repo_id, step, window, cx);
+            handled = self.review_adjacent_file(if key == "up" { -1 } else { 1 }, window, cx);
+        }
+
+        if !handled
+            && self.diff_panel_focus_handle.is_focused(window)
+            && !mods.modified()
+            && matches!(key, "up" | "down")
+        {
+            handled = self.review_adjacent_change(key == "up", window, cx);
+        }
+
+        if !handled
+            && self.diff_panel_focus_handle.is_focused(window)
+            && !mods.modified()
+            && !self.is_conflict_resolver_active()
+        {
+            handled = self.review_scroll_key(key);
         }
 
         if !handled
@@ -671,7 +714,9 @@ impl DiffRenderer {
                     self.rebuild_diff_cache(cx);
                     handled = true;
                 }
-                "d" if !mods.shift => {
+                // Ctrl/Cmd+U discards in an unstaged diff (unstage, above, is
+                // the staged diff's); Ctrl/Cmd+D no longer does, D being next to S.
+                "u" if area == DiffArea::Unstaged && !mods.shift => {
                     let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
                     self.open_popover_at(
                         PopoverKind::DiscardChangesConfirm {
@@ -880,22 +925,6 @@ impl DiffRenderer {
                             .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
                     }
                 }
-                "up" => {
-                    handled = self.navigate_prev_diff_change(cx);
-                }
-                "down" => {
-                    handled = self.navigate_next_diff_change(cx);
-                }
-                "left" => {
-                    if let Some(repo_id) = self.active_repo_id() {
-                        handled = self.try_select_adjacent_diff_file(repo_id, -1, window, cx);
-                    }
-                }
-                "right" => {
-                    if let Some(repo_id) = self.active_repo_id() {
-                        handled = self.try_select_adjacent_diff_file(repo_id, 1, window, cx);
-                    }
-                }
                 _ => {}
             }
         }
@@ -922,7 +951,22 @@ impl DiffRenderer {
                 }
                 _ => {}
             }
+            self.focus_diff_after_navigation(window, cx);
             handled = true;
+        }
+
+        // The diff editor menu shows S and U beside its line entries; the
+        // bare letters stage, unstage or discard the selected lines with the
+        // menu closed as well. Only while the diff itself holds focus, as it
+        // does after a click, a drag or the menu: plain letters also arrive
+        // through the window-wide fallback and bubble up from the panel's
+        // text fields, and neither may discard lines selected here.
+        if !handled
+            && !conflict_resolver_active
+            && let Some(action) = self.diff_line_action_for_key(keystroke)
+            && self.diff_panel_focus_handle.is_focused(window)
+        {
+            handled = self.apply_diff_line_action(action, cx);
         }
 
         if !handled
@@ -1570,66 +1614,81 @@ impl DiffRenderer {
 
         let ui_scale =
             ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
-        let max_search_input_height = ui_scale.px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
+        // Pad the first line onto the centre of the bar's control row.
+        let line_height = ui_scale.px(DIFF_SEARCH_LINE_HEIGHT_PX);
+        let pad_y =
+            ((components::quick_search_row_height(ui_scale) - line_height) / 2.0).max(px(0.0));
+        // An explicit height: the multi-line input fills its parent, so an
+        // auto height would take the bar's row instead of the text's lines.
+        let lines = self.diff_search_input.read(cx).text().matches('\n').count() + 1;
+        let search_input_height =
+            line_height * (lines as f32).min(DIFF_SEARCH_MAX_LINES) + pad_y * 2.0;
 
-        let panel =
-            components::QuickSearchBar::<Self>::new("diff_search", self.diff_search_status())
-                .input(
-                    div()
-                        .id("diff_search_input_scroll")
-                        .relative()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .max_h(max_search_input_height)
-                        .pr(components::Scrollbar::visible_gutter(
-                            self.diff_search_scroll.clone(),
-                            components::ScrollbarAxis::Vertical,
-                        ))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.diff_search_scroll)
-                        .child(self.diff_search_input.clone()),
+        let panel = components::QuickSearchBar::<Self>::new(
+            "diff_search",
+            &self.diff_search_bar,
+            self.diff_search_status(),
+        )
+        .floating()
+        .input(
+            div()
+                .id("diff_search_input_scroll")
+                .relative()
+                .w_full()
+                .min_w(px(0.0))
+                .h(search_input_height)
+                .py(pad_y)
+                .pr(components::Scrollbar::visible_gutter(
+                    self.diff_search_scroll.clone(),
+                    components::ScrollbarAxis::Vertical,
+                ))
+                .overflow_y_scroll()
+                .track_scroll(&self.diff_search_scroll)
+                .child(self.diff_search_input.clone()),
+        )
+        // Only a query past the visible lines scrolls.
+        .input(div().when(lines as f32 > DIFF_SEARCH_MAX_LINES, |slot| {
+            slot.child(
+                components::Scrollbar::new(
+                    "diff_search_scrollbar",
+                    self.diff_search_scroll.clone(),
                 )
-                .input(
-                    components::Scrollbar::new(
-                        "diff_search_scrollbar",
-                        self.diff_search_scroll.clone(),
-                    )
-                    .render(theme),
-                )
-                .newline(|this, window, cx| this.insert_diff_search_line_break(window, cx))
-                .options(
-                    components::search_toggles(self.diff_search_options),
-                    |this, next, window, cx| {
-                        this.set_diff_search_options(components::search_options(next), window, cx);
-                    },
-                )
-                .navigation(
-                    !self.diff_search_matches.is_empty(),
-                    |this, window, cx| {
-                        this.diff_search_prev_match();
-                        this.focus_diff_search_input(window, cx);
-                        cx.notify();
-                    },
-                    |this, window, cx| {
-                        this.diff_search_next_match();
-                        this.focus_diff_search_input(window, cx);
-                        cx.notify();
-                    },
-                )
-                .on_close(|this, window, cx| {
-                    this.deactivate_diff_search(window, cx);
-                    cx.notify();
-                })
-                .render(theme, ui_scale, cx)
-                .occlude()
-                .with_animation(
-                    "diff_search_overlay_mount",
-                    Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
-                    |panel, delta| {
-                        let slide_y = (1.0 - delta) * -8.0;
-                        panel.opacity(delta).relative().top(px(slide_y))
-                    },
-                );
+                .render(theme),
+            )
+        }))
+        .newline(|this, window, cx| this.insert_diff_search_line_break(window, cx))
+        .options(
+            components::search_toggles(self.diff_search_options),
+            |this, next, window, cx| {
+                this.set_diff_search_options(components::search_options(next), window, cx);
+            },
+        )
+        .navigation(
+            !self.diff_search_matches.is_empty(),
+            |this, window, cx| {
+                this.diff_search_prev_match();
+                this.focus_diff_search_input(window, cx);
+                cx.notify();
+            },
+            |this, window, cx| {
+                this.diff_search_next_match();
+                this.focus_diff_search_input(window, cx);
+                cx.notify();
+            },
+        )
+        .on_close(|this, window, cx| {
+            this.deactivate_diff_search(window, cx);
+            cx.notify();
+        })
+        .render(theme, ui_scale, cx)
+        .with_animation(
+            "diff_search_overlay_mount",
+            Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
+            |panel, delta| {
+                let slide_y = (1.0 - delta) * -8.0;
+                panel.opacity(delta).relative().top(px(slide_y))
+            },
+        );
 
         let overlay_panel = div()
             .id("diff_search_overlay_panel")
@@ -1638,6 +1697,7 @@ impl DiffRenderer {
             .top(components::content_header_height(
                 ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
             ))
+            .left(ui_scale::design_px_from_percent(8.0, ui_scale_percent))
             .right(ui_scale::design_px_from_percent(8.0, ui_scale_percent))
             .child(panel)
             .into_any_element();
@@ -2683,6 +2743,7 @@ impl DiffRenderer {
                 d.bg(theme.colors.interaction.pressed_background)
             })
             .track_focus(&self.diff_panel_focus_handle)
+            .key_context("ReviewDiff")
             .on_action(
                 cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
                     if let Some(repo_id) = this.active_repo_id()
@@ -2783,6 +2844,15 @@ impl DiffRenderer {
                     .child(body),
             )
             .when_some(diff_bar, |d, bar| d.child(bar))
+            .child(crate::view::review_navigation::hint(
+                theme,
+                crate::ui_scale::UiScale::from_percent(ui_scale_percent),
+                if cfg!(target_os = "macos") {
+                    "↑↓ Changes · Option ↑↓ Files · Esc Back"
+                } else {
+                    "↑↓ Changes · Alt ↑↓ Files · Esc Back"
+                },
+            ))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker {
                 view: cx.entity().into(),
