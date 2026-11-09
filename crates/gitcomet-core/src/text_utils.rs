@@ -1,3 +1,19 @@
+/// Lengths of the longest common prefix and, of what remains, the longest
+/// common suffix of `a` and `b`; together they never exceed either length.
+#[inline]
+pub fn common_affix_len<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize) {
+    let shared = a.len().min(b.len());
+    let mut prefix = 0;
+    while prefix < shared && a[prefix] == b[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < shared - prefix && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix] {
+        suffix += 1;
+    }
+    (prefix, suffix)
+}
+
 /// Mask credentials embedded in a URL's userinfo for display.
 ///
 /// `scheme://user:secret@host/…` becomes `scheme://user:***@host/…`. For
@@ -177,6 +193,22 @@ pub fn text_has_mixed_line_endings(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn common_affix_len_never_counts_an_element_twice() {
+        use super::common_affix_len;
+        let cases: [(&[u8], &[u8], (usize, usize)); 6] = [
+            (b"", b"", (0, 0)),
+            (b"abc", b"abc", (3, 0)),
+            (b"aa", b"aaa", (2, 0)),
+            (b"axc", b"ayc", (1, 1)),
+            (b"abc", b"xbc", (0, 2)),
+            (b"ab", b"", (0, 0)),
+        ];
+        for (a, b, expected) in cases {
+            assert_eq!(common_affix_len(a, b), expected, "{a:?} vs {b:?}");
+        }
+    }
+
     #[test]
     fn line_starts_begin_after_every_newline() {
         use super::line_starts;

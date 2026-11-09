@@ -299,18 +299,8 @@ pub fn push_tiny_block_diff_rows(
         return false;
     }
 
-    let mut prefix = 0usize;
-    while prefix < old_len && prefix < new_len && old_lines[prefix] == new_lines[prefix] {
-        prefix += 1;
-    }
-
-    let mut suffix = 0usize;
-    while prefix + suffix < old_len
-        && prefix + suffix < new_len
-        && old_lines[old_len - 1 - suffix] == new_lines[new_len - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) =
+        gitcomet_core::text_utils::common_affix_len(&old_lines[..old_len], &new_lines[..new_len]);
 
     for (offset, line) in old_lines.iter().enumerate().take(prefix) {
         push_tiny_block_context_row(

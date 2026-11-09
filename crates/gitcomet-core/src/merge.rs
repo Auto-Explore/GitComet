@@ -735,7 +735,8 @@ fn emit_conflict_markers(
     match options.style {
         ConflictStyle::Zdiff3 => {
             // Strip common prefix and suffix lines from the conflict.
-            let (prefix_len, suffix_len) = common_prefix_suffix_lines(ours_lines, theirs_lines);
+            let (prefix_len, suffix_len) =
+                crate::text_utils::common_affix_len(ours_lines, theirs_lines);
 
             // Emit common prefix as resolved.
             for line in &ours_lines[..prefix_len] {
@@ -849,21 +850,6 @@ fn emit_marker(output: &mut String, ch: char, size: usize, label: Option<&str>, 
         output.push_str(lbl);
     }
     output.push_str(le);
-}
-
-/// Find common prefix and suffix lines between two line sequences.
-fn common_prefix_suffix_lines<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize) {
-    let max = a.len().min(b.len());
-    let mut prefix = 0;
-    while prefix < max && a[prefix] == b[prefix] {
-        prefix += 1;
-    }
-    let remaining = max - prefix;
-    let mut suffix = 0;
-    while suffix < remaining && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix] {
-        suffix += 1;
-    }
-    (prefix, suffix)
 }
 
 /// Count leading lines of `base` that match the corresponding hoisted context

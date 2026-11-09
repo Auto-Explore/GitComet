@@ -992,17 +992,7 @@ fn diff_chunks<'a>(
     // whitespace-insensitive equivalence classes. Preserve that detail: it
     // makes an exact repeated line win over an earlier whitespace-equivalent
     // candidate (one of KDiff3's upstream alignment regressions).
-    let mut prefix = 0usize;
-    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
-        prefix += 1;
-    }
-    let mut suffix = 0usize;
-    while prefix + suffix < left.len()
-        && prefix + suffix < right.len()
-        && left[left.len() - 1 - suffix] == right[right.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let (prefix, suffix) = crate::text_utils::common_affix_len(left, right);
     let left_mid = &left[prefix..left.len() - suffix];
     let right_mid = &right[prefix..right.len() - suffix];
 

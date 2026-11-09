@@ -442,7 +442,7 @@ fn shared_boundary_bytes_matches_generic_ascii_boundaries() {
 
     assert_eq!(
         shared_boundary_bytes(old, new),
-        shared_boundary_units(old, new)
+        crate::text_utils::common_affix_len(old, new)
     );
 }
 
