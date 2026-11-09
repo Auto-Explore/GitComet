@@ -16,7 +16,7 @@ struct PagedDiffLineProvider {
 }
 
 impl PagedDiffLineProvider {
-    pub(crate) fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
+    fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
         Self {
             lines,
             page_size: page_size.max(1),
@@ -24,7 +24,7 @@ impl PagedDiffLineProvider {
         }
     }
 
-    pub fn cached_page_count(&self) -> usize {
+    fn cached_page_count(&self) -> usize {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
     }
 
