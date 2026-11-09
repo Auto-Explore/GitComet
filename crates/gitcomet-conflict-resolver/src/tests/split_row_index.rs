@@ -314,7 +314,7 @@ fn two_way_split_projection_no_hide() {
     let index = ConflictSplitRowIndex::new(&segments, 1);
     let proj = TwoWaySplitProjection::new(&index, &segments, false);
 
-    // Total = context(1) + ConflictBlock::unresolved(max(2,1)) = 3
+    // Total = context(1) + block(max(2,1)) = 3
     assert_eq!(proj.visible_len(), index.total_rows());
 
     // All visible indices map to source rows
@@ -338,7 +338,7 @@ fn two_way_split_projection_hide_resolved() {
     let proj_no_hide = TwoWaySplitProjection::new(&index, &segments, false);
     let proj_hide = TwoWaySplitProjection::new(&index, &segments, true);
 
-    // Without hide: context(1) + ConflictBlock::unresolved(2) + context(1) = 4
+    // Without hide: context(1) + block(2) + context(1) = 4
     assert_eq!(proj_no_hide.visible_len(), 4);
     // With hide: context(1) + context(1) = 2 (block hidden)
     assert_eq!(proj_hide.visible_len(), 2);
