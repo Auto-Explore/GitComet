@@ -372,7 +372,7 @@ jobs:
           grep -q 'container type: :naked' dist/deployment-ci/gitcomet.rb
           grep -q 'binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
           grep -q 'gitcomet-v#{version}-linux-#{arch}.AppImage' dist/deployment-ci/gitcomet.rb
-          grep -q 'depends_on macos:' dist/deployment-ci/gitcomet.rb
+          grep -q 'depends_on macos: :sequoia' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap publish detection
         run: |
