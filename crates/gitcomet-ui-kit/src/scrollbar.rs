@@ -892,6 +892,25 @@ mod tests {
         );
     }
 
+    /// Each axis reads its own track origin and length: a wide, short track
+    /// must map along x, never along its 16px height.
+    #[test]
+    fn click_offset_follows_the_axis_of_the_track() {
+        let wide = Bounds::new(point(px(100.0), px(7.0)), size(px(400.0), px(16.0)));
+        let tall = Bounds::new(point(px(7.0), px(100.0)), size(px(16.0), px(400.0)));
+        for (axis, track) in [
+            (ScrollbarAxis::Horizontal, wide),
+            (ScrollbarAxis::Vertical, tall),
+        ] {
+            let offset_at = |pos: f32| {
+                compute_click_offset(axis, px(pos), track, px(100.0), px(0.0), px(900.0), 1)
+            };
+            assert_eq!(offset_at(100.0), px(0.0), "{axis:?} start");
+            assert_eq!(offset_at(250.0), px(450.0), "{axis:?} middle");
+            assert_eq!(offset_at(400.0), px(900.0), "{axis:?} end");
+        }
+    }
+
     #[test]
     fn thumb_metrics_none_without_overflow() {
         assert!(thumb_metrics(px(100.0), px(0.0), px(0.0)).is_none());
