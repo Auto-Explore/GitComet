@@ -857,7 +857,11 @@ mod tests {
     /// and the rebuild's effects.
     fn rebuild_dropping_a_compared_commit(
         source: crate::model::ComparisonSource,
-    ) -> (Option<crate::model::RangeSelection>, Vec<Effect>) {
+    ) -> (
+        Option<crate::model::RangeSelection>,
+        Vec<Effect>,
+        Option<gitcomet_core::domain::DiffTarget>,
+    ) {
         let (mut state, index) = fixture();
         let [newest, oldest] = [0, 2].map(|row| index.commit_id(row).unwrap());
         let repo = &mut state.repos[0];
@@ -868,8 +872,18 @@ mod tests {
         repo.history_state.selected_commit = Some(newest.clone());
         repo.history_state.range_selection = Some(crate::model::RangeSelection {
             source,
-            ..crate::model::RangeSelection::new(oldest, Some(newest), "a".into(), "b".into())
+            ..crate::model::RangeSelection::new(
+                oldest.clone(),
+                Some(newest.clone()),
+                "a".into(),
+                "b".into(),
+            )
         });
+        repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit_range(
+            oldest,
+            Some(newest),
+            Some("a.txt".into()),
+        ));
         repo.history_state.indexed = Default::default();
         let snapshot = repo.history_state.log_snapshot.clone().unwrap();
         let work = reduce(&mut state, Event::Ensure { repo_id: RepoId(1) });
@@ -896,6 +910,7 @@ mod tests {
         (
             state.repos[0].history_state.range_selection.clone(),
             effects,
+            state.repos[0].diff_state.diff_target.clone(),
         )
     }
 
@@ -906,8 +921,12 @@ mod tests {
             ComparisonSource::SelectedPair,
             ComparisonSource::MergedSelection,
         ] {
-            let (range, effects) = rebuild_dropping_a_compared_commit(source);
+            let (range, effects, diff_target) = rebuild_dropping_a_compared_commit(source);
             assert_eq!(range, None, "{source:?}");
+            assert_eq!(
+                diff_target, None,
+                "the comparison's open diff goes too ({source:?})"
+            );
             assert!(
                 effects.iter().any(|e| matches!(
                     e,
@@ -916,11 +935,15 @@ mod tests {
                 "the details pane goes back to the still-selected commit ({source:?})"
             );
         }
+        let (range, _, diff_target) =
+            rebuild_dropping_a_compared_commit(ComparisonSource::Explicit);
         assert!(
-            rebuild_dropping_a_compared_commit(ComparisonSource::Explicit)
-                .0
-                .is_some(),
+            range.is_some(),
             "an explicit comparison does not come from the selection"
+        );
+        assert!(
+            diff_target.is_some(),
+            "an explicit comparison keeps its open diff"
         );
     }
 

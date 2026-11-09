@@ -757,3 +757,48 @@ fn comparison_list_refresh_replans_a_file_that_lost_a_side() {
         "{effects:?}"
     );
 }
+
+/// A comparison of `c3`/`c2` with one of its files open.
+fn state_with_comparison_file_open(repo_id: RepoId) -> AppState {
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
+    dispatch_effects(
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: gitcomet_core::domain::DiffTarget::commit_range(
+                CommitId("c1".into()),
+                Some(CommitId("c3".into())),
+                Some("a.txt".into()),
+            ),
+        },
+    );
+    assert!(repo(&state, repo_id).diff_state.diff_target.is_some());
+    state
+}
+
+/// A file diff opened from the comparison belongs to it, so leaving the
+/// comparison for a single commit closes it.
+#[test]
+fn collapsing_to_one_commit_closes_the_comparisons_file_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+}
+
+#[test]
+fn clearing_the_commit_selection_closes_the_comparisons_file_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_comparison_file_open(repo_id);
+    dispatch_effects(
+        &mut state,
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        },
+    );
+    assert_eq!(repo(&state, repo_id).history_state.range_selection, None);
+    assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+}

@@ -2550,11 +2550,16 @@ fn log_loaded_reconciles_commit_multi_selection() {
     assert_eq!(sel.anchor_log_rev, None);
 }
 
-/// Reloads the log without `gone` while `kept`/`gone` are compared as `source`;
-/// returns the comparison left and the reload's effects.
+/// Reloads the log without `gone` while `kept`/`gone` are compared as `source`
+/// with a file of it open; returns the comparison left, the reload's effects
+/// and the open diff.
 fn reload_dropping_a_compared_commit(
     source: crate::model::ComparisonSource,
-) -> (Option<crate::model::RangeSelection>, Vec<Effect>) {
+) -> (
+    Option<crate::model::RangeSelection>,
+    Vec<Effect>,
+    Option<gitcomet_core::domain::DiffTarget>,
+) {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
@@ -2584,8 +2589,18 @@ fn reload_dropping_a_compared_commit(
     repo_state.history_state.selected_commit = Some(kept.clone());
     repo_state.history_state.range_selection = Some(crate::model::RangeSelection {
         source,
-        ..crate::model::RangeSelection::new(gone, Some(kept), "gone".into(), "kept".into())
+        ..crate::model::RangeSelection::new(
+            gone.clone(),
+            Some(kept.clone()),
+            "gone".into(),
+            "kept".into(),
+        )
     });
+    repo_state.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit_range(
+        gone,
+        Some(kept),
+        Some(PathBuf::from("a.txt")),
+    ));
 
     let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
     let effects = reduce(
@@ -2607,6 +2622,7 @@ fn reload_dropping_a_compared_commit(
     (
         state.repos[0].history_state.range_selection.clone(),
         effects,
+        state.repos[0].diff_state.diff_target.clone(),
     )
 }
 
@@ -2617,8 +2633,12 @@ fn log_reload_that_drops_a_compared_commit_leaves_the_selection_comparison() {
         ComparisonSource::SelectedPair,
         ComparisonSource::MergedSelection,
     ] {
-        let (range, effects) = reload_dropping_a_compared_commit(source);
+        let (range, effects, diff_target) = reload_dropping_a_compared_commit(source);
         assert_eq!(range, None, "{source:?}");
+        assert_eq!(
+            diff_target, None,
+            "the comparison's open diff goes too ({source:?})"
+        );
         assert!(
             effects.iter().any(|e| matches!(
                 e,
@@ -2627,10 +2647,14 @@ fn log_reload_that_drops_a_compared_commit_leaves_the_selection_comparison() {
             "the details pane goes back to the still-selected commit ({source:?})"
         );
     }
-    let (range, _) = reload_dropping_a_compared_commit(ComparisonSource::Explicit);
+    let (range, _, diff_target) = reload_dropping_a_compared_commit(ComparisonSource::Explicit);
     assert!(
         range.is_some(),
         "an explicit comparison does not come from the selection"
+    );
+    assert!(
+        diff_target.is_some(),
+        "an explicit comparison keeps its open diff"
     );
 }
 

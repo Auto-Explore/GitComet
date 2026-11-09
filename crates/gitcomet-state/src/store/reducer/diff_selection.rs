@@ -803,18 +803,9 @@ pub(super) fn clear_diff_selection_for_status_action(
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-
-    clear_inline_submodule_diff_state(repo_state);
-    repo_state.diff_state.content_preview = false;
-    repo_state.diff_state.edit_mode = false;
-    repo_state.diff_state.edit_return_view = None;
-
-    repo_state.set_diff_target(None);
-    repo_state.diff_state.clear_loads();
-    repo_state.bump_diff_state_rev();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.close_diff();
+    }
     Vec::new()
 }
 

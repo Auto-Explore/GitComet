@@ -777,12 +777,13 @@ impl RepoState {
             self.history_state.selected_commit_rev.wrapping_add(1);
     }
 
-    /// Leave comparison mode: drop the endpoints and the file list, and retire
-    /// any load still in flight so its reply cannot repopulate the list of a
-    /// comparison the user has already left. Returns whether there was anything
-    /// to leave — a plain commit click runs through here on every selection, and
-    /// bumping the revs for a comparison that was never active would invalidate
-    /// the range-file row cache for nothing.
+    /// Leave comparison mode: drop the endpoints and the file list, close a file
+    /// diff opened from it, and retire any load still in flight so its reply
+    /// cannot repopulate the list of a comparison the user has already left.
+    /// Returns whether there was anything to leave — a plain commit click runs
+    /// through here on every selection, and bumping the revs for a comparison
+    /// that was never active would invalidate the range-file row cache for
+    /// nothing.
     pub(crate) fn clear_range_comparison(&mut self) -> bool {
         if self.history_state.range_selection.is_none() && !self.history_state.range_files_in_flight
         {
@@ -790,11 +791,18 @@ impl RepoState {
         }
         self.set_range_selection(None);
         self.release_range_files();
+        // Only a comparison opens range diffs, so one open is this comparison's.
+        if matches!(
+            self.diff_state.diff_target,
+            Some(gitcomet_core::domain::DiffTarget::CommitRange { .. })
+        ) {
+            self.close_diff();
+        }
         true
     }
 
-    /// Leave a comparison derived from the multi-selection, once the selection
-    /// lost one of its commits. An explicit comparison stays.
+    /// Leave a comparison derived from the multi-selection, and its open file
+    /// diff, once the selection lost one of its commits. An explicit one stays.
     pub(crate) fn clear_selection_comparison(&mut self) -> bool {
         match self
             .history_state
