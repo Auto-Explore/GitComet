@@ -1,7 +1,7 @@
 use crate::domain::FileConflictKind;
 use crate::merge::{
-    ConflictStyle, InteractiveMergePlanBudget, ManualAlignment, ManualAlignmentList, MergeBlockId,
-    MergeOptions, MergePlan, MergeSource, OrderedSelection, render_merge_plan,
+    ConflictStyle, InteractiveMergePlanBudget, ManualAlignment, ManualAlignmentList, MergeBlock,
+    MergeBlockId, MergeOptions, MergePlan, MergeSource, OrderedSelection, render_merge_plan,
     try_build_interactive_merge_plan_with_alignments,
 };
 use std::ops::Range;
@@ -1293,35 +1293,9 @@ impl ConflictSession {
     /// This is KDiff3's `chooseGlobal(..., bConflictsOnly = false)` behavior.
     /// Returns the number of blocks whose decision changed.
     pub fn replace_all_delta_selections(&mut self, selection: OrderedSelection) -> usize {
-        let Some(plan) = self.merge_plan.as_ref() else {
-            return 0;
-        };
-        if selection
-            .iter()
-            .any(|source| plan.source_text(source).is_none())
-        {
-            return 0;
-        }
-        let changed_blocks: Vec<usize> = plan
-            .blocks
-            .iter()
-            .enumerate()
-            .filter_map(|(index, block)| {
-                (block.is_delta && (block.manual_content.is_some() || block.selection != selection))
-                    .then_some(index)
-            })
-            .collect();
-        let Some(plan) = self.merge_plan.as_mut() else {
-            return 0;
-        };
-        for block_index in &changed_blocks {
-            plan.replace_selection_deferred(*block_index, selection.clone());
-        }
-        plan.refresh_unresolved_blocks();
-        for block_index in changed_blocks.iter().copied() {
-            self.sync_region_from_plan_block(block_index);
-        }
-        changed_blocks.len()
+        self.replace_selections_where(selection, |block, selection| {
+            block.is_delta && (block.manual_content.is_some() || block.selection != *selection)
+        })
     }
 
     /// Pick one side for every still-unresolved whitespace-only conflict.
@@ -1336,9 +1310,21 @@ impl ConflictSession {
     /// (its `hasModfiedText()` guard) are touched. Returns the number of
     /// blocks whose decision changed.
     pub fn replace_whitespace_conflict_selections(&mut self, selection: OrderedSelection) -> usize {
-        let Some(plan) = self.merge_plan.as_ref() else {
-            // Marker-only fallback sessions have no aligned-row classification,
-            // so there is no trustworthy whitespace verdict to act on.
+        // Marker-only fallback sessions have no aligned-row classification,
+        // so there is no trustworthy whitespace verdict to act on.
+        self.replace_selections_where(selection, |block, _| {
+            block.whitespace_conflict && !block.is_resolved() && block.manual_content.is_none()
+        })
+    }
+
+    /// Sets `selection` on every plan block `pick` accepts; returns how many.
+    /// Without a merge plan, or with a source the plan lacks, nothing changes.
+    fn replace_selections_where(
+        &mut self,
+        selection: OrderedSelection,
+        pick: impl Fn(&MergeBlock, &OrderedSelection) -> bool,
+    ) -> usize {
+        let Some(plan) = self.merge_plan.as_mut() else {
             return 0;
         };
         if selection
@@ -1351,16 +1337,8 @@ impl ConflictSession {
             .blocks
             .iter()
             .enumerate()
-            .filter_map(|(index, block)| {
-                (block.whitespace_conflict
-                    && !block.is_resolved()
-                    && block.manual_content.is_none())
-                .then_some(index)
-            })
+            .filter_map(|(index, block)| pick(block, &selection).then_some(index))
             .collect();
-        let Some(plan) = self.merge_plan.as_mut() else {
-            return 0;
-        };
         for block_index in &changed_blocks {
             plan.replace_selection_deferred(*block_index, selection.clone());
         }
