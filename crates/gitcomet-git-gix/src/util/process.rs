@@ -665,6 +665,41 @@ pub(super) fn run_command_with_timeout_auth(
     )
 }
 
+/// The askpass helper and staged auth for a command that may prompt.
+struct AskpassContext {
+    script: gitcomet_core::auth::askpass::AskPassScript,
+    auth: Option<PromptAuth>,
+}
+
+impl AskpassContext {
+    fn configure(cmd: &mut Command, allow_auth: bool) -> Result<Option<Self>> {
+        if !command_may_require_auth(cmd) {
+            return Ok(None);
+        }
+        let auth = if allow_auth { command_git_auth() } else { None };
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
+        configure_git_auth_prompt(cmd, auth.as_ref(), &script);
+        Ok(Some(Self { script, auth }))
+    }
+
+    /// The command's auth outcome; appends the host prompt git saw and, when
+    /// a passphrase was asked for, its trailer to `stderr`.
+    fn finish(&self, stderr: &mut Vec<u8>, success: bool) -> AuthOutcome {
+        let outcome = resolve_auth_outcome(self.auth.as_ref(), &self.script, stderr, success);
+        append_host_prompt_to_stderr(stderr, &self.script);
+        // On a failure with another cause, such as a pull refused for local
+        // changes, a passphrase trailer would mislead.
+        if matches!(
+            outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
+            append_passphrase_prompt_to_stderr(stderr, &self.script);
+        }
+        outcome
+    }
+}
+
 enum CommandActivity {
     Report,
     Silent,
@@ -694,15 +729,7 @@ fn run_command_with_timeout_auth_activity(
     };
     let trace2 = Trace2Monitor::start(&mut cmd, activity, &liveness);
     let lfs_progress = LfsProgressMonitor::start(&mut cmd, activity, &liveness);
-    let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = if allow_auth { command_git_auth() } else { None };
-        let script = create_askpass_script()
-            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
-        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some((script, auth))
-    } else {
-        None
-    };
+    let askpass_context = AskpassContext::configure(&mut cmd, allow_auth)?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     // Meters stream to the operation's progress; the captured stderr reads as
     // it would without them.
@@ -774,20 +801,9 @@ fn run_command_with_timeout_auth_activity(
 
     let auth_outcome = askpass_context
         .as_ref()
-        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
-            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        .map_or(AuthOutcome::NotRequested, |context| {
+            context.finish(&mut stderr, status.success())
         });
-    if let Some((askpass_script, _)) = askpass_context.as_ref() {
-        append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        // The trailer explains a request for a passphrase. On a failure with
-        // another cause, such as a pull refused for local changes, it misleads.
-        if matches!(
-            auth_outcome,
-            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
-        ) {
-            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
-        }
-    }
 
     if cancelled {
         return Err(Error::new(ErrorKind::Cancelled));
@@ -1036,15 +1052,7 @@ where
     )?;
     let liveness = LivenessClock::new();
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
-    let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = command_git_auth();
-        let script = create_askpass_script()
-            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
-        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some((script, auth))
-    } else {
-        None
-    };
+    let askpass_context = AskpassContext::configure(&mut cmd, true)?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     timing.stage("prepare");
@@ -1112,20 +1120,9 @@ where
 
     let auth_outcome = askpass_context
         .as_ref()
-        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
-            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        .map_or(AuthOutcome::NotRequested, |context| {
+            context.finish(&mut stderr, status.success())
         });
-    if let Some((askpass_script, _)) = askpass_context.as_ref() {
-        append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        // The trailer explains a request for a passphrase. On a failure with
-        // another cause, such as a pull refused for local changes, it misleads.
-        if matches!(
-            auth_outcome,
-            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
-        ) {
-            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
-        }
-    }
 
     if cancelled {
         return Err(Error::new(ErrorKind::Cancelled));
