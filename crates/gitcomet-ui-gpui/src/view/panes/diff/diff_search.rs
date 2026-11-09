@@ -2600,6 +2600,26 @@ struct ConflictResolverSearchContext<'a> {
 }
 
 impl<'a> ConflictResolverSearchContext<'a> {
+    /// Base, ours and theirs text at aligned `row`; padding rows are empty.
+    fn three_way_row_texts(&self, row: usize) -> [&'a str; 3] {
+        let side = |side: usize, text: &'a str, line_starts: &'a [usize]| {
+            self.three_way_aligned
+                .side_line_for_row(side, row)
+                .map_or("", |line| {
+                    conflict_resolver::line_text_from_starts(text, line_starts, line)
+                })
+        };
+        [
+            side(0, self.three_way_base_text, self.three_way_base_line_starts),
+            side(1, self.three_way_ours_text, self.three_way_ours_line_starts),
+            side(
+                2,
+                self.three_way_theirs_text,
+                self.three_way_theirs_line_starts,
+            ),
+        ]
+    }
+
     fn from_conflict_resolver(conflict_resolver: &'a ConflictResolverUiState) -> Self {
         let (three_way_base_line_starts, three_way_ours_line_starts, three_way_theirs_line_starts) =
             if conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay {
@@ -2730,6 +2750,7 @@ fn search_three_way_via_spans(
     query: AsciiCaseInsensitiveNeedle<'_>,
     out: &mut Vec<usize>,
 ) {
+    let choices = block_choices(ctx.marker_segments);
     for span in projection.spans() {
         match *span {
             conflict_resolver::ThreeWayVisibleSpan::Lines {
@@ -2738,32 +2759,8 @@ fn search_three_way_via_spans(
                 len,
             } => {
                 for i in 0..len {
-                    // Rows are aligned; each side renders its own line
-                    // there (padding rows have no text).
-                    let row = source_line_start + i;
-                    let aligned = ctx.three_way_aligned;
-                    let base = aligned.side_line_for_row(0, row).map_or("", |l| {
-                        conflict_resolver::line_text_from_starts(
-                            ctx.three_way_base_text,
-                            ctx.three_way_base_line_starts,
-                            l,
-                        )
-                    });
-                    let ours = aligned.side_line_for_row(1, row).map_or("", |l| {
-                        conflict_resolver::line_text_from_starts(
-                            ctx.three_way_ours_text,
-                            ctx.three_way_ours_line_starts,
-                            l,
-                        )
-                    });
-                    let theirs = aligned.side_line_for_row(2, row).map_or("", |l| {
-                        conflict_resolver::line_text_from_starts(
-                            ctx.three_way_theirs_text,
-                            ctx.three_way_theirs_line_starts,
-                            l,
-                        )
-                    });
-                    if query.is_match(base) || query.is_match(ours) || query.is_match(theirs) {
+                    let texts = ctx.three_way_row_texts(source_line_start + i);
+                    if texts.into_iter().any(|text| query.is_match(text)) {
                         out.push(visible_start + i);
                     }
                 }
@@ -2772,10 +2769,7 @@ fn search_three_way_via_spans(
                 visible_index,
                 conflict_ix,
             } => {
-                let choice_label = conflict_choice_for_index(ctx.marker_segments, conflict_ix)
-                    .map(conflict_choice_label)
-                    .unwrap_or("?");
-                let summary = format!("Resolved: picked {choice_label}");
+                let summary = collapsed_block_summary(&choices, conflict_ix);
                 if query.is_match(&summary) {
                     out.push(visible_index);
                 }
@@ -2796,6 +2790,7 @@ fn search_three_way_via_spans_with_matcher(
     let mut ours_rows = Vec::new();
     let mut theirs_rows = Vec::new();
     let mut summary_rows = Vec::new();
+    let choices = block_choices(ctx.marker_segments);
 
     for span in projection
         .spans()
@@ -2810,51 +2805,19 @@ fn search_three_way_via_spans_with_matcher(
             } => {
                 for i in (0..len).take_while(|_| !matcher.is_cancelled()) {
                     let visible_ix = visible_start + i;
-                    // Rows are aligned; translate per side.
-                    let row = source_line_start + i;
-                    let aligned = ctx.three_way_aligned;
-                    base_rows.push((
-                        visible_ix,
-                        Cow::Borrowed(aligned.side_line_for_row(0, row).map_or("", |l| {
-                            conflict_resolver::line_text_from_starts(
-                                ctx.three_way_base_text,
-                                ctx.three_way_base_line_starts,
-                                l,
-                            )
-                        })),
-                    ));
-                    ours_rows.push((
-                        visible_ix,
-                        Cow::Borrowed(aligned.side_line_for_row(1, row).map_or("", |l| {
-                            conflict_resolver::line_text_from_starts(
-                                ctx.three_way_ours_text,
-                                ctx.three_way_ours_line_starts,
-                                l,
-                            )
-                        })),
-                    ));
-                    theirs_rows.push((
-                        visible_ix,
-                        Cow::Borrowed(aligned.side_line_for_row(2, row).map_or("", |l| {
-                            conflict_resolver::line_text_from_starts(
-                                ctx.three_way_theirs_text,
-                                ctx.three_way_theirs_line_starts,
-                                l,
-                            )
-                        })),
-                    ));
+                    let [base, ours, theirs] = ctx.three_way_row_texts(source_line_start + i);
+                    base_rows.push((visible_ix, Cow::Borrowed(base)));
+                    ours_rows.push((visible_ix, Cow::Borrowed(ours)));
+                    theirs_rows.push((visible_ix, Cow::Borrowed(theirs)));
                 }
             }
             conflict_resolver::ThreeWayVisibleSpan::CollapsedResolvedBlock {
                 visible_index,
                 conflict_ix,
             } => {
-                let choice_label = conflict_choice_for_index(ctx.marker_segments, conflict_ix)
-                    .map(conflict_choice_label)
-                    .unwrap_or("?");
                 summary_rows.push((
                     visible_index,
-                    Cow::Owned(format!("Resolved: picked {choice_label}")),
+                    Cow::Owned(collapsed_block_summary(&choices, conflict_ix)),
                 ));
             }
             // Folded context lines are not visible, so they are not searched.
@@ -2868,17 +2831,29 @@ fn search_three_way_via_spans_with_matcher(
     collect_stream_match_visible_rows(summary_rows, matcher, out);
 }
 
-fn conflict_choice_for_index(
+/// Each conflict block's choice, by conflict index; collected once per search.
+fn block_choices(
     segments: &[conflict_resolver::ConflictSegment],
-    conflict_ix: usize,
-) -> Option<conflict_resolver::ConflictChoice> {
+) -> Vec<conflict_resolver::ConflictChoice> {
     segments
         .iter()
         .filter_map(|seg| match seg {
             conflict_resolver::ConflictSegment::Block(block) => Some(block.choice),
             _ => None,
         })
-        .nth(conflict_ix)
+        .collect()
+}
+
+/// The text a collapsed resolved block shows; search matches the same text.
+pub(in crate::view) fn collapsed_block_summary(
+    choices: &[conflict_resolver::ConflictChoice],
+    conflict_ix: usize,
+) -> String {
+    let label = choices
+        .get(conflict_ix)
+        .copied()
+        .map_or("?", conflict_choice_label);
+    format!("Resolved: picked {label}")
 }
 
 fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static str {
@@ -2898,40 +2873,12 @@ fn three_way_visible_item_matches_query(
     query: &str,
 ) -> bool {
     match item {
-        conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-            // `ix` is an aligned row; translate per side.
-            let aligned = ctx.three_way_aligned;
-            let base = aligned.side_line_for_row(0, ix).map_or("", |l| {
-                conflict_resolver::line_text_from_starts(
-                    ctx.three_way_base_text,
-                    ctx.three_way_base_line_starts,
-                    l,
-                )
-            });
-            let ours = aligned.side_line_for_row(1, ix).map_or("", |l| {
-                conflict_resolver::line_text_from_starts(
-                    ctx.three_way_ours_text,
-                    ctx.three_way_ours_line_starts,
-                    l,
-                )
-            });
-            let theirs = aligned.side_line_for_row(2, ix).map_or("", |l| {
-                conflict_resolver::line_text_from_starts(
-                    ctx.three_way_theirs_text,
-                    ctx.three_way_theirs_line_starts,
-                    l,
-                )
-            });
-
-            contains_ascii_case_insensitive(base, query)
-                || contains_ascii_case_insensitive(ours, query)
-                || contains_ascii_case_insensitive(theirs, query)
-        }
+        conflict_resolver::ThreeWayVisibleItem::Line(row) => ctx
+            .three_way_row_texts(row)
+            .into_iter()
+            .any(|text| contains_ascii_case_insensitive(text, query)),
         conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
-            let choice_label = conflict_choice_for_index(ctx.marker_segments, conflict_ix)
-                .map(conflict_choice_label)
-                .unwrap_or("?");
-            let summary = format!("Resolved: picked {choice_label}");
+            let summary = collapsed_block_summary(&block_choices(ctx.marker_segments), conflict_ix);
             contains_ascii_case_insensitive(&summary, query)
         }
         // Folded context lines are not visible, so they are not searched.

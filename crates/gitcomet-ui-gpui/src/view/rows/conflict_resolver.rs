@@ -5,7 +5,9 @@ use super::diff_text::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::diff_search::{
+    DiffSearchMatcher, DiffSearchOptions, collapsed_block_summary,
+};
 
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 
@@ -827,17 +829,7 @@ impl DiffRenderer {
             match visible_item {
                 conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
                     let label: SharedString = if matches!(side, ConflictPickSide::Ours) {
-                        let choice_label = conflict_choices
-                            .get(range_ix)
-                            .map(|c| match *c {
-                                conflict_resolver::ConflictChoice::Base => "Base (A)",
-                                conflict_resolver::ConflictChoice::Ours => "Local (B)",
-                                conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
-                                conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
-                                _ => "Ordered source selection",
-                            })
-                            .unwrap_or("?");
-                        format!("  Resolved: picked {choice_label}").into()
+                        format!("  {}", collapsed_block_summary(&conflict_choices, range_ix)).into()
                     } else {
                         "".into()
                     };

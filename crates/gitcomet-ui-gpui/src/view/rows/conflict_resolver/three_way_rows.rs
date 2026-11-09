@@ -5,10 +5,10 @@ use super::{
     DiffSearchMatchEmphasis, DiffSyntaxConfig, DiffSyntaxMode, MouseButton, MouseDownEvent,
     MouseMoveEvent, PreparedDiffSyntaxLine, Range, SharedString, ThreeWayColumn, ViewPerfSpan,
     Window, build_cached_diff_styled_text_for_prepared_document_line_nonblocking,
-    build_conflict_cached_diff_styled_text, conflict_canvas, conflict_diff_line_number_cell,
-    conflict_diff_text_cell, conflict_display_text, conflict_input_row_min_width,
-    conflict_resolver, conflict_scaled_px, div, line_number_string, perf,
-    three_way_input_row_menu_targets, with_alpha,
+    build_conflict_cached_diff_styled_text, collapsed_block_summary, conflict_canvas,
+    conflict_diff_line_number_cell, conflict_diff_text_cell, conflict_display_text,
+    conflict_input_row_min_width, conflict_resolver, conflict_scaled_px, div, line_number_string,
+    perf, three_way_input_row_menu_targets, with_alpha,
 };
 use crate::kit::click::PointerClickExt;
 use gpui::prelude::*;
@@ -227,17 +227,7 @@ impl DiffRenderer {
             match visible_item {
                 conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
                     let label: SharedString = if matches!(column, ThreeWayColumn::Base) {
-                        let choice_label = conflict_choices
-                            .get(range_ix)
-                            .map(|c| match *c {
-                                conflict_resolver::ConflictChoice::Base => "Base (A)",
-                                conflict_resolver::ConflictChoice::Ours => "Local (B)",
-                                conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
-                                conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
-                                _ => "Ordered source selection",
-                            })
-                            .unwrap_or("?");
-                        format!("  Resolved: picked {choice_label}").into()
+                        format!("  {}", collapsed_block_summary(conflict_choices, range_ix)).into()
                     } else {
                         "".into()
                     };
