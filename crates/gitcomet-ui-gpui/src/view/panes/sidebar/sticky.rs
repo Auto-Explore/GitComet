@@ -810,31 +810,15 @@ impl StickyRows {
             let natural_y = ix as f32 * f32::from(row_height)
                 + f32::from(scroll_offset.y)
                 + f32::from(displacement);
-            let logical_y = sidebar_sticky::row_y(
+            let y = sidebar_sticky::elastic_row_y(
                 ix,
                 rank,
                 layout.slots.len(),
                 -f32::from(scroll_offset.y),
                 f32::from(bounds.size.height),
                 f32::from(row_height),
+                f32::from(displacement),
             );
-            // Every decorated header belongs to the fixed chrome layer, even
-            // when logical scrolling leaves it at its natural position. In
-            // particular, short auxiliary sections near the bottom need not
-            // reach an edge anchor before their headers stop stretching.
-            let y = if sidebar_sticky::header_key(&presentation.rows[ix]).is_some() {
-                logical_y
-            } else {
-                sidebar_sticky::elastic_row_y(
-                    ix,
-                    rank,
-                    layout.slots.len(),
-                    -f32::from(scroll_offset.y),
-                    f32::from(bounds.size.height),
-                    f32::from(row_height),
-                    f32::from(displacement),
-                )
-            };
             (y, y != natural_y)
         };
         let rendered = SidebarPaneView::render_sidebar_rows(

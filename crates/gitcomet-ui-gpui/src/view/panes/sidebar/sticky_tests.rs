@@ -213,7 +213,7 @@ fn elastic_sidebar_stretches_rows_below_a_fixed_sticky_header(cx: &mut gpui::Tes
 
 #[cfg(target_os = "macos")]
 #[gpui::test]
-fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sections(
+fn elastic_sidebar_keeps_interior_headers_with_short_and_empty_sections(
     cx: &mut gpui::TestAppContext,
 ) {
     fn draw(cx: &mut gpui::VisualTestContext) {
@@ -229,6 +229,11 @@ fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sect
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut state = fixture(100);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
+    // Short local branches leave the Remote Branches header inside the
+    // viewport at the top, as in the reported ntsd-2.4 sidebar.
+    if let Loadable::Ready(branches) = &mut repo.branches {
+        Arc::make_mut(branches).truncate(2);
+    }
     // Match the reported sidebar: one worktree, no submodules and no stashes.
     repo.worktrees = long_list_tests::fixture(1, CollapsedSidebarSection::Worktrees).repos[0]
         .worktrees
@@ -300,17 +305,23 @@ fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sect
                 .offset()
         });
         assert_eq!(before.len(), 3);
-        // At least one header is between the edge stacks. This is the case
-        // that the old anchor-only correction failed to protect.
-        cx.update(|_, app| {
+        // Interior headers belong to the same moving content as their rows.
+        // Only the headers already pinned at a viewport edge stay fixed.
+        let interior = cx.update(|_, app| {
             let handle = pane.read(app).branches_scroll.0.borrow();
             let row_height = handle.last_item_size.unwrap().contents.height / count as f32;
-            assert!(headers.iter().zip(&before).any(|(&ix, bounds)| {
-                (bounds.top() - (handle.base_handle.bounds().top() + offset.y + row_height * ix))
-                    .abs()
-                    < px(0.5)
-            }));
+            headers
+                .iter()
+                .zip(&before)
+                .map(|(&ix, bounds)| {
+                    (bounds.top()
+                        - (handle.base_handle.bounds().top() + offset.y + row_height * ix))
+                        .abs()
+                        < px(0.5)
+                })
+                .collect::<Vec<_>>()
         });
+        assert!(interior.iter().any(|&interior| interior));
         for (delta, phase) in [
             (-100.0, gpui::TouchPhase::Started),
             (0.0, gpui::TouchPhase::Ended),
@@ -322,14 +333,24 @@ fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sect
                 touch_phase: phase,
             });
             draw(cx);
-            for (&ix, bounds) in headers.iter().zip(&before) {
-                assert_eq!(
-                    cx.debug_bounds(selector(ix)).unwrap(),
-                    *bounds,
-                    "header {ix} moved during {phase:?}"
-                );
+            let moved_body = cx.debug_bounds(body_selector).unwrap();
+            let displacement = moved_body.top() - body.top();
+            for ((&ix, bounds), &interior) in headers.iter().zip(&before).zip(&interior) {
+                let moved_header = cx.debug_bounds(selector(ix)).unwrap();
+                if interior {
+                    assert_eq!(
+                        moved_header.top() - bounds.top(),
+                        displacement,
+                        "interior header {ix} separated from its section during {phase:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        moved_header, *bounds,
+                        "pinned header {ix} moved during {phase:?}"
+                    );
+                }
             }
-            assert!(cx.debug_bounds(body_selector).unwrap().top() < body.top() - px(20.0));
+            assert!(displacement < -px(20.0));
             assert_eq!(
                 cx.update(|_, app| pane
                     .read(app)
@@ -348,6 +369,59 @@ fn elastic_sidebar_keeps_natural_bottom_headers_fixed_above_short_and_empty_sect
         for (&ix, bounds) in headers.iter().zip(&before) {
             assert_eq!(cx.debug_bounds(selector(ix)).unwrap(), *bounds);
         }
+
+        cx.update(|window, app| {
+            pane.update(app, |pane, _| {
+                pane.branches_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            });
+            window.refresh();
+        });
+        draw(cx);
+        let (remote, last_local) = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                let remote = presentation
+                    .rows
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row,
+                            BranchSidebarRow::SectionHeader {
+                                section: BranchSection::Remote,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap();
+                let last_local = presentation.rows[..remote]
+                    .iter()
+                    .rposition(|row| matches!(row, BranchSidebarRow::Branch { .. }))
+                    .unwrap();
+                (remote, last_local)
+            })
+        });
+        let branch_selector: &'static str = format!("branch_row_{}_{last_local}", repo_id.0).leak();
+        let top_header = cx.debug_bounds(selector(0)).unwrap();
+        let remote_header = cx.debug_bounds(selector(remote)).unwrap();
+        let local_branch = cx.debug_bounds(branch_selector).unwrap();
+        let section_gap = remote_header.top() - local_branch.bottom();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: top_header.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Started,
+        });
+        draw(cx);
+        let moved_branch = cx.debug_bounds(branch_selector).unwrap();
+        let moved_remote = cx.debug_bounds(selector(remote)).unwrap();
+        assert_eq!(cx.debug_bounds(selector(0)).unwrap(), top_header);
+        assert!(moved_branch.top() > local_branch.top() + px(20.0));
+        assert_eq!(
+            moved_remote.top() - moved_branch.bottom(),
+            section_gap,
+            "local rows must not slide underneath the interior Remote Branches header"
+        );
     });
 }
 
