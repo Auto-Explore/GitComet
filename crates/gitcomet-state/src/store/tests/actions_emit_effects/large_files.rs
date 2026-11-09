@@ -582,7 +582,7 @@ fn review_commit_and_amend_push_wait_for_running_push() {
         let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
         annex_repo_on(&mut state, "adjusted/main(unlocked)");
         reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
-        state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+        state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
             message: "ship".into(),
             amend,
             push_after_commit: true,
@@ -959,7 +959,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
     }
 
-    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,

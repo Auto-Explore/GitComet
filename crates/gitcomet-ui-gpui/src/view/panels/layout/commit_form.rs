@@ -25,10 +25,12 @@ impl CommitOptions {
         let hooks = GitHooks::from_skip(self.skip_hooks);
         Msg::Commit {
             repo_id,
-            message,
-            amend: self.amend,
-            push_after_commit: self.push_after,
-            hooks,
+            request: gitcomet_state::model::CommitRequest {
+                message,
+                amend: self.amend,
+                push_after_commit: self.push_after,
+                hooks,
+            },
         }
     }
 

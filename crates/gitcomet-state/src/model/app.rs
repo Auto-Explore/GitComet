@@ -1,6 +1,6 @@
 //! App-wide state: settings, prompts, and notifications.
 
-use super::{CloneOpState, RepoId, RepoState};
+use super::{CloneOpState, CommitRequest, RepoId, RepoState};
 use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::process::GitRuntimeState;
@@ -306,10 +306,7 @@ pub enum AuthRetryOperation {
     },
     Commit {
         repo_id: RepoId,
-        message: String,
-        amend: bool,
-        push_after_commit: bool,
-        hooks: gitcomet_core::services::GitHooks,
+        request: CommitRequest,
     },
     Clone {
         url: String,

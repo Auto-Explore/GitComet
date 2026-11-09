@@ -71,11 +71,13 @@ fn bare_worktree_commands_refuse_without_mutating_operation_counters() {
     let (mut repos, ids, mut state, repo_id) = fixture(RepositoryMode::Bare);
     for message in [
         Msg::Commit {
-            amend: false,
             repo_id,
-            message: "message".into(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "message".into(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
         Msg::DropStash { repo_id, index: 0 },
         Msg::Reset {

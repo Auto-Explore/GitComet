@@ -456,10 +456,13 @@ fn commit_options_carry_the_hook_choice_to_commit_and_amend() {
                 match options.msg(repo_id, "message".to_string()) {
                     Msg::Commit {
                         repo_id: id,
-                        message,
-                        amend: sent_amend,
-                        push_after_commit,
-                        hooks,
+                        request:
+                            gitcomet_state::model::CommitRequest {
+                                message,
+                                amend: sent_amend,
+                                push_after_commit,
+                                hooks,
+                            },
                     } => {
                         assert_eq!(sent_amend, amend, "{options:?}");
                         assert_eq!((id, message.as_str()), (repo_id, "message"));

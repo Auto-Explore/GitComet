@@ -1,8 +1,9 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
-    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
-    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    BranchExistsPromptState, CommitRequest, ConflictFileLoadMode, DefaultTagType,
+    FileBrowserSettings, ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt,
+    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
+    SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -1054,11 +1055,7 @@ pub enum Msg {
     },
     Commit {
         repo_id: RepoId,
-        message: String,
-        amend: bool,
-        push_after_commit: bool,
-        /// Kept by the push after this commit.
-        hooks: GitHooks,
+        request: CommitRequest,
     },
     SafePushAfterCommit {
         repo_id: RepoId,

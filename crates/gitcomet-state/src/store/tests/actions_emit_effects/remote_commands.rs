@@ -945,7 +945,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -982,7 +982,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     state.repos[0].push_in_flight = 0;
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::CommitRequest {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -1028,11 +1028,13 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
         &id_alloc,
         &mut state,
         Msg::Commit {
-            amend: false,
             repo_id,
-            message: "wip".to_string(),
-            push_after_commit: true,
-            hooks: GitHooks::Skip,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "wip".to_string(),
+                push_after_commit: true,
+                hooks: GitHooks::Skip,
+            },
         },
     );
     assert!(

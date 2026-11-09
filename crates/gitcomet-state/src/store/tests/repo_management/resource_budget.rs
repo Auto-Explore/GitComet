@@ -23,11 +23,13 @@ fn commit_to_checked_push_keeps_its_backend_through_both_handoffs() {
             &ids,
             &mut state,
             Msg::Commit {
-                amend: false,
                 repo_id: id,
-                message: "message".into(),
-                push_after_commit: true,
-                hooks: gitcomet_core::services::GitHooks::Run,
+                request: crate::model::CommitRequest {
+                    amend: false,
+                    message: "message".into(),
+                    push_after_commit: true,
+                    hooks: gitcomet_core::services::GitHooks::Run,
+                },
             },
         );
         assert_eq!(state.repos[0].commit_in_flight, 1);

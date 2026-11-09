@@ -5,7 +5,7 @@ use super::{
     actions_emit_effects, begin_commit_action, begin_local_action, external_and_history,
     maintenance, refresh_selected_head_gitlink, repo_management, util, worktree_removal,
 };
-use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
+use crate::model::{AppState, AuthPromptState, AuthRetryOperation, CommitRequest, RepoId};
 use crate::model::{AuthPromptKind, AuthPromptStatus};
 use crate::msg::{Effect, Msg, RepoCommandKind};
 use crate::store::reducer::prepared::ReducerInputs;
@@ -49,18 +49,14 @@ fn auth_prompt_for_safe_push_after_commit(
 
 fn auth_prompt_for_commit(
     repo_id: RepoId,
-    pending: Option<PendingCommitRetry>,
+    pending: Option<CommitRequest>,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let pending = pending?;
     auth_prompt_for_error(
         error,
         AuthRetryOperation::Commit {
             repo_id,
-            message: pending.message,
-            amend: pending.amend,
-            push_after_commit: pending.push_after_commit,
-            hooks: pending.hooks,
+            request: pending?,
         },
     )
 }
@@ -197,19 +193,7 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
         AuthRetryOperation::SafePushAfterCommit { repo_id, context } => {
             Some(Msg::SafePushAfterCommit { repo_id, context })
         }
-        AuthRetryOperation::Commit {
-            repo_id,
-            message,
-            amend,
-            push_after_commit,
-            hooks,
-        } => Some(Msg::Commit {
-            repo_id,
-            message,
-            amend,
-            push_after_commit,
-            hooks,
-        }),
+        AuthRetryOperation::Commit { repo_id, request } => Some(Msg::Commit { repo_id, request }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
     }
 }
@@ -801,11 +785,7 @@ pub(super) fn clone_repo_finished(
     effects
 }
 
-pub(super) fn commit(
-    state: &mut AppState,
-    repo_id: RepoId,
-    request: PendingCommitRetry,
-) -> Vec<Effect> {
+pub(super) fn commit(state: &mut AppState, repo_id: RepoId, request: CommitRequest) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
     let (message, amend, hooks) = (request.message.clone(), request.amend, request.hooks);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -868,7 +848,7 @@ pub(super) fn commit_finished(
             state,
             repo_id,
             SafePushAfterCommitContext {
-                amend: pending_commit.amend,
+                amend,
                 local_branch: outcome.local_branch,
                 pre_head: outcome.pre_head,
                 post_head: outcome.post_head,

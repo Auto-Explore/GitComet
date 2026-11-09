@@ -18,11 +18,13 @@ fn commit_emits_effect() {
         &id_alloc,
         &mut state,
         Msg::Commit {
-            amend: false,
             repo_id: RepoId(1),
-            message: "hello".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "hello".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
 
@@ -121,11 +123,13 @@ fn commit_amend_emits_effect() {
         &id_alloc,
         &mut state,
         Msg::Commit {
-            amend: true,
             repo_id: RepoId(1),
-            message: "amended".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: true,
+                message: "amended".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
 
@@ -278,11 +282,13 @@ fn commit_bumps_ops_rev() {
         &id_alloc,
         &mut state,
         Msg::Commit {
-            amend: false,
             repo_id,
-            message: "test commit".to_string(),
-            push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            request: crate::model::CommitRequest {
+                amend: false,
+                message: "test commit".to_string(),
+                push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
+            },
         },
     );
     assert!(

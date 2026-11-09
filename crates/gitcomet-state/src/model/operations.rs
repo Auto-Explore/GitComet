@@ -207,11 +207,13 @@ pub enum GitOperationOuterOutcome {
     TimedOut,
 }
 
+/// A commit or amend as the commit form asked for it; kept for an auth retry.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PendingCommitRetry {
+pub struct CommitRequest {
     pub message: String,
     pub amend: bool,
     pub push_after_commit: bool,
+    /// Kept by the push after this commit.
     pub hooks: gitcomet_core::services::GitHooks,
 }
 
@@ -235,7 +237,7 @@ pub struct InteractiveCherryPickSetup {
 /// queued large-file commands.
 #[derive(Clone, Debug, Default)]
 pub struct RepoPendingState {
-    pub commit_retry: Option<PendingCommitRetry>,
+    pub commit_retry: Option<CommitRequest>,
     pub force_push_lease: Option<ForcePushLease>,
     /// Annex operations waiting for a conflicting pull or push to finish.
     pub(crate) large_file_commands: std::collections::VecDeque<PendingLargeFileCommand>,
