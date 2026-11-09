@@ -69,7 +69,13 @@ fn windows_ssh_pull_retry_keeps_auth_attempts_out_of_terminal_failure_feedback()
             assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
             let prompt = state.auth_prompt.as_ref().expect("passphrase prompt");
             assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
-            assert!(prompt.reason.contains("Enter passphrase for key"));
+            assert!(
+                prompt
+                    .challenge
+                    .as_ref()
+                    .is_some_and(|challenge| challenge.prompt.contains("Enter passphrase for key"))
+            );
+            assert_eq!(prompt.output, None);
             let log = &state.repos[0].feedback.command_log;
             assert_eq!(log.len(), attempt + 1);
             assert_eq!(log.last().unwrap().command, "git pull --prune");
@@ -378,7 +384,7 @@ fn cancelling_auth_does_not_remove_an_unrelated_clone() {
         challenge: None,
         status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
-        reason: "passphrase required".into(),
+        output: Some("passphrase required".into()),
         operation: AuthRetryOperation::Clone {
             url: "git@github.com:first/repo.git".into(),
             dest: PathBuf::from("/tmp/first"),
@@ -451,7 +457,7 @@ fn aborting_a_clone_that_exits_for_credentials_stays_quiet_behind_another_prompt
         challenge: None,
         status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
-        reason: "passphrase required".into(),
+        output: Some("passphrase required".into()),
         operation: AuthRetryOperation::RepoCommand {
             repo_id,
             command: RepoCommandKind::FetchAll,
