@@ -19,8 +19,7 @@ fn model_for_commit_sha_link(
         ContextMenuItem::Separator,
     ];
 
-    // Revealing the commit you are already looking at is a no-op, so the
-    // commit's own SHA field offers only the browse entry.
+    // The details pane's own SHA field turns this off.
     if allow_navigate {
         items.push(ContextMenuItem::Entry {
             label: "Reveal commit".into(),

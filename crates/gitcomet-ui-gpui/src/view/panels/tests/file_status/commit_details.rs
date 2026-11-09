@@ -1335,6 +1335,36 @@ fn commit_card_chevrons_open_the_commit_menu_for_their_sha(cx: &mut gpui::TestAp
     }
 }
 
+/// While the card still shows the previous commit, its menus must not act on
+/// it: Reveal there would undo the selection the user just made.
+#[gpui::test]
+fn commit_card_chevrons_are_inert_while_the_card_is_stale(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = commit_card_chip_fixture(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut state = (*this.state).clone();
+            let repo = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == gitcomet_state::model::RepoId(41))
+                .expect("fixture repo");
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(CHIP_PARENT_SHA.into()));
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    for menu in ["commit_card_sha_menu", "commit_card_parent_menu"] {
+        let bounds = cx.debug_bounds(menu).expect(menu);
+        simulate_counted_click(cx, bounds.center(), 1);
+        draw_and_drain_test_window(cx);
+        let kind = cx.update(|_window, app| {
+            crate::view::test_support::popover_kind(view.read(app), app)
+        });
+        assert_eq!(kind, None, "{menu} opened a menu for the previous commit");
+    }
+}
+
 #[gpui::test]
 fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

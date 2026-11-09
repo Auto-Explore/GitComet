@@ -358,7 +358,9 @@ fn model_with_header(
             icon: Some("icons/copy.svg".into()),
             shortcut: Some("C".into()),
             disabled: false,
-            action: Box::new(ContextMenuAction::CopyText { text: sha.clone() }),
+            action: Box::new(ContextMenuAction::CopyCommitSha {
+                commit_id: commit_id.clone(),
+            }),
         });
         let names = commit_branch_names_to_copy(this, repo_id, commit_id, refs);
         let single = names.len() == 1;

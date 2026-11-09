@@ -97,10 +97,6 @@ pub(in crate::view) enum RootRequest {
     InstallLinuxDesktopIntegration,
     Toast(components::ToastKind, String),
     CopyCommitSha(CommitId),
-    RevealCommit {
-        repo_id: RepoId,
-        commit_id: CommitId,
-    },
     ClearPendingTerminalShutdownPrompt,
     ConfirmTerminalShutdown(TerminalShutdownPrompt),
     ResolveUnsavedFileEdits {
@@ -243,9 +239,6 @@ impl GitCometView {
             }
             RootRequest::Toast(kind, message) => self.push_toast(kind, message, cx),
             RootRequest::CopyCommitSha(commit_id) => self.copy_commit_sha(commit_id, cx),
-            RootRequest::RevealCommit { repo_id, commit_id } => {
-                self.reveal_commit_in_history(repo_id, commit_id, cx)
-            }
             RootRequest::ClearPendingTerminalShutdownPrompt => {
                 self.clear_pending_terminal_shutdown_prompt(cx)
             }

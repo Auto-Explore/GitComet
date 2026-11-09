@@ -656,7 +656,7 @@ pub(in crate::view) enum ContextMenuAction {
     CopyLinkAddress {
         url: String,
     },
-    /// Copy a commit's full SHA, and say so: menus show it shortened or not at all.
+    /// Copy a commit's full SHA and confirm it with a toast.
     CopyCommitSha {
         commit_id: CommitId,
     },

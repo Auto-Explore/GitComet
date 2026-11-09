@@ -856,16 +856,28 @@ impl DetailsPaneView {
         });
     }
 
-    /// Deferred: a click can arrive while the root is mid-update.
-    pub(in super::super) fn request_root(
+    pub(in super::super) fn copy_commit_sha(
         &self,
-        request: crate::view::gitcomet_view_requests::RootRequest,
+        commit_id: CommitId,
         cx: &mut gpui::Context<Self>,
     ) {
-        use crate::view::gitcomet_view_requests::RootRequests as _;
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.request(request, None, cx);
+            let _ = root_view.update(cx, |root, cx| root.copy_commit_sha(commit_id, cx));
+        });
+    }
+
+    pub(in super::super) fn reveal_commit_in_history(
+        &self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.reveal_commit_in_history(repo_id, commit_id, cx)
+            });
         });
     }
 
