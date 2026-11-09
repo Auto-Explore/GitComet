@@ -2405,6 +2405,82 @@ fn indexed_history_pending_momentum_follows_the_live_owner_and_stops_when_hidden
     });
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn pruning_a_parked_indexed_owner_cancels_queued_native_momentum(cx: &mut gpui::TestAppContext) {
+    use crate::kit::elastic_scroll::{ReplayInput, ReplaySource, with_replay_input};
+
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, _| window.activate());
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            history.update(app, |history, cx| {
+                history
+                    .scroll_interaction
+                    .borrow_mut()
+                    .logical
+                    .as_mut()
+                    .unwrap()
+                    .set_position(100.0);
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        let position = cx
+            .debug_bounds("indexed_history_viewport")
+            .unwrap()
+            .center();
+        cx.update(|window, app| {
+            let at = app.background_executor().now();
+            with_replay_input(
+                ReplayInput {
+                    source: ReplaySource::Momentum,
+                    phase: gpui::TouchPhase::Moved,
+                    at,
+                    momentum_ended: false,
+                },
+                || {
+                    window.dispatch_event(
+                        gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                            position,
+                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+                            touch_phase: gpui::TouchPhase::Moved,
+                            modifiers: Default::default(),
+                        }),
+                        app,
+                    );
+                },
+            );
+            history.update(app, |history, _| {
+                assert!(history.scroll_elastic.pending_native_momentum());
+                assert_eq!(history.history_scroll_position(), 100.0);
+                // The model observer calls this teardown before a hidden pane
+                // can repaint or refresh the driver's weak frame binding.
+                let mut parked = (*history.state).clone();
+                parked.repos[0].set_backend_parked_for_test(true);
+                history.state = Arc::new(parked);
+                history.prune_retained_indexed_history();
+                assert!(history.indexed.presentation.is_none());
+                assert!(history.scroll_interaction.borrow().logical.is_none());
+                assert!(
+                    !history.scroll_elastic.pending_native_momentum(),
+                    "dropping a cold indexed owner cancels its accepted native travel immediately"
+                );
+            });
+        });
+    });
+}
+
 #[gpui::test]
 #[cfg(target_os = "macos")]
 fn uniform_history_two_native_packets_preserve_their_queued_endpoint(

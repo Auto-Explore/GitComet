@@ -306,6 +306,7 @@ impl HistoryView {
                 .find(|repo| repo.id == id)
                 .is_none_or(|repo| repo.is_backend_parked())
         }) {
+            self.reset_history_scroll_motion();
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
         }
