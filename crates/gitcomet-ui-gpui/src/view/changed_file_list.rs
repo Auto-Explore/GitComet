@@ -72,8 +72,8 @@ impl Render for ChangedFileListView {
                         .as_ref()
                         .is_some_and(|headers| headers.binary_search(&(start + offset)).is_ok())
                     {
-                        // Retain the measured row slot. Its chrome is painted
-                        // once in the fixed overlay, outside the spring.
+                        // Retain the measured row slot. Its header is painted
+                        // once in the sibling overlay with sticky positioning.
                         div().w_full().invisible().child(row).into_any_element()
                     } else {
                         row
@@ -509,5 +509,166 @@ fn elastic_grouped_files_keep_headers_fixed_and_forward_header_wheel_input(
             2,
             "the fixed pinned header remains interactive"
         );
+    });
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[gpui::test]
+fn elastic_grouped_files_keep_interior_headers_with_rows_and_reverse_top_push_off(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    fn gesture(
+        cx: &mut gpui::VisualTestContext,
+        position: Point<Pixels>,
+        delta: f32,
+        phase: gpui::TouchPhase,
+    ) {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+            modifiers: Default::default(),
+            touch_phase: phase,
+        });
+        draw(cx);
+    }
+
+    let scroll = UniformListScrollHandle::default();
+    let (view, cx) = cx.add_window_view(|_, _| {
+        ChangedFileListView::new(
+            Rc::new(RefCell::new(FileListController::new(
+                gitcomet_extension_api::FileListMode::Grouped,
+            ))),
+            "elastic_interior_groups_test",
+            scroll.clone(),
+            |range, _, _| {
+                range
+                    .map(|row| {
+                        div()
+                            .h(px(24.0))
+                            .w_full()
+                            .debug_selector(move || format!("interior_group_body_{row}"))
+                            .child(format!("Row {row}"))
+                            .into_any_element()
+                    })
+                    .collect()
+            },
+        )
+    });
+    cx.update(|_, app| {
+        view.update(app, |list, _| {
+            list.refresh(
+                Some(100),
+                Some(StickyHeaders {
+                    headers: Arc::from([0, 4, 40, 91, 96]),
+                    header: Rc::new(|row, height, pinned, _| {
+                        Some(
+                            div()
+                                .h(height)
+                                .w_full()
+                                .debug_selector(move || {
+                                    format!(
+                                        "interior_group_{}_{row}",
+                                        if pinned { "pinned" } else { "natural" }
+                                    )
+                                })
+                                .child(format!("Group {row}"))
+                                .into_any_element(),
+                        )
+                    }),
+                }),
+            );
+        });
+    });
+    cx.simulate_resize(gpui::size(px(320.0), px(240.0)));
+    draw(cx);
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, _| {
+            window.activate();
+            window.refresh();
+        });
+        draw(cx);
+        let first = cx.debug_bounds("interior_group_natural_0").unwrap();
+        let interior = cx.debug_bounds("interior_group_natural_4").unwrap();
+        let body = cx.debug_bounds("interior_group_body_5").unwrap();
+        gesture(cx, interior.center(), 100.0, gpui::TouchPhase::Started);
+        let moved = cx.debug_bounds("interior_group_body_5").unwrap();
+        assert!(moved.top() > body.top() + px(20.0));
+        assert_eq!(cx.debug_bounds("interior_group_natural_0").unwrap(), first);
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_4").unwrap().top() - interior.top(),
+            moved.top() - body.top(),
+            "the interior group must follow its file rows during a top bounce"
+        );
+        gesture(cx, interior.center(), 0.0, gpui::TouchPhase::Ended);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_4").unwrap(),
+            interior
+        );
+
+        scroll.scroll_to_item_strict(99, gpui::ScrollStrategy::Bottom);
+        cx.update(|window, _| window.refresh());
+        draw(cx);
+        let pinned = cx.debug_bounds("interior_group_pinned_40").unwrap();
+        let near_top = cx.debug_bounds("interior_group_natural_91").unwrap();
+        let interior = cx.debug_bounds("interior_group_natural_96").unwrap();
+        let body = cx.debug_bounds("interior_group_body_97").unwrap();
+        let bottom_offset = scroll.0.borrow().base_handle.offset();
+        assert_eq!(near_top.top(), pinned.bottom());
+        gesture(cx, interior.center(), -200.0, gpui::TouchPhase::Started);
+        let moved = cx.debug_bounds("interior_group_body_97").unwrap();
+        let displacement = moved.top() - body.top();
+        assert!(displacement < -px(24.0));
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_96").unwrap().top() - interior.top(),
+            displacement,
+            "short bottom groups must keep their headers with the file rows"
+        );
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_91").unwrap().top(),
+            pinned.top(),
+            "an interior header reaching the top must take over the anchor"
+        );
+        assert!(cx.debug_bounds("interior_group_pinned_40").is_none());
+        assert!(cx.debug_bounds("interior_group_pinned_91").is_none());
+        assert_eq!(scroll.0.borrow().base_handle.offset(), bottom_offset);
+
+        gesture(cx, interior.center(), 160.0, gpui::TouchPhase::Moved);
+        let moved = cx.debug_bounds("interior_group_body_97").unwrap();
+        let displacement = moved.top() - body.top();
+        assert!(displacement > -px(24.0) && displacement < px(0.0));
+        let returning = cx.debug_bounds("interior_group_natural_91").unwrap();
+        assert_eq!(returning.top() - near_top.top(), displacement);
+        assert_eq!(
+            cx.debug_bounds("interior_group_pinned_40")
+                .unwrap()
+                .bottom(),
+            returning.top(),
+            "reversing the bounce must reverse the next-header push-off continuously"
+        );
+        assert_eq!(scroll.0.borrow().base_handle.offset(), bottom_offset);
+        gesture(cx, interior.center(), 0.0, gpui::TouchPhase::Ended);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(cx.debug_bounds("interior_group_pinned_40").unwrap(), pinned);
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_91").unwrap(),
+            near_top
+        );
+        assert_eq!(
+            cx.debug_bounds("interior_group_natural_96").unwrap(),
+            interior
+        );
+        assert_eq!(cx.debug_bounds("interior_group_body_97").unwrap(), body);
     });
 }
