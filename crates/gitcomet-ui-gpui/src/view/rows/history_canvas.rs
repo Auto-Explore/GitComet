@@ -958,7 +958,7 @@ struct MarkChipStyle {
     pad: Pixels,
     height: Pixels,
     radius: Pixels,
-    border: Pixels,
+    border_width: Pixels,
     line_height: Pixels,
 }
 
@@ -986,7 +986,7 @@ impl MarkChipStyle {
             chip,
             self.radius,
             fill,
-            self.border,
+            self.border_width,
             border,
             window,
         );
@@ -1945,13 +1945,13 @@ pub(super) fn history_commit_row_canvas(
                 pad: mark_pad,
                 height: chip_height,
                 radius: chip_radius,
-                border: scaled_px(1.0),
+                border_width: scaled_px(1.0),
                 line_height: xxs_line_height,
             };
             // The comparison mark leads the message, ahead of extension marks.
             let comparison_mark_hover = comparison_mark.as_ref().and_then(|label| {
                 let lead = border_lead + inset;
-                let chip = paint_comparison_mark_chip(
+                paint_comparison_mark_chip(
                     theme,
                     &chip_style,
                     &base_style,
@@ -1962,12 +1962,14 @@ pub(super) fn history_commit_row_canvas(
                     bounds,
                     window,
                     cx,
-                )?;
+                )
+                .map(|chip| (chip, label.clone()))
+            });
+            if let Some((chip, _)) = &comparison_mark_hover {
                 summary_bounds.origin.x += chip.size.width + inset;
                 summary_bounds.size.width -= chip.size.width + inset;
                 leading_marks_right = chip.right();
-                Some((chip, label.clone()))
-            });
+            }
             for (edge, marks, owner) in [
                 (MarkEdge::Leading, &annotation.leading, mark_menus[0]),
                 (MarkEdge::Trailing, &annotation.trailing, mark_menus[1]),

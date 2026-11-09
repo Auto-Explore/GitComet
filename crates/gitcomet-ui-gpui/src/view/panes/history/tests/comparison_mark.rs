@@ -38,14 +38,19 @@ fn mark(id: &str, label: &str) -> ComparisonMark {
     }
 }
 
-/// Mounts a short log with `mark` as the comparison mark.
+/// Mounts a short log with `mark` as the comparison mark, in a window `width`
+/// wide when given.
 fn mount(
     cx: &mut gpui::TestAppContext,
     mark: Option<ComparisonMark>,
+    width: Option<Pixels>,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    if let Some(width) = width {
+        cx.simulate_resize(size(width, px(900.0)));
+    }
     let page = Arc::new(log_page(
         (0..4)
             .map(|ix| commit(&format!("c{ix:02}"), &[], &format!("commit {ix:02}")))
@@ -108,7 +113,7 @@ fn find_chip(
 
 #[gpui::test]
 fn the_marked_commit_shows_a_comparison_mark_chip(cx: &mut gpui::TestAppContext) {
-    let (view, cx) = mount(cx, Some(mark("c00", "main")));
+    let (view, cx) = mount(cx, Some(mark("c00", "main")), None);
     let (_, tooltip) = find_chip(cx, &view).expect("the marked row shows the chip");
     assert_eq!(
         tooltip.as_deref(),
@@ -121,7 +126,7 @@ fn the_marked_commit_shows_a_comparison_mark_chip(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn an_unmarked_commit_shows_no_comparison_mark_chip(cx: &mut gpui::TestAppContext) {
-    let (view, cx) = mount(cx, Some(mark("c02", "c02")));
+    let (view, cx) = mount(cx, Some(mark("c02", "c02")), None);
     assert_eq!(find_chip(cx, &view), None);
 }
 
@@ -136,7 +141,7 @@ fn leading_extension_marks_start_after_the_chip(cx: &mut gpui::TestAppContext) {
             cx,
         )
     });
-    let (view, cx) = mount(cx, Some(mark("c00", "main")));
+    let (view, cx) = mount(cx, Some(mark("c00", "main")), None);
     let (on_chip, _) = find_chip(cx, &view).expect("the marked row shows the chip");
     let row = cx.debug_bounds("history_row_0").unwrap();
     let right_click = |cx: &mut gpui::VisualTestContext, x: Pixels| {
@@ -152,7 +157,7 @@ fn leading_extension_marks_start_after_the_chip(cx: &mut gpui::TestAppContext) {
         });
         cx.run_until_parked();
     };
-    for &x in &on_chip {
+    for x in [on_chip[on_chip.len() / 2], *on_chip.last().unwrap()] {
         right_click(cx, x);
     }
     assert_eq!(
@@ -200,4 +205,22 @@ fn marking_a_commit_repaints_the_history() {
         fingerprint(Some(mark("c00", "main"))),
         fingerprint(Some(mark("c00", "main")))
     );
+}
+
+/// A message cell too narrow to keep half for the subject shows only the
+/// icon, which still explains itself on hover; narrower still, no chip.
+#[gpui::test]
+fn a_narrow_message_cell_shows_the_chip_as_its_icon(cx: &mut gpui::TestAppContext) {
+    let chip = |cx: &mut gpui::TestAppContext, width| {
+        let mut cx = cx.clone();
+        let (view, cx) = mount(&mut cx, Some(mark("c00", "main")), Some(px(width)));
+        find_chip(cx, &view)
+            .map(|(on_chip, tooltip)| (*on_chip.last().unwrap() - on_chip[0], tooltip.is_some()))
+    };
+    let (labelled, _) = chip(cx, 1400.0).expect("a wide cell shows the labelled chip");
+    let (icon, tooltip) = chip(cx, 1100.0).expect("a narrow cell keeps the icon");
+    assert!(labelled > px(60.0), "labelled chip spans {labelled:?}");
+    assert!(icon < px(30.0), "icon-only chip spans {icon:?}");
+    assert!(tooltip);
+    assert_eq!(chip(cx, 900.0), None);
 }
