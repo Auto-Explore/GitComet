@@ -371,7 +371,7 @@ pub(super) fn repo_externally_changed(
         // storm must not stack them up. One in flight absorbs the rest and is
         // re-run once when it lands, the same coalescing the status and tag
         // reloads above get from `RepoLoadsInFlight`.
-        && let Some(request) = repo_state.request_range_files_refresh()
+        && let Some(load) = repo_state.request_range_files_refresh()
     {
         // Keep the current list visible until the refresh lands (no flicker
         // to a loading state on every debounced save).
@@ -380,7 +380,8 @@ pub(super) fn repo_externally_changed(
             from,
             to: None,
             options,
-            request,
+            request: load.request,
+            cancellation: load.cancellation,
         });
     }
 

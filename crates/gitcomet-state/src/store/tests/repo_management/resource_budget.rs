@@ -1190,7 +1190,7 @@ fn descriptor_recovery_reloads_a_comparison_that_was_loading() {
         "Working tree".into(),
     )));
     repo.set_range_files(Loadable::Loading);
-    let stranded = repo.begin_range_files_load();
+    let stranded = repo.begin_range_files_load().request;
     let failure = Msg::Internal(InternalMsg::RepoLoadFinished {
         repo_id: id,
         load_epoch: repo.load_epoch,

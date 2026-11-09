@@ -169,6 +169,9 @@ pub struct HistoryState {
     /// The worktree moved again while a load was in flight; re-run once it
     /// lands, so the list still ends up describing the final state.
     pub range_files_refresh_queued: bool,
+    /// Stops the outstanding range-file load once a newer one or leaving the
+    /// comparison makes its reply unread.
+    pub(crate) range_files_cancellation: gitcomet_core::services::CancellationToken,
     pub squash_preview: Loadable<SquashPreview>,
     pub squash_preview_rev: u64,
     /// The `(oldest, head)` range whose message preview is currently being
@@ -312,6 +315,7 @@ impl Default for HistoryState {
             range_files_request: 0,
             range_files_in_flight: false,
             range_files_refresh_queued: false,
+            range_files_cancellation: Default::default(),
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
@@ -460,6 +464,12 @@ fn commit_selection_entry_index(
     index_hint
         .filter(|&ix| entries.get(ix) == Some(target))
         .or_else(|| entries.iter().position(|id| id == target))
+}
+
+/// A claimed range-file load: the id its reply carries, and what stops it.
+pub(crate) struct RangeFilesLoad {
+    pub(crate) request: u64,
+    pub(crate) cancellation: gitcomet_core::services::CancellationToken,
 }
 
 /// A "compare two points" selection. `from` is the base/older side and `to`
@@ -821,16 +831,23 @@ impl RepoState {
             self.history_state.range_files_request.wrapping_add(1);
         self.history_state.range_files_in_flight = false;
         self.history_state.range_files_refresh_queued = false;
+        self.history_state.range_files_cancellation.cancel();
     }
 
     /// Claim the next range-file load. Returns the request id to carry through
     /// the effect and back on the reply; anything older is stale by definition.
-    pub(crate) fn begin_range_files_load(&mut self) -> u64 {
+    pub(crate) fn begin_range_files_load(&mut self) -> RangeFilesLoad {
         self.history_state.range_files_request =
             self.history_state.range_files_request.wrapping_add(1);
         self.history_state.range_files_in_flight = true;
         self.history_state.range_files_refresh_queued = false;
-        self.history_state.range_files_request
+        self.history_state.range_files_cancellation.cancel();
+        self.history_state.range_files_cancellation =
+            gitcomet_core::services::CancellationToken::new();
+        RangeFilesLoad {
+            request: self.history_state.range_files_request,
+            cancellation: self.history_state.range_files_cancellation.clone(),
+        }
     }
 
     /// Raise a refresh of the current comparison's file list. `Some(request)`
@@ -841,7 +858,7 @@ impl RepoState {
     /// refresh but forgot to claim would leave `range_files_in_flight` false
     /// forever, and every later change would start its own pair of full-tree
     /// `git diff` calls.
-    pub(crate) fn request_range_files_refresh(&mut self) -> Option<u64> {
+    pub(crate) fn request_range_files_refresh(&mut self) -> Option<RangeFilesLoad> {
         if self.history_state.range_files_in_flight {
             self.history_state.range_files_refresh_queued = true;
             return None;

@@ -184,6 +184,7 @@ pub enum Effect {
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer load can be dropped. See `HistoryState::range_files_request`.
         request: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
     },
     LoadSquashMessagePreview {
         repo_id: RepoId,

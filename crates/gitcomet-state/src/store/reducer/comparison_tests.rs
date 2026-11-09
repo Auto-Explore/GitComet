@@ -698,7 +698,7 @@ fn comparison_list_refresh_replans_a_file_that_lost_a_side() {
     select(&mut state, repo_id, "c2", CommitSelectMode::Single);
     select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
     let land = |state: &mut AppState, kind: FileStatusKind| {
-        let request = state.repos[0].begin_range_files_load();
+        let request = state.repos[0].begin_range_files_load().request;
         dispatch_effects(
             state,
             Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
@@ -952,4 +952,37 @@ fn a_restored_pair_matches_its_history_entry() {
     let nav = &repo.navigation.main_history;
     assert!(repo.main_view_snapshot_matches(&nav.entries[nav.cursor]));
     assert!(nav.cursor + 1 < nav.entries.len(), "Forward is still there");
+}
+
+fn range_load_cancellation(effects: &[Effect]) -> gitcomet_core::services::CancellationToken {
+    effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::LoadRangeFiles { cancellation, .. } => Some(cancellation.clone()),
+            _ => None,
+        })
+        .expect("a range-file load")
+}
+
+/// A load nobody will read is stopped rather than left to run to the end.
+#[test]
+fn a_superseded_or_abandoned_range_load_is_cancelled() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    select(&mut state, repo_id, "c1", CommitSelectMode::Single);
+    let first =
+        range_load_cancellation(&select(&mut state, repo_id, "c3", CommitSelectMode::Toggle));
+    let second =
+        range_load_cancellation(&select(&mut state, repo_id, "c2", CommitSelectMode::Toggle));
+    assert!(
+        first.is_cancelled(),
+        "a newer comparison supersedes the pair's load"
+    );
+    assert!(!second.is_cancelled());
+
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    assert!(
+        second.is_cancelled(),
+        "leaving the comparison abandons its load"
+    );
 }

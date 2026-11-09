@@ -779,7 +779,7 @@ pub(super) fn compare_range_with_options(
     options: gitcomet_core::services::ComparisonOptions,
     source: ComparisonSource,
 ) -> Vec<Effect> {
-    let request = {
+    let load = {
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
         };
@@ -804,7 +804,8 @@ pub(super) fn compare_range_with_options(
         from,
         to,
         options,
-        request,
+        request: load.request,
+        cancellation: load.cancellation,
     });
     effects
 }
@@ -943,12 +944,14 @@ pub(super) fn range_files_loaded(
         .as_ref()
         .map(|range| range.options)
         .unwrap_or_default();
+    let load = repo_state.begin_range_files_load();
     effects.push(Effect::LoadRangeFiles {
         repo_id,
         from,
         to,
         options,
-        request: repo_state.begin_range_files_load(),
+        request: load.request,
+        cancellation: load.cancellation,
     });
     effects
 }

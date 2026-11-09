@@ -1671,12 +1671,14 @@ pub(super) fn repo_opened_ok(
             append_selected_history_reload_effects(repo_id, repo_state, reloads, &mut effects);
             if let Some(range) = repo_state.history_state.range_selection.clone() {
                 repo_state.set_range_files(Loadable::Loading);
+                let load = repo_state.begin_range_files_load();
                 effects.push(Effect::LoadRangeFiles {
                     repo_id,
                     from: range.from,
                     to: range.to,
                     options: range.options,
-                    request: repo_state.begin_range_files_load(),
+                    request: load.request,
+                    cancellation: load.cancellation,
                 });
             }
             if let Some(target) = repo_state.diff_state.diff_target.clone() {
