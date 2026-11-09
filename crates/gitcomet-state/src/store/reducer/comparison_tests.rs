@@ -831,3 +831,27 @@ fn refocusing_within_a_pair_keeps_its_loaded_comparison() {
     assert_eq!(history.range_files_rev, rev);
     assert_eq!(history.selected_commit, Some(CommitId("c1".into())));
 }
+
+/// Commit-time order can list a parent above its child (date skew in a
+/// shallow clone). The pair is still a chain, newest being the child.
+#[test]
+fn a_parent_listed_above_its_child_still_gets_the_merged_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![commit("parent", "c0"), commit("child", "parent")],
+        next_cursor: None,
+    }));
+
+    select(&mut state, repo_id, "parent", CommitSelectMode::Single);
+    select(&mut state, repo_id, "child", CommitSelectMode::Toggle);
+
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("a parent and its child compare");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("child".into())));
+    assert_eq!(range.source, ComparisonSource::MergedSelection);
+}

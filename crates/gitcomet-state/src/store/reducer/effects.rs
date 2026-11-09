@@ -559,11 +559,17 @@ fn selection_shape(repo_state: &RepoState, selected: &[CommitId]) -> Option<Sele
         if let Some(mut positions) = positions {
             positions.sort_unstable();
             positions.dedup();
-            let chain = positions.windows(2).all(|pair| {
+            let parent_of = |child: usize, parent: usize| {
                 index
-                    .parent_id_bytes(pair[0], 0)
-                    .is_some_and(|parent| Some(parent) == index.id_bytes(pair[1]))
-            });
+                    .parent_id_bytes(child, 0)
+                    .is_some_and(|id| Some(id) == index.id_bytes(parent))
+            };
+            let mut chain = positions.windows(2).all(|pair| parent_of(pair[0], pair[1]));
+            // Commit-time order can list a parent above its child.
+            if !chain && positions.windows(2).all(|pair| parent_of(pair[1], pair[0])) {
+                positions.reverse();
+                chain = true;
+            }
             let oldest = *positions.last()?;
             return Some(SelectionShape {
                 newest: index.commit_id(*positions.first()?)?,
@@ -594,15 +600,20 @@ fn selection_shape(repo_state: &RepoState, selected: &[CommitId]) -> Option<Sele
     if found.len() != wanted.len() {
         return None;
     }
+    let parent_of = |child: &Commit, parent: &Commit| child.parent_ids.first() == Some(&parent.id);
+    let mut chain = found.windows(2).all(|pair| parent_of(pair[0], pair[1]));
+    // Commit-time order can list a parent above its child.
+    if !chain && found.windows(2).all(|pair| parent_of(pair[1], pair[0])) {
+        found.reverse();
+        chain = true;
+    }
     let oldest = found.last()?;
     Some(SelectionShape {
         newest: found.first()?.id.clone(),
         oldest: oldest.id.clone(),
         oldest_parent: oldest.parent_ids.first().cloned(),
         count: found.len(),
-        chain: found
-            .windows(2)
-            .all(|pair| pair[0].parent_ids.first() == Some(&pair[1].id)),
+        chain,
     })
 }
 
