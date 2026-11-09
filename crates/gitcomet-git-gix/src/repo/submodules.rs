@@ -513,39 +513,51 @@ fn push_submodule_add_args(
     command
 }
 
-/// `repo`'s configured submodules with their path relative to `repo` and
-/// joined onto `prefix`; none when it has no `.gitmodules`.
+/// A configured submodule with its path relative to its repository and joined
+/// onto the walk's prefix.
+struct SubmoduleEntry<'repo> {
+    submodule: gix::Submodule<'repo>,
+    relative_path: PathBuf,
+    full_path: PathBuf,
+}
+
+/// `repo`'s configured submodules in order, each resolved when reached so a walk
+/// that stops at its target never reads the entries after it.
 fn submodule_entries<'repo>(
     repo: &'repo gix::Repository,
     prefix: &Path,
-) -> Result<Vec<(gix::Submodule<'repo>, PathBuf, PathBuf)>> {
-    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+) -> Result<impl Iterator<Item = Result<SubmoduleEntry<'repo>>> + 'repo> {
+    let submodules = crate::refs::submodules(repo).map_err(|e| {
         Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
-    })?
-    else {
-        return Ok(Vec::new());
-    };
-    submodules
-        .map(|submodule| {
-            let relative_path = submodule
-                .path()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
-                .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
-            let full_path = prefix.join(&relative_path);
-            Ok((submodule, relative_path, full_path))
+    })?;
+    let prefix = prefix.to_path_buf();
+    Ok(submodules.into_iter().flatten().map(move |submodule| {
+        let relative_path = submodule
+            .path()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
+            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
+        let full_path = prefix.join(&relative_path);
+        Ok(SubmoduleEntry {
+            submodule,
+            relative_path,
+            full_path,
         })
-        .collect()
+    }))
 }
 
 /// Records `submodule`'s source if it is local and untrusted, then its nested ones.
 fn collect_untrusted_submodule_source(
     current_workdir: &Path,
     trust_root: &Path,
-    submodule: &gix::Submodule<'_>,
-    full_path: &Path,
+    entry: &SubmoduleEntry<'_>,
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
+    let SubmoduleEntry {
+        submodule,
+        full_path,
+        ..
+    } = entry;
     if let Some(target) =
         trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?
         && !submodule_source_trusted(trust_root, &target)?
@@ -569,11 +581,15 @@ fn collect_untrusted_submodule_source(
 fn update_submodule_recursive(
     repo: &gix::Repository,
     trust_root: &Path,
-    submodule: &gix::Submodule<'_>,
-    (relative_path, full_path): (&Path, &Path),
+    entry: &SubmoduleEntry<'_>,
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
+    let SubmoduleEntry {
+        submodule,
+        relative_path,
+        full_path,
+    } = entry;
     let current_workdir = repo_workdir_for_submodule_trust(repo);
     let local_target =
         trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?;
@@ -612,12 +628,12 @@ fn collect_repo_untrusted_submodule_sources(
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for (submodule, _, full_path) in submodule_entries(repo, prefix)? {
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
         collect_untrusted_submodule_source(
             current_workdir,
             trust_root,
-            &submodule,
-            &full_path,
+            &entry,
             out,
             remote_url_policy,
         )?;
@@ -633,15 +649,9 @@ fn update_repo_submodules_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    for (submodule, relative_path, full_path) in submodule_entries(repo, prefix)? {
-        update_submodule_recursive(
-            repo,
-            trust_root,
-            &submodule,
-            (&relative_path, &full_path),
-            outputs,
-            remote_url_policy,
-        )?;
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        update_submodule_recursive(repo, trust_root, &entry, outputs, remote_url_policy)?;
     }
 
     Ok(())
@@ -656,25 +666,25 @@ fn collect_target_submodule_untrusted_sources(
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
     let current_workdir = repo_workdir_for_submodule_trust(repo);
-    for (submodule, _, full_path) in submodule_entries(repo, prefix)? {
-        if full_path == target_path {
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        if entry.full_path == target_path {
             collect_untrusted_submodule_source(
                 current_workdir,
                 trust_root,
-                &submodule,
-                &full_path,
+                &entry,
                 out,
                 remote_url_policy,
             )?;
             return Ok(true);
         }
 
-        if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_configured_submodule_repo(&submodule)?
+        if target_path.starts_with(&entry.full_path)
+            && let Some(nested_repo) = open_configured_submodule_repo(&entry.submodule)?
             && collect_target_submodule_untrusted_sources(
                 &nested_repo,
                 trust_root,
-                &full_path,
+                &entry.full_path,
                 target_path,
                 out,
                 remote_url_policy,
@@ -695,25 +705,19 @@ fn load_target_submodule_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    for (submodule, relative_path, full_path) in submodule_entries(repo, prefix)? {
-        if full_path == target_path {
-            update_submodule_recursive(
-                repo,
-                trust_root,
-                &submodule,
-                (&relative_path, &full_path),
-                outputs,
-                remote_url_policy,
-            )?;
+    for entry in submodule_entries(repo, prefix)? {
+        let entry = entry?;
+        if entry.full_path == target_path {
+            update_submodule_recursive(repo, trust_root, &entry, outputs, remote_url_policy)?;
             return Ok(true);
         }
 
-        if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)?
+        if target_path.starts_with(&entry.full_path)
+            && let Some(nested_repo) = open_gitlink_repo(repo, &entry.relative_path)?
             && load_target_submodule_recursive(
                 &nested_repo,
                 trust_root,
-                &full_path,
+                &entry.full_path,
                 target_path,
                 outputs,
                 remote_url_policy,
