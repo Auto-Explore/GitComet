@@ -629,11 +629,11 @@ jobs:
         include:
           - target_platform: aarch64-darwin
             arch: arm64
-            runs_on: macos-latest
+            runs_on: macos-26
             dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
-            runs_on: macos-15-intel
+            runs_on: macos-26-intel
             dump_syms_triple: x86_64-apple-darwin
     env:
       TAG: ${{ needs.prepare.outputs.tag }}

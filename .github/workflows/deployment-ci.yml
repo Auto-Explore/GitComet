@@ -372,7 +372,7 @@ jobs:
           grep -q 'container type: :naked' dist/deployment-ci/gitcomet.rb
           grep -q 'binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
           grep -q 'gitcomet-v#{version}-linux-#{arch}.AppImage' dist/deployment-ci/gitcomet.rb
-          grep -q 'depends_on macos:' dist/deployment-ci/gitcomet.rb
+          grep -q 'depends_on macos: :sequoia' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap publish detection
         run: |
@@ -733,11 +733,11 @@ jobs:
         include:
           - target_platform: aarch64-darwin
             arch: arm64
-            runs_on: macos-latest
+            runs_on: macos-26
             dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
-            runs_on: macos-15-intel
+            runs_on: macos-26-intel
             dump_syms_triple: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
