@@ -760,6 +760,11 @@ fn dropping_receiver_then_last_store_suppresses_late_open_result_store_event_fai
     started_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("open effect did not start");
+    // Let the worker finish the passes that notify before the receiver goes.
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(1))
+        .expect("store worker barrier");
 
     drop(event_rx);
     drop(store);
