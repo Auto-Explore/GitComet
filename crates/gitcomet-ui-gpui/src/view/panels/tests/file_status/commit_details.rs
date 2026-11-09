@@ -1253,7 +1253,7 @@ fn commit_card_chevrons_are_inert_while_the_card_is_stale(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
-fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext) {
+fn commit_card_root_commit_has_no_parent_chip(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2462,11 +2462,11 @@ fn commit_card_branch_badges_open_the_sidebar_branch_menu(cx: &mut gpui::TestApp
 
     for (menu, expected) in [
         (
-            "commit_card_ref_menu_0",
+            "commit_card_ref_menu_feature",
             crate::view::branch_sidebar::BranchMenuTarget::local("feature"),
         ),
         (
-            "commit_card_ref_menu_1",
+            "commit_card_ref_menu_origin/feature",
             crate::view::branch_sidebar::BranchMenuTarget::remote("origin", "feature"),
         ),
     ] {
@@ -2490,7 +2490,7 @@ fn commit_card_branch_badges_open_the_sidebar_branch_menu(cx: &mut gpui::TestApp
         draw_and_drain_test_window(cx);
     }
     assert!(
-        cx.debug_bounds("commit_card_ref_menu_2").is_none(),
+        cx.debug_bounds("commit_card_ref_menu_v1.0").is_none(),
         "a tag badge has no branch menu"
     );
 }

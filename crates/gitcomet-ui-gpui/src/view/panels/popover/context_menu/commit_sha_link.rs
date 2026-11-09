@@ -1,10 +1,6 @@
 use super::*;
 
 pub(super) fn model(repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
-    model_for_commit_sha_link(repo_id, commit_id)
-}
-
-fn model_for_commit_sha_link(repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Commit".into()),
         ContextMenuItem::Label(commit_id.as_ref().to_owned().into()),
@@ -59,7 +55,7 @@ mod tests {
     #[test]
     fn model_offers_revealing_and_browsing() {
         let commit_id = CommitId("deadbeef".into());
-        let model = model_for_commit_sha_link(RepoId(3), &commit_id);
+        let model = model(RepoId(3), &commit_id);
 
         assert_eq!(
             entry_labels(&model),
@@ -75,7 +71,7 @@ mod tests {
     #[test]
     fn entries_carry_the_repo_and_commit_they_act_on() {
         let commit_id = CommitId("deadbeef".into());
-        let model = model_for_commit_sha_link(RepoId(3), &commit_id);
+        let model = model(RepoId(3), &commit_id);
         let actions = model
             .items
             .iter()

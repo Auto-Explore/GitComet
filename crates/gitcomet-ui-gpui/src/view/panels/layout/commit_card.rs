@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 const MAX_REF_PILLS: usize = 4;
-const SHA_CHIP_HEIGHT_PX: f32 = 22.0;
+const CHIP_HEIGHT_PX: f32 = 22.0;
 
 /// The card's two SHA chips. A click copies the commit's own SHA but reveals
 /// the parent; both chevrons open the same commit menu.
@@ -59,22 +59,19 @@ impl ShaChip {
 enum RefPillKind {
     /// Opens the sidebar's branch menu from its chevron.
     Branch(BranchMenuTarget),
-    Tag,
+    Tag(String),
 }
 
 struct RefPill {
-    label: String,
     kind: RefPillKind,
     /// The checked-out branch, tinted like the sidebar's HEAD row.
     is_head: bool,
 }
 
-type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
-
-/// What a chip's chevron opens, anchored under the whole chip.
+/// What a chip's chevron opens, anchored under the whole chip. `invoker`
+/// also names the chevron element.
 struct ChipMenu {
-    id: ElementId,
-    selector: SharedString,
+    invoker: SharedString,
     kind: PopoverKind,
     tooltip: &'static str,
     enabled: bool,
@@ -98,7 +95,6 @@ impl DetailsPaneView {
                     .filter(|branch| &branch.target == commit)
                     .map(|branch| RefPill {
                         is_head: head == Some(branch.name.as_str()),
-                        label: branch.name.clone(),
                         kind: RefPillKind::Branch(BranchMenuTarget::local(&branch.name)),
                     }),
             );
@@ -109,7 +105,6 @@ impl DetailsPaneView {
                     .iter()
                     .filter(|branch| &branch.target == commit)
                     .map(|branch| RefPill {
-                        label: format!("{}/{}", branch.remote, branch.name),
                         kind: RefPillKind::Branch(BranchMenuTarget::remote(
                             &branch.remote,
                             &branch.name,
@@ -123,8 +118,7 @@ impl DetailsPaneView {
                 tags.iter()
                     .filter(|tag| &tag.target == commit)
                     .map(|tag| RefPill {
-                        label: tag.name.clone(),
-                        kind: RefPillKind::Tag,
+                        kind: RefPillKind::Tag(tag.name.clone()),
                         is_head: false,
                     }),
             );
@@ -147,7 +141,6 @@ impl DetailsPaneView {
         let body_enabled = current || matches!(chip, ShaChip::Commit { .. });
         let ui_scale = self.ui_scale();
         let menu_id = chip.menu_id();
-        let chip_bounds = ChipBounds::default();
 
         let body = div()
             .id(chip.id())
@@ -191,44 +184,39 @@ impl DetailsPaneView {
             )
             .gitcomet_tooltip(theme, chip.tooltip().into());
 
-        let menu = self.commit_card_chip_chevron(
-            ChipMenu {
-                id: menu_id.into(),
-                selector: menu_id.into(),
-                kind: PopoverKind::CommitShaLinkMenu {
-                    repo_id,
-                    commit_id: commit_id.clone(),
-                },
-                tooltip: "Commit actions",
-                enabled: current,
+        let menu = ChipMenu {
+            invoker: menu_id.into(),
+            kind: PopoverKind::CommitShaLinkMenu {
+                repo_id,
+                commit_id: commit_id.clone(),
             },
-            &chip_bounds,
-            cx,
-        );
+            tooltip: "Commit actions",
+            enabled: current,
+        };
         let bg = if chip.washed() {
             with_alpha(theme.colors.accent.foreground, 0.18)
         } else {
             theme.colors.surface.raised
         };
-        self.commit_card_chip(body, menu, bg, chip_bounds)
+        self.commit_card_chip(body, bg, menu, cx)
             .when(chip.washed(), |d| {
                 d.debug_selector(|| "commit_card_sha_find_wash".to_string())
             })
     }
 
-    /// The chevron segment that opens `menu` under the chip measured into
-    /// `chip_bounds`.
-    fn commit_card_chip_chevron(
+    /// A bordered chip: `body`, a divider and a chevron that opens `menu`
+    /// under the whole chip.
+    fn commit_card_chip(
         &self,
+        body: impl IntoElement,
+        bg: gpui::Rgba,
         menu: ChipMenu,
-        chip_bounds: &ChipBounds,
         cx: &mut gpui::Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> Div {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
         let ChipMenu {
-            id,
-            selector,
+            invoker,
             kind,
             tooltip,
             enabled,
@@ -236,13 +224,13 @@ impl DetailsPaneView {
         let open = self
             .active_context_menu_invoker
             .as_ref()
-            .is_some_and(|invoker| invoker == &selector);
-        let chip_bounds = Rc::clone(chip_bounds);
-        div()
-            .id(id)
+            .is_some_and(|active| active == &invoker);
+        let chip_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+        let chevron = div()
+            .id(invoker.clone())
             .debug_selector({
-                let selector = selector.clone();
-                move || selector.to_string()
+                let invoker = invoker.clone();
+                move || invoker.to_string()
             })
             .flex()
             .items_center()
@@ -267,31 +255,23 @@ impl DetailsPaneView {
             .on_activate(
                 !enabled,
                 components::ControlActivation::Action,
-                cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    let Some(bounds) = chip_bounds.get().filter(|_| e.standard_click()) else {
-                        return;
-                    };
-                    this.open_popover_for_bounds(
-                        kind.clone().invoked_by(selector.clone()),
-                        bounds,
-                        window,
-                        cx,
-                    );
+                cx.listener({
+                    let chip_bounds = Rc::clone(&chip_bounds);
+                    move |this, e: &ClickEvent, window, cx| {
+                        let Some(bounds) = chip_bounds.get().filter(|_| e.standard_click()) else {
+                            return;
+                        };
+                        this.open_popover_for_bounds(
+                            kind.clone().invoked_by(invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    }
                 }),
             )
-            .gitcomet_tooltip(theme, tooltip.into())
-    }
+            .gitcomet_tooltip(theme, tooltip.into());
 
-    /// A bordered chip: `body`, a divider and `chevron`, measured into
-    /// `chip_bounds` so the chevron's menu opens under the whole chip.
-    fn commit_card_chip(
-        &self,
-        body: impl IntoElement,
-        chevron: Stateful<Div>,
-        bg: gpui::Rgba,
-        chip_bounds: ChipBounds,
-    ) -> Div {
-        let theme = self.theme;
         div()
             .flex_none()
             .on_children_prepainted(move |children, _window, _cx| {
@@ -301,7 +281,7 @@ impl DetailsPaneView {
                 div()
                     .flex()
                     .items_center()
-                    .h(self.ui_scale().px(SHA_CHIP_HEIGHT_PX))
+                    .h(ui_scale.px(CHIP_HEIGHT_PX))
                     .rounded(px(theme.radii.control))
                     .border_1()
                     .border_color(theme.colors.stroke.default)
@@ -319,7 +299,6 @@ impl DetailsPaneView {
     /// plain pill.
     fn commit_card_ref_pill(
         &self,
-        ix: usize,
         pill: RefPill,
         repo_id: RepoId,
         current: bool,
@@ -335,7 +314,7 @@ impl DetailsPaneView {
             RefPillKind::Branch(BranchMenuTarget::Remote { .. }) => {
                 ("icons/git_branch.svg", secondary)
             }
-            RefPillKind::Tag => ("icons/tag.svg", secondary),
+            RefPillKind::Tag(_) => ("icons/tag.svg", secondary),
         };
         let icon_color = if pill.is_head {
             theme.colors.accent.foreground
@@ -356,33 +335,29 @@ impl DetailsPaneView {
             .text_color(label_color)
             .whitespace_nowrap()
             .child(svg_icon(icon, icon_color, ui_scale.px(14.0)))
-            .child(pill.label);
+            .child(match &pill.kind {
+                RefPillKind::Branch(target) => target.display_name(),
+                RefPillKind::Tag(name) => name.clone(),
+            });
         let RefPillKind::Branch(target) = pill.kind else {
             return label
                 .flex_none()
-                .h(ui_scale.px(SHA_CHIP_HEIGHT_PX))
+                .h(ui_scale.px(CHIP_HEIGHT_PX))
                 .rounded(px(theme.radii.row))
                 .when(pill.is_head, |d| d.bg(head_tint));
         };
-        let selector: SharedString = format!("commit_card_ref_menu_{ix}").into();
-        let chip_bounds = ChipBounds::default();
-        let chevron = self.commit_card_chip_chevron(
-            ChipMenu {
-                id: ("commit_card_ref_menu", ix).into(),
-                selector,
-                kind: PopoverKind::BranchMenu { repo_id, target },
-                tooltip: "Branch actions",
-                enabled: current,
-            },
-            &chip_bounds,
-            cx,
-        );
+        let menu = ChipMenu {
+            invoker: format!("commit_card_ref_menu_{}", target.display_name()).into(),
+            kind: PopoverKind::BranchMenu { repo_id, target },
+            tooltip: "Branch actions",
+            enabled: current,
+        };
         let bg = if pill.is_head {
             head_tint
         } else {
             theme.colors.surface.raised
         };
-        self.commit_card_chip(label, chevron, bg, chip_bounds)
+        self.commit_card_chip(label, bg, menu, cx)
     }
 
     pub(super) fn commit_details_card(
@@ -517,8 +492,8 @@ impl DetailsPaneView {
         };
         if !pills.is_empty() {
             bottom = bottom.child(div().w(px(1.0)).h(px(14.0)).bg(theme.colors.stroke.default));
-            for (ix, pill) in pills.into_iter().take(MAX_REF_PILLS).enumerate() {
-                bottom = bottom.child(self.commit_card_ref_pill(ix, pill, repo_id, current, cx));
+            for pill in pills.into_iter().take(MAX_REF_PILLS) {
+                bottom = bottom.child(self.commit_card_ref_pill(pill, repo_id, current, cx));
             }
             if hidden > 0 {
                 bottom = bottom.child(

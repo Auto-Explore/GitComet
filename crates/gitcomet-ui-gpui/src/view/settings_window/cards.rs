@@ -2450,7 +2450,7 @@ impl SettingsWindowView {
                     .into();
                 card.child(
                     self.link_row(
-                        "settings_window_professional_edition_waitlist",
+                        "settings_window_professional_edition_upgrade",
                         "Upgrade to Professional edition",
                         host,
                         theme,

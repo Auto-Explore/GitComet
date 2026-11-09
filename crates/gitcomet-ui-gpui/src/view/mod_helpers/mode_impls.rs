@@ -369,7 +369,8 @@ pub(crate) enum PopoverKind {
         /// approved through its link menu.
         load_remote_image_url: Option<SharedString>,
     },
-    /// Actions for a commit id clicked in a commit message or a SHA field.
+    /// Actions for a commit id clicked in a commit message or from a commit
+    /// card SHA chip.
     CommitShaLinkMenu {
         repo_id: RepoId,
         commit_id: CommitId,
