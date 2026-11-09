@@ -1,5 +1,8 @@
 use super::*;
 
+const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
+const MAX_TITLE_CHARS: usize = 96;
+
 pub(super) fn build_startup_report(crash_log_path: PathBuf, crash_log: &str) -> StartupCrashReport {
     let parsed = parse_crash_log(crash_log);
     let issue_title = build_issue_title(&parsed);
@@ -166,7 +169,7 @@ pub(super) fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
     parsed
 }
 
-pub(super) fn reset_parsed_failure(parsed: &mut ParsedCrashLog) {
+fn reset_parsed_failure(parsed: &mut ParsedCrashLog) {
     parsed.environment = None;
     parsed.os = None;
     parsed.arch = None;
@@ -194,7 +197,7 @@ pub(super) fn build_issue_url(title: &str, body: &str) -> String {
     )
 }
 
-pub(super) fn build_issue_title(parsed: &ParsedCrashLog) -> String {
+fn build_issue_title(parsed: &ParsedCrashLog) -> String {
     let failure_message = parsed
         .message
         .as_deref()
@@ -345,11 +348,7 @@ pub(super) fn percent_encode(input: &str) -> String {
     gitcomet_core::url_encoding::encode_component(input).collect()
 }
 
-pub(super) fn single_line_text(input: &str) -> String {
-    input.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-pub(super) fn truncate_chars(input: &str, max_chars: usize) -> String {
+fn truncate_chars(input: &str, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();
     }

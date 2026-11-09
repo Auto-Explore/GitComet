@@ -21,13 +21,11 @@ static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
 static RUNTIME_ERRORS_SEEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_RUNTIME_ERRORS_SEEN: usize = 1_024;
 static CRASH_LOGGER: CrashLogger = CrashLogger;
-const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
 const PENDING_REPORT_FILE: &str = "pending-report-path.txt";
 const STARTUP_REPORT_FILE: &str = "pending-startup-report.log";
 const SESSION_MARKER_FILE_PREFIX: &str = "session-in-progress";
 const LAST_OPERATION_FILE_PREFIX: &str = "last-operation";
 const RUNTIME_ERROR_FILE_PREFIX: &str = "last-runtime-error";
-const MAX_TITLE_CHARS: usize = 96;
 const MAX_BACKTRACE_CHARS: usize = 2_400;
 #[cfg(windows)]
 const PENDING_REPORT_PATH_WIDE_PREFIX: &str = "gitcomet-crashlog-utf16le:";
@@ -1002,7 +1000,7 @@ fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
 use crate::hex_encode;
 #[cfg(windows)]
 use gitcomet_core::hex::decode as hex_decode;
-use report::{build_startup_report, parse_crash_log, single_line_text};
+use report::{build_startup_report, parse_crash_log};
 
 fn unix_time_ms() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1010,6 +1008,10 @@ fn unix_time_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+fn single_line_text(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 struct ResetFlagOnDrop;
