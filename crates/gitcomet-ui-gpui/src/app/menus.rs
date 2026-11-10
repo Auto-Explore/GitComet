@@ -61,6 +61,7 @@ pub(super) fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
         crate::external_editor::configured_setting().is_some(),
         find_normal_gitcomet_window(cx).is_some(),
         bare,
+        crate::view::extension_host::provides_update_check(cx),
     );
     let extension_items = crate::view::extension_host::macos_menu_items(bare, cx);
     if !extension_items.is_empty()
@@ -80,7 +81,7 @@ pub(super) fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
 /// about the external-editor item do not have to restate that half.
 #[cfg(all(test, target_os = "macos"))]
 pub(super) fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
-    macos_app_menus_with_options(external_editor_configured, true, false)
+    macos_app_menus_with_options(external_editor_configured, true, false, false)
 }
 
 #[cfg(target_os = "macos")]
@@ -88,6 +89,7 @@ pub(super) fn macos_app_menus_with_options(
     external_editor_configured: bool,
     normal_window_available: bool,
     bare: bool,
+    extension_update_check: bool,
 ) -> Vec<Menu> {
     let mut file_items = vec![
         MenuItem::action("New Window", NewWindow),
@@ -130,8 +132,7 @@ pub(super) fn macos_app_menus_with_options(
         MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch).disabled(bare),
         MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
             manual_update_check_menu_disabled(
-                crate::view::update_checks_disabled_by_environment()
-                    || !crate::view::update_checks_available(),
+                crate::view::manual_update_check_unavailable(extension_update_check),
                 normal_window_available,
             ),
         ),
@@ -216,6 +217,7 @@ pub(super) fn refresh_macos_app_menus_for_external_editor(cx: &mut App, configur
         configured,
         normal_window_available,
         bare,
+        crate::view::extension_host::provides_update_check(cx),
     ));
 }
 

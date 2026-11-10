@@ -351,7 +351,9 @@ use gitcomet_ui_kit::zoom_wheel;
 pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
 mod update_check;
 mod workspace_picker;
-pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
+pub(crate) use update_check::{
+    manual_update_check_unavailable, update_checks_available, update_checks_disabled_by_environment,
+};
 mod user_survey;
 use gitcomet_core::word_diff;
 

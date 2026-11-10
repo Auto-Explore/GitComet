@@ -409,6 +409,44 @@ fn app_menu_open_remote_hands_off_to_the_remote_picker(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn app_menu_update_check_runs_an_extensions_own_check(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{Extension, ExtensionId, Registrar, Registry};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Updating(Rc<Cell<usize>>);
+    impl Extension for Updating {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.updating").unwrap()
+        }
+        fn register(&self, registrar: &mut Registrar) {
+            let checked = self.0.clone();
+            registrar.update_check(
+                "updates",
+                Rc::new(move |_, _, _| checked.set(checked.get() + 1)),
+            );
+        }
+    }
+    let checked = Rc::new(Cell::new(0));
+    cx.update(|app| {
+        let registry = Registry::build(vec![Box::new(Updating(checked.clone()))]).unwrap();
+        crate::view::extension_host::install(registry, app);
+    });
+    let (_view, cx) = open_app_menu(cx);
+    let row = cx
+        .debug_bounds("app_menu_check_for_updates")
+        .expect("app menu should offer Check for updates")
+        .center();
+    assert_eq!(checked.get(), 0, "opening the menu checks nothing");
+    cx.simulate_mouse_move(row, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(row, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(row, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(checked.get(), 1);
+}
+
+#[gpui::test]
 fn app_menu_places_update_check_immediately_after_apply_patch(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = open_app_menu(cx);
     let apply_patch = cx

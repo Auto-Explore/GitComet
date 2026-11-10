@@ -1,6 +1,10 @@
 use super::repository_views::MainSlot;
 use super::*;
 
+/// A crash-report or update-check action: run with the window's host.
+type ExtensionWindowAction =
+    std::rc::Rc<dyn Fn(gitcomet_extension_api::WindowHost, &mut Window, &mut App)>;
+
 impl GitCometView {
     fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
         match kind {
@@ -222,6 +226,9 @@ impl GitCometView {
             repo_uses_annex: annex.is_some_and(|annex| annex.in_use()),
             annex_initialized: annex.is_some_and(|annex| annex.initialized()),
             annex_adjusted: repo.is_some_and(|repo| repo.annex_adjusted_branch().is_some()),
+            update_check: !super::manual_update_check_unavailable(
+                super::extension_host::provides_update_check(cx),
+            ),
         }
     }
 
@@ -2350,20 +2357,30 @@ impl GitCometView {
         if let Some(action) = super::extension_host::registry(cx)
             .and_then(|registry| registry.crash_report_action().cloned())
         {
-            if let Some(host) = self
-                .extension_window
-                .as_ref()
-                .map(|extension| extension.host())
-            {
-                let window = self.window_handle;
-                // Release this view's borrow before the extension opens a dialog.
-                cx.defer(move |cx| {
-                    let _ = window.update(cx, |_, window, cx| action(host, window, cx));
-                });
-            }
+            self.run_extension_window_action(action, cx);
             return;
         }
         self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
+    }
+
+    /// Runs an extension's window-wide action once this view's borrow is
+    /// released, so the action may open a dialog or a window.
+    pub(super) fn run_extension_window_action(
+        &self,
+        action: ExtensionWindowAction,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(host) = self
+            .extension_window
+            .as_ref()
+            .map(|extension| extension.host())
+        else {
+            return;
+        };
+        let window = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| action(host, window, cx));
+        });
     }
 
     pub(super) fn report_startup_crash_report_with(

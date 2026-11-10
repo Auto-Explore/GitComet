@@ -61,6 +61,8 @@ pub(crate) enum Needs {
     Push,
     /// A remote whose URL points at a web page.
     RemoteWebPage,
+    /// "Check for updates" has a check to run.
+    UpdateCheck,
     MacOs,
     Linux,
     /// Git can run `git lfs`.
@@ -104,6 +106,8 @@ pub(crate) struct PaletteContext {
     pub(crate) repo_uses_annex: bool,
     pub(crate) annex_initialized: bool,
     pub(crate) annex_adjusted: bool,
+    /// "Check for updates" has a check to run, as the menus decide.
+    pub(crate) update_check: bool,
 }
 
 const GIT_LFS_MISSING: &str = "Install Git LFS where Git can find it first";
@@ -148,6 +152,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
         Needs::Pull => ctx.pull_unavailable,
         Needs::Push => ctx.push_unavailable,
         Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
+        Needs::UpdateCheck => (!ctx.update_check).then_some("Update checks are not available here"),
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
@@ -772,7 +777,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "update upgrade version release",
         requires_repo: false,
-        needs: Needs::Nothing,
+        needs: Needs::UpdateCheck,
     },
     CommandEntry {
         id: Command::InstallDesktopIntegration.id(),
@@ -2014,6 +2019,13 @@ mod tests {
                 Needs::Sequencer,
                 PaletteContext {
                     sequencer: true,
+                    ..ctx.clone()
+                },
+            ),
+            (
+                Needs::UpdateCheck,
+                PaletteContext {
+                    update_check: true,
                     ..ctx.clone()
                 },
             ),
