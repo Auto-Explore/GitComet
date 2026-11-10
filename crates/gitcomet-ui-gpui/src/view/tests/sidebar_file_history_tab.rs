@@ -110,6 +110,20 @@ fn the_tab_hides_while_another_repository_is_active(cx: &mut gpui::TestAppContex
     assert!(shows(cx, "sidebar_file_history_content"));
 }
 
+/// The tab lists commits the History view shows: opening it from a
+/// contributed view brings History back to the main canvas.
+#[gpui::test]
+fn opening_the_tab_from_a_contributed_view_shows_history(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_view(cx);
+    click(cx, "repository_view_0");
+    assert!(shows(cx, "panels_review"));
+
+    open_history(&view, cx);
+    assert!(!shows(cx, "panels_review"), "History has the main canvas");
+    assert!(history_selected(&view, cx));
+    assert!(shows(cx, "sidebar_file_history_content"));
+}
+
 #[gpui::test]
 fn contributed_tabs_and_the_history_tab_exclude_each_other(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_view(cx);
@@ -121,6 +135,9 @@ fn contributed_tabs_and_the_history_tab_exclude_each_other(cx: &mut gpui::TestAp
     assert!(shows(cx, "sidebar_file_history_content"));
     assert!(!shows(cx, "panels_files"));
 
+    // Opening the tab showed History; the view's own tab is listed again
+    // once the view is.
+    click(cx, "repository_view_0");
     click(cx, "sidebar_tab_extension_0");
     assert!(!history_selected(&view, cx));
     assert!(shows(cx, "panels_files"));
@@ -218,6 +235,40 @@ fn right_click_row_1(
     cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     test_support::redraw(cx);
+}
+
+/// A commit picked in the tab is shown in the History view's diff: picking
+/// one while a contributed view has the main canvas brings History back,
+/// and the keyboard stays with the list.
+#[gpui::test]
+fn picking_a_commit_from_a_contributed_view_shows_history(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_view(cx);
+    push_state(&view, cx, |state| {
+        let repo = &mut state.repos[0];
+        repo.history_state.file_history_path = Some(PATH.into());
+        repo.history_state.file_history = Loadable::Ready(
+            gitcomet_core::domain::LogPage {
+                commits: (0..3).map(menu_commit).collect(),
+                next_cursor: None,
+            }
+            .into(),
+        );
+    });
+    open_history(&view, cx);
+    click(cx, "repository_view_0");
+    click(cx, "sidebar_tab_file_history");
+    assert!(shows(cx, "panels_review"), "the tab alone leaves the view");
+
+    click(cx, "picker_prompt_item_1");
+    assert!(!shows(cx, "panels_review"), "History has the main canvas");
+    assert!(shows(cx, "sidebar_file_history_content"));
+    let pane = cx.update(|_window, app| view.read(app).file_history_pane.clone());
+    assert_eq!(
+        cx.update(|_w, app| pane.read(app).selected.clone()),
+        Some(menu_commit(1).id)
+    );
+    let focus = cx.update(|_w, app| pane.read(app).filter_input().read(app).focus_handle());
+    cx.update(|window, _| assert!(focus.is_focused(window), "Up and Down still move here"));
 }
 
 fn menu_kind(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) -> PopoverKind {
