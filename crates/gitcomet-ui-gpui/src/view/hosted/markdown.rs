@@ -31,6 +31,7 @@ pub(crate) struct MarkdownView {
     disclosures: crate::view::markdown_disclosures::MarkdownDisclosures,
     preferences: crate::view::hosted::environment::DiffPreferences,
     approved_images: Arc<FxHashSet<SharedString>>,
+    text_style: gitcomet_extension_api::MarkdownTextStyle,
 }
 
 impl MarkdownView {
@@ -71,6 +72,7 @@ impl MarkdownView {
             disclosures: Default::default(),
             preferences,
             approved_images: Arc::default(),
+            text_style: Default::default(),
         }
     }
 
@@ -102,6 +104,30 @@ impl MarkdownView {
         self.hovered_link = None;
         self.reveal = Default::default();
         cx.notify();
+    }
+
+    fn set_text_style(
+        &mut self,
+        style: gitcomet_extension_api::MarkdownTextStyle,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.text_style == style {
+            return;
+        }
+        self.text_style = style;
+        // Every measured height was taken at the other size.
+        self.invalidate_visibility();
+        cx.notify();
+    }
+
+    /// The theme the document is drawn with: the window's, with the
+    /// document's sizes following the UI font size for interface text.
+    fn document_theme(&self) -> AppTheme {
+        let mut theme = self.theme.get();
+        if self.text_style == gitcomet_extension_api::MarkdownTextStyle::Interface {
+            theme.metrics.markdown_preview_font_size_px = theme.metrics.ui_font_size_px;
+        }
+        theme
     }
 
     fn clear_selection(&mut self) {
@@ -547,7 +573,7 @@ impl Render for MarkdownView {
                 .into_any_element();
         };
         let context = crate::view::rows::MarkdownDocumentContext {
-            theme: self.theme.get(),
+            theme: self.document_theme(),
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             editor_font_family: crate::font_preferences::current_editor_font_family(cx).into(),
             image_root: None,
@@ -573,6 +599,7 @@ impl Render for MarkdownView {
             change_extents: None,
             tasks_editable: false,
             disclosures: Some(self.disclosures.clone()),
+            flush_left: self.text_style == gitcomet_extension_api::MarkdownTextStyle::Interface,
         };
         self.hitboxes.clear();
         self.motion_targets.clear();
@@ -622,6 +649,11 @@ impl gitcomet_extension_api::MarkdownViewImpl for HostedMarkdownView {
             view.scroll = handle;
             cx.notify();
         });
+    }
+
+    fn set_text_style(&self, style: gitcomet_extension_api::MarkdownTextStyle, cx: &mut App) {
+        self.entity
+            .update(cx, |view, cx| view.set_text_style(style, cx));
     }
 }
 

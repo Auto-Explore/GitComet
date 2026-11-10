@@ -2691,6 +2691,7 @@ impl DiffRenderer {
                     change_extents: None,
                     tasks_editable: false,
                     disclosures: None,
+                    flush_left: false,
                 };
                 let vertical_scrollbar_gutter = if vertical_sync_enabled {
                     px(0.0)
