@@ -180,12 +180,15 @@ impl SidebarPaneView {
                                     &path_label,
                                     theme.colors.accent.foreground,
                                 ))
+                                // The parent folders recede; the worktree's own
+                                // folder keeps the primary colour.
+                                .path_leaf_color(theme.colors.foreground.primary)
                                 // Set the color explicitly: TruncatedText
                                 // resolves an unset color from the ambient text
                                 // style inside a deferred measure closure, which
                                 // doesn't see ancestor `text_color` — so in the
                                 // collapsed popover it would render near-black.
-                                .text_color(theme.colors.foreground.primary)
+                                .text_color(theme.colors.foreground.secondary)
                                 .full_text_tooltip(this.tooltip_host.clone())
                                 .render(cx),
                             ),
@@ -416,16 +419,20 @@ impl SidebarPaneView {
                     .line_clamp(1)
                     .whitespace_nowrap()
                     .debug_selector(move || format!("submodule_label_{ix}"))
-                    .child(filtered_label_element(
-                        path_label,
-                        None,
-                        &ctx.filter_query,
-                        theme.colors.foreground.primary,
-                        theme.colors.accent.foreground,
-                        theme.ui_text(14.0).into(),
-                        FontWeight::NORMAL,
-                        cx,
-                    )),
+                    // The folders recede; the submodule's own folder keeps the
+                    // primary colour. The row's tooltip leads with the whole
+                    // path.
+                    .child(
+                        components::TruncatedText::path(path_label.clone(), theme.ui_text(14.0))
+                            .highlights(search_label_highlights(
+                                &ctx.filter_query,
+                                &path_label,
+                                theme.colors.accent.foreground,
+                            ))
+                            .text_color(theme.colors.foreground.secondary)
+                            .path_leaf_color(theme.colors.foreground.primary)
+                            .render(cx),
+                    ),
             )
             .when_some(badge_label, |row, badge_label| {
                 row.child(

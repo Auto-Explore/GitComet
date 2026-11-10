@@ -74,7 +74,8 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
     let interaction =
         crate::view::rows::FileRowInteraction::new(theme, tint, selected, context_menu_active);
     let badge_disc = interaction.badge_disc(row_group.clone());
-    let tooltip = path_label.clone();
+    // The whole path, even where a tree row shows only the file name.
+    let tooltip = presentation.label.clone();
 
     let element = div()
         .id(element_id)
@@ -125,6 +126,10 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
                         // no path to align against.
                         None => components::TruncatedText::new(path_label, theme.ui_text(14.0)),
                     }
+                    // The folders recede; the file name keeps full contrast.
+                    // The caller's row tooltip names the whole path.
+                    .text_color(theme.colors.foreground.secondary)
+                    .path_leaf_color(theme.colors.foreground.primary)
                     .render(cx),
                 ),
         )

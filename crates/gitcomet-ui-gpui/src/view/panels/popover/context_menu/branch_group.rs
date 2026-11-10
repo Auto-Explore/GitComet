@@ -32,12 +32,15 @@ pub(super) fn model(
     };
 
     let mut items = vec![ContextMenuItem::Header(group_label.clone().into())];
+    // A count, not a path: one line, cut at its end.
     items.push(ContextMenuItem::Label(
-        components::ContextMenuText::path_single_line(if filtered {
+        components::ContextMenuText::new(if filtered {
             format!("{} matching the filter", branch_count_label(member_count))
         } else {
             branch_count_label(member_count)
-        }),
+        })
+        .max_lines(1)
+        .tooltip_mode(components::TruncatedTextTooltipMode::FullTextIfTruncated),
     ));
     items.push(ContextMenuItem::Separator);
 

@@ -2104,6 +2104,51 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
     assert!(cx.debug_bounds("diff_bar_stage").is_none());
 }
 
+/// Cmd/Ctrl+F in an extension's view opens the search of the hosted pane
+/// the user is in, as F2/F3 step it, and never History's find behind the
+/// view.
+#[gpui::test]
+fn the_search_key_in_an_extension_view_opens_its_panes_search_not_history(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    cx.update(|_window, app| crate::app::bind_app_keys_for_test(app));
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs in the pane", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    let id = first_session(&store);
+    let pane = cx.update(|_, app| changes.read(app).current().cloned().unwrap());
+    let renderer = hosted_renderer(cx, &pane);
+    let history_find_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .history_find_is_open()
+        })
+    };
+
+    click_debug_selector(cx, selector(format!("hosted_diff_{id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    cx.simulate_keystrokes("secondary-f");
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
+    let input = cx.update(|_, app| renderer.read(app).diff_search_input.clone());
+    assert!(
+        cx.update(|window, app| input.read(app).focus_handle().is_focused(window)),
+        "the pane's search has the keyboard"
+    );
+    assert!(!history_find_open(cx), "History's find stayed shut");
+}
+
 #[gpui::test]
 fn change_function_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
     let (dir, store, view, cx) = open_repository(cx);
