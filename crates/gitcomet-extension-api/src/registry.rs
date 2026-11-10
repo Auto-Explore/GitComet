@@ -656,36 +656,17 @@ impl Registry {
                 }
             }
         }
-        if registry.crash_report_actions.len() > 1 {
-            for (id, _) in registry.crash_report_actions.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "crash_report_action has more than one provider".to_string(),
-                );
-            }
-        }
-        if registry.update_check_actions.len() > 1 {
-            for (id, _) in registry.update_check_actions.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "update_check has more than one provider".to_string(),
-                );
-            }
-        }
-        if registry.edition_strip.len() > 1 {
-            for (id, _) in registry.edition_strip.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "edition_strip has more than one provider".to_string(),
-                );
-            }
-        }
-        if registry.title_bar_brand.len() > 1 {
-            for (id, _) in registry.title_bar_brand.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "title_bar_brand has more than one provider".to_string(),
-                );
+        for (slot, ids) in [
+            (
+                "crash_report_action",
+                provider_ids(&registry.crash_report_actions),
+            ),
+            ("update_check", provider_ids(&registry.update_check_actions)),
+            ("edition_strip", provider_ids(&registry.edition_strip)),
+            ("title_bar_brand", provider_ids(&registry.title_bar_brand)),
+        ] {
+            for id in ids.into_iter().skip(1) {
+                error(id.extension(), format!("{slot} has more than one provider"));
             }
         }
         let commands: BTreeSet<&ContributionId> =
@@ -875,6 +856,11 @@ impl Registry {
     pub fn close_guards(&self) -> &[(ContributionId, CloseGuard)] {
         &self.close_guards
     }
+}
+
+/// The contributors to a slot that takes one provider, in registration order.
+fn provider_ids<T>(slot: &[(ContributionId, T)]) -> Vec<&ContributionId> {
+    slot.iter().map(|(id, _)| id).collect()
 }
 
 #[cfg(test)]
