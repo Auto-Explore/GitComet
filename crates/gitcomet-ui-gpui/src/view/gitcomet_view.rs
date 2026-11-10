@@ -226,6 +226,9 @@ impl GitCometView {
             repo_uses_annex: annex.is_some_and(|annex| annex.in_use()),
             annex_initialized: annex.is_some_and(|annex| annex.initialized()),
             annex_adjusted: repo.is_some_and(|repo| repo.annex_adjusted_branch().is_some()),
+            update_check: !super::manual_update_check_unavailable(
+                super::extension_host::provides_update_check(cx),
+            ),
         }
     }
 
