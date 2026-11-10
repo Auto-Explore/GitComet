@@ -317,10 +317,91 @@ pub fn overlay_highlights(
     out
 }
 
+/// `highlights` plus `leaf` over a path's last component, the file or
+/// folder it names, so a dimmer base colour is left on the folders before
+/// it. `highlights`, such as search matches, keep their own style where they
+/// overlap the leaf. A trailing separator still names the component before
+/// it; a path without a separator is all leaf.
+pub fn path_leaf_highlights(
+    path: &str,
+    leaf: HighlightStyle,
+    highlights: &[(Range<usize>, HighlightStyle)],
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let leaf_start = path
+        .trim_end_matches(std::path::is_separator)
+        .rfind(std::path::is_separator)
+        .map_or(0, |separator| separator + 1);
+    let mut sorted = highlights.to_vec();
+    sorted.sort_by_key(|(range, _)| range.start);
+    let mut out = Vec::with_capacity(sorted.len() * 2 + 1);
+    let mut cursor = leaf_start;
+    for (range, style) in sorted {
+        if range.start > cursor {
+            out.push((cursor..range.start.min(path.len()), leaf));
+        }
+        cursor = cursor.max(range.end);
+        out.push((range, style));
+    }
+    if cursor < path.len() {
+        out.push((cursor..path.len(), leaf));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::HighlightStyle;
+
+    fn weight(weight: f32) -> HighlightStyle {
+        HighlightStyle {
+            font_weight: Some(gpui::FontWeight(weight)),
+            ..HighlightStyle::default()
+        }
+    }
+
+    #[test]
+    fn path_leaf_highlights_mark_only_the_last_component() {
+        let leaf = weight(100.0);
+        assert_eq!(
+            path_leaf_highlights("/Users/u/GitComet", leaf, &[]),
+            vec![(9..17, leaf)]
+        );
+        assert_eq!(
+            path_leaf_highlights("crates/kit/src/lib.rs", leaf, &[]),
+            vec![(15..21, leaf)]
+        );
+        // A trailing separator still names the folder before it.
+        assert_eq!(
+            path_leaf_highlights("/Users/u/GitComet/", leaf, &[]),
+            vec![(9..18, leaf)]
+        );
+        // Nothing to dim: a bare name, or the root, is all leaf.
+        assert_eq!(
+            path_leaf_highlights("Cargo.toml", leaf, &[]),
+            vec![(0..10, leaf)]
+        );
+        assert_eq!(path_leaf_highlights("/", leaf, &[]), vec![(0..1, leaf)]);
+    }
+
+    #[test]
+    fn path_leaf_highlights_keep_other_highlights_over_the_leaf() {
+        let leaf = weight(100.0);
+        let hit = weight(700.0);
+        // "/Users/u/GitComet": a match in the parents, one straddling the
+        // leaf's start and one inside it, given out of order.
+        let matches = [(12..14, hit), (1..3, hit), (7..10, hit)];
+        assert_eq!(
+            path_leaf_highlights("/Users/u/GitComet", leaf, &matches),
+            vec![
+                (1..3, hit),
+                (7..10, hit),
+                (10..12, leaf),
+                (12..14, hit),
+                (14..17, leaf),
+            ]
+        );
+    }
 
     fn style() -> HighlightStyle {
         HighlightStyle {

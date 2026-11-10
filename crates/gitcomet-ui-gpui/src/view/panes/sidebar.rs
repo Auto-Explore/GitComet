@@ -2331,6 +2331,7 @@ struct UnsavedFileRowCtx {
     repo_id: RepoId,
     ix: usize,
     is_open: bool,
+    tooltip_host: WeakEntity<TooltipHost>,
 }
 
 /// One row of the pinned unsaved-edits section: pen, path, discard.
@@ -2358,6 +2359,7 @@ fn unsaved_file_row(
         repo_id,
         ix,
         is_open,
+        tooltip_host,
     } = ctx;
     let ui_scale_percent = crate::ui_scale::current(cx).percent;
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -2412,7 +2414,11 @@ fn unsaved_file_row(
                     // Path elision keeps the file name, which identifies the
                     // row, and drops the folders in the middle.
                     .profile(components::TextTruncationProfile::Path)
-                    .text_color(file_browser_row_label_color(theme, is_open))
+                    .id(("file_browser_unsaved_path", ix))
+                    // The folders recede; the file name keeps the row's colour.
+                    .text_color(theme.colors.foreground.secondary)
+                    .path_leaf_color(file_browser_row_label_color(theme, is_open))
+                    .full_text_tooltip(tooltip_host)
                     .render(cx),
             ),
         )

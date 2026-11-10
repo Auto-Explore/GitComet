@@ -989,6 +989,9 @@ fn status_row(
                         ),
                     }
                     .id(("status_row_path", ix))
+                    // The folders recede; the file name keeps full contrast.
+                    .text_color(theme.colors.foreground.secondary)
+                    .path_leaf_color(theme.colors.foreground.primary)
                     .full_text_tooltip(tooltip_host)
                     .render(cx),
                 ),

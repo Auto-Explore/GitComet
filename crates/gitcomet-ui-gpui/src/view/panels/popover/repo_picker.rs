@@ -868,21 +868,24 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     cx,
                 ));
             }
+            // A workspace is named, a repository is shown by its path.
             let label = match entry {
                 RepoPickerEntry::Workspace(workspace_id) => this
                     .cached_workspaces
                     .iter()
                     .find(|workspace| workspace.id == *workspace_id)
-                    .map(|workspace| gpui::SharedString::from(workspace.display_name())),
+                    .map(|workspace| (gpui::SharedString::from(workspace.display_name()), false)),
                 RepoPickerEntry::Open(repo_id) => this
                     .state
                     .repos
                     .iter()
                     .find(|repo| repo.id == *repo_id)
-                    .map(|repo| path_display::path_display_shared(&repo.spec.workdir)),
-                RepoPickerEntry::Closed(path) => Some(path_display::path_display_shared(path)),
+                    .map(|repo| (path_display::path_display_shared(&repo.spec.workdir), true)),
+                RepoPickerEntry::Closed(path) => {
+                    Some((path_display::path_display_shared(path), true))
+                }
             };
-            let Some(label) = label else {
+            let Some((label, is_path)) = label else {
                 continue;
             };
             let tone = crate::view::menu_presentation::context_menu_tone(label.as_ref(), None);
@@ -890,7 +893,13 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             menu = menu.child(
                 components::ContextMenuEntry::new(
                     ("repo_item", ix),
-                    components::ContextMenuText::path_single_line(label),
+                    if is_path {
+                        components::ContextMenuText::path_single_line(label)
+                    } else {
+                        components::ContextMenuText::new(label)
+                            .max_lines(1)
+                            .tooltip_mode(components::TruncatedTextTooltipMode::FullTextIfTruncated)
+                    },
                 )
                 .tone(tone)
                 .tooltip_host(this.tooltip_host.clone())
