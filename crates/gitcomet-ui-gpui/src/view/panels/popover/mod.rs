@@ -304,6 +304,8 @@ pub(in super::super) struct PopoverHost {
     /// rows remain stable for the duration of one keyboard interaction.
     cached_workspaces: Vec<session::Workspace>,
     cached_workspace_id: Option<session::WorkspaceId>,
+    /// Whether an extension supplies "Check for updates", fixed at construction.
+    extension_update_check: bool,
     /// Extension commands in the app menu, fixed at construction.
     extension_app_menu: Rc<[crate::view::extension_host::ExtensionMenuEntry]>,
     /// Extension commands in a repository tab's menu, fixed at construction.

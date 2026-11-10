@@ -25,8 +25,7 @@ fn push_entry(
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     model_with_update_checks_disabled(
         this,
-        crate::view::update_checks_disabled_by_environment()
-            || !crate::view::update_checks_available(),
+        crate::view::manual_update_check_unavailable(this.extension_update_check),
     )
 }
 

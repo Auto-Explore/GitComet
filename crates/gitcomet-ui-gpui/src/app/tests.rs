@@ -329,7 +329,7 @@ fn macos_file_menu_hides_unconfigured_external_editor_action() {
 #[test]
 fn macos_apply_patch_menu_is_disabled_for_bare_repositories() {
     for bare in [false, true] {
-        let menus = macos_app_menus_with_options(true, true, bare);
+        let menus = macos_app_menus_with_options(true, true, bare, false);
         let file = menus
             .iter()
             .find(|menu| menu.name.as_ref() == "File")

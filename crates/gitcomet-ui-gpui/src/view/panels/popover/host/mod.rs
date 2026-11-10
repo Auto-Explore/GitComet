@@ -919,6 +919,7 @@ impl PopoverHost {
             cached_pinned_repos: Vec::new(),
             cached_workspaces: Vec::new(),
             cached_workspace_id: None,
+            extension_update_check: crate::view::extension_host::provides_update_check(cx),
             extension_app_menu: crate::view::extension_host::menu_entries(
                 gitcomet_extension_api::MenuLocation::Application,
                 cx,

@@ -287,6 +287,11 @@ pub(in crate::view) fn palette_entries(cx: &App) -> &'static [CommandEntry] {
         .map_or(&[], |host| host.palette)
 }
 
+/// Whether an extension runs "Check for updates" with its own check.
+pub(crate) fn provides_update_check(cx: &App) -> bool {
+    registry(cx).is_some_and(|registry| registry.update_check_action().is_some())
+}
+
 /// The registry, or `None` when no extension is registered.
 pub(crate) fn registry(cx: &App) -> Option<Rc<Registry>> {
     cx.try_global::<ExtensionHost>()

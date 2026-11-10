@@ -5,7 +5,7 @@ use crate::contributions::{
     CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, DetailsTabDescriptor,
     MenuLocation, RefMenuItemDescriptor, RepositoryEntryGate, RepositoryViewDescriptor,
     SettingsPageDescriptor, SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor,
-    WindowGateDescriptor,
+    UpdateCheckAction, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -87,6 +87,7 @@ pub struct Registrar {
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
     crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
     errors: Vec<String>,
 }
 
@@ -118,6 +119,7 @@ impl Registrar {
             close_guards: Vec::new(),
             startup_workflows: Vec::new(),
             crash_report_actions: Vec::new(),
+            update_check_actions: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -427,6 +429,23 @@ impl Registrar {
         self
     }
 
+    /// Runs "Check for updates" (the application menu, the in-window app menu
+    /// and the command palette) instead of the host's own check, and enables it
+    /// for a product whose identity names no update source. At most one
+    /// extension may provide it. The host's startup check, its setting and
+    /// `GITCOMET_NO_UPDATE_CHECK` stay the host's: they follow the identity's
+    /// update source alone and do not reach this check.
+    pub fn update_check(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        action: UpdateCheckAction,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.update_check_actions.push((id, action));
+        }
+        self
+    }
+
     pub fn close_guard(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -469,6 +488,7 @@ pub struct Registry {
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
     crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
 }
 
 impl Registry {
@@ -523,6 +543,9 @@ impl Registry {
             registry
                 .crash_report_actions
                 .extend(registrar.crash_report_actions);
+            registry
+                .update_check_actions
+                .extend(registrar.update_check_actions);
             registry.title_bar_brand.extend(registrar.title_bar_brand);
             registry.status_items.extend(registrar.status_items);
             registry.commit_box_items.extend(registrar.commit_box_items);
@@ -638,6 +661,14 @@ impl Registry {
                 error(
                     id.extension(),
                     "crash_report_action has more than one provider".to_string(),
+                );
+            }
+        }
+        if registry.update_check_actions.len() > 1 {
+            for (id, _) in registry.update_check_actions.iter().skip(1) {
+                error(
+                    id.extension(),
+                    "update_check has more than one provider".to_string(),
                 );
             }
         }
@@ -764,6 +795,11 @@ impl Registry {
     /// The crash banner's native report-review action, when provided.
     pub fn crash_report_action(&self) -> Option<&CrashReportAction> {
         self.crash_report_actions.first().map(|(_, action)| action)
+    }
+
+    /// The product's own update check, when provided.
+    pub fn update_check_action(&self) -> Option<&UpdateCheckAction> {
+        self.update_check_actions.first().map(|(_, action)| action)
     }
 
     pub fn edition_strip(&self) -> Option<&ChromeDescriptor> {

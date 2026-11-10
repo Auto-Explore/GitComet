@@ -52,8 +52,8 @@ pub use contributions::{
     RefMenuHandler, RefMenuItemDescriptor, RefMenuTarget, RepositoryEntryGate,
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
     SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, SidebarTabDescriptor,
-    StatusItemDescriptor, ViewBuilder, ViewFocus, ViewNavigation, ViewTarget, WindowGateDescriptor,
-    WindowGatePredicate,
+    StatusItemDescriptor, UpdateCheckAction, ViewBuilder, ViewFocus, ViewNavigation, ViewTarget,
+    WindowGateDescriptor, WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
