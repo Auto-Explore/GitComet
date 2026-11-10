@@ -155,7 +155,7 @@ chardetng = { version = "1.0.0", default-features = false }
 ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
-dekobon-tree-sitter-groovy = "0.3.0"
+dekobon-tree-sitter-groovy = "0.4.0"
 # Vendored as a library; see vendor/README.md.
 difftastic = { path = "vendor/difftastic" }
 dispatch2 = "0.3.1"
@@ -328,7 +328,7 @@ tree-sitter-java = "0.23.5"
 tree-sitter-janet-simple = { path = "vendor/tree-sitter-janet-simple" }
 tree-sitter-jinja-dialects = { path = "vendor/tree-sitter-jinja-dialects" }
 tree-sitter-jsdoc = "0.25.0"
-tree-sitter-jsonnet = "0.0.1"
+tree-sitter-jsonnet = "0.1.1"
 tree-sitter-json = "0.24.8"
 # Vendored, not from crates.io: the published crate depends on
 # `tree-sitter = ~0.25.5` and `links` makes that unresolvable alongside 0.26 --
