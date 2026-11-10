@@ -6,28 +6,41 @@
 
 mod motion;
 mod native;
+mod routing;
+mod surfaces;
 mod tracked;
 pub use tracked::TrackedElasticScroll;
+#[cfg(all(test, target_os = "macos"))]
+mod linked_work_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod regression_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod surface_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
+#[cfg(all(test, target_os = "macos"))]
+mod work_tests;
 
 use crate::{ScrollbarAxis, ScrollbarDriver};
 use gpui::{
     AnyElement, App, AppContext, Bounds, ContentMask, DispatchPhase, Element, ElementId,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
     MouseDownEvent, OngoingScroll, Pixels, ScrollHandle, ScrollWheelEvent, TouchPhase,
-    UniformListScrollHandle, Window, WindowId, point, px,
+    UniformListScrollHandle, Window, point, px,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// A scroll model for one axis. Positions use f64 so very large virtual documents
 /// do not lose sub-row precision. `scroll_by` returns the distance consumed.
 pub trait ElasticScrollDriver: 'static {
     /// Signed position (negative below the top), and nonnegative maximum.
+    /// Driver methods run synchronously while motion is borrowed; use the
+    /// wrapper's callbacks for work that reads or resets its motion state.
     fn metrics(&self) -> (f64, f64);
+    /// Returns the signed logical distance actually consumed. A zero result
+    /// alone requests no repaint. Notify from the owner, or install a scroll
+    /// callback, if the operation changes other visible state at a clamped edge.
     fn scroll_by(&self, delta: Pixels) -> Pixels;
     /// A partially measured list may need its native handler to discover more
     /// rows before its scrollbar estimate represents a real boundary.
@@ -135,9 +148,9 @@ impl ElasticScrollDriver for gpui::ListState {
     }
 }
 
-type WheelListener = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>;
+type WheelListener = Box<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>;
 type WheelPredicate = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) -> bool>;
-type LogicalScrollListener = Rc<dyn Fn(Pixels, &ScrollWheelEvent, &mut Window, &mut App)>;
+type LogicalScrollListener = Box<dyn Fn(Pixels, &ScrollWheelEvent, &mut Window, &mut App)>;
 
 /// Adds rubber-banding to an existing scrollable element.
 pub struct ElasticScroll {
@@ -206,10 +219,20 @@ impl ElasticScroll {
         driver: impl ElasticScrollDriver,
         child: impl IntoElement,
     ) -> Self {
+        Self::with_shared_driver(id, Rc::new(driver), child)
+    }
+
+    /// Reuses an owner-retained driver without allocating an erased driver on
+    /// each render. The current callbacks are still installed afresh each paint.
+    pub fn with_shared_driver(
+        id: impl Into<ElementId>,
+        driver: Rc<dyn ElasticScrollDriver>,
+        child: impl IntoElement,
+    ) -> Self {
         Self {
             id: id.into(),
             child: Some(child.into_any_element()),
-            driver: Rc::new(driver),
+            driver,
             on_scroll: None,
             wheel_predicate: None,
             on_logical_scroll: None,
@@ -250,7 +273,7 @@ impl ElasticScroll {
         mut self,
         listener: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_scroll = Some(Rc::new(listener));
+        self.on_scroll = Some(Box::new(listener));
         self
     }
 
@@ -271,7 +294,7 @@ impl ElasticScroll {
         mut self,
         listener: impl Fn(Pixels, &ScrollWheelEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_logical_scroll = Some(Rc::new(listener));
+        self.on_logical_scroll = Some(Box::new(listener));
         self
     }
 
@@ -333,18 +356,34 @@ impl State {
 
 #[derive(Default)]
 struct LocalState {
+    claim_token: u64,
     axis: OngoingScroll,
     expected_metrics: Option<(f64, f64)>,
     size: Option<gpui::Size<Pixels>>,
-    captured_delta: Option<gpui::Point<Pixels>>,
+    captured_delta: Option<Pixels>,
 }
 
 /// Only the innermost wrapper under the pointer handles a scroll. Captures
 /// claim from outer to inner; bubble listeners check the final claim before
 /// the child's native scroll listener can apply the same delta a second time.
 #[derive(Default)]
-struct WheelClaim(Option<(WindowId, GlobalElementId)>);
+struct WheelClaim {
+    owner: Cell<Option<u64>>,
+}
 impl gpui::Global for WheelClaim {}
+
+impl WheelClaim {
+    fn register_surface() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Test hosts may clear App globals while retaining painted elements.
+        // Never recycle their tokens when a new claim global is initialized.
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |token| {
+            token.checked_add(1)
+        })
+        .expect("scroll surface ids exhausted")
+    }
+}
 
 pub struct ElasticScrollPrepaintState {
     hitbox: Hitbox,
@@ -438,7 +477,15 @@ impl Element for ElasticScroll {
             })
         });
         let local = window.with_element_state(id.expect("elastic scroll id"), |local, _| {
-            let local: Rc<RefCell<LocalState>> = local.unwrap_or_default();
+            let local: Rc<RefCell<LocalState>> = local.unwrap_or_else(|| {
+                if cx.try_global::<WheelClaim>().is_none() {
+                    cx.set_global(WheelClaim::default());
+                }
+                Rc::new(RefCell::new(LocalState {
+                    claim_token: WheelClaim::register_surface(),
+                    ..Default::default()
+                }))
+            });
             (local.clone(), local)
         });
         let state_weak = Rc::downgrade(&state.0);
@@ -519,23 +566,24 @@ impl Element for ElasticScroll {
         );
         {
             let mut motion = state.0.borrow_mut();
-            let changed = if self.linked_motion {
-                motion
-                    .expected_driver
-                    .as_ref()
-                    .is_some_and(|(driver, expected)| driver.metrics() != *expected)
-            } else {
-                local
-                    .borrow()
-                    .expected_metrics
-                    .is_some_and(|expected| expected != self.driver.metrics())
-            };
-            // Overflow extents are measured by the child, after our initial
-            // geometry check. Appended output can turn an old edge into an
-            // interior position while the finger is still held. Request one
-            // cleanup frame rather than leaving that stretch waiting for input.
-            if changed && motion.motion.offset() != 0.0 {
-                motion.schedule_geometry_reset(Rc::downgrade(&state.0), view, window);
+            // Only a displaced surface needs a post-measurement cleanup.
+            // ListState and terminal metrics can otherwise repeat expensive work
+            // after every unrelated redraw, even while resting at zero.
+            if motion.motion.offset() != 0.0 {
+                let changed = if self.linked_motion {
+                    motion
+                        .expected_driver
+                        .as_ref()
+                        .is_some_and(|(driver, expected)| driver.metrics() != *expected)
+                } else {
+                    local
+                        .borrow()
+                        .expected_metrics
+                        .is_some_and(|expected| expected != self.driver.metrics())
+                };
+                if changed {
+                    motion.schedule_geometry_reset(Rc::downgrade(&state.0), view, window);
+                }
             }
         }
         Some(ElasticScrollPrepaintState {
@@ -547,7 +595,7 @@ impl Element for ElasticScroll {
 
     fn paint(
         &mut self,
-        id: Option<&GlobalElementId>,
+        _id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         child: &mut AnyElement,
@@ -559,178 +607,6 @@ impl Element for ElasticScroll {
             child.paint(window, cx);
             return;
         };
-        let id = id.expect("elastic scroll id").clone();
-        let window_id = window.window_handle().window_id();
-        let view = window.current_view();
-        let axis = self.axis;
-        let horizontal_only = self.horizontal_only;
-        let restrict_to_axis = self.vertical_only || horizontal_only;
-        window.on_mouse_event({
-            let id = id.clone();
-            let hitbox = prepaint.hitbox.clone();
-            let state = prepaint.state.clone();
-            let local = prepaint.local.clone();
-            let wheel_predicate = self.wheel_predicate.clone();
-            move |event: &ScrollWheelEvent, phase, window, cx| {
-                if phase != DispatchPhase::Capture {
-                    return;
-                }
-                // A live input predicate may change before Bubble. A prior
-                // packet's claim must never authorize replaying its delta.
-                local.borrow_mut().captured_delta = None;
-                if state.0.borrow().motion.touching()
-                    && matches!(
-                        native::read(event).phase,
-                        TouchPhase::Ended | TouchPhase::Cancelled
-                    )
-                {
-                    state
-                        .0
-                        .borrow_mut()
-                        .motion
-                        .release(cx.background_executor().now());
-                    cx.notify(view);
-                }
-                if hitbox.should_handle_scroll(window)
-                    && wheel_predicate
-                        .as_ref()
-                        .is_none_or(|predicate| predicate(event, window, cx))
-                {
-                    let mut delta = event.delta.pixel_delta(window.line_height());
-                    let mut local = local.borrow_mut();
-                    if restrict_to_axis && event.delta.precise() {
-                        // Track even a gesture this wrapper declines, so an
-                        // inner horizontal area remembers the parent's axis
-                        // through small diagonal packets later in the gesture.
-                        local.axis.filter(&mut delta, event.touch_phase);
-                    }
-                    let accepts = match axis {
-                        ScrollbarAxis::Vertical => delta.y.abs() >= delta.x.abs(),
-                        ScrollbarAxis::Horizontal => {
-                            !horizontal_only || delta.x.abs() >= delta.y.abs()
-                        }
-                    };
-                    if accepts {
-                        local.captured_delta = Some(delta);
-                        cx.set_global(WheelClaim(Some((window_id, id.clone()))));
-                    }
-                }
-            }
-        });
-        window.on_mouse_event({
-            let state = prepaint.state.clone();
-            move |_: &MouseDownEvent, phase, _, cx| {
-                if phase == DispatchPhase::Capture && state.0.borrow().motion.offset() != 0.0 {
-                    state.0.borrow_mut().motion.reset();
-                    cx.notify(view);
-                }
-            }
-        });
-        window.with_content_mask(
-            Some(ContentMask {
-                bounds,
-                ..Default::default()
-            }),
-            |window| child.paint(window, cx),
-        );
-        window.on_mouse_event({
-            let hitbox = prepaint.hitbox.clone();
-            let state = prepaint.state.clone();
-            let driver = self.driver.clone();
-            let local = prepaint.local.clone();
-            let on_scroll = self.on_scroll.clone();
-            let wheel_predicate = self.wheel_predicate.clone();
-            let on_logical_scroll = self.on_logical_scroll.clone();
-            let linked_motion = self.linked_motion;
-            move |event: &ScrollWheelEvent, phase, window, cx| {
-                if phase != DispatchPhase::Bubble
-                    || !hitbox.should_handle_scroll(window)
-                    || !cx
-                        .try_global::<WheelClaim>()
-                        .is_some_and(|claim| claim.0.as_ref() == Some(&(window_id, id.clone())))
-                {
-                    return;
-                }
-                let Some(delta) = local.borrow().captured_delta else {
-                    return;
-                };
-                if wheel_predicate
-                    .as_ref()
-                    .is_some_and(|predicate| !predicate(event, window, cx))
-                {
-                    return;
-                }
-                let mut state = state.0.borrow_mut();
-                if !event.delta.precise() {
-                    if state.motion.offset() != 0.0 {
-                        cx.notify(view);
-                    }
-                    state.motion.reset();
-                    return;
-                }
-                let now = cx.background_executor().now();
-                let delta = match axis {
-                    ScrollbarAxis::Vertical if delta.x.abs() > delta.y.abs() => return,
-                    ScrollbarAxis::Vertical => delta.y,
-                    ScrollbarAxis::Horizontal
-                        if horizontal_only && delta.y.abs() > delta.x.abs() =>
-                    {
-                        return;
-                    }
-                    ScrollbarAxis::Horizontal if delta.x != px(0.0) => delta.x,
-                    ScrollbarAxis::Horizontal if !horizontal_only => delta.y,
-                    ScrollbarAxis::Horizontal => px(0.0),
-                };
-                if !f32::from(delta).is_finite()
-                    || (state.motion.offset() == 0.0 && !driver.should_handle(delta))
-                {
-                    return;
-                }
-                let animate = motion_enabled(cx);
-                if animate {
-                    let input = native::read(event);
-                    if input.source == Some(native::Source::Wheel) {
-                        state.motion.reset();
-                    } else {
-                        let phase = if input.source == Some(native::Source::Touch)
-                            && input.phase == TouchPhase::Moved
-                            && !state.motion.touching()
-                        {
-                            TouchPhase::Started
-                        } else {
-                            input.phase
-                        };
-                        state.motion.begin(phase, now);
-                        if input.source == Some(native::Source::Momentum) {
-                            state.motion.allow_native_momentum(now);
-                        }
-                    }
-                } else {
-                    state.motion.reset();
-                }
-                let delta = f32::from(delta);
-                let remaining = state.motion.take_reversal(delta, now);
-                let consumed = driver.scroll_by(px(remaining));
-                if animate {
-                    state.motion.record_delta(delta, now);
-                    state
-                        .motion
-                        .overscroll(remaining - f32::from(consumed), now);
-                }
-                local.borrow_mut().expected_metrics = Some(driver.metrics());
-                if linked_motion {
-                    state.expected_driver = Some((driver.clone(), driver.metrics()));
-                }
-                drop(state);
-                if let Some(on_scroll) = &on_scroll {
-                    on_scroll(event, window, cx);
-                }
-                if let Some(on_logical_scroll) = &on_logical_scroll {
-                    on_logical_scroll(px(remaining), event, window, cx);
-                }
-                cx.notify(view);
-                cx.stop_propagation();
-            }
-        });
+        routing::paint(self, bounds, child, prepaint, window, cx);
     }
 }

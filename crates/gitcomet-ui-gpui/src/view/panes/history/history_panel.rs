@@ -135,8 +135,7 @@ impl HistoryView {
             .h_full()
             .track_scroll(&self.history_scroll)
             .on_scroll_wheel(cx.listener(Self::history_wheel));
-            let list = restrict_scroll_to_vertical_axis(list);
-            let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            let list = crate::kit::elastic_scroll::ElasticScroll::vertical(
                 (
                     "history_elastic",
                     self.active_repo_id().map_or(0, |id| id.0),
@@ -148,7 +147,6 @@ impl HistoryView {
                 },
                 list,
             )
-            .vertical_only()
             .on_scroll(cx.listener(|this, _, _, cx| this.history_wheel_interaction(cx)));
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();

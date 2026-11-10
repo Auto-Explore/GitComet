@@ -92,12 +92,11 @@ impl Render for ChangedFileListView {
             }
             None => (list, None),
         };
-        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+        let list = crate::kit::elastic_scroll::ElasticScroll::vertical(
             "changed_files_elastic",
             self.scroll.clone(),
-            restrict_scroll_to_vertical_axis(list),
-        )
-        .vertical_only();
+            list,
+        );
         div()
             .relative()
             .size_full()

@@ -202,12 +202,11 @@ impl ScrollContainer {
             surface = surface.debug_selector(move || selector.to_string());
         }
 
-        let mut body = crate::elastic_scroll::ElasticScroll::new(
+        let mut body = crate::elastic_scroll::ElasticScroll::vertical(
             elastic_id,
             self.scroll.clone(),
-            crate::restrict_scroll_to_vertical_axis(surface).child(child),
-        )
-        .vertical_only();
+            surface.child(child),
+        );
         if let Some(state) = self.elastic_scroll {
             body = body.motion_state(state);
         }

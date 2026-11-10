@@ -2,7 +2,6 @@ use super::control_height_md;
 use super::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::click::PointerClickExt as _;
 use crate::interaction as controls;
-use crate::restrict_scroll_to_vertical_axis;
 use crate::theme::AppTheme;
 use crate::tooltip_host::TooltipHost;
 use crate::ui_scale::UiScale;
@@ -816,7 +815,6 @@ impl PickerPrompt {
             .py(scaled_px(LIST_PAD_PX))
             .pl(scaled_px(LIST_PAD_PX))
             .track_scroll(&scroll_handle);
-        list = restrict_scroll_to_vertical_axis(list);
 
         // A list whose every section is collapsed has no rows but is not empty:
         // its headers are the only way back to the rows, so they must still draw.
@@ -969,12 +967,11 @@ impl PickerPrompt {
         // Mirrors the list's left padding so rows stay centred in the list, with
         // the scrollbar's own gutter added on top of it when one is showing.
         let list = list.pr(scrollbar_gutter + scaled_px(LIST_PAD_PX));
-        let list = crate::elastic_scroll::ElasticScroll::new(
+        let list = crate::elastic_scroll::ElasticScroll::vertical(
             "picker_prompt_elastic",
             scroll_handle.clone(),
             list,
-        )
-        .vertical_only();
+        );
         let scrollbar = {
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(any(test, feature = "test-support"))]
