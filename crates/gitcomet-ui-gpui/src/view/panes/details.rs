@@ -3122,7 +3122,7 @@ impl DetailsPaneView {
 }
 
 impl Render for DetailsPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         #[cfg(any(test, feature = "benchmarks"))]
         {
             self.render_count += 1;
@@ -3137,7 +3137,7 @@ impl Render for DetailsPaneView {
                     window.focus(&this.details_focus, cx);
                 }
             }))
-            .child(self.commit_details_view(cx))
+            .child(self.commit_details_view(window, cx))
             .child(StatusSectionResizeTracker { view: cx.entity() })
     }
 }

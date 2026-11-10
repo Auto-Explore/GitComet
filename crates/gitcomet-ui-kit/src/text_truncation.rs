@@ -47,6 +47,13 @@ pub enum TextTruncationProfile {
     End,
     Middle,
     Path,
+    /// A ref name keeps its leaf, the part after the last `/`. The path
+    /// before it is clipped from the start first, with no marker, and only
+    /// a leaf too wide on its own is cut from its end with an ellipsis:
+    /// `feat/new-component` narrows through `eat/new-component` and
+    /// `new-component` to `new-compo…`. The history graph's ref chips cut
+    /// their labels the same way.
+    RefLeaf,
 }
 
 #[derive(Clone, Debug)]
