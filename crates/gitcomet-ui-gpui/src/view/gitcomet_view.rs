@@ -2442,6 +2442,27 @@ impl GitCometView {
             .diff_pane_for_keys(scope, window, cx)
     }
 
+    /// Cmd/Ctrl+F outside the side panes opens the search of the diff the
+    /// diff keys act on ([`Self::diff_shortcut_target`]): History's find or
+    /// diff search, or the hosted diff pane in the extension view or overlay
+    /// over History. With no pane there it opens nothing, rather than
+    /// History's hidden find, and the key goes on to the focused view.
+    pub(super) fn open_main_slot_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        match self.diff_shortcut_target(window, cx) {
+            Some(target) if target.entity_id() == self.diff_renderer.entity_id() => self
+                .main_pane
+                .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx)),
+            Some(target) => {
+                target.update(cx, |pane, cx| pane.open_search_for_active_view(window, cx))
+            }
+            None => false,
+        }
+    }
+
     /// F2/F3 step the open search of the side pane holding focus (the
     /// sidebar's or the details pane's); false leaves them to the main pane.
     pub(super) fn step_focused_pane_search(

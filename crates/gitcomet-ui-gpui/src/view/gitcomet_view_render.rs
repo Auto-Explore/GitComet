@@ -588,8 +588,9 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                     return;
                 }
-                // The search of the pane holding focus; the main pane's
-                // otherwise (history or diff).
+                // The search of the pane holding focus; the main slot's
+                // otherwise (History's, or the hosted diff pane of the
+                // extension view or overlay over it).
                 let handled = if this.sidebar_pane.read(cx).contains_focus(window, cx) {
                     this.sidebar_pane
                         .update(cx, |pane, cx| pane.open_search(window, cx))
@@ -598,9 +599,7 @@ impl Render for GitCometView {
                         .update(cx, |pane, cx| pane.open_review_search(window, cx))
                 } else {
                     false
-                } || this
-                    .main_pane
-                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                } || this.open_main_slot_search(window, cx);
                 if handled {
                     cx.stop_propagation();
                 }
