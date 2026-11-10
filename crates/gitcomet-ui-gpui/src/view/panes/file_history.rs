@@ -471,6 +471,33 @@ impl FileHistoryPaneView {
         });
     }
 
+    /// A commit the user picked: shown in the History view's diff, so that
+    /// view takes the main canvas.
+    fn pick(&mut self, commit_id: CommitId, cx: &mut gpui::Context<Self>) {
+        self.select(commit_id, cx);
+        self.show_history_view(cx);
+    }
+
+    /// Brings the History view to the main canvas once this update is over,
+    /// keeping the keyboard with the filter when it had it: a view that takes
+    /// the canvas takes the focus too, and Up and Down move through this list.
+    fn show_history_view(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        let filter = self.search_input.read(cx).focus_handle();
+        cx.defer(move |cx| {
+            let Ok(window) = root_view.read_with(cx, |root, _| root.window_handle) else {
+                return;
+            };
+            let _ = window.update(cx, |_, window, cx| {
+                let focused = filter.is_focused(window);
+                let _ = root_view.update(cx, |root, cx| root.show_history_view(window, cx));
+                if focused {
+                    window.focus(&filter, cx);
+                }
+            });
+        });
+    }
+
     fn select(&mut self, commit_id: CommitId, cx: &mut gpui::Context<Self>) {
         self.selected = Some(commit_id.clone());
         self.request(commit_id);
@@ -567,7 +594,7 @@ impl FileHistoryPaneView {
             }
             PickerNavOutcome::Navigated => {
                 if let Some(commit_id) = display.and_then(|ix| rows.filtered_payload(ix).cloned()) {
-                    self.select(commit_id, cx);
+                    self.pick(commit_id, cx);
                 }
             }
             PickerNavOutcome::Enter | PickerNavOutcome::Idle => {}
@@ -664,6 +691,7 @@ impl Render for FileHistoryPaneView {
                             FileHistoryMode::File
                         };
                         this.set_mode(mode, cx);
+                        this.show_history_view(cx);
                     }),
             )
             .child(
@@ -706,7 +734,7 @@ impl Render for FileHistoryPaneView {
             ))
             .render(theme, ui_scale, cx, move |this, ix, _e, _window, cx| {
                 if let Some(commit_id) = commit_ids.get(ix).cloned() {
-                    this.select(commit_id, cx);
+                    this.pick(commit_id, cx);
                 }
             });
         let entity = cx.entity().downgrade();

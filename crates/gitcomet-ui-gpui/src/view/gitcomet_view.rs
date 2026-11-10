@@ -1716,6 +1716,17 @@ impl GitCometView {
         .detach();
     }
 
+    /// Brings the History view to the main canvas, from a document or a
+    /// contributed view.
+    pub(in crate::view) fn show_history_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.show_repository_canvas(cx);
+        self.select_routed_view(repository_views::RoutedArea::Main, None, window, cx);
+    }
+
     /// Opens the file history tab for `path`; does nothing for an inactive repository.
     pub(in crate::view) fn open_file_history(
         &mut self,
@@ -1728,6 +1739,10 @@ impl GitCometView {
             return;
         }
         self.set_sidebar_collapsed(false, cx);
+        // The tab lists commits the History view shows. Shown before the tab
+        // is selected, since changing the view may select a sidebar tab of
+        // its own.
+        self.show_history_view(window, cx);
         self.file_history_pane
             .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
         self.sidebar_pane
