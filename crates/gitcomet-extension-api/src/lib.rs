@@ -32,7 +32,7 @@ pub mod host;
 pub mod id;
 pub mod lifecycle;
 pub mod markdown;
-pub use markdown::{MarkdownView, MarkdownViewImpl};
+pub use markdown::{MarkdownTextStyle, MarkdownView, MarkdownViewImpl};
 pub mod panes;
 pub mod presentation;
 pub use presentation::{HostedAction, HostedMenuItem, NotificationKind};
