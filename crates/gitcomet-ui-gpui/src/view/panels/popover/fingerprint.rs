@@ -1134,9 +1134,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             submodule_repo_path.hash(hasher);
             view_fingerprint::hash_diff_target(target, hasher);
         }
-        PopoverKind::TagMenu { repo_id, commit_id } => {
+        PopoverKind::TagMenu {
+            repo_id,
+            commit_id,
+            name,
+        } => {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+            name.hash(hasher);
         }
         PopoverKind::HistoryBranchFilter { repo_id } => {
             repo_id.hash(hasher);

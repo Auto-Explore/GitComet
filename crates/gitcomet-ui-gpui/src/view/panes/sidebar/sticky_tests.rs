@@ -270,7 +270,7 @@ fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
     let (headers, worktrees, stashes, group, rows) = cx.update(|_, app| {
         pane.update(app, |pane, _| {
             let presentation = pane.branch_sidebar_presentation_cached().unwrap();
-            assert_eq!(presentation.structure.sections.len(), 5);
+            assert_eq!(presentation.structure.sections.len(), 6);
             let group = presentation.structure.headers
                 [branch_sidebar::local_group_storage_key("shared").as_str()];
             assert!(
@@ -422,6 +422,15 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
         long_list_tests::fixture(100, CollapsedSidebarSection::Stashes).repos[0]
             .stashes
             .clone();
+    // The last section needs content below its header to scroll to the top.
+    Arc::make_mut(&mut state).repos[0].tags = Loadable::Ready(Arc::new(
+        (0..100)
+            .map(|i| Tag {
+                name: format!("v{i}"),
+                target: CommitId("a".into()),
+            })
+            .collect(),
+    ));
     let repo_id = state.repos[0].id.0;
     let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
     cx.update(|_, app| {
@@ -446,7 +455,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
             )
         })
     });
-    assert_eq!(sections.len(), 5);
+    assert_eq!(sections.len(), 6);
     for section in &sections[1..] {
         assert!(matches!(rows[section - 1], BranchSidebarRow::SectionSpacer));
     }
@@ -507,7 +516,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
     // Navigating to the last section stacks every header above it, gap-free.
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            pane.navigate_sidebar_header(branch_sidebar::stash_section_storage_key().into(), cx)
+            pane.navigate_sidebar_header(branch_sidebar::tags_section_storage_key().into(), cx)
         })
     });
     test_support::redraw(cx);
@@ -525,7 +534,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
     for pair in painted.windows(2) {
         assert!(near(pair[1].1.top(), pair[0].1.bottom()));
     }
-    assert_eq!(painted.last().unwrap().0, sections[4]);
+    assert_eq!(painted.last().unwrap().0, *sections.last().unwrap());
 
     // Scrolling along, a section shows one blank slot above its header.
     let last_local = remote - 2;
@@ -1104,9 +1113,9 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
         }
         let chrome = cx.update(|window, _| window.viewport_size().height - viewport.size.height);
         for (slots, count, selected_visible) in [
-            (7.25, 6, true),
-            (6.25, 5, false),
-            (5.5, 0, false),
+            (8.25, 7, true),
+            (7.25, 6, false),
+            (6.5, 0, false),
             (12.0, eligible.len(), true),
         ] {
             cx.simulate_resize(gpui::size(px(1000.0), chrome + row_height * slots));
@@ -1116,7 +1125,7 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
                 cx.debug_bounds("sidebar_sticky_selected_branch").is_some(),
                 selected_visible
             );
-            if count == 6 {
+            if count == 7 {
                 assert!(cx.debug_bounds("sidebar_ancestor_menu_0").is_some());
             }
         }
@@ -1399,7 +1408,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
     let rows = cx.update(|_, app| {
         pane.update(app, |pane, cx| {
             let p = pane.branch_sidebar_presentation_cached().unwrap();
-            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 6);
+            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 7);
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::remote("origin", "shared/topic-000001"),
@@ -1412,7 +1421,10 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
     test_support::redraw(cx);
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 9);
+            assert_eq!(
+                pane.sticky_context.as_ref().unwrap().eligible_rows.len(),
+                10
+            );
             pane.set_selected_branch(
                 state.repos[0].id,
                 BranchMenuTarget::local("shared/topic-000001"),
@@ -1426,7 +1438,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
         pane.update(app, |pane, cx| {
             assert_eq!(
                 pane.sticky_context.as_ref().unwrap().eligible_rows.len(),
-                7,
+                8,
                 "shared paths are deduplicated"
             );
             pane.set_selected_branch(
@@ -1454,7 +1466,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
         pane.update(app, |pane, _| {
             let p = pane.branch_sidebar_presentation_cached().unwrap();
             assert!(Rc::ptr_eq(&p.rows, &rows));
-            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 6);
+            assert_eq!(pane.sticky_context.as_ref().unwrap().eligible_rows.len(), 7);
         })
     });
     for head in ["HEAD", "shared/deleted-branch"] {
@@ -1476,7 +1488,7 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
                     .unwrap()
                     .eligible_rows
                     .len(),
-                5
+                6
             )
         });
     }
@@ -1552,11 +1564,11 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
     let h = cx.update(|_, app| {
         sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
     });
-    for (slots, expected) in [(6.25, 5), (5.5, 0), (12.0, 6)] {
+    for (slots, expected) in [(7.25, 6), (6.5, 0), (12.0, 7)] {
         cx.simulate_resize(gpui::size(px(1000.0), chrome + h * slots));
         test_support::redraw(cx);
         cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), expected));
-        if expected == 5 {
+        if expected == 6 {
             assert!(cx.debug_bounds("sidebar_ancestor_menu_0").is_some());
         }
         assert_eq!(cx.debug_bounds(selector(0)).is_some(), expected != 0);

@@ -1267,6 +1267,7 @@ fn ensure_sidebar_data_stores_request_before_repo_is_open() {
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     };
 
     assert!(ensure_sidebar_data(&mut state, repo_id, request).is_empty());
@@ -1289,6 +1290,7 @@ fn ensure_sidebar_data_loads_only_missing_requested_sections() {
         worktrees: true,
         submodules: false,
         stashes: true,
+        tags: false,
     };
     let effects = ensure_sidebar_data(&mut state, repo_id, request);
 
@@ -3658,4 +3660,33 @@ fn file_browser_loaded_cancelled_error_records_diagnostic() {
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.file_browser.entries, Loadable::Error(_)));
     assert_eq!(repo.feedback.diagnostics.len(), 1);
+}
+
+#[test]
+fn ensure_sidebar_data_loads_tags() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    state.git_log_settings.show_history_tags = false;
+
+    let request = SidebarDataRequest {
+        tags: true,
+        ..Default::default()
+    };
+    let effects = ensure_sidebar_data(&mut state, repo_id, request);
+
+    let loads = effects
+        .iter()
+        .filter(|effect| {
+            matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadTags { repo_id: rid }) if *rid == repo_id
+            )
+        })
+        .count();
+    assert_eq!(loads, 1, "{effects:?}");
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).tags,
+        Loadable::Loading
+    ));
 }

@@ -24,6 +24,7 @@ const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const ANNEX_SECTION_KEY: &str = "section:annex";
 const STASH_SECTION_KEY: &str = "section:stash";
+const TAGS_SECTION_KEY: &str = "section:tags";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
 const REMOTE_HEADER_GROUP_PREFIX: &str = "group:remote-header:";
@@ -233,6 +234,10 @@ pub(super) const fn stash_section_storage_key() -> &'static str {
     STASH_SECTION_KEY
 }
 
+pub(super) const fn tags_section_storage_key() -> &'static str {
+    TAGS_SECTION_KEY
+}
+
 pub(super) fn remote_header_storage_key(name: &str) -> String {
     let mut key = String::with_capacity(REMOTE_HEADER_GROUP_PREFIX.len() + name.len());
     key.push_str(REMOTE_HEADER_GROUP_PREFIX);
@@ -385,6 +390,18 @@ pub(super) enum BranchSidebarRow {
         tooltip: SharedString,
         created_at: Option<std::time::SystemTime>,
     },
+    TagsHeader {
+        top_border: bool,
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
+    TagPlaceholder {
+        message: SharedString,
+    },
+    TagItem {
+        name: SharedString,
+        target: CommitId,
+    },
 }
 
 #[derive(Clone, Copy, Default)]
@@ -522,6 +539,9 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
     stash_rev: u64,
     stash_hash: u64,
     stash_reuse_identity: fingerprint::LoadableArcIdentity,
+    tags_rev: u64,
+    tags_hash: u64,
+    tags_reuse_identity: fingerprint::LoadableArcIdentity,
 }
 
 impl BranchSidebarSourceFingerprintParts {
@@ -544,6 +564,8 @@ impl BranchSidebarSourceFingerprintParts {
         let submodule_reuse_identity = fingerprint::loadable_arc_identity(&repo.submodules);
         let stash_rev = repo.stashes_rev;
         let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
+        let tags_rev = repo.tags_rev;
+        let tags_reuse_identity = fingerprint::loadable_arc_identity(&repo.tags);
 
         Self {
             annex_refs_hidden,
@@ -613,6 +635,16 @@ impl BranchSidebarSourceFingerprintParts {
                     || branch_sidebar_stash_source_hash(repo),
                     |parts| parts.stash_hash,
                 ),
+            tags_rev,
+            tags_reuse_identity,
+            tags_hash: reuse
+                .filter(|parts| {
+                    parts.tags_rev == tags_rev || parts.tags_reuse_identity == tags_reuse_identity
+                })
+                .map_or_else(
+                    || branch_sidebar_tags_source_hash(repo),
+                    |parts| parts.tags_hash,
+                ),
         }
     }
 
@@ -630,6 +662,8 @@ impl BranchSidebarSourceFingerprintParts {
         self.stash_hash.hash(&mut hasher);
         5u8.hash(&mut hasher);
         self.annex_hash.hash(&mut hasher);
+        7u8.hash(&mut hasher);
+        self.tags_hash.hash(&mut hasher);
         6u8.hash(&mut hasher);
         self.history_hidden_remotes.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
@@ -698,6 +732,12 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     let stash_rev = repo.stashes_rev;
     if cached.stash_rev != stash_rev
         && cached.stash_reuse_identity != fingerprint::loadable_arc_identity(&repo.stashes)
+    {
+        return false;
+    }
+
+    if cached.tags_rev != repo.tags_rev
+        && cached.tags_reuse_identity != fingerprint::loadable_arc_identity(&repo.tags)
     {
         return false;
     }
@@ -877,6 +917,62 @@ fn branch_sidebar_stash_source_hash(repo: &RepoState) -> u64 {
     hasher.finish()
 }
 
+fn hash_branch_sidebar_tags_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.tags, hasher);
+    if let Loadable::Ready(tags) = &repo.tags {
+        for tag in tags.iter() {
+            tag.name.hash(hasher);
+            tag.target.hash(hasher);
+        }
+    }
+}
+
+fn branch_sidebar_tags_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_tags_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+/// Version-aware order, newest first: digit runs compare by value, descending.
+/// shortcut: `v1.0.0-rc1` sorts above `v1.0.0`; upgrade if users report it.
+fn cmp_tag_names_newest_first(a: &str, b: &str) -> Ordering {
+    fn runs(s: &str) -> impl Iterator<Item = &str> {
+        let mut rest = s;
+        std::iter::from_fn(move || {
+            let first = rest.chars().next()?;
+            let digit = first.is_ascii_digit();
+            let end = rest
+                .find(|c: char| c.is_ascii_digit() != digit)
+                .unwrap_or(rest.len());
+            let (run, tail) = rest.split_at(end);
+            rest = tail;
+            Some(run)
+        })
+    }
+    let is_num = |s: &str| s.as_bytes()[0].is_ascii_digit();
+    let mut left = runs(a);
+    let mut right = runs(b);
+    let ordering = loop {
+        match (left.next(), right.next()) {
+            (None, None) => break Ordering::Equal,
+            (None, Some(_)) => break Ordering::Less,
+            (Some(_), None) => break Ordering::Greater,
+            (Some(l), Some(r)) => {
+                let ordering = if is_num(l) && is_num(r) {
+                    let (l, r) = (l.trim_start_matches('0'), r.trim_start_matches('0'));
+                    l.len().cmp(&r.len()).then_with(|| l.cmp(r))
+                } else {
+                    l.cmp(r)
+                };
+                if ordering != Ordering::Equal {
+                    break ordering;
+                }
+            }
+        }
+    };
+    ordering.reverse()
+}
+
 fn cmp_ascii_case_insensitive(left: &[u8], right: &[u8]) -> Ordering {
     for (&left, &right) in left.iter().zip(right.iter()) {
         let ordering = left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
@@ -915,7 +1011,7 @@ fn branch_sidebar_divergence_count(count: usize) -> Option<NonZeroU32> {
 fn defaults_to_collapsed(collapse_key: &str) -> bool {
     matches!(
         collapse_key,
-        WORKTREES_SECTION_KEY | SUBMODULES_SECTION_KEY | STASH_SECTION_KEY
+        WORKTREES_SECTION_KEY | SUBMODULES_SECTION_KEY | STASH_SECTION_KEY | TAGS_SECTION_KEY
     )
 }
 
@@ -1052,6 +1148,7 @@ pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
                 | SUBMODULES_SECTION_KEY
                 | ANNEX_SECTION_KEY
                 | STASH_SECTION_KEY
+                | TAGS_SECTION_KEY
         )
 }
 
@@ -1415,6 +1512,42 @@ fn sidebar_rows(
                 message: "Loading".into(),
             }),
             Loadable::Error(error) => rows.push(BranchSidebarRow::StashPlaceholder {
+                message: error.clone().into(),
+            }),
+        }
+    }
+
+    rows.push(BranchSidebarRow::SectionSpacer);
+    let tags_collapsed =
+        !always_expanded && is_collapsed(collapsed_items, tags_section_storage_key());
+    rows.push(BranchSidebarRow::TagsHeader {
+        top_border: true,
+        collapsed: tags_collapsed,
+        collapse_key: tags_section_storage_key().into(),
+    });
+    if !tags_collapsed {
+        match &repo.tags {
+            Loadable::Ready(tags) if tags.is_empty() => {
+                rows.push(BranchSidebarRow::TagPlaceholder {
+                    message: "No tags".into(),
+                });
+            }
+            Loadable::Ready(tags) => {
+                let mut sorted: Vec<_> = tags.iter().collect();
+                sorted.sort_by(|a, b| cmp_tag_names_newest_first(&a.name, &b.name));
+                for tag in sorted {
+                    rows.push(BranchSidebarRow::TagItem {
+                        name: tag.name.clone().into(),
+                        target: tag.target.clone(),
+                    });
+                }
+            }
+            Loadable::Loading | Loadable::NotLoaded => {
+                rows.push(BranchSidebarRow::TagPlaceholder {
+                    message: "Loading".into(),
+                })
+            }
+            Loadable::Error(error) => rows.push(BranchSidebarRow::TagPlaceholder {
                 message: error.clone().into(),
             }),
         }

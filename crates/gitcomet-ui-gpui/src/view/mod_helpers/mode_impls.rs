@@ -519,10 +519,10 @@ pub(crate) enum PopoverKind {
         submodule_repo_path: std::path::PathBuf,
         target: DiffTarget,
     },
-    #[allow(dead_code)]
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+        name: Option<String>,
     },
     HistoryBranchFilter {
         repo_id: RepoId,
