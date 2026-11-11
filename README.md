@@ -1,11 +1,11 @@
 
-## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet
+# <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/2ufDGP8RnA)
 [![Website](https://img.shields.io/badge/Website-gitcomet.dev-0A66C2?logo=googlechrome&logoColor=white)](https://gitcomet.dev)
 [![AutoExplore](https://img.shields.io/badge/AutoExplore-autoexplore.ai-0B7A75?logo=safari&logoColor=white)](https://autoexplore.ai)
-[![license](https://img.shields.io/github/license/Auto-Explore/gitcomet.svg)](LICENSE)
+[![license](https://img.shields.io/github/license/Auto-Explore/gitcomet.svg)](LICENSE-AGPL-3.0)
 [![latest](https://img.shields.io/github/v/release/Auto-Explore/gitcomet.svg)](https://github.com/Auto-Explore/gitcomet/releases/latest)
 [![downloads](https://img.shields.io/github/downloads/Auto-Explore/gitcomet/total)](https://github.com/Auto-Explore/gitcomet/releases)
 
@@ -13,7 +13,9 @@
 
 GitComet is built for teams that want fast Git operations with local-first privacy, familiar workflows, and open source freedom.
 
-Available for Linux, Windows, and macOS.
+Available for Linux, Windows, and macOS on x86-64 and ARM64. Linux supports Wayland, X11, and WSLg.
+
+[Documentation](https://docs.gitcomet.dev/) · [Features](https://gitcomet.dev/features/) · [GitComet Pro](https://gitcomet.dev/pro/)
 
 
 
@@ -23,7 +25,9 @@ https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24
 
 ### Download
 
-Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
+Download the latest Open Source binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases), or see [all installation options](https://gitcomet.dev/download/). Windows installers are signed, and the macOS disk image is notarized.
+
+Bought a GitComet Pro license? [Download the separate Pro client from your account](https://pro.gitcomet.dev/app/downloads). It installs beside the free edition.
 
 <details>
 <summary>Windows</summary>
@@ -73,6 +77,25 @@ emerge --ask dev-vcs/gitcomet
 </details>
 
 <details>
+<summary>Nix / NixOS</summary>
+
+Run without installing:
+
+```bash
+nix run nixpkgs#gitcomet
+```
+
+Install for your user:
+
+```bash
+nix profile install nixpkgs#gitcomet
+```
+
+On NixOS, add `gitcomet` to `environment.systemPackages` in `/etc/nixos/configuration.nix` and apply it with `sudo nixos-rebuild switch`. See the [Nixpkgs package](https://search.nixos.org/packages?channel=unstable&show=gitcomet).
+
+</details>
+
+<details>
 <summary>apt (Debian/Ubuntu)</summary>
 
 ```bash
@@ -117,33 +140,47 @@ https://docs.google.com/forms/d/e/1FAIpQLSd8DKIl222UomSXrpv1q9rWodRlBSQo9pJDD62G
 
 GitComet started from frustration with existing tools on huge codebases like Chromium. We could not find a product that stays responsive and functional when browsing large repositories and file diffs.
 
-### Editions (planned)
+### Editions
 
 #### Open Source
 
 - **Price**: €0 forever
 - **Usage**: Free for personal and commercial use
+- **Privacy**: No account or cloud upload required; works with private repositories
 - **Includes**:
   - Full local-first desktop workflow
   - Git remotes, [branch-scoped Pull](docs/pull.md), push, staging, commits
   - Configurable automatic background fetch across open workspaces ([docs](docs/automatic-fetch.md))
   - Worktrees, branching, and full history, without agent checkpoints and other tool refs ([docs](docs/hidden-refs.md))
   - Bare repository browsing and conversion ([docs](docs/bare-repositories.md))
-  - Multi-repository browsing
-  - Inline and side-by-side diffs
+  - Multi-repository workspaces and windows
+  - Inline and side-by-side diffs, line-level staging, and [Difftastic](docs/difftastic.md)
   - 2-way and 3-way merge tools
+  - Interactive rebase, cherry-pick, blame, stashes, and submodules
+  - Built-in editor, embedded terminal, and custom themes
   - Git LFS: file status, content downloads, locks and tracking ([docs](docs/git-lfs.md))
   - git-annex: content get/drop/copy/move, special remotes, adjusted branches ([docs](docs/git-annex.md))
 
-#### Professional
+#### GitComet Pro
 
-- **Price**: €20 lifetime access (limited-time early adopter offer)
-- **Includes everything in Open Source, plus**:
-  - Claude Code, Codex, and GitHub CLI integrations
-  - Code test coverage workflows
-  - GitHub and Azure DevOps integrations
-  - Priority improvements during early access
-- Join waitlist: [gitcomet.dev/#editions](https://gitcomet.dev/#editions)
+[![GitComet Pro connects coding agents, AI providers, and cloud and self-hosted Git forges](assets/gitcomet_pro.png)](https://gitcomet.dev/pro/)
+
+GitComet Pro is available now as a separate desktop app for Linux, macOS, and Windows. Every license includes everything in Open Source, plus:
+
+- Pull request review, comments, approval, and merging on GitHub, GitLab, Azure DevOps, Bitbucket, Gitea, and Forgejo, with capabilities depending on the forge
+- Cloud and self-hosted forge connections, with several accounts at once
+- Coding agent sessions in History: Claude Code, Codex, OpenCode, and Copilot CLI
+- Optional AI for commit messages, explanations, change notes, and pull request descriptions, using your own provider or a local model
+- Projects and per-project Git identity
+
+| License | Price | Details |
+| --- | --- | --- |
+| Personal | €4 / month | Billed annually, plus VAT where applicable. For your own personal or commercial work, on up to five computers. |
+| Organization | €4 / user / month | Billed annually, plus VAT where applicable. Minimum 2 seats. Includes team management and Single Sign-On (SSO) support. |
+
+Forge credentials stay in your operating system's keychain, and pull requests, comments, and merges go directly from your desktop to the forge. The Pro service handles your account and license. AI is optional and sends requests to the provider you choose.
+
+[Compare plans and buy a license](https://gitcomet.dev/pro/#pricing). After purchase, [download and install the Pro client](https://pro.gitcomet.dev/app/downloads), then choose **Connect this machine** and approve the displayed code in your browser. See the [Pro getting started guide](https://docs.gitcomet.dev/gitcomet-pro/getting-started/) for installation and activation.
 
 ### Build from source
 
