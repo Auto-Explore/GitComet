@@ -1,3 +1,4 @@
+use self::scroll_sync::ConflictPreviewSyncGroup;
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
@@ -456,6 +457,7 @@ impl DiffRenderer {
     }
 
     pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
+        self.reset_diff_elastic_scroll();
         self.diff_horizontal_scroll.reset();
         self.forget_hosted_line_end_text();
         // A reveal names a row in the view it was armed over. That view is gone,
@@ -465,6 +467,81 @@ impl DiffRenderer {
         self.markdown_interaction.reveal.clear();
         self.markdown_interaction.hovered_link = None;
         self.markdown_interaction.plain_link = None;
+    }
+
+    pub(in crate::view) fn reset_diff_elastic_scroll(&mut self) {
+        self.diff_elastic_scroll.reset();
+        self.diff_horizontal_elastic_scroll.reset();
+        self.file_editor_elastic_vertical.reset();
+        self.file_editor_elastic_horizontal.reset();
+        self.conflict_output_elastic_vertical.reset();
+        self.conflict_output_elastic_horizontal.reset();
+        self.diff_elastic_generation = self.diff_elastic_generation.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn elastic_diff_vertical(
+        &self,
+        id: &'static str,
+        driver: impl crate::kit::elastic_scroll::ElasticScrollDriver,
+        child: impl IntoElement,
+        linked: bool,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let element = crate::kit::elastic_scroll::ElasticScroll::new(
+            (id, self.diff_elastic_generation),
+            driver,
+            child,
+        )
+        .vertical_only();
+        if linked {
+            element.shared_motion(self.diff_elastic_scroll.clone())
+        } else {
+            element
+        }
+    }
+
+    pub(in crate::view) fn elastic_diff_horizontal(
+        &self,
+        id: &'static str,
+        scroll: gpui::ScrollHandle,
+        child: impl IntoElement,
+        linked: bool,
+    ) -> crate::kit::elastic_scroll::ElasticScroll {
+        let element = crate::kit::elastic_scroll::ElasticScroll::horizontal(
+            (id, self.diff_elastic_generation),
+            scroll,
+            child,
+        )
+        .horizontal_only();
+        if linked {
+            element.shared_motion(self.diff_horizontal_elastic_scroll.clone())
+        } else {
+            element
+        }
+    }
+
+    pub(in crate::view) fn conflict_output_elastic_states(
+        &self,
+    ) -> (
+        crate::kit::elastic_scroll::ElasticScrollState,
+        crate::kit::elastic_scroll::ElasticScrollState,
+    ) {
+        let linked = matches!(
+            self.conflict_preview_sync_group(),
+            ConflictPreviewSyncGroup::ColumnsAndOutput
+                | ConflictPreviewSyncGroup::TwoWayPairAndOutput
+        );
+        // The resolved result is an independent vertical document, even
+        // when its horizontal axis participates in source-column sync.
+        let vertical = self.conflict_output_elastic_vertical.clone();
+        // Membership follows presentation and sync policy, including a
+        // zero-range follower. A layout gaining horizontal range must not
+        // replace its spring halfway through the first edge gesture.
+        let horizontal = if linked && self.diff_scroll_sync.includes_horizontal() {
+            self.diff_horizontal_elastic_scroll.clone()
+        } else {
+            self.conflict_output_elastic_horizontal.clone()
+        };
+        (vertical, horizontal)
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -879,6 +956,7 @@ impl DiffRenderer {
         }
 
         self.diff_scroll_sync = next;
+        self.reset_diff_elastic_scroll();
         self.sync_diff_split_scroll();
         self.sync_conflict_preview_scroll();
         cx.notify();
@@ -894,6 +972,7 @@ impl DiffRenderer {
         }
 
         self.diff_view = next;
+        self.reset_diff_elastic_scroll();
         // Inline keys styled segments by `row_ix` while split keys them by
         // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
         // the same `split_left`/`split_right` epochs, so the two key spaces
@@ -1295,6 +1374,7 @@ impl DiffRenderer {
         if self.mergetool_output_scroll_sync == next {
             return;
         }
+        self.reset_diff_elastic_scroll();
         self.mergetool_output_scroll_sync = next;
         self.schedule_ui_settings_persist(cx);
         cx.notify();
@@ -1998,6 +2078,7 @@ impl DiffRenderer {
         });
 
         if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
+            self.reset_diff_elastic_scroll();
             self.remote_markdown_images.approved_urls = Arc::default();
             self.remote_markdown_images.approval_revision = self
                 .remote_markdown_images

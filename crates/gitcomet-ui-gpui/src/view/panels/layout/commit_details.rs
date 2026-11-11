@@ -180,7 +180,7 @@ impl DetailsPaneView {
                             cx,
                         )
                     } else {
-                        self.commit_details_message_view(theme, repo_id)
+                        self.commit_details_message_view(theme, repo_id, cx)
                     };
                     let card = self.commit_details_card(
                         details,

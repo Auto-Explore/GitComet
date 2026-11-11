@@ -285,6 +285,12 @@ impl DiffRenderer {
             cx.processor(|this, ix, _window, cx| this.render_submodule_summary_row(ix, cx)),
         )
         .size_full();
+        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            "submodule_summary_elastic",
+            scroll.clone(),
+            list,
+        )
+        .vertical_only();
         div()
             .id("submodule_summary_scroll")
             .relative()

@@ -89,6 +89,11 @@ pub(super) fn panel(
                             message_scroll,
                             scaled_px(140.0),
                         )
+                        .motion_state(
+                            this.create_tag_message_input
+                                .read(cx)
+                                .vertical_elastic_scroll_state(),
+                        )
                         .render(theme, this.create_tag_message_input.clone()),
                     ),
                 )

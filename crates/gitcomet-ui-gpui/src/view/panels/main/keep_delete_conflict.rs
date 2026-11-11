@@ -286,6 +286,8 @@ impl DiffRenderer {
                     })
                     // File preview
                     .child(
+                        crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                            ("keep_delete_preview_elastic", self.diff_elastic_generation),
                         div()
                             .id("keep_delete_preview_scroll")
                             .flex_1()
@@ -322,6 +324,7 @@ impl DiffRenderer {
                                     .whitespace_nowrap()
                                     .child(surviving_text),
                             ),
+                        ),
                     )
                     // Action buttons
                     .child(

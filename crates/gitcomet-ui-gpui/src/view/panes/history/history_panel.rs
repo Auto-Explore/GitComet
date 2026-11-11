@@ -16,7 +16,7 @@ const HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.last_window_size = window.viewport_size();
+        self.set_last_window_size(window.viewport_size());
         let headers = self.sync_history_annotations(window, cx);
         let content = self.history_view_inner(window, cx);
         if headers.is_empty() {
@@ -53,6 +53,7 @@ impl HistoryView {
         let scrollbar_gutter = super::history_scrollbar_gutter();
         let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
         if manual {
+            self.reset_history_scroll_motion();
             self.cancel_history_scroll_reveal();
         }
         // Lets a new indexed viewport start from the pitch its rows will get.
@@ -136,6 +137,21 @@ impl HistoryView {
             .track_scroll(&self.history_scroll)
             .on_scroll_wheel(cx.listener(Self::history_wheel));
             let list = restrict_scroll_to_vertical_axis(list);
+            let list = crate::kit::elastic_scroll::ElasticScroll::new(
+                (
+                    "history_elastic",
+                    self.active_repo_id().map_or(0, |id| id.0),
+                ),
+                super::scroll::HistoryScrollDriver {
+                    view: cx.entity().downgrade(),
+                    handle: self.history_scroll.clone(),
+                    interaction: self.scroll_interaction.clone(),
+                },
+                list,
+            )
+            .vertical_only()
+            .on_scroll(cx.listener(|this, _, _, cx| this.history_wheel_interaction(cx)));
+            let list = self.configure_history_elastic(list);
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
@@ -687,6 +703,7 @@ impl HistoryView {
         static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let request_id = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.active_repo_id() == Some(repo_id) {
+            self.reset_history_scroll_motion();
             self.pending_history_selections
                 .push_back(super::PendingHistorySelection {
                     request_id,

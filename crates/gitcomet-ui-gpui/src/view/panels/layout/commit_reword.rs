@@ -417,7 +417,7 @@ impl DetailsPaneView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .child(self.commit_details_message_view(theme, repo_id)),
+                    .child(self.commit_details_message_view(theme, repo_id, cx)),
             )
             .child(div().flex_none().child(edit))
             .into_any_element()
@@ -451,6 +451,11 @@ impl DetailsPaneView {
             ui_scale.px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
         )
         .container_id(("commit_reword_container", repo_id.0))
+        .motion_state(
+            self.commit_reword_input
+                .read(cx)
+                .vertical_elastic_scroll_state(),
+        )
         .render(theme, self.commit_reword_input.clone());
         let warning = published_on.map(|upstream| {
             div()

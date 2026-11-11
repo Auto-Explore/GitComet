@@ -1658,6 +1658,11 @@ impl Render for ToastHost {
                             .child(input),
                     );
 
+                let message_scroll = crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                    ("toast_message_elastic", t.id),
+                    message_scroll,
+                );
+
                 let action_buttons = (!t.actions.is_empty()).then(|| {
                     div()
                         .flex()

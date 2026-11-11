@@ -302,6 +302,31 @@ impl TextInput {
         self.layout.painted_scroll_offset = None;
     }
 
+    /// The vertical spring for a field placed in an external `ScrollContainer`.
+    /// Sharing this state lets caret reveals clear that container's rebound.
+    /// Inputs with `set_scrollable` already use it internally.
+    pub fn vertical_elastic_scroll_state(&self) -> crate::elastic_scroll::ElasticScrollState {
+        self.interaction.internal_elastic_scroll.clone()
+    }
+
+    /// Bind the owning editor's springs to caret/edit reveal without adding
+    /// another scroll wrapper. The vertical state can also drive its gutter.
+    /// Passing `None` unbinds that axis; repeated binding does not reset motion.
+    pub fn set_elastic_scroll_states(
+        &mut self,
+        vertical: Option<crate::elastic_scroll::ElasticScrollState>,
+        horizontal: Option<crate::elastic_scroll::ElasticScrollState>,
+    ) {
+        self.interaction.external_elastic_scroll = [vertical, horizontal];
+    }
+
+    pub(super) fn reset_elastic_scroll(&self) {
+        self.interaction.internal_elastic_scroll.reset();
+        for state in self.interaction.external_elastic_scroll.iter().flatten() {
+            state.reset();
+        }
+    }
+
     /// Scroll a multiline field inside its own border, up to `max_height` design px.
     /// The text always reserves scrollbar space so wrapping stays stable.
     pub fn set_scrollable(
@@ -311,6 +336,7 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         assert!(self.multiline && max_height.is_finite() && max_height > 0.0);
+        self.reset_elastic_scroll();
         self.set_vertical_scroll_handle(Some(scroll));
         self.scroll_max_height = Some(max_height);
         self.invalidate_layout_caches();

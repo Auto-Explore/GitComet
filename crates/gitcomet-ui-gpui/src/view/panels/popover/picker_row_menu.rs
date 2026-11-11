@@ -514,6 +514,14 @@ pub(super) fn layer(
         ui_scale,
         cx,
     );
+    let latch_on_precise_wheel = placement.clone();
+    let area = crate::kit::elastic_scroll::ElasticScroll::new(
+        "picker_row_menu_elastic",
+        scroll.clone(),
+        area,
+    )
+    .vertical_only()
+    .on_scroll(move |_, _, _| latch_on_precise_wheel.borrow_mut().latch());
     let list = super::menu_layer::scroll_area_with_arrows(area, up, down);
     let latch_on_press = placement.clone();
     let latch_on_move = placement.clone();

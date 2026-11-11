@@ -244,19 +244,47 @@ pub(in crate::view) fn group_header_row(
         .into_any_element()
 }
 
-/// Draws the header of row `row` pinned over the list, or `None` when that
-/// row is not a header. Given the row height the list measured.
+/// Draws a group header at its natural position or pinned over the list.
+/// The boolean distinguishes the pinned copy for its identity and selectors.
 pub(in crate::view) type PinnedHeader =
-    std::rc::Rc<dyn Fn(usize, gpui::Pixels, &mut gpui::App) -> Option<gpui::AnyElement>>;
+    std::rc::Rc<dyn Fn(usize, gpui::Pixels, bool, &mut gpui::App) -> Option<gpui::AnyElement>>;
 
-/// Pins the header of the group at the top of a list over its rows; the
-/// next header pushes it up as it arrives. Computed per frame from the
-/// header rows it was given, so scrolling never replans.
+/// Pins the current group at the top; the next header pushes it up. Interior
+/// headers follow the body's elastic displacement so each group stays together.
 #[derive(Clone)]
 pub(in crate::view) struct StickyGroupHeaders {
     /// The row of each header, ascending.
     pub(in crate::view) headers: std::sync::Arc<[usize]>,
     pub(in crate::view) header: PinnedHeader,
+}
+
+#[derive(Clone, Copy)]
+struct GroupHeaderMetrics {
+    bounds: gpui::Bounds<gpui::Pixels>,
+    scroll_offset: gpui::Point<gpui::Pixels>,
+    item_height: gpui::Pixels,
+}
+
+struct GroupHeaderMeasurement(std::rc::Rc<std::cell::Cell<Option<GroupHeaderMetrics>>>);
+
+impl gpui::UniformListDecoration for GroupHeaderMeasurement {
+    fn compute(
+        &self,
+        _visible_range: std::ops::Range<usize>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        scroll_offset: gpui::Point<gpui::Pixels>,
+        item_height: gpui::Pixels,
+        _item_count: usize,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::App,
+    ) -> gpui::AnyElement {
+        self.0.set(Some(GroupHeaderMetrics {
+            bounds,
+            scroll_offset,
+            item_height,
+        }));
+        gpui::div().into_any_element()
+    }
 }
 
 impl StickyGroupHeaders {
@@ -271,46 +299,121 @@ impl StickyGroupHeaders {
         let after = self.headers.partition_point(|&header| header <= row);
         self.headers.get(after).copied()
     }
-}
 
-impl gpui::UniformListDecoration for StickyGroupHeaders {
-    fn compute(
+    /// Measure in the list, then paint in a fixed sibling after the elastic
+    /// body. Keeping the two in the same render also avoids stale metrics.
+    pub(in crate::view) fn with_overlay(
+        self,
+    ) -> (impl gpui::UniformListDecoration, gpui::AnyElement) {
+        let metrics = std::rc::Rc::new(std::cell::Cell::new(None::<GroupHeaderMetrics>));
+        let measured = metrics.clone();
+        let overlay = gpui::canvas(
+            move |bounds, window, cx| -> Option<gpui::AnyElement> {
+                let metrics = measured.take()?;
+                let displacement = metrics.bounds.top() - metrics.scroll_offset.y - bounds.top();
+                let mut element = self.render(metrics, bounds.size.height, displacement, cx);
+                element.layout_as_root(
+                    gpui::size(
+                        gpui::AvailableSpace::Definite(bounds.size.width),
+                        gpui::AvailableSpace::Definite(bounds.size.height),
+                    ),
+                    window,
+                    cx,
+                );
+                window.with_content_mask(
+                    Some(gpui::ContentMask {
+                        bounds,
+                        ..Default::default()
+                    }),
+                    |window| element.prepaint_at(bounds.origin, window, cx),
+                );
+                Some(element)
+            },
+            |bounds, mut element, window, cx| {
+                if let Some(element) = &mut element {
+                    window.with_content_mask(
+                        Some(gpui::ContentMask {
+                            bounds,
+                            ..Default::default()
+                        }),
+                        |window| element.paint(window, cx),
+                    );
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element();
+        (GroupHeaderMeasurement(metrics), overlay)
+    }
+
+    fn render(
         &self,
-        _visible_range: std::ops::Range<usize>,
-        _bounds: gpui::Bounds<gpui::Pixels>,
-        scroll_offset: gpui::Point<gpui::Pixels>,
-        item_height: gpui::Pixels,
-        _item_count: usize,
-        _window: &mut gpui::Window,
+        metrics: GroupHeaderMetrics,
+        height: gpui::Pixels,
+        displacement: gpui::Pixels,
         cx: &mut gpui::App,
     ) -> gpui::AnyElement {
-        let scrolled = -scroll_offset.y;
-        if scrolled <= px(0.0) || item_height <= px(0.0) {
+        let GroupHeaderMetrics {
+            scroll_offset,
+            item_height,
+            ..
+        } = metrics;
+        if item_height <= px(0.0) {
             return gpui::div().into_any_element();
         }
-        let first = (scrolled / item_height).floor() as usize;
-        let Some(header) = self
-            .header_for(first)
-            .and_then(|row| (self.header)(row, item_height, cx))
-        else {
-            return gpui::div().into_any_element();
-        };
-        // The decoration's origin scrolls with the rows; `scrolled` is the
-        // viewport's top in its coordinates.
-        let mut top = scrolled;
-        if let Some(next) = self.next_header(first) {
-            let next_top = item_height * next as f32 - scrolled;
-            if next_top < item_height {
-                top -= item_height - next_top;
+        let scrolled = -scroll_offset.y;
+        let first = (scrolled / item_height).floor().max(0.0) as usize;
+        let start = self.headers.partition_point(|&row| row < first);
+        let current = self.header_for(first);
+        let pinned =
+            current.filter(|&row| scrolled > px(0.0) && item_height * row as f32 <= scrolled);
+        let mut children = Vec::new();
+        for row in pinned.into_iter().chain(
+            self.headers[start..]
+                .iter()
+                .copied()
+                .filter(|row| Some(*row) != pinned),
+        ) {
+            let is_pinned = pinned == Some(row);
+            let natural_top = item_height * row as f32 - scrolled;
+            let mut top = natural_top + displacement;
+            // Visual anchoring includes a header naturally at the top and an
+            // interior header reaching it during a bounce. Keep the logical
+            // pinned flag unchanged for the header's identity and actions.
+            if is_pinned || natural_top <= px(0.0) || top <= px(0.0) {
+                top = px(0.0);
+                if let Some(next) = self.next_header(row) {
+                    top =
+                        top.min(item_height * next as f32 - scrolled + displacement - item_height);
+                }
+            }
+            if top >= height {
+                break;
+            }
+            if top + item_height <= px(0.0) {
+                continue;
+            }
+            if let Some(header) = (self.header)(row, item_height, is_pinned, cx) {
+                children.push(
+                    gpui::div()
+                        .absolute()
+                        .top(top)
+                        .left_0()
+                        .right_0()
+                        .h(item_height)
+                        .block_mouse_except_scroll()
+                        .child(header)
+                        .into_any_element(),
+                );
             }
         }
         gpui::div()
-            .absolute()
-            .top(top)
-            .left_0()
-            .right_0()
-            .occlude()
-            .child(header)
+            .relative()
+            .size_full()
+            .children(children)
             .into_any_element()
     }
 }

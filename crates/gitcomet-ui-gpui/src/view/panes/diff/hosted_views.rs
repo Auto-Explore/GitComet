@@ -824,7 +824,13 @@ impl Element for HostedOverLayer {
         cx: &mut App,
     ) -> Self::PrepaintState {
         // Where the rows are this frame: the list prepainted first.
-        let origin = bounds.top() + self.scroll.0.borrow().base_handle.offset().y;
+        let origin = {
+            let scroll = self.scroll.0.borrow();
+            // The list's measured viewport includes its elastic translation.
+            // The overlay's own bounds stay fixed for clipping and placement
+            // near the pane edges, while its views follow their anchor rows.
+            scroll.base_handle.bounds().top() + scroll.base_handle.offset().y
+        };
         // The pitch the list laid its rows out at this frame.
         let pitch = list_row_pitch(&self.scroll, self.list_rows).unwrap_or(self.row_height);
         let (pane_id, start) = (self.pane_id, self.start);

@@ -439,3 +439,116 @@ fn holding_a_drag_selection_past_the_file_editor_scrolls_it(test_cx: &mut gpui::
         std::fs::remove_dir_all(workdir).unwrap();
     }
 }
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn file_editor_elastic_rows_align_with_gutter_and_caret_reveal_resets_them(
+    test_cx: &mut gpui::TestAppContext,
+) {
+    fn draw_elastic_frame(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.refresh();
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = test_cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = unique_workdir("file_editor_elastic_alignment");
+    let file_rel = PathBuf::from("notes.txt");
+    let text = "first line with text\n".repeat(100);
+    std::fs::write(workdir.join(&file_rel), &text).unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(gitcomet_state::model::RepoId(1180), &workdir, &file_rel),
+                cx,
+            );
+            view.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_show_line_numbers = true;
+                pane.diff_word_wrap = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    for _ in 0..3 {
+        draw_elastic_frame(cx);
+    }
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    let input = cx.update(|_, app| pane.read(app).file_editor_input.clone());
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, app| {
+            window.activate();
+            input.update(app, |input, cx| {
+                input.set_cursor_offset(0, cx);
+                window.focus(&input.focus_handle(), cx);
+            });
+            window.refresh();
+        });
+        for _ in 0..3 {
+            draw_elastic_frame(cx);
+        }
+        let viewport = cx.debug_bounds("file_editor_scroll").unwrap();
+        let scrollbar = cx.debug_bounds("file_editor_scrollbar").unwrap();
+        let row = cx.debug_bounds("file_editor_gutter_row_0").unwrap();
+        let text_bounds = cx.update(|_, app| input.read(app).hotspot_bounds(&(0..1)).unwrap());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            touch_phase: gpui::TouchPhase::Started,
+            ..Default::default()
+        });
+        draw_elastic_frame(cx);
+        let moved_row = cx.debug_bounds("file_editor_gutter_row_0").unwrap();
+        let moved_text = cx.update(|_, app| input.read(app).hotspot_bounds(&(0..1)).unwrap());
+        let row_displacement = moved_row.top() - row.top();
+        let status = cx.update(|window, app| {
+            (
+                window.is_window_active(),
+                app.reduce_motion(),
+                pane.read(app).file_editor_scroll.offset(),
+                pane.read(app).file_editor_scroll.max_offset(),
+            )
+        });
+        assert!(
+            row_displacement > px(20.0),
+            "row {row:?} -> {moved_row:?}, text {text_bounds:?} -> {moved_text:?}, active/reduced/offset/max={status:?}"
+        );
+        assert!((moved_text.top() - text_bounds.top() - row_displacement).abs() < px(0.5));
+        assert_eq!(cx.debug_bounds("file_editor_scrollbar").unwrap(), scrollbar);
+        cx.update(|_, app| {
+            let pane = pane.read(app);
+            assert_eq!(pane.file_editor_scroll.offset().y, px(0.0));
+            assert_eq!(
+                pane.file_editor_gutter_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                px(0.0)
+            );
+        });
+
+        // A keyboard/caret reveal at the same logical top must clear the
+        // spring; an offset-only external-scroll guard cannot detect it.
+        cx.update(|_, app| input.update(app, |input, cx| input.set_cursor_offset(1, cx)));
+        draw_elastic_frame(cx);
+        assert_eq!(cx.debug_bounds("file_editor_gutter_row_0").unwrap(), row);
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert_eq!(input.cursor_offset(), 1);
+            assert_eq!(input.text(), text);
+            assert!(
+                (input.hotspot_bounds(&(0..1)).unwrap().top() - text_bounds.top()).abs() < px(0.5)
+            );
+        });
+    });
+    std::fs::remove_dir_all(workdir).unwrap();
+}

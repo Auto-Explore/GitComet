@@ -21,6 +21,7 @@ impl TextInput {
     }
 
     fn reset_focus(&mut self, cx: &mut Context<Self>) {
+        self.reset_elastic_scroll();
         self.interaction.has_focus = false;
         self.interaction.cursor_blink_visible = true;
         self.interaction.cursor_blink_task.take();
@@ -218,7 +219,15 @@ impl Render for TextInput {
                 .relative()
                 .w_full()
                 .min_w(px(0.0))
-                .child(crate::restrict_scroll_to_vertical_axis(surface))
+                .child(
+                    crate::elastic_scroll::ElasticScroll::new(
+                        ("text_input_elastic", entity_id),
+                        scroll.clone(),
+                        crate::restrict_scroll_to_vertical_axis(surface),
+                    )
+                    .vertical_only()
+                    .motion_state(self.interaction.internal_elastic_scroll.clone()),
+                )
                 .child(
                     crate::Scrollbar::new(
                         ElementId::from(("text_input_scrollbar", entity_id)),

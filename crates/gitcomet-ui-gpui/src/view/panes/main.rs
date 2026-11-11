@@ -75,6 +75,7 @@ impl MainPaneView {
                 Self::notify_fingerprint_for(&this.state) != Self::notify_fingerprint_for(&next);
             if this.state.active_repo != next.active_repo {
                 this.history_view.update(cx, |history, _| {
+                    history.reset_history_scroll_motion();
                     history
                         .history_scroll
                         .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -85,6 +86,10 @@ impl MainPaneView {
             });
             this.state = next;
             this.sync_interactive_commit_editor_states();
+            let history_active = this.history_is_active_surface(cx);
+            this.history_view.update(cx, |history, _| {
+                history.set_history_scroll_active(history_active);
+            });
             if changed || diff_changed {
                 cx.notify();
             }
@@ -499,11 +504,14 @@ impl Render for MainPaneView {
             pane.sync_layout_snapshot(cx);
             pane.main_pane_content_width()
         });
+        let content = self.active_content(cx);
+        let history_active = self.active_repo().is_some() && content == MainPaneContent::History;
         self.history_view.update(cx, |history, _| {
+            history.set_history_scroll_active(history_active);
             history.set_last_window_size(window.viewport_size());
             history.set_history_content_width(width);
         });
-        match self.active_content(cx) {
+        match content {
             MainPaneContent::History => self.history_view.clone().into_any_element(),
             MainPaneContent::Diff => self.diff_renderer.clone().into_any_element(),
             MainPaneContent::InteractiveRebase => {

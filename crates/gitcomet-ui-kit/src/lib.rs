@@ -27,6 +27,7 @@ pub mod click;
 pub mod clipboard;
 pub mod components;
 pub mod drag_autoscroll;
+pub mod elastic_scroll;
 pub mod file_icons;
 pub mod font_preferences;
 pub mod icons;

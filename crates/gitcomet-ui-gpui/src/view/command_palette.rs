@@ -1669,7 +1669,12 @@ impl Render for CommandPaletteView {
             .h(list_height)
             .pr(scrollbar_gutter)
             .track_scroll(&self.scroll_handle);
-            let list = restrict_scroll_to_vertical_axis(list);
+            let list = crate::kit::elastic_scroll::ElasticScroll::new(
+                "command_palette_elastic",
+                self.scroll_handle.clone(),
+                restrict_scroll_to_vertical_axis(list),
+            )
+            .vertical_only();
             let scrollbar = Scrollbar::new("command_palette_scrollbar", self.scroll_handle.clone())
                 .render(theme);
             div()
