@@ -17,16 +17,7 @@ Available for Linux, Windows, and macOS on x86-64 and ARM64. Linux supports Wayl
 
 [Documentation](https://docs.gitcomet.dev/) · [Features](https://gitcomet.dev/features/) · [GitComet Pro](https://gitcomet.dev/pro/)
 
-[![GitComet interface showing branches, commit history, worktrees, and staged changes — click to watch the demo](assets/gitcomet-demo-thumbnail.png)](https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24)
-
-[▶ Watch the demo](https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24)
-
-<details>
-<summary>Watch demo here</summary>
-
-https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24
-
-</details>
+<video src="assets/gitcomet_intro_readme.mp4" controls></video>
 
 ### Download
 
