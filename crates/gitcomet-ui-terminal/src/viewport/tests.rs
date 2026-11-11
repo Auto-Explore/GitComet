@@ -1,6 +1,8 @@
 use super::*;
 use crate::backend::*;
 
+mod elastic;
+
 // A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
 const TEST_COLS: usize = 20;
 const TEST_ROWS: usize = 6;
@@ -824,6 +826,7 @@ fn a_busy_parser_does_not_block_paint_or_scrollbar_reads(cx: &mut gpui::TestAppC
             line_height: px(TEST_LINE_H),
             fallback_history: content.history_size,
             fallback_display: content.display_offset,
+            elastic: view.scroll_elastic.clone(),
         };
         use gitcomet_ui_kit::ScrollbarDriver;
         assert!(driver.max_offset(ScrollbarAxis::Vertical) > px(0.));

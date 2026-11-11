@@ -2183,6 +2183,90 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
 }
 
 #[gpui::test]
+fn indexed_history_precise_wheel_routing_preserves_axis_lock_and_fallbacks(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let live = crate::ui_runtime::UiRuntime::live();
+    let deterministic = crate::ui_runtime::UiRuntime::deterministic();
+    for (runtime, reduced, owns_precise) in [
+        (live, false, cfg!(target_os = "macos")),
+        (live, true, cfg!(target_os = "macos")),
+        (deterministic, false, false),
+    ] {
+        crate::ui_runtime::with_override(runtime, || {
+            cx.update(|window, app| {
+                window.activate();
+                app.set_reduce_motion(reduced);
+                history.update(app, |history, cx| {
+                    history
+                        .scroll_interaction
+                        .borrow_mut()
+                        .logical
+                        .as_mut()
+                        .unwrap()
+                        .set_position(100.0);
+                    cx.notify();
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            let position = cx
+                .debug_bounds("indexed_history_viewport")
+                .unwrap()
+                .center();
+            cx.update(|window, app| {
+                let mut positions = Vec::new();
+                // Dispatch as one batch so rendering cannot introduce the
+                // axis tracker's 28ms gesture timeout between these packets.
+                for (x, phase) in [
+                    (-5.0, gpui::TouchPhase::Started),
+                    (0.0, gpui::TouchPhase::Moved),
+                    (-0.1, gpui::TouchPhase::Moved),
+                ] {
+                    window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                        position,
+                        delta: gpui::ScrollDelta::Pixels(point(px(x), px(-4.0))),
+                        touch_phase: phase,
+                        modifiers: Default::default(),
+                    }), app);
+                    positions.push(history.read(app).history_scroll_position());
+                }
+                assert_eq!(positions, if owns_precise { vec![100.0, 100.0, 100.0] } else { vec![104.0, 108.0, 112.0] },
+                    "runtime={runtime:?}, reduced_motion={reduced}: off-axis packets must not fall back to raw vertical deltas");
+                let before_vertical = history.read(app).history_scroll_position();
+                window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-5.0))),
+                    touch_phase: gpui::TouchPhase::Started,
+                    modifiers: Default::default(),
+                }), app);
+                assert_eq!(history.read(app).history_scroll_position(), before_vertical + 5.0,
+                    "a new vertical gesture moves exactly once");
+                let before_lines = history.read(app).history_scroll_position();
+                let line_height = f64::from(f32::from(window.line_height()));
+                window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    modifiers: Default::default(),
+                }), app);
+                assert_eq!(history.read(app).history_scroll_position(), before_lines + line_height,
+                    "ordinary line wheels retain the indexed fallback");
+            });
+        });
+    }
+}
+
+#[gpui::test]
 fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
     let (index, commits) = indexed_fixture(10);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));

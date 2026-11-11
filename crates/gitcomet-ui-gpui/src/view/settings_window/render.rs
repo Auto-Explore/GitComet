@@ -230,13 +230,14 @@ impl Render for SettingsWindowView {
                     .min_w(ui_scale.px(180.0))
                     .max_w(ui_scale.px(380.0))
                     .p_1()
-                    .child(
+                    .child(crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                        "settings_hosted_menu_elastic",
                         div()
                             .id("settings_hosted_menu_scroll")
                             .max_h(height.max(ui_scale.px(120.0)))
                             .overflow_y_scroll()
                             .child(view),
-                    );
+                    ));
                 return root.child(
                     div()
                         .id("settings_hosted_menu_backdrop")
@@ -600,7 +601,14 @@ impl SettingsWindowView {
                         self.settings_window_scroll.clone(),
                         components::ScrollbarAxis::Vertical,
                     ))
-                    .child(scroll_surface),
+                    .child(
+                        crate::kit::elastic_scroll::ElasticScroll::new(
+                            "settings_page_elastic",
+                            self.settings_window_scroll.clone(),
+                            scroll_surface,
+                        )
+                        .vertical_only(),
+                    ),
             )
             .child(
                 {
@@ -720,7 +728,14 @@ impl SettingsWindowView {
                         self.open_source_licenses_scroll.clone(),
                         components::ScrollbarAxis::Vertical,
                     ))
-                    .child(list),
+                    .child(
+                        crate::kit::elastic_scroll::ElasticScroll::new(
+                            "settings_licenses_elastic",
+                            self.open_source_licenses_scroll.clone(),
+                            list,
+                        )
+                        .vertical_only(),
+                    ),
             )
             .child(
                 {

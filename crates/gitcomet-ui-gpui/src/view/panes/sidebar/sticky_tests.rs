@@ -31,6 +31,400 @@ fn selector(ix: usize) -> &'static str {
     format!("sidebar_sticky_header_{ix}").leak()
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_sidebar_stretches_rows_below_a_fixed_sticky_header(cx: &mut gpui::TestAppContext) {
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = fixture(100);
+    let repo_id = state.repos[0].id;
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+            view.set_theme(AppTheme::from_key("gitcomet_light").unwrap(), cx);
+        });
+        pane.update(app, |pane, _| pane.set_collapsed_keys_for_test(&[]));
+    });
+    draw(cx);
+    let row = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            presentation
+                .rows
+                .iter()
+                .enumerate()
+                .find_map(|(ix, row)| {
+                    (matches!(row, BranchSidebarRow::Branch { .. })
+                        && !pane
+                            .sticky_context
+                            .as_ref()
+                            .unwrap()
+                            .eligible_rows
+                            .contains(&ix))
+                    .then_some(ix)
+                })
+                .unwrap()
+        })
+    });
+    let body_selector: &'static str = format!("branch_row_{}_{row}", repo_id.0).leak();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, app| {
+            window.activate();
+            pane.update(app, |pane, _| {
+                pane.pending_sidebar_navigation = None;
+                pane.sidebar_scroll_animation = None;
+                pane.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
+                pane.branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+            });
+            // Runtime overrides do not invalidate the deterministic fixture's
+            // cached views; rebuild their live input handlers explicitly.
+            window.refresh();
+        });
+        draw(cx);
+        let header = cx.debug_bounds(selector(0)).unwrap();
+        assert_eq!(
+            header.top(),
+            cx.update(|_, app| pane
+                .read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .top())
+        );
+        let body = cx.debug_bounds(body_selector).unwrap();
+        for (delta, phase) in [
+            (100.0, gpui::TouchPhase::Started),
+            (0.0, gpui::TouchPhase::Ended),
+        ] {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: header.center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                modifiers: Default::default(),
+                touch_phase: phase,
+            });
+            draw(cx);
+            assert_eq!(cx.debug_bounds(selector(0)).unwrap(), header);
+            let moved = cx.debug_bounds(body_selector).unwrap();
+            let status = cx.update(|window, app| {
+                (
+                    window.is_window_active(),
+                    app.reduce_motion(),
+                    pane.read(app).theme.is_dark,
+                    pane.read(app)
+                        .branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .offset()
+                        .y,
+                )
+            });
+            assert!(
+                moved.top() > body.top() + px(20.0),
+                "phase={phase:?}, body={body:?}, moved={moved:?}, active/reduced/dark/logical={status:?}"
+            );
+            let divider = cx.debug_bounds("sidebar_sticky_divider_0").unwrap();
+            assert_eq!(divider.bottom(), header.bottom());
+            assert_eq!(
+                cx.update(|_, app| pane
+                    .read(app)
+                    .branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y),
+                px(0.0)
+            );
+        }
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(cx.debug_bounds(selector(0)).unwrap(), header);
+        assert_eq!(cx.debug_bounds(body_selector).unwrap(), body);
+
+        // Focus the natural group without activating it (cancel the pointer
+        // click), then use Space while the bounce holds it at its top anchor.
+        let group_key = branch_sidebar::local_group_storage_key("shared");
+        let group = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                pane.branch_sidebar_presentation_cached()
+                    .unwrap()
+                    .structure
+                    .headers[group_key.as_str()]
+            })
+        });
+        let group_selector: &'static str = format!("branch_group_{group}").leak();
+        let group_bounds = cx.debug_bounds(group_selector).unwrap();
+        cx.simulate_event(gpui::MouseDownEvent {
+            position: group_bounds.center(),
+            button: gpui::MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        let outside = point(header.right() + px(100.0), header.top());
+        cx.simulate_mouse_move(outside, Some(gpui::MouseButton::Left), Default::default());
+        cx.simulate_event(gpui::MouseUpEvent {
+            position: outside,
+            button: gpui::MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        draw(cx);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: header.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Started,
+        });
+        draw(cx);
+        assert!(cx.debug_bounds(body_selector).unwrap().top() > body.top() + px(20.0));
+        cx.simulate_keystrokes("space");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("space").unwrap(),
+        });
+        draw(cx);
+        cx.update(|_, app| {
+            assert!(branch_sidebar::is_collapsed(
+                &pane.read(app).collapsed_items_for_test(),
+                &group_key
+            ));
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_sidebar_keeps_interior_headers_with_short_and_empty_sections(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = fixture(100);
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    // Short local branches leave the Remote Branches header inside the
+    // viewport at the top, as in the reported ntsd-2.4 sidebar.
+    if let Loadable::Ready(branches) = &mut repo.branches {
+        Arc::make_mut(branches).truncate(2);
+    }
+    // Match the reported sidebar: one worktree, no submodules and no stashes.
+    repo.worktrees = long_list_tests::fixture(1, CollapsedSidebarSection::Worktrees).repos[0]
+        .worktrees
+        .clone();
+    repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    let repo_id = repo.id;
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+        });
+        pane.update(app, |pane, _| pane.set_collapsed_keys_for_test(&[]));
+    });
+    draw(cx);
+    let (headers, body_row, count) = cx.update(|_, app| {
+        pane.update(app, |pane, _| {
+            let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+            (
+                presentation
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, row)| {
+                        matches!(
+                            row,
+                            BranchSidebarRow::WorktreesHeader { .. }
+                                | BranchSidebarRow::SubmodulesHeader { .. }
+                                | BranchSidebarRow::StashHeader { .. }
+                        )
+                        .then_some(ix)
+                    })
+                    .collect::<Vec<_>>(),
+                presentation
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, BranchSidebarRow::WorktreeItem { .. }))
+                    .unwrap(),
+                presentation.rows.len(),
+            )
+        })
+    });
+    let body_selector: &'static str = format!("worktree_row_{}_{body_row}", repo_id.0).leak();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, app| {
+            window.activate();
+            pane.update(app, |pane, _| {
+                pane.pending_sidebar_navigation = None;
+                pane.sidebar_scroll_animation = None;
+                pane.branches_scroll
+                    .scroll_to_item_strict(count - 1, gpui::ScrollStrategy::Bottom);
+            });
+            window.refresh();
+        });
+        draw(cx);
+        let before = headers
+            .iter()
+            .map(|&ix| cx.debug_bounds(selector(ix)).unwrap())
+            .collect::<Vec<_>>();
+        let body = cx.debug_bounds(body_selector).unwrap();
+        let offset = cx.update(|_, app| {
+            pane.read(app)
+                .branches_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+        });
+        assert_eq!(before.len(), 3);
+        // Interior headers belong to the same moving content as their rows.
+        // Only the headers already pinned at a viewport edge stay fixed.
+        let interior = cx.update(|_, app| {
+            let handle = pane.read(app).branches_scroll.0.borrow();
+            let row_height = handle.last_item_size.unwrap().contents.height / count as f32;
+            headers
+                .iter()
+                .zip(&before)
+                .map(|(&ix, bounds)| {
+                    (bounds.top()
+                        - (handle.base_handle.bounds().top() + offset.y + row_height * ix))
+                        .abs()
+                        < px(0.5)
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(interior.iter().any(|&interior| interior));
+        for (delta, phase) in [
+            (-100.0, gpui::TouchPhase::Started),
+            (0.0, gpui::TouchPhase::Ended),
+        ] {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: before[2].center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                modifiers: Default::default(),
+                touch_phase: phase,
+            });
+            draw(cx);
+            let moved_body = cx.debug_bounds(body_selector).unwrap();
+            let displacement = moved_body.top() - body.top();
+            for ((&ix, bounds), &interior) in headers.iter().zip(&before).zip(&interior) {
+                let moved_header = cx.debug_bounds(selector(ix)).unwrap();
+                if interior {
+                    assert_eq!(
+                        moved_header.top() - bounds.top(),
+                        displacement,
+                        "interior header {ix} separated from its section during {phase:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        moved_header, *bounds,
+                        "pinned header {ix} moved during {phase:?}"
+                    );
+                }
+            }
+            assert!(displacement < -px(20.0));
+            assert_eq!(
+                cx.update(|_, app| pane
+                    .read(app)
+                    .branches_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()),
+                offset
+            );
+        }
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        draw(cx);
+        assert_eq!(cx.debug_bounds(body_selector).unwrap(), body);
+        for (&ix, bounds) in headers.iter().zip(&before) {
+            assert_eq!(cx.debug_bounds(selector(ix)).unwrap(), *bounds);
+        }
+
+        cx.update(|window, app| {
+            pane.update(app, |pane, _| {
+                pane.branches_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            });
+            window.refresh();
+        });
+        draw(cx);
+        let (remote, last_local) = cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                let remote = presentation
+                    .rows
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row,
+                            BranchSidebarRow::SectionHeader {
+                                section: BranchSection::Remote,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap();
+                let last_local = presentation.rows[..remote]
+                    .iter()
+                    .rposition(|row| matches!(row, BranchSidebarRow::Branch { .. }))
+                    .unwrap();
+                (remote, last_local)
+            })
+        });
+        let branch_selector: &'static str = format!("branch_row_{}_{last_local}", repo_id.0).leak();
+        let top_header = cx.debug_bounds(selector(0)).unwrap();
+        let remote_header = cx.debug_bounds(selector(remote)).unwrap();
+        let local_branch = cx.debug_bounds(branch_selector).unwrap();
+        let section_gap = remote_header.top() - local_branch.bottom();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: top_header.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Started,
+        });
+        draw(cx);
+        let moved_branch = cx.debug_bounds(branch_selector).unwrap();
+        let moved_remote = cx.debug_bounds(selector(remote)).unwrap();
+        assert_eq!(cx.debug_bounds(selector(0)).unwrap(), top_header);
+        assert!(moved_branch.top() > local_branch.top() + px(20.0));
+        assert_eq!(
+            moved_remote.top() - moved_branch.bottom(),
+            section_gap,
+            "local rows must not slide underneath the interior Remote Branches header"
+        );
+    });
+}
+
 #[gpui::test]
 fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

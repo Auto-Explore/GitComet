@@ -733,7 +733,12 @@ impl ReflogPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(&scroll);
-        let list = restrict_scroll_to_vertical_axis(list);
+        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            ("reflog_panel_elastic", repo_id.0 as usize),
+            scroll.clone(),
+            restrict_scroll_to_vertical_axis(list),
+        )
+        .vertical_only();
 
         div()
             .id(("reflog_panel_rows_container", repo_id.0 as usize))

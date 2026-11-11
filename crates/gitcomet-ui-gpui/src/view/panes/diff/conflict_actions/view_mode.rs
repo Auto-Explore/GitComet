@@ -17,6 +17,7 @@ impl DiffRenderer {
             }
             return;
         }
+        self.reset_diff_elastic_scroll();
         self.conflict_resolver.view_mode = view_mode;
         self.set_mergetool_view_three_way_and_persist(
             view_mode == ConflictResolverViewMode::ThreeWay,
@@ -168,6 +169,7 @@ impl DiffRenderer {
     }
 
     pub(in crate::view::panes::diff) fn conflict_resolver_rebuild_visible_map(&mut self) {
+        self.reset_diff_elastic_scroll();
         if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
             || self.conflict_resolver.has_three_way_visible_state_ready()
             || self.conflict_resolver.two_way_uses_aligned_rows()

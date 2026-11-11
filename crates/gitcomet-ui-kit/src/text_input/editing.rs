@@ -638,6 +638,7 @@ impl TextInput {
         selection: EditSelection,
         cx: &mut Context<Self>,
     ) -> Range<usize> {
+        self.reset_elastic_scroll();
         let undo_snapshot = self.current_undo_snapshot();
         let range = self.normalized_utf8_range(range);
         let previous_selection = self.selection.range.clone();

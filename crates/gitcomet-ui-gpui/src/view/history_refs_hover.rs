@@ -581,8 +581,9 @@ impl Render for HistoryRefsHoverHost {
             .debug_selector(|| "history_refs_hover_panel".to_string())
             .w(layout.panel_w)
             .max_h(layout.max_panel_h)
-            .overflow_y_scroll()
-            .p_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
             .bg(theme.colors.surface.raised)
             .border_1()
             .border_color(theme.colors.stroke.default)
@@ -593,7 +594,20 @@ impl Render for HistoryRefsHoverHost {
                 cx.stop_propagation();
             }))
             .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-            .children(items);
+            .child(crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                format!(
+                    "history_refs_hover_elastic_{}_{}",
+                    state.repo_id.0,
+                    state.commit_id.as_ref()
+                ),
+                div()
+                    .id("history_refs_hover_scroll")
+                    .max_h((layout.max_panel_h - px(2.0)).max(px(0.0)))
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .p_1()
+                    .children(items),
+            ));
 
         let measured_panel = div()
             .on_children_prepainted(move |children_bounds, _window, _app| {

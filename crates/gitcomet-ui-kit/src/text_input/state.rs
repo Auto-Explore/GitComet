@@ -820,6 +820,10 @@ pub(super) struct InteractionState {
     pub(super) context_menu: Option<TextInputContextMenuState>,
     pub(super) vertical_motion_x: Option<Pixels>,
     pub(super) vertical_scroll_handle: Option<ScrollHandle>,
+    /// The internally scrolling field owns its spring. External editors bind
+    /// their separate body/gutter springs only so caret actions can clear them.
+    pub(super) internal_elastic_scroll: crate::elastic_scroll::ElasticScrollState,
+    pub(super) external_elastic_scroll: [Option<crate::elastic_scroll::ElasticScrollState>; 2],
     /// When set, a multiline input lays out at its content (widest-line) width
     /// instead of filling its container, so an outer `overflow_scroll` container
     /// can scroll it horizontally and expose a real horizontal `max_offset` on
@@ -870,6 +874,8 @@ impl InteractionState {
             context_menu: None,
             vertical_motion_x: None,
             vertical_scroll_handle: None,
+            internal_elastic_scroll: Default::default(),
+            external_elastic_scroll: [None, None],
             content_width_layout: false,
             pending_cursor_autoscroll: false,
             cursor_autoscroll_retries_remaining: 0,

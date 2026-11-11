@@ -196,11 +196,7 @@ pub(super) fn panel(
                     .flex_col()
                     .p_1()
                     .max_h(scaled_px(180.0))
-                    .overflow_y_scroll()
-                    .rounded(px(theme.radii.control))
-                    .border_1()
-                    .border_color(theme.colors.stroke.default)
-                    .bg(theme.colors.surface.raised),
+                    .overflow_y_scroll(),
                 |options, (ix, name)| {
                     let is_selected = this.push_upstream_remote_selected_index == Some(ix)
                         || (this.push_upstream_remote_selected_index.is_none()
@@ -233,7 +229,20 @@ pub(super) fn panel(
                     )
                 },
             );
-            selector = selector.child(options);
+            selector = selector.child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.stroke.default)
+                    .bg(theme.colors.surface.raised)
+                    .overflow_hidden()
+                    .child(crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                        "push_upstream_remote_elastic",
+                        options,
+                    )),
+            );
         }
         div().px_2().pb_1().w_full().min_w(px(0.0)).child(selector)
     } else {

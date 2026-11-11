@@ -1991,6 +1991,10 @@ impl DiffRenderer {
         // the surrounding container can scroll horizontally.
         let soft_wrap = self.diff_word_wrap;
         self.file_editor_input.update(cx, |input, cx| {
+            input.set_elastic_scroll_states(
+                Some(self.file_editor_elastic_vertical.clone()),
+                Some(self.file_editor_elastic_horizontal.clone()),
+            );
             input.set_soft_wrap(soft_wrap, cx);
             input.set_content_width_layout(!soft_wrap);
         });
@@ -2072,6 +2076,58 @@ impl DiffRenderer {
             }
         }
 
+        let gutter = crate::kit::elastic_scroll::ElasticScroll::new(
+            ("file_editor_gutter_elastic", self.diff_elastic_generation),
+            editor_scroll.clone(),
+            gutter,
+        )
+        .vertical_only()
+        .shared_motion(self.file_editor_elastic_vertical.clone());
+        let editor_surface = div()
+            .id("file_editor_scroll")
+            .debug_selector(|| "file_editor_scroll".to_string())
+            // flex-col so a content-width input overflows to the
+            // right instead of being shrunk to the viewport,
+            // which gives the container a horizontal range.
+            .flex()
+            .flex_col()
+            .when(soft_wrap, |d| d.items_stretch())
+            .when(!soft_wrap, |d| d.items_start())
+            .w_full()
+            .min_w(px(0.0))
+            .h_full()
+            .min_h(px(0.0))
+            .pl_2()
+            .pr(scrollbar_gutter)
+            .when(soft_wrap, |d| {
+                restrict_scroll_to_vertical_axis(d.overflow_hidden().overflow_y_scroll())
+            })
+            .when(!soft_wrap, |d| d.overflow_scroll())
+            .track_scroll(&self.file_editor_scroll)
+            .child(self.file_editor_input.clone());
+        let editor_surface = crate::kit::elastic_scroll::ElasticScroll::new(
+            ("file_editor_elastic", self.diff_elastic_generation),
+            editor_scroll.clone(),
+            editor_surface,
+        )
+        .vertical_only()
+        .shared_motion(self.file_editor_elastic_vertical.clone());
+        let editor_surface = if soft_wrap {
+            editor_surface.into_any_element()
+        } else {
+            crate::kit::elastic_scroll::ElasticScroll::horizontal(
+                (
+                    "file_editor_horizontal_elastic",
+                    self.diff_elastic_generation,
+                ),
+                editor_scroll.clone(),
+                editor_surface,
+            )
+            .horizontal_only()
+            .motion_state(self.file_editor_elastic_horizontal.clone())
+            .into_any_element()
+        };
+
         div()
             // The gutter is virtualized, so it cannot simply share the editor's
             // scroll container. Copy the editor's offset into it after layout
@@ -2140,32 +2196,7 @@ impl DiffRenderer {
                     .h_full()
                     .pb(horizontal_gutter)
                     .min_h(px(0.0))
-                    .child(
-                        div()
-                            .id("file_editor_scroll")
-                            .debug_selector(|| "file_editor_scroll".to_string())
-                            // flex-col so a content-width input overflows to the
-                            // right instead of being shrunk to the viewport,
-                            // which gives the container a horizontal range.
-                            .flex()
-                            .flex_col()
-                            .when(soft_wrap, |d| d.items_stretch())
-                            .when(!soft_wrap, |d| d.items_start())
-                            .w_full()
-                            .min_w(px(0.0))
-                            .h_full()
-                            .min_h(px(0.0))
-                            .pl_2()
-                            .pr(scrollbar_gutter)
-                            .when(soft_wrap, |d| {
-                                restrict_scroll_to_vertical_axis(
-                                    d.overflow_hidden().overflow_y_scroll(),
-                                )
-                            })
-                            .when(!soft_wrap, |d| d.overflow_scroll())
-                            .track_scroll(&self.file_editor_scroll)
-                            .child(self.file_editor_input.clone()),
-                    )
+                    .child(editor_surface)
                     // The track must be outside the moving scroll surface or
                     // GPUI applies the content offset to the scrollbar itself.
                     .child(
@@ -2260,6 +2291,7 @@ impl DiffRenderer {
 
                 div()
                     .id(("file_editor_gutter_row", visual_ix))
+                    .debug_selector(move || format!("file_editor_gutter_row_{visual_ix}"))
                     .h(row_height)
                     .flex()
                     .flex_row()

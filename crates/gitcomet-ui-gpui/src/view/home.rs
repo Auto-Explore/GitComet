@@ -677,7 +677,14 @@ impl HomeView {
                     .w_full()
                     .h(height)
                     .min_w(px(0.0))
-                    .child(restrict_scroll_to_vertical_axis(list))
+                    .child(
+                        crate::kit::elastic_scroll::ElasticScroll::new(
+                            format!("{}_elastic", labels.list_id),
+                            scroll.clone(),
+                            restrict_scroll_to_vertical_axis(list),
+                        )
+                        .vertical_only(),
+                    )
                     .child(Scrollbar::new(labels.scrollbar_id, scroll).render(theme)),
             )
         };
@@ -893,7 +900,8 @@ impl GitCometView {
                 }),
             )
             .child(self.interstitial_backdrop())
-            .child(
+            .child(crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                "home_page_elastic",
                 div()
                     .id("home_scroll")
                     .relative()
@@ -968,7 +976,7 @@ impl GitCometView {
                             .children(open_repo_fallback)
                             .child(self.home.clone()),
                     ),
-            )
+            ))
             .into_any_element()
     }
 }

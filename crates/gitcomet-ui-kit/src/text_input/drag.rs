@@ -183,6 +183,7 @@ impl TextInput {
         if next == current {
             return false;
         }
+        self.reset_elastic_scroll();
         handle.set_offset(next);
         // The drag owns the scroll now; a queued caret reveal would fight it.
         self.interaction.pending_cursor_autoscroll = false;
