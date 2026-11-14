@@ -521,7 +521,6 @@ impl DiffRenderer {
             return;
         };
         let repo_id = self.file_diff_cache_repo_id;
-        let diff_file_rev = self.file_diff_cache_rev;
         let diff_target = self.file_diff_cache_target.clone();
         let source_backed = text.is_none();
         let indexed_identity = match side {
@@ -620,7 +619,6 @@ impl DiffRenderer {
                     }
                     if this.file_diff_syntax_generation != syntax_generation
                         || this.file_diff_cache_repo_id != repo_id
-                        || this.file_diff_cache_rev != diff_file_rev
                         || this.file_diff_cache_target != diff_target
                     {
                         return;
@@ -643,8 +641,14 @@ impl DiffRenderer {
                         // and for subsequent occurrence scans.
                         this.file_diff_pair_syntax_text.insert(side, text);
                     }
+                    // Revision-only refreshes retain the indexed generation
+                    // and coalesce with this worker. Install under its current
+                    // revision, just as already-prepared documents are rekeyed.
                     let inserted = this.insert_prepared_syntax_document(
-                        key,
+                        PreparedSyntaxDocumentKey {
+                            target_rev: this.file_diff_cache_rev,
+                            ..key
+                        },
                         rows::inject_background_prepared_diff_syntax_document(document),
                     );
                     if inserted {
