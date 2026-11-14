@@ -3465,16 +3465,18 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
     });
 }
 
-/// A click-syntax worker must leave its side unmarked however it ends.
-///
-/// The marker exists to stop two workers racing for one side, so it has to be
-/// released whenever the task is over -- including when a rev-only refresh
-/// supersedes it without replacing the visible row generation. It used to be
-/// removed *after* the result guards, so that worker left the side marked and
-/// `request_file_diff_click_syntax_document` drops every later click on a marked
-/// side.
+/// A revision-only refresh keeps the indexed source generation, so its pending
+/// worker must install under the current key and replay the original click.
+/// Releasing the side's marker alone leaves both syntax and the click waiting
+/// for another user action.
 #[gpui::test]
-fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContext) {
+fn revision_only_refresh_completes_the_pending_syntax_click(cx: &mut gpui::TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        assert_revision_only_refresh_completes_the_pending_syntax_click(cx);
+    });
+}
+
+fn assert_revision_only_refresh_completes_the_pending_syntax_click(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -3482,12 +3484,12 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
 
     let repo_id = gitcomet_state::model::RepoId(884);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_superseded_click_worker",
+        "gitcomet_ui_test_{}_revision_only_click_worker",
         std::process::id()
     ));
     let source_dir = workdir.join(".source-backed");
-    std::fs::create_dir_all(&source_dir).expect("create superseded-worker fixture");
-    let path = std::path::PathBuf::from("src/superseded.rs");
+    std::fs::create_dir_all(&source_dir).expect("create revision-only worker fixture");
+    let path = std::path::PathBuf::from("src/revision_only.rs");
     let old_source_path = source_dir.join("old.rs");
     let new_source_path = source_dir.join("new.rs");
 
@@ -3538,6 +3540,12 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
                     )),
                 ),
             )));
+            // Only the clicked side should start a syntax worker. In particular,
+            // a redraw after the revision change must not also prepare the left
+            // side and invalidate its styles independently of this completion.
+            this.diff_renderer.update(cx, |pane, _| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+            });
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
@@ -3545,7 +3553,7 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
     wait_for_main_pane_condition(
         cx,
         &view,
-        "source-backed superseded-worker diff",
+        "source-backed revision-only worker diff",
         |pane| {
             pane.file_diff_cache_rev == 1
                 && pane.file_diff_cache_inflight.is_none()
@@ -3574,28 +3582,40 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
         0,
         DiffTextRegion::SplitRight,
         11..12,
-        "superseded-worker bracket hitbox",
+        "revision-only worker bracket hitbox",
     );
 
-    cx.update(|_window, app| {
+    let (syntax_generation, left_epoch, right_epoch) = cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.diff_renderer.update(cx, |pane, cx| {
                 // A cold side: no prepared document and no retained body, so the
                 // click has to go through the worker.
                 pane.prepared_syntax_documents.clear();
                 pane.file_diff_pair_syntax_text.clear();
+                let before = (
+                    pane.file_diff_syntax_generation,
+                    pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft),
+                    pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+                );
                 pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
                 assert!(
                     pane.file_diff_click_syntax_inflight
                         .contains_key(&DiffTextRegion::SplitRight),
                     "a cold click on a source-backed side should take the marker"
                 );
+                assert!(
+                    !pane
+                        .file_diff_click_syntax_inflight
+                        .contains_key(&DiffTextRegion::SplitLeft),
+                    "only the clicked side should have a pending worker"
+                );
 
                 // A same-content refresh can advance the cache rev without
                 // replacing rows or their syntax generation.
                 pane.file_diff_cache_rev = pane.file_diff_cache_rev.wrapping_add(1);
-            });
-        });
+                before
+            })
+        })
     });
     cx.run_until_parked();
 
@@ -3605,27 +3625,34 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
             !pane
                 .file_diff_click_syntax_inflight
                 .contains_key(&DiffTextRegion::SplitRight),
-            "a superseded worker must release its side, or every later click on \
-             it is dropped; inflight={:?}",
+            "the completed worker must release its side; inflight={:?}",
             pane.file_diff_click_syntax_inflight,
         );
-    });
-
-    // And the side is genuinely usable again: the next click reaches the worker
-    // and resolves the pair.
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.diff_renderer.update(cx, |pane, cx| {
-                pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
-            });
-        });
-    });
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(pane.file_diff_syntax_generation, syntax_generation);
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .is_some(),
+            "the worker must install its document under the current revision"
+        );
+        assert_eq!(
+            pane.file_diff_pair_syntax_text
+                .get(&DiffTextRegion::SplitRight)
+                .map(AsRef::as_ref),
+            Some(new_text.as_str()),
+            "the prepared document must retain the source used to resolve the click"
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft),
+            left_epoch,
+            "the right-side completion must preserve left-side cached styles"
+        );
+        assert!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight) > right_epoch,
+            "the completed document must invalidate right-side fallback styles"
+        );
         let pair = pane
             .diff_text_pair_match_for_tests()
-            .expect("the click after the rebuild window should still light its pair");
+            .expect("the original click must light its pair without a second click");
         assert_eq!(
             pair.spans
                 .iter()
@@ -4628,4 +4655,264 @@ fn typing_a_search_in_a_collapsed_file_diff_finds_its_rows(cx: &mut gpui::TestAp
     }
 
     let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn source_backed_syntax_pending_worker_survives_rev_only_refresh_right(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_source_backed_syntax_pending_worker_refresh(cx, DiffTextRegion::SplitRight, true);
+}
+
+#[gpui::test]
+fn source_backed_syntax_pending_worker_survives_rev_only_refresh_left(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_source_backed_syntax_pending_worker_refresh(cx, DiffTextRegion::SplitLeft, true);
+}
+
+#[gpui::test]
+fn source_backed_syntax_pending_worker_completes_without_revision_change_right(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_source_backed_syntax_pending_worker_refresh(cx, DiffTextRegion::SplitRight, false);
+}
+
+#[gpui::test]
+fn source_backed_syntax_pending_worker_completes_without_revision_change_left(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_source_backed_syntax_pending_worker_refresh(cx, DiffTextRegion::SplitLeft, false);
+}
+
+/// Identical bytes may acquire a new diff_file_rev while one source-backed
+/// syntax worker is pending. Keep the completed side and the still-running
+/// side coloured without requiring a row rebuild or another user action.
+fn assert_source_backed_syntax_pending_worker_refresh(
+    cx: &mut gpui::TestAppContext,
+    pending_side: DiffTextRegion,
+    advance_revision: bool,
+) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        assert_source_backed_syntax_pending_worker_refresh_deterministic(
+            cx,
+            pending_side,
+            advance_revision,
+        );
+    });
+}
+
+fn assert_source_backed_syntax_pending_worker_refresh_deterministic(
+    cx: &mut gpui::TestAppContext,
+    pending_side: DiffTextRegion,
+    advance_revision: bool,
+) {
+    use crate::view::panes::diff::input::DiffPaneInput;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let completed_side = match pending_side {
+        DiffTextRegion::SplitLeft => DiffTextRegion::SplitRight,
+        DiffTextRegion::SplitRight => DiffTextRegion::SplitLeft,
+        DiffTextRegion::Inline => panic!("this fixture requires a split side"),
+    };
+    let next_rev = if advance_revision { 2 } else { 1 };
+    let directory = tempfile::tempdir().expect("source-backed revision fixture");
+    let workdir = directory.path().to_path_buf();
+    let old_source_path = workdir.join("old.rs");
+    let new_source_path = workdir.join("new.rs");
+    let old_text =
+        "fn fixture() {\n    /* a comment\n       across lines */\n    let value = 1;\n}\n";
+    let new_text = old_text.replace("value = 1", "value = 2");
+    std::fs::write(&old_source_path, old_text).unwrap();
+    std::fs::write(&new_source_path, &new_text).unwrap();
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(1754);
+    let path = std::path::PathBuf::from("src/fixture.rs");
+    let mut repo = opening_repo_state(repo_id, &workdir);
+    set_test_file_status(
+        &mut repo,
+        path.clone(),
+        gitcomet_core::domain::FileStatusKind::Modified,
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    let target = repo.diff_state.diff_target.clone().unwrap();
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::Diff::from_unified(
+            target,
+            "@@ -4 +4 @@\n-    let value = 1;\n+    let value = 2;\n",
+        ),
+    ));
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+        gitcomet_core::domain::FileDiffText::new_sources(
+            path,
+            Some(gitcomet_core::domain::FileDiffTextSource::new(
+                old_source_path,
+            )),
+            Some(gitcomet_core::domain::FileDiffTextSource::new(
+                new_source_path,
+            )),
+        ),
+    )));
+    let initial_state = app_state_with_repo(repo, repo_id);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            // Stage the order explicitly instead of relying on parse timing.
+            this.diff_renderer.update(cx, |pane, _| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+            });
+            push_test_state(this, Arc::clone(&initial_state), cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed row cache before preparing syntax",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_path.is_some()
+                && pane.file_diff_cache_inflight.is_none()
+        },
+        |pane| {
+            format!(
+                "rev={} rows_pending={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    // Finish one side first so the revision change isolates the asymmetric case.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                assert!(
+                    pane.file_diff_split_prepared_syntax_document(pending_side)
+                        .is_none()
+                );
+                pane.request_file_diff_click_syntax_document(completed_side, cx);
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "one side prepared before the other worker is queued",
+        |pane| {
+            pane.file_diff_split_prepared_syntax_document(completed_side)
+                .is_some()
+        },
+        |pane| format!("pending={:?}", pane.file_diff_click_syntax_inflight),
+    );
+
+    let mut next_state = (*initial_state).clone();
+    let next_repo = next_state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id)
+        .unwrap();
+    next_repo.diff_state.diff_file_rev = next_rev;
+    next_repo.diff_state.diff_state_rev = next_repo.diff_state.diff_state_rev.wrapping_add(1);
+    let next_state = Arc::new(next_state);
+    let prepared = Arc::new(AtomicBool::new(false));
+    let completed = Arc::new(AtomicBool::new(false));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (seq, generation) = this.diff_renderer.update(cx, |pane, cx| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(true);
+                let prepared = Arc::clone(&prepared);
+                pane.file_diff_click_syntax_after_prepare_hook = Some(Arc::new(move || {
+                    prepared.store(true, Ordering::SeqCst);
+                }));
+                let completed = Arc::clone(&completed);
+                pane.file_diff_click_syntax_before_complete_hook = Some(Arc::new(move |_| {
+                    completed.store(true, Ordering::SeqCst);
+                }));
+                pane.request_file_diff_click_syntax_document(pending_side, cx);
+                assert!(
+                    pane.file_diff_click_syntax_inflight
+                        .contains_key(&pending_side)
+                );
+                (pane.file_diff_cache_seq, pane.file_diff_syntax_generation)
+            });
+            // Same target, source identities, file bytes and patch. Only the
+            // revision may change, as after a same-target SelectDiff that reloads
+            // through Loading. Publish it before yielding to the queued worker;
+            // the controls use this identical schedule without advancing rev.
+            push_test_state(this, Arc::clone(&next_state), cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.apply_input(DiffPaneInput::selected(Arc::clone(&next_state)), cx);
+                pane.ensure_file_diff_cache(cx);
+                assert_eq!(pane.file_diff_cache_rev, next_rev);
+                assert_eq!(
+                    pane.file_diff_cache_seq, seq,
+                    "identical payload must reuse rows"
+                );
+                assert_eq!(
+                    pane.file_diff_syntax_generation, generation,
+                    "a revision-only refresh must preserve the indexed generation"
+                );
+                assert!(
+                    pane.file_diff_split_prepared_syntax_document(completed_side)
+                        .is_some()
+                );
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        prepared.load(Ordering::SeqCst),
+        "pending worker must parse successfully"
+    );
+    assert!(
+        completed.load(Ordering::SeqCst),
+        "pending worker must reach completion"
+    );
+
+    // An ordinary redraw/cache check must not strand the pending side in fallback.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer
+                .update(cx, |pane, cx| pane.ensure_file_diff_cache(cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert!(pane.file_diff_split_prepared_syntax_document(
+            completed_side).is_some());
+        assert!(pane.file_diff_split_prepared_syntax_document(
+            pending_side).is_some(),
+            "refresh stranded {pending_side:?} without prepared syntax; rev={next_rev}, pending={:?}",
+            pane.file_diff_click_syntax_inflight);
+
+        // Document presence alone is insufficient: an empty or wrong tree
+        // would satisfy it. This continuation needs the preceding comment opener.
+        for (side, text, starts) in [
+            (DiffTextRegion::SplitLeft, old_text, pane.file_diff_old_line_starts.as_ref()),
+            (DiffTextRegion::SplitRight, new_text.as_str(), pane.file_diff_new_line_starts.as_ref()),
+        ] {
+            let document = pane.file_diff_split_prepared_syntax_document(side).unwrap();
+            let snapshot = prepared_document_snapshot_for_line(
+                pane.theme,
+                text,
+                starts,
+                document,
+                rows::DiffSyntaxLanguage::Rust,
+                3,
+            ).expect("prepared document must expose comment continuation tokens");
+            let start = snapshot.text.find("across lines").unwrap();
+            let end = start + "across lines".len();
+            assert!(snapshot.syntax.iter().any(|(range, color)| {
+                range.start <= start && range.end >= end
+                    && *color == Some(pane.theme.syntax.comment.into_color())
+            }), "{side:?} lost whole-document comment context: {:?}", snapshot.syntax);
+        }
+    });
 }

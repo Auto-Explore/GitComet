@@ -1546,4 +1546,5 @@ mod markdown;
 mod shortcuts;
 mod status_footer;
 mod status_staging;
+mod syntax_refresh_selection;
 mod text_encoding;
