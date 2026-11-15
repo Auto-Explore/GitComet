@@ -104,7 +104,6 @@ impl DiffRenderer {
         key: PreparedSyntaxDocumentKey,
         make_document: impl FnOnce() -> Option<rows::PreparedDiffSyntaxDocument>,
     ) -> bool {
-        let was_resolvable = self.prepared_syntax_document(&key).is_some();
         let sides = [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight];
         let before = sides.map(|side| {
             self.file_diff_split_prepared_syntax_document(side)
@@ -114,7 +113,6 @@ impl DiffRenderer {
             return false;
         };
         let inserted = self.insert_prepared_syntax_document(key, document);
-        let installed_side_changed = inserted || !was_resolvable;
         let mut changed = false;
         for (ix, candidate) in sides.into_iter().enumerate() {
             let available = self
@@ -125,9 +123,7 @@ impl DiffRenderer {
             // since this pane last built fallback rows.
             let became_available =
                 available && (!before[ix] || self.file_diff_syntax_availability[ix] == Some(false));
-            if became_available
-                || (candidate == Self::split_side_for_region(side) && installed_side_changed)
-            {
+            if became_available || (candidate == Self::split_side_for_region(side) && inserted) {
                 self.bump_file_diff_side_style_epoch(candidate);
                 changed = true;
             }
@@ -564,7 +560,8 @@ impl DiffRenderer {
                 !self.file_diff_new_text.is_empty(),
             ),
         };
-        if (!source_backed && !has_text)
+        if available
+            || (!source_backed && !has_text)
             || (!source_backed && self.file_diff_resident_syntax_inflight != 0)
             || self.file_diff_cache_language.is_none()
             || self.file_diff_click_syntax_inflight.contains_key(&side)
@@ -573,7 +570,6 @@ impl DiffRenderer {
                 .file_diff_side_syntax_attempts
                 .get(&side)
                 .is_some_and(|attempt| attempt.stopped || attempt.retry_pending)
-            || available
         {
             return;
         }
@@ -625,38 +621,24 @@ impl DiffRenderer {
         attempt.retries += 1;
         attempt.retry_pending = true;
         let retries = attempt.retries;
-        let generation = attempt.generation;
-        let identity = attempt.identity.clone();
+        let generation = self.file_diff_syntax_generation;
+        let identity = self.file_diff_side_syntax_identity(side);
         cx.spawn(
             async move |view: WeakEntity<DiffRenderer>, cx: &mut gpui::AsyncApp| {
                 cx.background_executor().timer(delay).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_syntax_generation != generation
                         || this.file_diff_side_syntax_identity(side) != identity
-                        || !this
-                            .file_diff_side_syntax_attempts
-                            .get(&side)
-                            .is_some_and(|attempt| {
-                                attempt.generation == generation
-                                    && attempt.identity == identity
-                                    && attempt.retries == retries
-                                    && attempt.retry_pending
-                            })
                     {
                         return;
                     }
-                    if this.file_diff_source_is_current(side)
-                        && this.observe_file_diff_side_syntax_availability(side)
-                    {
-                        this.file_diff_side_syntax_attempts.remove(&side);
-                        this.retry_pending_diff_text_syntax_click();
-                        cx.notify();
+                    let Some(attempt) = this.file_diff_side_syntax_attempts.get_mut(&side) else {
+                        return;
+                    };
+                    if attempt.retries != retries || !attempt.retry_pending {
                         return;
                     }
-                    this.file_diff_side_syntax_attempts
-                        .get_mut(&side)
-                        .unwrap()
-                        .retry_pending = false;
+                    attempt.retry_pending = false;
                     this.request_file_diff_side_syntax_document(side, cx);
                 });
             },
@@ -702,21 +684,14 @@ impl DiffRenderer {
             self.file_diff_pair_syntax_text.remove(&side);
         }
         if source_is_current && self.observe_file_diff_side_syntax_availability(side) {
+            self.file_diff_side_syntax_attempts.remove(&side);
             self.retry_pending_diff_text_syntax_click();
             cx.notify();
             return;
         }
         let syntax_generation = self.file_diff_syntax_generation;
         let indexed_identity = self.file_diff_side_syntax_identity(side);
-        self.file_diff_side_syntax_attempts
-            .entry(side)
-            .or_insert_with(|| FileDiffSideSyntaxAttempt {
-                generation: syntax_generation,
-                identity: indexed_identity.clone(),
-                retries: 0,
-                retry_pending: false,
-                stopped: false,
-            });
+        self.file_diff_side_syntax_attempts.entry(side).or_default();
         let Some(language) = self.file_diff_cache_language else {
             self.fail_file_diff_side_syntax(side, FileDiffSideSyntaxFailure::Unparsed, cx);
             return;
@@ -1359,8 +1334,7 @@ impl DiffRenderer {
         }
     }
 
-    /// Applies a foreground sync prepare result for one side. Returns `true` if
-    /// the side needs a background async parse instead.
+    /// Reports whether a foreground prepare changed styles or needs a background parse.
     pub(super) fn apply_sync_syntax_result(
         &mut self,
         side: DiffTextRegion,
@@ -1371,23 +1345,21 @@ impl DiffRenderer {
             return SyncFileDiffPreparedSyntaxApplyResult::default();
         };
         let mut needs_background_prepare = false;
-        let inserted =
-            self.install_file_diff_side_document(side, key.clone(), || match prepare() {
-                Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => Some(document),
-                Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => {
-                    needs_background_prepare = true;
-                    None
-                }
-                _ => None,
-            });
+        let changed = self.install_file_diff_side_document(side, key.clone(), || match prepare() {
+            Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => Some(document),
+            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => {
+                needs_background_prepare = true;
+                None
+            }
+            _ => None,
+        });
         SyncFileDiffPreparedSyntaxApplyResult {
-            inserted,
+            changed,
             needs_background_prepare,
         }
     }
 
-    /// Applies background-parsed documents for both sides and reports which
-    /// side became newly cacheable.
+    /// Installs background parses and reports whether either installation changed styles.
     pub(super) fn apply_background_syntax_documents(
         &mut self,
         left_key: &Option<PreparedSyntaxDocumentKey>,
@@ -1515,7 +1487,7 @@ impl DiffRenderer {
         let needs_split_left_async = split_left_sync.needs_background_prepare;
         let needs_split_right_async = split_right_sync.needs_background_prepare;
 
-        if split_left_sync.inserted || split_right_sync.inserted {
+        if split_left_sync.changed || split_right_sync.changed {
             cx.notify();
         }
 

@@ -276,7 +276,7 @@ impl SharedPreparedDocumentSeedStore {
             return;
         }
 
-        let belongs_to_scope = |candidate: &&PreparedSyntaxCacheKey| {
+        let belongs_to_scope = |candidate: &PreparedSyntaxCacheKey| {
             #[cfg(any(test, feature = "test-support"))]
             {
                 candidate.test_scope == key.test_scope
@@ -287,12 +287,13 @@ impl SharedPreparedDocumentSeedStore {
                 true
             }
         };
-        if self.insertion_order.iter().filter(belongs_to_scope).count()
+        if self
+            .insertion_order
+            .iter()
+            .filter(|candidate| belongs_to_scope(candidate))
+            .count()
             >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES
-            && let Some(index) = self
-                .insertion_order
-                .iter()
-                .position(|candidate| belongs_to_scope(&candidate))
+            && let Some(index) = self.insertion_order.iter().position(belongs_to_scope)
             && let Some(oldest) = self.insertion_order.remove(index)
         {
             self.by_key.remove(&oldest);

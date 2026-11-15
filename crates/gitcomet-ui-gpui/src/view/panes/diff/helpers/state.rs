@@ -129,10 +129,9 @@ pub(in crate::view) struct CachedPreparedSyntaxDocument {
     pub(in crate::view) insertion_sequence: u64,
 }
 
-#[derive(Clone, Debug)]
+/// Retry budget for the current row/source generation; cleared when it advances.
+#[derive(Clone, Debug, Default)]
 pub(in crate::view) struct FileDiffSideSyntaxAttempt {
-    pub(in crate::view) generation: u64,
-    pub(in crate::view) identity: Option<Arc<str>>,
     pub(in crate::view) retries: usize,
     pub(in crate::view) retry_pending: bool,
     pub(in crate::view) stopped: bool,

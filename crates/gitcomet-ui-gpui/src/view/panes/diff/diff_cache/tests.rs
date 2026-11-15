@@ -803,7 +803,7 @@ fn sync_and_background_installs_recolour_a_revived_map_entry(cx: &mut gpui::Test
                 rows::inject_background_prepared_diff_syntax_document(data.clone()),
             ))
         });
-        assert!(applied.inserted);
+        assert!(applied.changed);
         assert!(!applied.needs_background_prepare);
         assert_eq!(
             pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),

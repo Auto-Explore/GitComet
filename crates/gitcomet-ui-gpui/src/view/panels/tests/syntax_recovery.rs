@@ -89,6 +89,65 @@ fn fail_first_read(
 }
 
 #[gpui::test]
+fn retry_timer_uses_a_document_repaired_before_it_fires(cx: &mut gpui::TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        let (_directory, view, cx, _old, new) = prepare_fixture(cx);
+        let completions = Arc::new(AtomicUsize::new(0));
+        let hidden = fail_first_read(cx, &view, &new, Arc::clone(&completions));
+        assert_eq!(completions.load(Ordering::SeqCst), 1);
+        assert!(!sides_present(cx, &view).1);
+
+        std::fs::remove_dir(&new).unwrap();
+        std::fs::rename(&hidden, &new).unwrap();
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, _| {
+                    assert_eq!(
+                        gitcomet_core::domain::FileDiffTextSource::new(new.clone()).identity,
+                        pane.file_diff_new_source_identity.clone().unwrap(),
+                    );
+                    // A small-file click can repair the document synchronously
+                    // while the earlier failed read still owns a retry timer.
+                    pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                        .expect("the restored small source should prepare synchronously");
+                    assert!(
+                        pane.file_diff_side_syntax_attempts[&DiffTextRegion::SplitRight]
+                            .retry_pending
+                    );
+                });
+            });
+        });
+        cx.executor().advance_clock(Duration::from_millis(249));
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert!(pane.file_diff_side_syntax_attempts[&DiffTextRegion::SplitRight].retry_pending);
+            assert!(pane.file_diff_click_syntax_inflight.is_empty());
+        });
+
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(
+            completions.load(Ordering::SeqCst),
+            1,
+            "the timer must use the repaired document without starting another worker"
+        );
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert!(
+                pane.file_diff_side_syntax_attempts.is_empty(),
+                "a cache hit must retire the completed retry state"
+            );
+            assert!(pane.file_diff_click_syntax_inflight.is_empty());
+            assert!(
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn transient_read_retry_replays_the_original_bracket_click(cx: &mut gpui::TestAppContext) {
     crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
         let (directory, view, cx, old, new) = prepare_fixture(cx);
