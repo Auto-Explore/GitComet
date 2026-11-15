@@ -421,7 +421,7 @@ fn assert_visible_side_recovers(cx: &mut gpui::TestAppContext, resident: bool) {
                 let pane = view.read(app).diff_renderer.read(app);
                 assert!(pane.file_diff_new_source_path.is_none());
                 assert!(!pane.file_diff_new_text.is_empty());
-                assert_eq!(pane.file_diff_resident_syntax_inflight, 0);
+                assert!(!pane.file_diff_resident_syntax_inflight);
             });
         }
         let completions = Arc::new(AtomicUsize::new(0));
@@ -446,5 +446,257 @@ fn assert_visible_side_recovers(cx: &mut gpui::TestAppContext, resident: bool) {
                     .is_empty()
             );
         });
+    });
+}
+
+/// Re-selecting a file reloads the same content under a new revision. Like a
+/// click, that may retry a side whose automatic attempts are exhausted.
+#[gpui::test]
+fn reselecting_the_file_retries_an_exhausted_side(cx: &mut gpui::TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        let (directory, view, cx, old, new) = prepare_fixture(cx);
+        let completions = Arc::new(AtomicUsize::new(0));
+        let hidden = fail_first_read(cx, &view, &new, Arc::clone(&completions));
+        for delay in [250, 1_000, 4_000] {
+            cx.executor().advance_clock(Duration::from_millis(delay));
+            cx.run_until_parked();
+        }
+        std::fs::remove_dir(&new).unwrap();
+        std::fs::rename(&hidden, &new).unwrap();
+        set_eager(cx, &view, true);
+        idle_frames(cx, &view);
+        assert_eq!(completions.load(Ordering::SeqCst), 4);
+        assert!(
+            !sides_present(cx, &view).1,
+            "frames must not retry an exhausted side"
+        );
+
+        let rows = cx.update(|_, app| view.read(app).diff_renderer.read(app).file_diff_cache_seq);
+        show(
+            cx,
+            &view,
+            &file_diff_state(
+                RepoId(7190),
+                directory.path(),
+                "src/retry.rs",
+                2,
+                &old,
+                &new,
+                0,
+                1,
+            ),
+        );
+        wait_settled(cx, &view, 2, "src/retry.rs");
+        idle_frames(cx, &view);
+        assert!(sides_present(cx, &view).1);
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert_eq!(
+                pane.file_diff_cache_seq, rows,
+                "identical content must keep its rows"
+            );
+            assert!(pane.file_diff_side_syntax_attempts.is_empty());
+        });
+    });
+}
+
+/// A background parse of in-memory text that is still running when the same
+/// content arrives under a new revision serves that revision: no second parse
+/// starts, and its documents are not thrown away.
+#[gpui::test]
+fn revision_only_refresh_joins_the_running_in_memory_parse(cx: &mut gpui::TestAppContext) {
+    use crate::view::panes::diff::input::DiffPaneInput;
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        let directory = tempfile::tempdir().unwrap();
+        let (old, new) = (
+            directory.path().join("old.rs"),
+            directory.path().join("new.rs"),
+        );
+        let path = "src/resident.rs";
+        let state = |rev: u64, value: usize| {
+            let mut state = (*file_diff_state(
+                RepoId(7191),
+                directory.path(),
+                path,
+                rev,
+                &old,
+                &new,
+                0,
+                value,
+            ))
+            .clone();
+            state.repos[0].diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::FileDiffText::new(
+                    path.into(),
+                    Some(fixture_text(0)),
+                    Some(fixture_text(value)),
+                )),
+            ));
+            Arc::new(state)
+        };
+        let (view, cx) = new_view(cx);
+        show(cx, &view, &state(1, 1));
+        wait_settled(cx, &view, 1, path);
+        let apply = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+            let scheduler = Arc::clone(cx.dispatcher.scheduler());
+            cx.update(|_, app| {
+                view.update(app, |this, cx| {
+                    push_test_state(this, Arc::clone(&state), cx);
+                    this.diff_renderer.update(cx, |pane, cx| {
+                        let queued = scheduler.pending_task_counts();
+                        pane.apply_input(DiffPaneInput::selected(state), cx);
+                        pane.ensure_file_diff_cache(cx);
+                        (
+                            scheduler.pending_task_counts() != queued,
+                            pane.file_diff_cache_rev,
+                            pane.file_diff_cache_seq,
+                        )
+                    })
+                })
+            })
+        };
+
+        // New content whose parse cannot finish inside a frame.
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, _| {
+                    pane.set_full_document_syntax_budget_override_for_tests(
+                        rows::DiffSyntaxBudget {
+                            foreground_parse: Duration::ZERO,
+                        },
+                    );
+                })
+            })
+        });
+        let (queued_rows, _, rows) = apply(cx, state(2, 2));
+        assert!(queued_rows, "new content starts a row build");
+        let parse_running = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, app| {
+                view.read(app)
+                    .diff_renderer
+                    .read(app)
+                    .file_diff_resident_syntax_inflight
+            })
+        };
+        while !parse_running(cx) {
+            assert!(cx.dispatcher.tick(false), "the row build never finished");
+        }
+
+        let (queued_work, rev, same_rows) = apply(cx, state(3, 2));
+        assert_eq!(
+            (rev, same_rows),
+            (3, rows),
+            "identical content keeps its rows"
+        );
+        assert!(
+            !queued_work,
+            "the running parse must serve the new revision"
+        );
+
+        cx.run_until_parked();
+        assert!(!parse_running(cx));
+        let (left, right, _) = sides_present(cx, &view);
+        assert!(
+            left && right,
+            "the parse must install under the revision the rows carry now"
+        );
+    });
+}
+
+/// The same-file row rebuild replaces the rows on screen. With background
+/// compute, as in the app, a side requested for the old rows meanwhile would be
+/// parsed and then thrown away; each rebuild must cost one parse per side.
+#[gpui::test]
+fn same_file_rebuild_parses_each_side_once(cx: &mut gpui::TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path();
+    let old = workdir.join("old.rs");
+    let old_staged = workdir.join("old_staged.rs");
+    let new = workdir.join("new.rs");
+    std::fs::write(&old, fixture_text(0)).unwrap();
+    std::fs::write(&old_staged, fixture_text(50)).unwrap();
+    std::fs::write(&new, fixture_text(1)).unwrap();
+    let repo_id = RepoId(7192);
+    let path = "src/rebuild.rs";
+    let (view, cx) =
+        crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+            new_view(cx)
+        });
+    let parses = Arc::new(AtomicUsize::new(0));
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, _| {
+                let parses = Arc::clone(&parses);
+                pane.file_diff_click_syntax_after_prepare_hook = Some(Arc::new(move || {
+                    parses.fetch_add(1, Ordering::SeqCst);
+                }));
+            })
+        })
+    });
+    // One frame, then background work is delivered before the next frame, as
+    // the app's main loop does it.
+    let settle = |cx: &mut gpui::VisualTestContext, rev: u64| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            let busy = |pane: &DiffRenderer| {
+                pane.file_diff_cache_inflight.is_some()
+                    || !pane.file_diff_click_syntax_inflight.is_empty()
+                    || !pane.file_diff_side_syntax_deferred.is_empty()
+            };
+            loop {
+                cx.run_until_parked();
+                if !cx.update(|_, app| busy(view.read(app).diff_renderer.read(app))) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "work never finished");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let ready = cx.update(|_, app| {
+                let pane = view.read(app).diff_renderer.read(app);
+                pane.file_diff_cache_rev == rev
+                    && [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight]
+                        .into_iter()
+                        .all(|side| {
+                            pane.file_diff_split_prepared_syntax_document(side)
+                                .is_some()
+                        })
+            });
+            if ready {
+                return parses.swap(0, Ordering::SeqCst);
+            }
+            assert!(std::time::Instant::now() < deadline, "sides never prepared");
+        }
+    };
+
+    // Background compute completes on real threads.
+    cx.executor().allow_parking();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        show(
+            cx,
+            &view,
+            &file_diff_state(repo_id, workdir, path, 1, &old, &new, 0, 1),
+        );
+        assert_eq!(settle(cx, 1), 2, "first view of the file");
+
+        // The worktree file is edited: only the new side changes on disk.
+        std::fs::write(&new, fixture_text(2)).unwrap();
+        show(
+            cx,
+            &view,
+            &file_diff_state(repo_id, workdir, path, 2, &old, &new, 0, 2),
+        );
+        assert_eq!(settle(cx, 2), 2, "edit of the new side");
+
+        // A hunk is staged: the old side becomes another blob, and both files
+        // behind the rows on screen stay as they were.
+        show(
+            cx,
+            &view,
+            &file_diff_state(repo_id, workdir, path, 3, &old_staged, &new, 50, 2),
+        );
+        assert_eq!(settle(cx, 3), 2, "replacement of the old side");
     });
 }

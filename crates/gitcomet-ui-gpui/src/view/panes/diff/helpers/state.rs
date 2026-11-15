@@ -834,13 +834,15 @@ pub(crate) struct DiffRenderer {
         rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
+    /// Content signature of the build in `file_diff_cache_inflight`.
+    pub(in crate::view) file_diff_cache_inflight_signature: u64,
     /// Identity of the row/source generation currently visible to clicks.
     /// Kept stable while a same-target replacement builds, then advanced at the
     /// atomic row swap.
     pub(in crate::view) file_diff_syntax_generation: u64,
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) file_diff_syntax_availability: [Option<bool>; 2],
-    pub(in crate::view) file_diff_resident_syntax_inflight: usize,
+    pub(in crate::view) file_diff_resident_syntax_inflight: bool,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
         FxHashMap<PreparedSyntaxDocumentKey, CachedPreparedSyntaxDocument>,
@@ -911,6 +913,11 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
     pub(in crate::view) worktree_preview_cache_write_blocked_until_rev: Option<u64>,
+    /// The content a preview parse was last requested for. Kept while that
+    /// parse runs and after it yields no document, so frames ask only once.
+    pub(in crate::view) worktree_preview_syntax_requested: Option<PreparedSyntaxDocumentKey>,
+    /// Rows were styled without the preview's document.
+    pub(in crate::view) worktree_preview_syntax_missing: bool,
     pub(in crate::view) worktree_preview_segments_cache:
         FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,

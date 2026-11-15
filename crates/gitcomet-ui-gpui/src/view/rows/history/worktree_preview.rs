@@ -97,7 +97,7 @@ impl DiffRenderer {
         }
 
         let language = this.worktree_preview_syntax_language;
-        let syntax_document = this.worktree_preview_prepared_syntax_document();
+        let syntax_document = this.worktree_preview_syntax_document_for_render(cx);
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
         let prepared_syntax_source = match syntax_document {
             Some(document) if !this.worktree_preview_text.is_empty() => {

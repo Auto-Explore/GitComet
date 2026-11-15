@@ -2065,3 +2065,51 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
 
     fixture.cleanup();
 }
+
+/// A conflict rebuild resets the syntax markers and may hand a side to a new
+/// worker. The worker it superseded must leave that marker alone, or a third
+/// parse of the same side could start beside the new one.
+#[gpui::test]
+fn superseded_conflict_syntax_worker_leaves_the_newer_marker(cx: &mut gpui::TestAppContext) {
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::deterministic(), || {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+        let side = ThreeWayColumn::Ours;
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    let (text, line_starts) = shared_text_and_line_starts("fn ours() {}\n");
+                    pane.conflict_resolver.source_hash = Some(1);
+                    pane.ensure_conflict_three_way_background_syntax_prepare(
+                        side,
+                        text,
+                        line_starts,
+                        rows::DiffSyntaxLanguage::Rust,
+                        Some(1),
+                        cx,
+                    );
+                    assert!(pane.conflict_three_way_syntax_inflight[side]);
+
+                    // The rebuild for new content, and its worker's marker.
+                    pane.conflict_resolver.source_hash = Some(2);
+                    pane.conflict_three_way_syntax_inflight = Default::default();
+                    pane.conflict_three_way_syntax_inflight[side] = true;
+                });
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert!(
+                pane.conflict_three_way_syntax_inflight[side],
+                "the superseded worker cleared the newer worker's marker"
+            );
+            assert!(
+                pane.conflict_three_way_prepared_syntax_documents[side].is_none(),
+                "a document parsed from superseded content must not be installed"
+            );
+        });
+    });
+}
