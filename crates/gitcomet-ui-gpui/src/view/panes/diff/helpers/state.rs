@@ -123,6 +123,21 @@ pub(in crate::view) struct PreparedSyntaxDocumentKey {
     pub(in crate::view) view_mode: PreparedSyntaxViewMode,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct CachedPreparedSyntaxDocument {
+    pub(in crate::view) document: rows::PreparedDiffSyntaxDocument,
+    pub(in crate::view) insertion_sequence: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct FileDiffSideSyntaxAttempt {
+    pub(in crate::view) generation: u64,
+    pub(in crate::view) identity: Option<Arc<str>>,
+    pub(in crate::view) retries: usize,
+    pub(in crate::view) retry_pending: bool,
+    pub(in crate::view) stopped: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffExpansionKind {
     #[default]
@@ -767,6 +782,9 @@ pub(crate) struct DiffRenderer {
     /// The value identifies the syntax generation that owns the marker, so a
     /// superseded worker cannot remove a newer generation's marker.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    pub(in crate::view) file_diff_side_syntax_attempts:
+        FxHashMap<DiffTextRegion, FileDiffSideSyntaxAttempt>,
+    pub(in crate::view) file_diff_side_syntax_deferred: FxHashMap<DiffTextRegion, u64>,
     /// Test-only switch for the eager source-backed prepare. Off, a source-backed
     /// side gets a document only when clicked, which is what the click-path tests
     /// are there to cover and what they would otherwise stop exercising.
@@ -822,9 +840,12 @@ pub(crate) struct DiffRenderer {
     /// atomic row swap.
     pub(in crate::view) file_diff_syntax_generation: u64,
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
+    pub(in crate::view) file_diff_syntax_availability: [Option<bool>; 2],
+    pub(in crate::view) file_diff_resident_syntax_inflight: usize,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
-        FxHashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
+        FxHashMap<PreparedSyntaxDocumentKey, CachedPreparedSyntaxDocument>,
+    pub(in crate::view) prepared_syntax_document_insert_sequence: u64,
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
     #[cfg(test)]

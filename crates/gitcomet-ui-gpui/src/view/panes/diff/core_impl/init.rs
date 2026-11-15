@@ -429,6 +429,8 @@ impl DiffRenderer {
             file_diff_old_line_starts: Arc::default(),
             file_diff_pair_syntax_text: FxHashMap::default(),
             file_diff_click_syntax_inflight: FxHashMap::default(),
+            file_diff_side_syntax_attempts: FxHashMap::default(),
+            file_diff_side_syntax_deferred: FxHashMap::default(),
             #[cfg(test)]
             eager_source_backed_syntax_prepare: true,
             #[cfg(test)]
@@ -468,6 +470,9 @@ impl DiffRenderer {
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
             syntax_chunk_poll_task: None,
             prepared_syntax_documents: FxHashMap::default(),
+            prepared_syntax_document_insert_sequence: 0,
+            file_diff_syntax_availability: [None; 2],
+            file_diff_resident_syntax_inflight: 0,
             #[cfg(test)]
             diff_syntax_budget_override: None,
             #[cfg(test)]

@@ -515,3 +515,357 @@ fn diff_syntax_edit_multibyte_utf8() {
     assert_eq!(edit.old_range, 3..5);
     assert_eq!(edit.new_range, 3..4);
 }
+
+fn with_syntax_cache_renderer(
+    cx: &mut gpui::TestAppContext,
+    test: impl FnOnce(&mut DiffRenderer, &mut gpui::Context<DiffRenderer>),
+) {
+    let (store, events) =
+        gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.diff_renderer.update(cx, |pane, cx| test(pane, cx));
+        });
+    });
+}
+
+fn syntax_cache_test_document() -> rows::BackgroundPreparedDiffSyntaxDocument {
+    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+        rows::DiffSyntaxLanguage::Rust,
+        rows::DiffSyntaxMode::Auto,
+        "fn syntax_cache_fixture() {}".into(),
+        Arc::from([0]),
+        None,
+        None,
+    )
+    .expect("Rust syntax fixture")
+}
+
+/// Overflow both the shared seed FIFO (64 entries) and the local document
+/// cache (8 entries) without retiring the scope that owns the fixture handle.
+fn evict_syntax_cache_test_documents() {
+    for index in 0..128 {
+        let data = rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+            rows::DiffSyntaxLanguage::Rust,
+            rows::DiffSyntaxMode::Auto,
+            format!("fn syntax_cache_churn_{index}() {{}}").into(),
+            Arc::from([0]),
+            None,
+            None,
+        )
+        .expect("cache churn document");
+        rows::inject_background_prepared_diff_syntax_document(data);
+    }
+}
+
+fn syntax_cache_test_key(
+    path: &str,
+    rev: u64,
+    mode: PreparedSyntaxViewMode,
+) -> PreparedSyntaxDocumentKey {
+    prepared_syntax_document_key(RepoId(754).into(), rev, Path::new(path), mode)
+}
+
+fn configure_syntax_cache_test_file(pane: &mut DiffRenderer) {
+    pane.file_diff_cache_repo_id = Some(RepoId(754).into());
+    pane.file_diff_cache_path = Some("fixture.rs".into());
+    pane.file_diff_cache_rev = 1;
+    pane.file_diff_cache_language = Some(rows::DiffSyntaxLanguage::Rust);
+    pane.file_diff_old_text = "fn syntax_cache_fixture() {}".into();
+    pane.file_diff_new_text = pane.file_diff_old_text.clone();
+    pane.file_diff_old_line_starts = Arc::from([0]);
+    pane.file_diff_new_line_starts = Arc::clone(&pane.file_diff_old_line_starts);
+}
+
+#[gpui::test]
+fn file_diff_syntax_map_retains_only_current_file_sides_and_preview_history(
+    cx: &mut gpui::TestAppContext,
+) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        let document =
+            rows::inject_background_prepared_diff_syntax_document(syntax_cache_test_document());
+        let preview =
+            syntax_cache_test_key("preview.rs", 1, PreparedSyntaxViewMode::WorktreePreview);
+        pane.insert_prepared_syntax_document(preview.clone(), document);
+        for rev in 1..=3 {
+            for mode in [
+                PreparedSyntaxViewMode::FileDiffSplitLeft,
+                PreparedSyntaxViewMode::FileDiffSplitRight,
+            ] {
+                pane.insert_prepared_syntax_document(
+                    syntax_cache_test_key("first.rs", rev, mode),
+                    document,
+                );
+            }
+            assert_eq!(pane.prepared_syntax_documents.len(), 3);
+            assert!(pane.prepared_syntax_documents.keys().all(|key| {
+                key.view_mode == PreparedSyntaxViewMode::WorktreePreview || key.target_rev == rev
+            }));
+        }
+        for mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            pane.insert_prepared_syntax_document(
+                syntax_cache_test_key("second.rs", 4, mode),
+                document,
+            );
+        }
+        assert_eq!(pane.prepared_syntax_documents.len(), 3);
+        assert!(pane.prepared_syntax_documents.contains_key(&preview));
+        assert!(pane.prepared_syntax_documents.keys().all(|key| {
+            key.view_mode == PreparedSyntaxViewMode::WorktreePreview
+                || key.file_path == Path::new("second.rs")
+        }));
+    });
+}
+
+#[gpui::test]
+fn full_syntax_map_evicts_oldest_previews_without_evicting_either_new_side(
+    cx: &mut gpui::TestAppContext,
+) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        let document =
+            rows::inject_background_prepared_diff_syntax_document(syntax_cache_test_document());
+        let previews: Vec<_> = (0..PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES)
+            .map(|index| {
+                syntax_cache_test_key(
+                    &format!("preview-{index}.rs"),
+                    1,
+                    PreparedSyntaxViewMode::WorktreePreview,
+                )
+            })
+            .collect();
+        for key in &previews {
+            pane.insert_prepared_syntax_document(key.clone(), document);
+        }
+        for mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            pane.insert_prepared_syntax_document(
+                syntax_cache_test_key("visible.rs", 2, mode),
+                document,
+            );
+        }
+        assert_eq!(
+            pane.prepared_syntax_documents.len(),
+            PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES
+        );
+        assert!(!pane.prepared_syntax_documents.contains_key(&previews[0]));
+        assert!(!pane.prepared_syntax_documents.contains_key(&previews[1]));
+        assert!(
+            previews[2..]
+                .iter()
+                .all(|key| pane.prepared_syntax_documents.contains_key(key))
+        );
+        for mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            assert!(
+                pane.prepared_syntax_documents
+                    .contains_key(&syntax_cache_test_key("visible.rs", 2, mode))
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn dropping_file_diff_rows_drops_documents_even_after_identity_changes(
+    cx: &mut gpui::TestAppContext,
+) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        let document =
+            rows::inject_background_prepared_diff_syntax_document(syntax_cache_test_document());
+        let preview =
+            syntax_cache_test_key("preview.rs", 1, PreparedSyntaxViewMode::WorktreePreview);
+        pane.insert_prepared_syntax_document(preview.clone(), document);
+        for mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            pane.insert_prepared_syntax_document(
+                syntax_cache_test_key("previous.rs", 1, mode),
+                document,
+            );
+        }
+        pane.file_diff_cache_path = Some("previous.rs".into());
+        // ensure_file_diff_cache may have already selected another repository
+        // before it resets the previous file's data.
+        pane.file_diff_cache_repo_id = Some(RepoId(755).into());
+        pane.reset_file_diff_cache_data();
+        assert_eq!(pane.prepared_syntax_documents.len(), 1);
+        assert!(pane.prepared_syntax_documents.contains_key(&preview));
+    });
+}
+
+#[gpui::test]
+fn installing_a_revived_shared_handle_recolours_both_sides_once(cx: &mut gpui::TestAppContext) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        configure_syntax_cache_test_file(pane);
+        let data = syntax_cache_test_document();
+        let document = rows::inject_background_prepared_diff_syntax_document(data.clone());
+        let left_key =
+            syntax_cache_test_key("fixture.rs", 1, PreparedSyntaxViewMode::FileDiffSplitLeft);
+        let right_key =
+            syntax_cache_test_key("fixture.rs", 1, PreparedSyntaxViewMode::FileDiffSplitRight);
+        pane.insert_prepared_syntax_document(left_key.clone(), document);
+        pane.insert_prepared_syntax_document(right_key.clone(), document);
+        // Evict the backing document while retaining both view-map handles.
+        // The prepared data and its scope stay alive, so re-injection revives
+        // exactly the same handle and may still serve lazy syntax chunks.
+        evict_syntax_cache_test_documents();
+        assert!(!pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitLeft));
+        assert!(!pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitRight));
+        let left_epoch = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft);
+        let right_epoch = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight);
+        assert!(
+            pane.install_file_diff_side_document(DiffTextRegion::SplitLeft, left_key, || {
+                Some(rows::inject_background_prepared_diff_syntax_document(
+                    data.clone(),
+                ))
+            })
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft),
+            left_epoch + 1
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            right_epoch + 1
+        );
+        assert!(!pane.install_file_diff_side_document(
+            DiffTextRegion::SplitRight,
+            right_key,
+            || { Some(rows::inject_background_prepared_diff_syntax_document(data)) }
+        ));
+        assert!(pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitLeft));
+        assert!(pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitRight));
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft),
+            left_epoch + 1
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            right_epoch + 1
+        );
+    });
+}
+
+#[gpui::test]
+fn externally_revived_document_recolours_only_the_observed_side(cx: &mut gpui::TestAppContext) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        configure_syntax_cache_test_file(pane);
+        let data = syntax_cache_test_document();
+        let document = rows::inject_background_prepared_diff_syntax_document(data.clone());
+        let key =
+            syntax_cache_test_key("fixture.rs", 1, PreparedSyntaxViewMode::FileDiffSplitRight);
+        pane.insert_prepared_syntax_document(key, document);
+        evict_syntax_cache_test_documents();
+        assert!(!pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitRight));
+        let left_epoch = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft);
+        let right_epoch = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight);
+        // The shared cache may be repopulated by another pane's completion.
+        rows::inject_background_prepared_diff_syntax_document(data);
+        assert!(pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitRight));
+        assert!(pane.observe_file_diff_side_syntax_availability(DiffTextRegion::SplitRight));
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft),
+            left_epoch
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            right_epoch + 1
+        );
+    });
+}
+
+#[gpui::test]
+fn sync_and_background_installs_recolour_a_revived_map_entry(cx: &mut gpui::TestAppContext) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        configure_syntax_cache_test_file(pane);
+        let data = syntax_cache_test_document();
+        let document = rows::inject_background_prepared_diff_syntax_document(data.clone());
+        let key = Some(syntax_cache_test_key(
+            "fixture.rs",
+            1,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ));
+        pane.insert_prepared_syntax_document(key.clone().unwrap(), document);
+        evict_syntax_cache_test_documents();
+        let before = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight);
+        let applied = pane.apply_sync_syntax_result(DiffTextRegion::SplitRight, &key, || {
+            Some(rows::PrepareDiffSyntaxDocumentResult::Ready(
+                rows::inject_background_prepared_diff_syntax_document(data.clone()),
+            ))
+        });
+        assert!(applied.inserted);
+        assert!(!applied.needs_background_prepare);
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            before + 1
+        );
+        evict_syntax_cache_test_documents();
+        let applied = pane.apply_background_syntax_documents(&None, None, &key, Some(data));
+        assert!(applied.split_right);
+        assert!(!applied.split_left);
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            before + 2
+        );
+    });
+}
+
+#[gpui::test]
+fn small_synchronous_click_installs_and_recolours_its_document(cx: &mut gpui::TestAppContext) {
+    with_syntax_cache_renderer(cx, |pane, _| {
+        configure_syntax_cache_test_file(pane);
+        let data = syntax_cache_test_document();
+        let document = rows::inject_background_prepared_diff_syntax_document(data);
+        let key =
+            syntax_cache_test_key("fixture.rs", 1, PreparedSyntaxViewMode::FileDiffSplitRight);
+        pane.insert_prepared_syntax_document(key, document);
+        evict_syntax_cache_test_documents();
+        let before = pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight);
+        let prepared = pane
+            .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+            .expect("small click prepares synchronously");
+        assert_eq!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+            Some(prepared)
+        );
+        assert_eq!(
+            pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
+            before + 1
+        );
+    });
+}
+
+#[gpui::test]
+fn mixed_resident_and_source_sides_do_not_parse_the_source_placeholder(
+    cx: &mut gpui::TestAppContext,
+) {
+    with_syntax_cache_renderer(cx, |pane, cx| {
+        configure_syntax_cache_test_file(pane);
+        pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+        pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::from_secs(1),
+        });
+        pane.file_diff_new_text = SharedString::default();
+        pane.file_diff_new_source_path = Some(Arc::new("source-backed.rs".into()));
+        pane.refresh_file_diff_syntax_documents(cx, None, None, None, None);
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                .is_some()
+        );
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .is_none()
+        );
+        assert!(pane.file_diff_click_syntax_inflight.is_empty());
+    });
+}

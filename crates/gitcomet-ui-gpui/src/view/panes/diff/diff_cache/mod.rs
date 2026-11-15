@@ -256,10 +256,14 @@ impl DiffRenderer {
 }
 
 impl DiffRenderer {
-    fn advance_file_diff_syntax_generation(&mut self) {
+    pub(in crate::view) fn advance_file_diff_syntax_generation(&mut self) {
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_pair_syntax_text.clear();
         self.file_diff_click_syntax_inflight.clear();
+        self.file_diff_side_syntax_attempts.clear();
+        self.file_diff_side_syntax_deferred.clear();
+        self.file_diff_syntax_availability = [None; 2];
+        self.file_diff_resident_syntax_inflight = 0;
     }
 
     /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row

@@ -182,8 +182,13 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
                 let replacement_key = pane
                     .file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitRight)
                     .expect("in-flight replacement key");
-                pane.prepared_syntax_documents
-                    .insert(replacement_key, old_rows_document);
+                pane.prepared_syntax_documents.insert(
+                    replacement_key,
+                    crate::view::panes::diff::helpers::state::CachedPreparedSyntaxDocument {
+                        document: old_rows_document,
+                        insertion_sequence: 0,
+                    },
+                );
             });
         });
     });

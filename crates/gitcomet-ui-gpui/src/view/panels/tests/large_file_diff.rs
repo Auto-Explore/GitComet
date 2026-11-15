@@ -3174,8 +3174,13 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
                         "future right key should be available while the file-diff cache is built",
                     );
                 pane.file_diff_cache_rev = original_rev;
-                pane.prepared_syntax_documents
-                    .insert(next_right_key, right_document);
+                pane.prepared_syntax_documents.insert(
+                    next_right_key,
+                    crate::view::panes::diff::helpers::state::CachedPreparedSyntaxDocument {
+                        document: right_document,
+                        insertion_sequence: 0,
+                    },
+                );
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -3727,6 +3732,12 @@ fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpu
                     )),
                 ),
             )));
+            // This fixture queues exactly two right-side workers. Automatic
+            // recovery of the deliberately cleared left document would invoke
+            // the shared completion hook for an unrelated worker as well.
+            this.diff_renderer.update(cx, |pane, _| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+            });
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
@@ -3748,7 +3759,7 @@ fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpu
         },
     );
 
-    let new_worker_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let new_worker_completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let new_worker_saw_marker = Arc::new(std::sync::atomic::AtomicBool::new(false));
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -3767,17 +3778,18 @@ fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpu
                 // A same-file rebuild installs a new generation and clears the
                 // old generation's markers before the next click arrives. Both
                 // workers are now queued in generation order.
-                pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
-                pane.file_diff_click_syntax_inflight.clear();
-                let completed = Arc::clone(&new_worker_completed);
+                pane.advance_file_diff_syntax_generation();
+                let generation = pane.file_diff_syntax_generation;
+                let completions = Arc::clone(&new_worker_completions);
                 let saw_marker = Arc::clone(&new_worker_saw_marker);
                 pane.file_diff_click_syntax_before_complete_hook = Some(Arc::new(move |pane| {
                     saw_marker.store(
                         pane.file_diff_click_syntax_inflight
-                            .contains_key(&DiffTextRegion::SplitRight),
+                            .get(&DiffTextRegion::SplitRight)
+                            == Some(&generation),
                         std::sync::atomic::Ordering::SeqCst,
                     );
-                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }));
                 pane.request_file_diff_click_syntax_document(DiffTextRegion::SplitRight, cx);
                 assert!(
@@ -3789,9 +3801,10 @@ fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpu
         });
     });
     cx.run_until_parked();
-    assert!(
-        new_worker_completed.load(std::sync::atomic::Ordering::SeqCst),
-        "the new worker must reach its completion callback"
+    assert_eq!(
+        new_worker_completions.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only the deliberately queued new-generation worker should complete"
     );
     assert!(
         new_worker_saw_marker.load(std::sync::atomic::Ordering::SeqCst),
