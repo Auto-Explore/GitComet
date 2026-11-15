@@ -393,7 +393,10 @@ impl DiffRenderer {
             }
         }
 
+        // A failed rebuild has no reusable rows. A new revision retries it,
+        // while the same-revision guard above prevents an idle retry loop.
         if same_repo_and_target
+            && self.file_diff_cache_error.is_none()
             && let Some(signature) = file_content_signature
             && self.file_diff_cache_content_signature == Some(signature)
         {
