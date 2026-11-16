@@ -593,7 +593,7 @@ fn a_modal_form_takes_tab_from_outside_it(cx: &mut TestAppContext) {
 /// A dialog that is not shown, or shown in another window, takes nothing.
 #[gpui::test]
 fn a_modal_form_that_is_not_shown_leaves_tab_to_the_window(cx: &mut TestAppContext) {
-    let hidden = cx.update(|app| TabScope::modal(app));
+    let hidden = cx.update(TabScope::modal);
     let (view, cx) = window_with(cx, &[0], Form::Plain);
     focus(cx, |app| view.read(app).before.read(app).focus_handle());
     press(cx, "tab");
