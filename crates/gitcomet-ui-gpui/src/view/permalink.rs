@@ -261,7 +261,8 @@ fn build_base(host: &str, port: Option<&str>, path: &str, scheme: &str) -> Optio
     if owner_repo.is_empty() || !owner_repo.contains('/') {
         return None;
     }
-    let kind = match host.as_str() {
+    let host = web_host(&host);
+    let kind = match host {
         "github.com" => ForgeKind::GitHub,
         "gitlab.com" => ForgeKind::GitLab,
         "bitbucket.org" => ForgeKind::Bitbucket,
@@ -280,6 +281,18 @@ fn build_base(host: &str, port: Option<&str>, path: &str, scheme: &str) -> Optio
         kind,
         web_root: format!("{scheme}://{host}{port}/{owner_repo}"),
     })
+}
+
+/// The host of a forge's web pages, given a host that only takes its SSH:
+/// GitHub, GitLab and Bitbucket each run one for port 443, and Bitbucket Cloud
+/// takes all SSH on `ssh.bitbucket.org`.
+fn web_host(host: &str) -> &str {
+    match host {
+        "ssh.github.com" => "github.com",
+        "altssh.gitlab.com" => "gitlab.com",
+        "ssh.bitbucket.org" | "altssh.bitbucket.org" => "bitbucket.org",
+        _ => host,
+    }
 }
 
 /// A remote's repository path without its slashes or `.git` suffix, so
