@@ -3872,7 +3872,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-segmentation",
  "url",
- "usvg",
+ "usvg 0.49.0",
  "uuid",
  "waker-fn",
  "web-time",
@@ -5272,7 +5272,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.49.0",
  "thiserror 2.0.21",
- "usvg",
+ "usvg 0.50.0",
 ]
 
 [[package]]
@@ -6934,7 +6934,7 @@ dependencies = [
  "rgb",
  "svgtypes",
  "tiny-skia",
- "usvg",
+ "usvg 0.49.0",
  "zune-jpeg",
 ]
 
@@ -9053,6 +9053,25 @@ dependencies = [
  "unicode-script",
  "unicode-vo",
  "xmlwriter",
+]
+
+[[package]]
+name = "usvg"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802"
+dependencies = [
+ "data-url",
+ "imagesize",
+ "kurbo",
+ "log",
+ "pico-args",
+ "roxmltree 0.21.2",
+ "simplecss",
+ "siphasher",
+ "strict-num",
+ "svgtypes",
+ "tiny-skia-path",
 ]
 
 [[package]]
