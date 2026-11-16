@@ -243,7 +243,10 @@ impl Render for TextInput {
         let mut input = input
             .flex()
             .track_focus(&focus)
-            .key_context("TextInput")
+            .key_context(crate::focus_order::key_context(
+                "TextInput",
+                self.tab != TextInputTab::MoveFocus,
+            ))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::backspace))

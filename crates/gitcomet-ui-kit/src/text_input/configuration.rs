@@ -11,7 +11,10 @@ impl TextInput {
     }
 
     pub(super) fn from_options(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let focus_handle = cx
+            .focus_handle()
+            .tab_index(options.tab_index)
+            .tab_stop(!(options.read_only && options.chromeless));
         let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
             this.clear_selection_on_ownership_loss(cx);
         });
@@ -32,6 +35,8 @@ impl TextInput {
             min_lines: options.min_lines,
             display_truncation: None,
             masked: false,
+            tab: options.tab,
+            tab_stop_override: None,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             tab_size: TEXT_INPUT_WRAP_TAB_STOP_COLUMNS,
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
@@ -85,6 +90,7 @@ impl TextInput {
             return;
         }
         self.chromeless = chromeless;
+        self.sync_tab_stop();
         self.invalidate_layout_caches();
         cx.notify();
     }
@@ -245,6 +251,46 @@ impl TextInput {
         std::mem::take(&mut self.interaction.arrow_down_pressed)
     }
 
+    /// What Tab and Shift-Tab do while the input has focus.
+    pub fn set_tab(&mut self, tab: TextInputTab, cx: &mut Context<Self>) {
+        if self.tab != tab {
+            self.tab = tab;
+            // The key context carries the setting, so the next frame must
+            // rebuild it.
+            cx.notify();
+        }
+    }
+
+    pub fn tab(&self) -> TextInputTab {
+        self.tab
+    }
+
+    /// The input's position in its form's Tab order: lower indices come
+    /// first, equal ones in paint order. See [`crate::focus_order`].
+    pub fn set_tab_index(&mut self, index: isize) {
+        self.focus_handle = self.focus_handle.clone().tab_index(index);
+    }
+
+    /// Whether Tab stops at the input. Inputs are stops unless they are
+    /// selectable text (read-only and chromeless); one that is not is still
+    /// focused by pointer.
+    pub fn set_tab_stop(&mut self, tab_stop: bool) {
+        self.tab_stop_override = Some(tab_stop);
+        self.sync_tab_stop();
+    }
+
+    /// Selectable text is not a field: Tab passes over it, as a browser passes
+    /// over text on a page.
+    fn sync_tab_stop(&mut self) {
+        let tab_stop = self
+            .tab_stop_override
+            .unwrap_or(!(self.read_only && self.chromeless));
+        if self.focus_handle.tab_stop != tab_stop {
+            self.focus_handle = self.focus_handle.clone().tab_stop(tab_stop);
+        }
+    }
+
+    /// Set while Tab is [`TextInputTab::Report`]ed, until taken.
     pub fn take_tab_pressed(&mut self) -> bool {
         std::mem::take(&mut self.interaction.tab_pressed)
     }
@@ -266,6 +312,7 @@ impl TextInput {
             return;
         }
         self.read_only = read_only;
+        self.sync_tab_stop();
         if !self.read_only && self.display_truncation.is_some() {
             self.display_truncation = None;
             self.invalidate_layout_caches();

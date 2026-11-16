@@ -1177,6 +1177,8 @@ impl CommandPaletteView {
                 components::TextInputOptions {
                     placeholder: "Search commands…".into(),
                     chromeless: true,
+                    // Tab walks the command list.
+                    tab: components::TextInputTab::Report,
                     ..Default::default()
                 },
                 window,

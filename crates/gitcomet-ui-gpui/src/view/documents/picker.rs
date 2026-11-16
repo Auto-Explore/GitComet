@@ -104,6 +104,8 @@ impl DocumentPicker {
                     placeholder: "Search recent files or type a path…".into(),
                     leading_icon: Some("icons/zoom.svg"),
                     chromeless: true,
+                    // Tab walks the file list.
+                    tab: TextInputTab::Report,
                     ..Default::default()
                 },
                 cx,

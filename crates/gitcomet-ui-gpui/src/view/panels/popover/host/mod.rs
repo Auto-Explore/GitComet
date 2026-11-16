@@ -800,8 +800,7 @@ impl PopoverHost {
         }
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let prompt_tab_wrap_end_focus_handle = cx.focus_handle().tab_index(1).tab_stop(false);
+        let prompt_tab_scope = TabScope::new(cx);
         let create_branch_from_ref_checkout_focus_handle =
             cx.focus_handle().tab_index(0).tab_stop(true);
         let create_branch_from_ref_focus = DialogFocus::new(cx);
@@ -901,8 +900,7 @@ impl PopoverHost {
             markdown_image_approval: None,
             active_invoker: None,
             popover_opened_from_diff_panel: false,
-            prompt_tab_group_focus_handle,
-            prompt_tab_wrap_end_focus_handle,
+            prompt_tab_scope,
             context_menu_selected_ix: None,
             worktree_menu_location: None,
             worktree_menu_location_task: None,
@@ -1491,6 +1489,51 @@ impl PopoverHost {
         self.popover.is_some()
     }
 
+    /// A picker's search field walks its list with Tab; inside a prompt the
+    /// same field is one of the form's fields, and Tab leaves it.
+    fn sync_search_input_tab(&self, cx: &mut gpui::Context<Self>) {
+        let tab = if self.prompt_tab_navigation_enabled() {
+            components::TextInputTab::MoveFocus
+        } else {
+            components::TextInputTab::Report
+        };
+        for input in [
+            &self.repo_picker_search_input,
+            &self.branch_picker_search_input,
+            &self.remote_picker_search_input,
+            &self.worktree_picker_search_input,
+            &self.worktree_badge_picker_search_input,
+            &self.submodule_picker_search_input,
+            &self.stash_picker_search_input,
+            &self.file_history_file_picker_search_input,
+            &self.history_author_filter_search_input,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            input.update(cx, |input, cx| input.set_tab(tab, cx));
+        }
+    }
+
+    /// Modal dialogs keep Tab inside them; anchored menus and pickers answer
+    /// it themselves.
+    pub(super) fn popover_keeps_tab_inside(&self) -> bool {
+        self.prompt_tab_navigation_enabled()
+            || matches!(
+                self.popover,
+                Some(PopoverKind::HookActivity { .. })
+                    | Some(PopoverKind::Hosted { menu: false, .. })
+                    | Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+                        ..
+                    })
+                    | Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+                        ..
+                    })
+            )
+    }
+
     pub(super) fn prompt_tab_navigation_enabled(&self) -> bool {
         matches!(
             self.popover,
@@ -1526,61 +1569,6 @@ impl PopoverHost {
                     ..
                 })
         ) || self.popover.as_ref().is_some_and(popover_is_confirm_dialog)
-    }
-
-    pub(super) fn wrap_prompt_focus(
-        &mut self,
-        forward: bool,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if forward {
-            window.focus(&self.prompt_tab_group_focus_handle, cx);
-            window.focus_next(cx);
-        } else {
-            window.focus(&self.prompt_tab_wrap_end_focus_handle, cx);
-            window.focus_prev(cx);
-        }
-    }
-
-    pub(super) fn focus_next_prompt_field(
-        &mut self,
-        _: &crate::view::PopoverPromptTabNext,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.prompt_tab_navigation_enabled() {
-            return;
-        }
-
-        window.focus_next(cx);
-        if !self
-            .prompt_tab_group_focus_handle
-            .contains_focused(window, cx)
-        {
-            self.wrap_prompt_focus(true, window, cx);
-        }
-        cx.stop_propagation();
-    }
-
-    pub(super) fn focus_prev_prompt_field(
-        &mut self,
-        _: &crate::view::PopoverPromptTabPrev,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.prompt_tab_navigation_enabled() {
-            return;
-        }
-
-        window.focus_prev(cx);
-        if !self
-            .prompt_tab_group_focus_handle
-            .contains_focused(window, cx)
-        {
-            self.wrap_prompt_focus(false, window, cx);
-        }
-        cx.stop_propagation();
     }
 
     /// A force prompt lives in shared state and must be dismissed there too,
@@ -1990,7 +1978,7 @@ impl PopoverHost {
                     self.error_details_text = Default::default();
                     self.error_details_scroll = ScrollHandle::new();
                     self.error_details_rail_scroll = ScrollHandle::new();
-                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                    window.focus(self.prompt_tab_scope.container(), cx);
                 }
                 PopoverKind::HookActivity {
                     repo_id,
@@ -2461,14 +2449,14 @@ impl PopoverHost {
                 }
                 PopoverKind::FilesystemConflict(_) => {
                     self.filesystem_conflict_apply_to_all = false;
-                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                    window.focus(self.prompt_tab_scope.container(), cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::RemoveConfirm { .. }),
                     ..
                 } => {
                     self.worktree_remove_delete_branch = false;
-                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                    window.focus(self.prompt_tab_scope.container(), cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which
                 // would otherwise swallow it and park focus on the tab group
@@ -2482,12 +2470,13 @@ impl PopoverHost {
                     self.prepare_add_to_gitignore(repo_id, area, &path, window, cx);
                 }
                 k if popover_is_confirm_dialog(k) => {
-                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                    window.focus(self.prompt_tab_scope.container(), cx);
                 }
                 _ => {}
             }
             self.popover = Some(kind);
         }
+        self.sync_search_input_tab(cx);
         if let Some(popover) = self.popover.as_ref() {
             self.notify_fingerprint =
                 fingerprint::notify_fingerprint(&self.state, popover, self.store.binding);

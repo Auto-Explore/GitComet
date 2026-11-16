@@ -1152,12 +1152,34 @@ impl TextInput {
     pub(super) fn on_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
 
-        if event.keystroke.modifiers.modified() {
+        // Tab moving focus is a binding, answered before keys reach here; an
+        // input that keeps Tab sees both Tab and Shift-Tab.
+        if key == "tab"
+            && self.tab != TextInputTab::MoveFocus
+            && !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
+        {
+            if modifiers.shift {
+                self.interaction.shift_tab_pressed = true;
+            } else {
+                self.interaction.tab_pressed = true;
+                if self.tab == TextInputTab::Insert {
+                    // Typed here rather than left to the platform, which
+                    // delivers no tab character on some systems.
+                    self.replace_text_in_range(None, "\t", window, cx);
+                }
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+
+        if modifiers.modified() {
             return;
         }
 
@@ -1166,8 +1188,6 @@ impl TextInput {
             cx.notify();
             return;
         }
-
-        let shift = event.keystroke.modifiers.shift;
 
         if key == "up" {
             // Intentionally duplicated with the Up action handler (up()).
@@ -1181,16 +1201,6 @@ impl TextInput {
         if key == "down" {
             // Intentionally duplicated with the Down action handler (down()).
             self.interaction.arrow_down_pressed = true;
-            cx.notify();
-            return;
-        }
-
-        if key == "tab" {
-            if shift {
-                self.interaction.shift_tab_pressed = true;
-            } else {
-                self.interaction.tab_pressed = true;
-            }
             cx.notify();
         }
     }

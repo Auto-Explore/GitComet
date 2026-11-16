@@ -1816,7 +1816,7 @@ fn branch_exists_prompt_owns_focus_tabs_within_actions_and_escape_cancels(
         assert_window_focus(
             window,
             app,
-            host.prompt_tab_group_focus_handle.clone(),
+            host.prompt_tab_scope.container().clone(),
             "expected the confirmation dialog to take focus from the hidden branch input",
         );
     });

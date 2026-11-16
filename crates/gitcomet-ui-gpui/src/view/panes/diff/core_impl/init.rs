@@ -91,6 +91,7 @@ impl DiffRenderer {
                     placeholder: "Resolve file contents…".into(),
                     multiline: true,
                     chromeless: true,
+                    tab: components::TextInputTab::Insert,
                     ..Default::default()
                 },
                 window,
@@ -172,6 +173,7 @@ impl DiffRenderer {
                 components::TextInputOptions {
                     multiline: true,
                     chromeless: true,
+                    tab: components::TextInputTab::Insert,
                     ..Default::default()
                 },
                 window,

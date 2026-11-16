@@ -722,3 +722,108 @@ fn long_truncated_values_never_widen_their_dialog(cx: &mut gpui::TestAppContext)
         assert_eq!(widths[0], widths[1], "a long value truncates instead");
     }
 }
+
+/// An extension's own form for the hosted-dialog test below.
+struct HostedForm {
+    first: gpui::Entity<components::TextInput>,
+    second: gpui::Entity<components::TextInput>,
+}
+
+impl gpui::Render for HostedForm {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(self.first.clone())
+            .child(self.second.clone())
+    }
+}
+
+/// An extension's dialog is a form Tab does not leave: past its Close button
+/// Tab wraps to the first field, never onto the window behind the scrim.
+#[gpui::test]
+fn hosted_extension_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+    let form = cx.update(|window, app| {
+        let mut input = || {
+            app.new(|cx| {
+                components::TextInput::new(components::TextInputOptions::default(), window, cx)
+            })
+        };
+        let (first, second) = (input(), input());
+        app.new(|_| HostedForm { first, second })
+    });
+    cx.update(|window, app| {
+        let content: gpui::AnyView = form.clone().into();
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_extension_dialog(1, "Form".into(), content, window, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let first = form.read(app).first.read(app).focus_handle();
+        window.focus(&first, app);
+        let _ = window.draw(app);
+    });
+
+    let field = |app: &gpui::App, second: bool| {
+        let form = form.read(app);
+        let input = if second { &form.second } else { &form.first };
+        input.read(app).focus_handle()
+    };
+    let press = |cx: &mut gpui::VisualTestContext, keys: &str| {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+
+    press(cx, "tab");
+    cx.update(|window, app| {
+        assert_window_focus(
+            window,
+            app,
+            field(app, true),
+            "Tab reaches the second field",
+        );
+    });
+    press(cx, "tab");
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            host.prompt_tab_scope.contains_focused(window, app)
+                && !field(app, false).is_focused(window)
+                && !field(app, true).is_focused(window),
+            "Tab moves on to the dialog's Close button"
+        );
+    });
+    press(cx, "tab");
+    cx.update(|window, app| {
+        assert_window_focus(
+            window,
+            app,
+            field(app, false),
+            "Tab wraps to the first field",
+        );
+    });
+    press(cx, "shift-tab shift-tab");
+    cx.update(|window, app| {
+        assert_window_focus(window, app, field(app, true), "Shift-Tab wraps back");
+        let form = form.read(app);
+        assert_eq!(form.first.read(app).text(), "", "Tab typed nothing");
+        assert_eq!(form.second.read(app).text(), "", "Tab typed nothing");
+    });
+}

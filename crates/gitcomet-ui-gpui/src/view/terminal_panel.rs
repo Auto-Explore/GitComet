@@ -1110,7 +1110,7 @@ impl GitCometView {
                 6.0,
                 self.ui_scale_percent,
             ))
-            .key_context("Terminal")
+            .key_context(gitcomet_ui_kit::focus_order::key_context("Terminal", true))
             .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {

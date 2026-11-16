@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
+use crate::kit::focus_order::TabScopeExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 impl Render for SettingsWindowView {
@@ -209,10 +210,10 @@ impl Render for SettingsWindowView {
                 dialog.content.clone(),
                 dialog.anchor,
                 dialog.menu,
-                dialog.focus.clone(),
+                dialog.tab_scope.clone(),
             )
         });
-        root.when_some(dialog, |root, (title, view, anchor, menu, focus)| {
+        root.when_some(dialog, |root, (title, view, anchor, menu, tab_scope)| {
             if let (true, Some(anchor)) = (menu, anchor) {
                 // A menu is a context menu, as in the main window: its view
                 // draws the kit's menu surface, and a click outside it closes it.
@@ -222,9 +223,7 @@ impl Render for SettingsWindowView {
                 let menu = components::popover_surface(theme)
                     .id("settings_hosted_dialog")
                     .debug_selector(|| "settings_hosted_dialog".to_string())
-                    .track_focus(&focus)
-                    .tab_group()
-                    .tab_stop(false)
+                    .tab_scope(&tab_scope)
                     .on_key_down(cx.listener(Self::hosted_dialog_key))
                     .occlude()
                     .min_w(ui_scale.px(180.0))
@@ -265,9 +264,7 @@ impl Render for SettingsWindowView {
             let dialog = surface
                 .id("settings_hosted_dialog")
                 .debug_selector(|| "settings_hosted_dialog".to_string())
-                .track_focus(&focus)
-                .tab_group()
-                .tab_stop(false)
+                .tab_scope(&tab_scope)
                 .on_key_down(cx.listener(Self::hosted_dialog_key))
                 .w(ui_scale.px(384.0))
                 .max_h_full()

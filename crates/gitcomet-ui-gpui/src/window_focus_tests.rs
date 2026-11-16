@@ -53,7 +53,10 @@ impl Render for FocusFixture {
 
 #[gpui::test]
 fn tab_can_start_focus_after_window_blur(cx: &mut gpui::TestAppContext) {
-    let _tab_navigation = cx.update(observe_tab_navigation);
+    cx.update(|app| {
+        app.bind_keys(gitcomet_ui_kit::focus_order::key_bindings());
+        gitcomet_ui_kit::focus_order::install(app);
+    });
     let (view, cx) = cx.add_window_view(FocusFixture::new);
     refresh_and_draw(cx);
     for (key, expected) in [("tab", 0), ("shift-tab", 1)] {
@@ -62,19 +65,21 @@ fn tab_can_start_focus_after_window_blur(cx: &mut gpui::TestAppContext) {
         cx.run_until_parked();
         refresh_and_draw(cx);
         cx.simulate_keystrokes(key);
+        cx.run_until_parked();
         cx.update(|window, app| {
             assert!(is_active(
                 &view.read(app).inputs[expected].read(app).focus_handle(),
                 window
             ));
         });
-        // A Tab that already has an owner must not be stolen by the fallback.
+        // The next Tab leaves the input for the control between them, as a
+        // browser form does, and types nothing.
         cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        refresh_and_draw(cx);
         cx.update(|window, app| {
-            assert!(is_active(
-                &view.read(app).inputs[expected].read(app).focus_handle(),
-                window
-            ));
+            assert!(view.read(app).between_inputs.is_focused(window));
+            assert_eq!(view.read(app).inputs[expected].read(app).text(), "");
         });
     }
     // Navigation must also pass through non-text controls on the way back
@@ -86,6 +91,7 @@ fn tab_can_start_focus_after_window_blur(cx: &mut gpui::TestAppContext) {
         });
         refresh_and_draw(cx);
         cx.simulate_keystrokes(key);
+        cx.run_until_parked();
         cx.update(|window, app| {
             assert!(is_active(
                 &view.read(app).inputs[expected].read(app).focus_handle(),

@@ -551,6 +551,24 @@ pub struct TextInputOptions {
     pub soft_wrap: bool,
     /// Minimum number of visible text rows. Only effective when `multiline: true`.
     pub min_lines: u32,
+    /// What Tab and Shift-Tab do while the input has focus.
+    pub tab: TextInputTab,
+    /// Position in its form's Tab order; see [`crate::focus_order`].
+    pub tab_index: isize,
+}
+
+/// What Tab and Shift-Tab do in a [`TextInput`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextInputTab {
+    /// Move focus to the next or previous field, as in a browser form.
+    #[default]
+    MoveFocus,
+    /// Keep focus and report the key through `take_tab_pressed` and
+    /// `take_shift_tab_pressed`, typing nothing. Pickers move their selection
+    /// with it.
+    Report,
+    /// Type a tab character, as a code editor does.
+    Insert,
 }
 
 impl TextInputOptions {
@@ -934,6 +952,10 @@ pub struct TextInput {
     pub(super) min_lines: u32,
     pub(super) display_truncation: Option<TextTruncationProfile>,
     pub(super) masked: bool,
+    pub(super) tab: TextInputTab,
+    /// Set by `set_tab_stop`; otherwise an input is a Tab stop unless it is
+    /// selectable text.
+    pub(super) tab_stop_override: Option<bool>,
     pub(super) line_ending: &'static str,
     /// Columns a tab advances to when shaped.
     pub(super) tab_size: usize,

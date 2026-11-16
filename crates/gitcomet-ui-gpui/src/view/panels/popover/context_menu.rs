@@ -374,7 +374,11 @@ impl PopoverHost {
             .flex_col()
             .min_h(px(0.0))
             .track_focus(&self.context_menu_focus_handle)
-            .key_context("ContextMenu")
+            // A menu keeps Tab, as menus do; the arrows move here.
+            .key_context(gitcomet_ui_kit::focus_order::key_context(
+                "ContextMenu",
+                true,
+            ))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
                     match event.keystroke.key.as_str() {
@@ -1387,7 +1391,11 @@ impl PopoverHost {
             .min_w(width.min_px(ui_scale))
             .max_w(width.max_px(ui_scale))
             .track_focus(&focus)
-            .key_context("ContextMenu")
+            // Tab moves the selection.
+            .key_context(gitcomet_ui_kit::focus_order::key_context(
+                "ContextMenu",
+                true,
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {

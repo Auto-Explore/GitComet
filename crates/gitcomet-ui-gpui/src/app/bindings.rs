@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
-    crate::window_focus::observe_tab_navigation(cx).detach();
+    gitcomet_ui_kit::focus_order::install(cx);
     install_global_diff_shortcut_fallback(cx);
     install_global_diff_navigation_actions(cx);
 
@@ -420,8 +420,9 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
             Some("PushUpstreamRemoteSelector"),
         ),
         KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
-        KeyBinding::new("tab", PopoverPromptTabNext, Some("PopoverPrompt")),
-        KeyBinding::new("shift-tab", PopoverPromptTabPrev, Some("PopoverPrompt")),
+    ]);
+    cx.bind_keys(gitcomet_ui_kit::focus_order::key_bindings());
+    cx.bind_keys([
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),

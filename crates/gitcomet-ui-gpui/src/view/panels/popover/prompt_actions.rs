@@ -818,18 +818,8 @@ impl PopoverHost {
         };
 
         let prompt_tab_navigation_enabled = self.prompt_tab_navigation_enabled();
-        let panel = if prompt_tab_navigation_enabled {
-            div()
-                .track_focus(&self.prompt_tab_group_focus_handle)
-                .tab_group()
-                .child(panel)
-                .child(
-                    div()
-                        .track_focus(&self.prompt_tab_wrap_end_focus_handle)
-                        .w(px(0.0))
-                        .h(px(0.0)),
-                )
-                .into_any_element()
+        let panel = if self.popover_keeps_tab_inside() {
+            self.prompt_tab_scope.wrap(panel).into_any_element()
         } else {
             panel
         };
@@ -866,9 +856,7 @@ impl PopoverHost {
         if prompt_tab_navigation_enabled || center_hook_workflow {
             popover_container = popover_container
                 .key_context("PopoverPrompt")
-                .on_action(cx.listener(Self::dismiss_prompt))
-                .on_action(cx.listener(Self::focus_next_prompt_field))
-                .on_action(cx.listener(Self::focus_prev_prompt_field));
+                .on_action(cx.listener(Self::dismiss_prompt));
         }
 
         if is_centered {

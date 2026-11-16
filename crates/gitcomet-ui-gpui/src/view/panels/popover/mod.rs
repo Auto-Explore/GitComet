@@ -2,6 +2,7 @@ use super::*;
 use crate::view::components::ControlInteractionExt;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::services::InteractiveRebaseAction;
+use gitcomet_ui_kit::focus_order::TabScope;
 use std::rc::Rc;
 
 mod add_repo_menu;
@@ -272,8 +273,8 @@ pub(in super::super) struct PopoverHost {
     /// diff panel or the commit details pane, and only the former should hand
     /// focus back to the diff panel when it closes.
     popover_opened_from_diff_panel: bool,
-    prompt_tab_group_focus_handle: FocusHandle,
-    prompt_tab_wrap_end_focus_handle: FocusHandle,
+    /// Keeps Tab inside an open prompt, which is a modal form.
+    prompt_tab_scope: TabScope,
     context_menu_selected_ix: Option<usize>,
     worktree_menu_location: Option<(std::path::PathBuf, bool)>,
     worktree_menu_location_task: Option<gpui::Task<()>>,

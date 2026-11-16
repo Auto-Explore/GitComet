@@ -522,7 +522,9 @@ pub(super) struct SettingsDialog {
     pub anchor: Option<gpui::Point<gpui::Pixels>>,
     /// A context menu: drawn bare at its anchor, closed by a click outside.
     pub menu: bool,
-    pub focus: gpui::FocusHandle,
+    /// Keeps Tab inside the dialog. Focused on its own while the dialog
+    /// opens, so the first Tab enters it.
+    pub tab_scope: gitcomet_ui_kit::focus_order::TabScope,
     previous_focus: Option<gpui::FocusHandle>,
     application_close_prompt: bool,
 }
@@ -548,20 +550,20 @@ impl SettingsHost {
                     .downcast::<super::close_guards::SettingsClosePrompt>()
                     .is_ok_and(|prompt| prompt.read(cx).scope == CloseScope::Application);
                 let _ = view.update(cx, |view, cx| {
-                    let focus = cx.focus_handle();
+                    let tab_scope = gitcomet_ui_kit::focus_order::TabScope::new(cx);
                     let previous_focus = view
                         .extension_dialog
                         .take()
                         .and_then(|dialog| dialog.previous_focus)
                         .or_else(|| window.focused(cx));
-                    window.focus(&focus, cx);
+                    window.focus(tab_scope.container(), cx);
                     view.extension_dialog = Some(SettingsDialog {
                         id,
                         title,
                         content,
                         anchor,
                         menu,
-                        focus,
+                        tab_scope,
                         previous_focus,
                         application_close_prompt,
                     });
@@ -621,28 +623,11 @@ impl SettingsWindowView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(dialog) = &self.extension_dialog else {
+        // Tab is the dialog's tab scope's.
+        if self.extension_dialog.is_none() || event.keystroke.key != "escape" {
             return;
-        };
-        match event.keystroke.key.as_str() {
-            "escape" => self.close_hosted_dialog(window, cx),
-            "tab" => {
-                let focus = dialog.focus.clone();
-                if event.keystroke.modifiers.shift {
-                    window.focus_prev(cx);
-                } else {
-                    window.focus_next(cx);
-                }
-                if !focus.contains_focused(window, cx) {
-                    window.focus(&focus, cx);
-                    window.focus_next(cx);
-                    if !focus.contains_focused(window, cx) {
-                        window.focus(&focus, cx);
-                    }
-                }
-            }
-            _ => return,
         }
+        self.close_hosted_dialog(window, cx);
         cx.stop_propagation();
     }
 }
