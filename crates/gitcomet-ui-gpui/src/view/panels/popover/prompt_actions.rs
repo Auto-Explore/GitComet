@@ -817,12 +817,10 @@ impl PopoverHost {
             panel.into_any_element()
         };
 
-        let prompt_tab_navigation_enabled = self.prompt_tab_navigation_enabled();
-        let panel = if self.popover_keeps_tab_inside() {
-            self.prompt_tab_scope.wrap(panel).into_any_element()
-        } else {
-            panel
-        };
+        // Tab stays inside every popover, as in a modal dialog; menus and
+        // pickers answer it themselves before it gets here.
+        let panel = self.tab_scope.wrap(panel).into_any_element();
+        let popover_is_prompt = self.popover_is_prompt();
 
         // Centered prompts are modal dialogs; anchored popovers (menus,
         // pickers) float just above the content and take the lighter lift.
@@ -853,7 +851,7 @@ impl PopoverHost {
             .p_1()
             .child(panel);
 
-        if prompt_tab_navigation_enabled || center_hook_workflow {
+        if popover_is_prompt || center_hook_workflow {
             popover_container = popover_container
                 .key_context("PopoverPrompt")
                 .on_action(cx.listener(Self::dismiss_prompt));

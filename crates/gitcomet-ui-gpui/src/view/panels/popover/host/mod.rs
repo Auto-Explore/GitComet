@@ -800,33 +800,30 @@ impl PopoverHost {
         }
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let prompt_tab_scope = TabScope::new(cx);
-        let create_branch_from_ref_checkout_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
+        let tab_scope = TabScope::new(cx);
+        let create_branch_from_ref_checkout_focus_handle = focus_order::field(cx);
         let create_branch_from_ref_focus = DialogFocus::new(cx);
         let checkout_remote_branch_focus = DialogFocus::new(cx);
         let stash_focus = DialogFocus::new(cx);
         let commit_prompt_focus = DialogFocus::new(cx);
-        let clone_repo_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let squash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let squash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let rebase_onto_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let clone_repo_browse_focus_handle = focus_order::field(cx);
+        let squash_cancel_focus_handle = focus_order::field(cx);
+        let squash_submit_focus_handle = focus_order::field(cx);
+        let rebase_onto_submit_focus_handle = focus_order::field(cx);
         let clone_repo_focus = DialogFocus::new(cx);
         let create_tag_focus = DialogFocus::new(cx);
-        let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let filesystem_conflict_apply_to_all_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let worktree_remove_delete_branch_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let worktree_add_create_branch_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_tag_annotated_focus_handle = focus_order::field(cx);
+        let filesystem_conflict_apply_to_all_focus_handle = focus_order::field(cx);
+        let worktree_remove_delete_branch_focus_handle = focus_order::field(cx);
+        let worktree_add_create_branch_focus_handle = focus_order::field(cx);
         let remote_add_focus = DialogFocus::new(cx);
         let remote_edit_focus = DialogFocus::new(cx);
         let push_upstream_focus = DialogFocus::new(cx);
-        let push_upstream_remote_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let push_upstream_remote_focus_handle = focus_order::field(cx);
+        let worktree_browse_focus_handle = focus_order::field(cx);
         let worktree_focus = DialogFocus::new(cx);
-        let submodule_advanced_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let submodule_force_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_advanced_focus_handle = focus_order::field(cx);
+        let submodule_force_focus_handle = focus_order::field(cx);
         let submodule_focus = DialogFocus::new(cx);
 
         Self {
@@ -900,7 +897,7 @@ impl PopoverHost {
             markdown_image_approval: None,
             active_invoker: None,
             popover_opened_from_diff_panel: false,
-            prompt_tab_scope,
+            tab_scope,
             context_menu_selected_ix: None,
             worktree_menu_location: None,
             worktree_menu_location_task: None,
@@ -1492,7 +1489,7 @@ impl PopoverHost {
     /// A picker's search field walks its list with Tab; inside a prompt the
     /// same field is one of the form's fields, and Tab leaves it.
     fn sync_search_input_tab(&self, cx: &mut gpui::Context<Self>) {
-        let tab = if self.prompt_tab_navigation_enabled() {
+        let tab = if self.popover_is_prompt() {
             components::TextInputTab::MoveFocus
         } else {
             components::TextInputTab::Report
@@ -1515,26 +1512,11 @@ impl PopoverHost {
         }
     }
 
-    /// Modal dialogs keep Tab inside them; anchored menus and pickers answer
-    /// it themselves.
-    pub(super) fn popover_keeps_tab_inside(&self) -> bool {
-        self.prompt_tab_navigation_enabled()
-            || matches!(
-                self.popover,
-                Some(PopoverKind::HookActivity { .. })
-                    | Some(PopoverKind::Hosted { menu: false, .. })
-                    | Some(PopoverKind::Repo {
-                        kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
-                        ..
-                    })
-                    | Some(PopoverKind::Repo {
-                        kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
-                        ..
-                    })
-            )
-    }
-
-    pub(super) fn prompt_tab_navigation_enabled(&self) -> bool {
+    /// A form the user fills in. Escape dismisses it through
+    /// `dismiss_prompt_popover`, and a picker's search field inside it is one
+    /// of its fields rather than the list's navigator. Tab needs no list:
+    /// every popover keeps it inside (`tab_scope`).
+    pub(super) fn popover_is_prompt(&self) -> bool {
         matches!(
             self.popover,
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
@@ -1649,7 +1631,7 @@ impl PopoverHost {
             cx.stop_propagation();
             return;
         }
-        if !self.prompt_tab_navigation_enabled() {
+        if !self.popover_is_prompt() {
             return;
         }
 
@@ -1978,7 +1960,7 @@ impl PopoverHost {
                     self.error_details_text = Default::default();
                     self.error_details_scroll = ScrollHandle::new();
                     self.error_details_rail_scroll = ScrollHandle::new();
-                    window.focus(self.prompt_tab_scope.container(), cx);
+                    window.focus(self.tab_scope.container(), cx);
                 }
                 PopoverKind::HookActivity {
                     repo_id,
@@ -2449,14 +2431,14 @@ impl PopoverHost {
                 }
                 PopoverKind::FilesystemConflict(_) => {
                     self.filesystem_conflict_apply_to_all = false;
-                    window.focus(self.prompt_tab_scope.container(), cx);
+                    window.focus(self.tab_scope.container(), cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::RemoveConfirm { .. }),
                     ..
                 } => {
                     self.worktree_remove_delete_branch = false;
-                    window.focus(self.prompt_tab_scope.container(), cx);
+                    window.focus(self.tab_scope.container(), cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which
                 // would otherwise swallow it and park focus on the tab group
@@ -2470,7 +2452,7 @@ impl PopoverHost {
                     self.prepare_add_to_gitignore(repo_id, area, &path, window, cx);
                 }
                 k if popover_is_confirm_dialog(k) => {
-                    window.focus(self.prompt_tab_scope.container(), cx);
+                    window.focus(self.tab_scope.container(), cx);
                 }
                 _ => {}
             }
