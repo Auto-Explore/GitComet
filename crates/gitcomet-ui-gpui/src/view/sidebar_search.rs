@@ -51,7 +51,8 @@ impl SidebarSearch {
                 | BranchSidebarRow::WorktreesHeader { .. }
                 | BranchSidebarRow::SubmodulesHeader { .. }
                 | BranchSidebarRow::AnnexHeader { .. }
-                | BranchSidebarRow::StashHeader { .. } => (0, true),
+                | BranchSidebarRow::StashHeader { .. }
+                | BranchSidebarRow::TagsHeader { .. } => (0, true),
                 BranchSidebarRow::RemoteHeader { .. } => (1, true),
                 BranchSidebarRow::GroupHeader { depth, .. } => (usize::from(*depth) + 2, true),
                 BranchSidebarRow::Branch { depth, .. } => (usize::from(*depth) + 2, false),
@@ -79,12 +80,14 @@ impl SidebarSearch {
                 BranchSidebarRow::StashItem { index, message, .. } => self
                     .matcher
                     .is_match(&format!("stash@{{{index}}}: {message}")),
+                BranchSidebarRow::TagItem { name, .. } => self.matcher.is_match(name),
                 BranchSidebarRow::AnnexRepositoryItem { name, .. } => self.matcher.is_match(name),
                 BranchSidebarRow::Placeholder { message, .. }
                 | BranchSidebarRow::WorktreePlaceholder { message }
                 | BranchSidebarRow::SubmodulePlaceholder { message, .. }
                 | BranchSidebarRow::AnnexPlaceholder { message, .. }
-                | BranchSidebarRow::StashPlaceholder { message } => !message.starts_with("No "),
+                | BranchSidebarRow::StashPlaceholder { message }
+                | BranchSidebarRow::TagPlaceholder { message } => !message.starts_with("No "),
                 _ => false,
             };
             if matched {
@@ -213,6 +216,21 @@ mod tests {
                 .project(&rows)
                 .as_slice(),
             [BranchSidebarRow::StashItem { .. }]
+        ));
+    }
+
+    #[test]
+    fn tag_names_are_searchable() {
+        let tag = |name: &str| BranchSidebarRow::TagItem {
+            name: name.to_string().into(),
+            target: gitcomet_core::domain::CommitId("t".into()),
+        };
+        let rows = [tag("v1.2.0"), tag("nightly")];
+        assert!(matches!(
+            SidebarSearch::new("v1.2", Default::default())
+                .project(&rows)
+                .as_slice(),
+            [BranchSidebarRow::TagItem { name, .. }] if name.as_ref() == "v1.2.0"
         ));
     }
 }

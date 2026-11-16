@@ -196,6 +196,11 @@ pub(in crate::view) fn active_sidebar_data_request(
                     collapsed_items,
                     branch_sidebar::stash_section_storage_key(),
                 ),
+            tags: expanded_visible
+                || !branch_sidebar::is_collapsed(
+                    collapsed_items,
+                    branch_sidebar::tags_section_storage_key(),
+                ),
         },
     ))
 }
@@ -380,6 +385,7 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
                     | BranchSidebarRow::SubmoduleItem { .. }
                     | BranchSidebarRow::AnnexRepositoryItem { .. }
                     | BranchSidebarRow::StashItem { .. }
+                    | BranchSidebarRow::TagItem { .. }
             )
         })
         .count();

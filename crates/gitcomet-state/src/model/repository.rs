@@ -265,6 +265,7 @@ pub struct SidebarDataRequest {
     pub worktrees: bool,
     pub submodules: bool,
     pub stashes: bool,
+    pub tags: bool,
 }
 
 /// User-visible repository feedback and bounded activity history.
@@ -611,6 +612,7 @@ impl RepoState {
         }
         self.tags = tags;
         self.tags_rev = self.tags_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_remote_tags(&mut self, remote_tags: Loadable<Vec<RemoteTag>>) {
@@ -912,6 +914,7 @@ impl RepoState {
                 self.worktrees_rev,
                 self.submodules_rev,
                 self.stashes_rev,
+                self.tags_rev,
             ])
         }
     }
@@ -1268,7 +1271,7 @@ const BRANCH_SIDEBAR_REV_MIX: u64 = 0x9e37_79b9_7f4a_7c15;
 const STATUS_CACHE_REV_MIX: u64 = 0x517c_c1b7_2722_0a95;
 
 #[inline]
-fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
+fn mix_branch_sidebar_revs(values: [u64; 8]) -> u64 {
     let mut acc = BRANCH_SIDEBAR_REV_MIX;
     for value in values {
         acc ^= value.wrapping_mul(BRANCH_SIDEBAR_REV_MIX);

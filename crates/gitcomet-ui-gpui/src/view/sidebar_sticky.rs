@@ -176,6 +176,7 @@ pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
         | BranchSidebarRow::SubmodulesHeader { collapse_key, .. }
         | BranchSidebarRow::AnnexHeader { collapse_key, .. }
         | BranchSidebarRow::StashHeader { collapse_key, .. }
+        | BranchSidebarRow::TagsHeader { collapse_key, .. }
         | BranchSidebarRow::RemoteHeader { collapse_key, .. }
         | BranchSidebarRow::GroupHeader { collapse_key, .. } => Some(collapse_key),
         _ => None,
@@ -194,6 +195,7 @@ pub(super) fn row_key(row: &BranchSidebarRow) -> SharedString {
         }
         BranchSidebarRow::AnnexRepositoryItem { uuid, .. } => format!("annex:{uuid}").into(),
         BranchSidebarRow::StashItem { id, .. } => format!("stash:{}", id.0).into(),
+        BranchSidebarRow::TagItem { name, .. } => format!("tag:{name}").into(),
         _ => header_key(row)
             .cloned()
             .unwrap_or_else(|| format!("{row:?}").into()),
@@ -361,6 +363,9 @@ pub(super) fn same_row(a: &BranchSidebarRow, b: &BranchSidebarRow) -> bool {
             BranchSidebarRow::SubmoduleItem { path: b, .. },
         ) => a == b,
         (BranchSidebarRow::StashItem { id: a, .. }, BranchSidebarRow::StashItem { id: b, .. }) => {
+            a == b
+        }
+        (BranchSidebarRow::TagItem { name: a, .. }, BranchSidebarRow::TagItem { name: b, .. }) => {
             a == b
         }
         (

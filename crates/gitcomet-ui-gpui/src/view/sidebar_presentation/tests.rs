@@ -499,6 +499,28 @@ fn active_sidebar_data_request_respects_repo_collapse_state() {
 }
 
 #[test]
+fn active_sidebar_data_request_requests_tags_when_visible_or_expanded() {
+    let state = AppState {
+        active_repo: Some(RepoId(1)),
+        repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+        ..AppState::test_default()
+    };
+    let tags = |collapsed: BTreeSet<String>, visible| {
+        let items = BTreeMap::from([(PathBuf::from("/tmp/repo"), collapsed)]);
+        active_sidebar_data_request(&state, &items, visible)
+            .expect("request exists")
+            .1
+            .tags
+    };
+    assert!(tags(BTreeSet::new(), true));
+    assert!(!tags(BTreeSet::new(), false));
+    assert!(tags(
+        BTreeSet::from(["expanded:section:tags".into()]),
+        false
+    ));
+}
+
+#[test]
 fn build_sidebar_presentation_reloads_worktree_row_branch_after_worktree_refresh() {
     let mut repo = repo_state(RepoId(1), "/tmp/repo");
     repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {

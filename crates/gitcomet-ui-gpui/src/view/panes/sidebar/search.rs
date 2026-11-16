@@ -15,6 +15,7 @@ fn is_searchable_branch_row(row: &BranchSidebarRow) -> bool {
             | BranchSidebarRow::SubmoduleItem { .. }
             | BranchSidebarRow::AnnexRepositoryItem { .. }
             | BranchSidebarRow::StashItem { .. }
+            | BranchSidebarRow::TagItem { .. }
     )
 }
 
@@ -427,6 +428,9 @@ impl SidebarPaneView {
                         Some(CollapsedSidebarSection::Stashes) => {
                             matches!(repo.stashes, Loadable::Ready(_) | Loadable::Error(_))
                         }
+                        Some(CollapsedSidebarSection::Tags) => {
+                            matches!(repo.tags, Loadable::Ready(_) | Loadable::Error(_))
+                        }
                         Some(CollapsedSidebarSection::Annex) => matches!(
                             repo.large_file_support,
                             Loadable::Ready(_) | Loadable::Error(_)
@@ -445,7 +449,8 @@ impl SidebarPaneView {
                                     repo.submodules,
                                     Loadable::Ready(_) | Loadable::Error(_)
                                 )
-                                && matches!(repo.stashes, Loadable::Ready(_) | Loadable::Error(_)))
+                                && matches!(repo.stashes, Loadable::Ready(_) | Loadable::Error(_))
+                                && matches!(repo.tags, Loadable::Ready(_) | Loadable::Error(_)))
                         }
                     });
             presentation.map_or((true, false, 0, complete), |p| {
@@ -690,7 +695,9 @@ impl SidebarPaneView {
                     sticky::NavigationTarget::RowKey(format!("tree:stash:{}", selected.0).into())
                 })
             }
-            CollapsedSidebarSection::Annex | CollapsedSidebarSection::Files => None,
+            CollapsedSidebarSection::Annex
+            | CollapsedSidebarSection::Tags
+            | CollapsedSidebarSection::Files => None,
         }
     }
 
@@ -1017,6 +1024,42 @@ mod tests {
         cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(false, cx)));
         test_support::redraw(cx);
         assert!(cx.debug_bounds("sidebar_branches_search").is_none());
+    }
+
+    #[gpui::test]
+    fn tag_search_match_rows_include_tag_rows(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+        let mut state = (*super::super::long_list_tests::branch_fixture(3)).clone();
+        state.repos[0].tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
+            name: "release-needle".into(),
+            target: CommitId("a".into()),
+        }]));
+        let state = Arc::new(state);
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.store.replace_snapshot_for_test(state.clone());
+                test_support::push_test_state(view, state, cx);
+                view.set_sidebar_collapsed(false, cx);
+                view.sidebar_pane
+                    .update(cx, |pane, _| pane.branch_filter_query = "needle".into());
+            })
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            pane.update(app, |pane, _| {
+                let rows = pane.branch_search_match_rows();
+                let presentation = pane.branch_sidebar_presentation_cached().unwrap();
+                let tag_ix = presentation
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, BranchSidebarRow::TagItem { .. }))
+                    .expect("tag row");
+                assert_eq!(rows, vec![tag_ix]);
+            })
+        });
     }
 
     #[gpui::test]

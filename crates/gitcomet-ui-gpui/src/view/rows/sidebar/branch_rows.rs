@@ -500,6 +500,17 @@ impl SidebarPaneView {
                     tooltip,
                     ..
                 } => Self::sidebar_stash_item_row(this, &ctx, slot, index, message, tooltip, cx),
+                BranchSidebarRow::TagsHeader {
+                    top_border: _,
+                    collapsed,
+                    collapse_key,
+                } => Self::sidebar_tags_header_row(this, &ctx, slot, collapsed, collapse_key, cx),
+                BranchSidebarRow::TagPlaceholder { message } => {
+                    ctx.placeholder_row("tag_placeholder", slot.ix, message)
+                }
+                BranchSidebarRow::TagItem { name, target } => {
+                    Self::sidebar_tag_item_row(this, &ctx, slot, name, target, cx)
+                }
                 BranchSidebarRow::Placeholder {
                     section: _,
                     message,

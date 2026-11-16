@@ -97,6 +97,95 @@ impl SidebarPaneView {
             .into_any_element()
     }
 
+    /// One tag; click reveals its commit, right-click opens the tag actions.
+    pub(super) fn sidebar_tag_item_row(
+        this: &Self,
+        ctx: &SidebarRowContext,
+        slot: SidebarRowSlot,
+        name: SharedString,
+        target: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let SidebarRowSlot { ix, row_style, .. } = slot;
+        let theme = ctx.theme;
+        let repo_id = ctx.repo_id;
+        let context_menu_invoker: SharedString = format!("tag_menu_{}_{}", repo_id.0, name).into();
+        let context_menu_active =
+            this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+        let row_group: SharedString = format!("tag_row_{}_{}", repo_id.0, name).into();
+        let row_state = components::InteractiveRowState::default().open(context_menu_active);
+        let target_for_click = target.clone();
+        let tooltip_name = name.clone();
+
+        div()
+            .id(("tag_sidebar_row", ix))
+            .debug_selector(move || format!("tag_sidebar_row_{ix}"))
+            .relative()
+            .group(row_group.clone())
+            .flex()
+            .items_center()
+            .gap(ctx.px(BRANCH_TREE_GAP_PX))
+            .pl(ctx.indent_px(0))
+            .pr(ctx.trailing_pad())
+            .h(ctx.row_height())
+            .w_full()
+            .interactive_row(row_style, row_state)
+            .child(ctx.tree_toggle_slot(None))
+            .child(ctx.tree_icon_slot("icons/tag.svg", ctx.icon_primary, 14.0))
+            .child(
+                components::FadingText::new(
+                    div()
+                        .text_size(theme.ui_text(14.0))
+                        .child(filtered_label_element(
+                            name.clone(),
+                            None,
+                            &ctx.filter_query,
+                            theme.colors.foreground.primary,
+                            theme.colors.accent.foreground,
+                            theme.ui_text(14.0).into(),
+                            FontWeight::NORMAL,
+                            cx,
+                        )),
+                    row_style.resolved_background(row_state),
+                )
+                .hover_bg(
+                    row_group.clone(),
+                    row_style.resolved_hover_background(row_state),
+                )
+                .render(ctx.ui_scale_percent)
+                .flex_1(),
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() || e.click_count() != 1 {
+                        return;
+                    }
+                    this.reveal_tag_commit(repo_id, target_for_click.clone(), cx);
+                }),
+            )
+            .on_pointer_click(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_popover_at(
+                        (PopoverKind::TagMenu {
+                            repo_id,
+                            commit_id: target.clone(),
+                            name: Some(name.to_string()),
+                        })
+                        .invoked_by(context_menu_invoker.clone()),
+                        e.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .gitcomet_tooltip(theme, tooltip_name)
+            .into_any_element()
+    }
+
     /// One linked worktree with its branch pill; double-click opens it.
     pub(super) fn sidebar_worktree_item_row(
         this: &Self,

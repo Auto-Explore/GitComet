@@ -664,9 +664,14 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(file_history_commit::model(self, *repo_id, commit_id, path)),
-            PopoverKind::TagMenu { repo_id, commit_id } => {
-                Some(tag::model(self, *repo_id, commit_id))
-            }
+            PopoverKind::TagMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => Some(match name {
+                Some(name) => tag::model_for_tag(self, *repo_id, commit_id, name),
+                None => tag::model(self, *repo_id, commit_id),
+            }),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

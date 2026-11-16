@@ -914,3 +914,83 @@ fn a_remote_hidden_from_history_marks_its_header_and_changes_the_cache_source() 
     );
     assert!(branch_sidebar_source_matches_cached(&repo, &parts));
 }
+
+fn tag_names(rows: &[BranchSidebarRow]) -> Vec<String> {
+    rows.iter()
+        .filter_map(|row| match row {
+            BranchSidebarRow::TagItem { name, .. } => Some(name.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn tag_rows_for(tags: Loadable<Arc<Vec<gitcomet_core::domain::Tag>>>) -> Vec<BranchSidebarRow> {
+    let mut repo = populated_repo();
+    repo.tags = tags;
+    expanded_sidebar_rows(&repo, &BTreeSet::new(), "")
+}
+
+fn tag(name: &str) -> gitcomet_core::domain::Tag {
+    gitcomet_core::domain::Tag {
+        name: name.into(),
+        target: commit_id("eeeeeeee"),
+    }
+}
+
+#[test]
+fn tag_rows_sort_versions_newest_first_without_overflow() {
+    let long = format!("v{}", "9".repeat(60));
+    let rows = tag_rows_for(Loadable::Ready(Arc::new(vec![
+        tag("v1.9"),
+        tag("v1.10"),
+        tag("v01.9"),
+        tag(&long),
+        tag("v1"),
+    ])));
+    let names = tag_names(&rows);
+    assert_eq!(names[0], long);
+    let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
+    assert!(pos("v1.10") < pos("v1.9"));
+    assert!(pos("v1.9") < pos("v1"));
+}
+
+#[test]
+fn tag_rows_come_after_the_stash_rows() {
+    let rows = tag_rows_for(Loadable::Ready(Arc::new(vec![tag("v1")])));
+    let stash = rows
+        .iter()
+        .position(|r| matches!(r, BranchSidebarRow::StashItem { .. }))
+        .unwrap();
+    let header = rows
+        .iter()
+        .position(|r| matches!(r, BranchSidebarRow::TagsHeader { .. }))
+        .unwrap();
+    let item = rows
+        .iter()
+        .position(|r| matches!(r, BranchSidebarRow::TagItem { .. }))
+        .unwrap();
+    assert!(stash < header && header < item);
+    assert!(matches!(rows[header - 1], BranchSidebarRow::SectionSpacer));
+}
+
+#[test]
+fn tag_placeholder_messages_follow_the_loadable_state() {
+    let message = |tags| {
+        tag_rows_for(tags)
+            .into_iter()
+            .find_map(|row| match row {
+                BranchSidebarRow::TagPlaceholder { message } => Some(message.to_string()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(message(Loadable::Ready(Arc::new(Vec::new()))), "No tags");
+    assert_eq!(message(Loadable::Loading), "Loading");
+    assert_eq!(message(Loadable::NotLoaded), "Loading");
+    assert_eq!(message(Loadable::Error("boom".into())), "boom");
+}
+
+#[test]
+fn tag_section_defaults_to_collapsed() {
+    assert!(is_collapsed(&BTreeSet::new(), tags_section_storage_key()));
+}
