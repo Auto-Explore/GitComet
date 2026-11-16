@@ -228,6 +228,8 @@ pub(super) fn render_collapsed_diff_rows(
     pass: DiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    this.ensure_file_diff_side_syntax(DiffTextRegion::SplitLeft, cx);
+    this.ensure_file_diff_side_syntax(DiffTextRegion::SplitRight, cx);
     let mark_lines = !this.structural_diff_active();
     let DiffRowsRenderPass {
         tab_width,
@@ -493,6 +495,8 @@ pub(super) fn render_file_diff_rows(
     pass: DiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    this.ensure_file_diff_side_syntax(DiffTextRegion::SplitLeft, cx);
+    this.ensure_file_diff_side_syntax(DiffTextRegion::SplitRight, cx);
     let mark_lines = !this.structural_diff_active();
     let DiffRowsRenderPass {
         tab_width,
@@ -869,6 +873,7 @@ pub(super) fn render_collapsed_diff_split_rows(
         line_end_views,
     } = common;
 
+    this.ensure_file_diff_side_syntax(region, cx);
     let theme = this.theme;
     let language = this.file_diff_cache_language;
     let cache_epoch = this.file_diff_split_style_cache_epoch(region);
@@ -1113,6 +1118,7 @@ pub(super) fn render_file_diff_split_rows(
         line_end_views,
     } = common;
 
+    this.ensure_file_diff_side_syntax(region, cx);
     let theme = this.theme;
     let language = this.file_diff_cache_language;
     let cache_epoch = this.file_diff_split_style_cache_epoch(region);

@@ -707,12 +707,13 @@ impl DiffRenderer {
                 };
 
                 let _ = view.update(cx, |this, cx| {
-                    this.conflict_three_way_syntax_inflight[side] = false;
-
-                    // Stale: source hash changed while we were parsing.
+                    // Stale: the source changed while we were parsing. That
+                    // rebuild reset the markers and may have handed this side
+                    // to a newer worker, so its marker is not ours to clear.
                     if this.conflict_resolver.source_hash != expected_source_hash {
                         return;
                     }
+                    this.conflict_three_way_syntax_inflight[side] = false;
 
                     if let Some(parsed) = parsed {
                         let document =
