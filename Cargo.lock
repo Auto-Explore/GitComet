@@ -1521,9 +1521,9 @@ dependencies = [
 
 [[package]]
 name = "dekobon-tree-sitter-groovy"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7411aad264eebe3d0602984788c63aa660b82b9bcd705f42c29ca1c62516d82"
+checksum = "e2d72848614192db59dd415975736160b17728facd9ec4ad6677acc50a650b79"
 dependencies = [
  "cc",
  "tree-sitter-language",
