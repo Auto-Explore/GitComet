@@ -151,6 +151,59 @@ fn settings_pages_open_dialogs_and_toasts_through_their_host(cx: &mut gpui::Test
     });
 }
 
+/// A settings page's dialog is a form Tab does not leave: it goes round the
+/// dialog's own buttons, never onto the page behind the scrim.
+#[gpui::test]
+fn settings_hosted_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
+    cx.update(|app| {
+        let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
+            gitcomet_extension_example::review::ReviewExtension,
+        )])
+        .expect("valid registration");
+        crate::view::extension_host::install(registry, app);
+        crate::app::bind_text_input_keys_for_test(app);
+        gitcomet_ui_kit::focus_order::install(app);
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.update(|window, _| window.activate());
+    crate::view::test_support::redraw(cx);
+    let nav = "settings_window_nav_extension_com.example.review/review-settings";
+    let center = cx.debug_bounds(nav).unwrap().center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    let reset = cx.debug_bounds("example_review_reset").unwrap().center();
+    cx.simulate_click(reset, gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_some());
+
+    let mut visited = Vec::new();
+    for key in ["tab", "tab", "tab", "shift-tab", "shift-tab", "shift-tab"] {
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        crate::view::test_support::redraw(cx);
+        cx.update(|window, app| {
+            let dialog = settings.read(app).extension_dialog.as_ref().unwrap();
+            assert!(
+                dialog.tab_scope.contains_focused(window, app)
+                    && !dialog.tab_scope.container().is_focused(window),
+                "{key} lands on a control of the dialog"
+            );
+            visited.push(window.focused(app).unwrap());
+        });
+    }
+    // Reset and Close: two controls, visited in turn and round again.
+    assert_ne!(visited[0], visited[1]);
+    assert_eq!(visited[0], visited[2], "Tab wraps");
+    assert_eq!(visited[3], visited[1], "Shift-Tab goes back");
+    assert_eq!(visited[5], visited[1], "Shift-Tab wraps");
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_none());
+}
+
 #[gpui::test]
 fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
     cx: &mut gpui::TestAppContext,

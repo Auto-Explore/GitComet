@@ -567,7 +567,8 @@ pub enum TextInputTab {
     /// `take_shift_tab_pressed`, typing nothing. Pickers move their selection
     /// with it.
     Report,
-    /// Type a tab character, as a code editor does.
+    /// Type a tab character, as a code editor does. Shift-Tab moves focus to
+    /// the previous field, and so does Tab while the input is read-only.
     Insert,
 }
 

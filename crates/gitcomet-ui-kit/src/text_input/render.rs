@@ -245,7 +245,7 @@ impl Render for TextInput {
             .track_focus(&focus)
             .key_context(crate::focus_order::key_context(
                 "TextInput",
-                self.tab != TextInputTab::MoveFocus,
+                self.keeps_tab(),
             ))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))

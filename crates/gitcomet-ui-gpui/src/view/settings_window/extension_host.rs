@@ -550,7 +550,7 @@ impl SettingsHost {
                     .downcast::<super::close_guards::SettingsClosePrompt>()
                     .is_ok_and(|prompt| prompt.read(cx).scope == CloseScope::Application);
                 let _ = view.update(cx, |view, cx| {
-                    let tab_scope = gitcomet_ui_kit::focus_order::TabScope::new(cx);
+                    let tab_scope = gitcomet_ui_kit::focus_order::TabScope::modal(cx);
                     let previous_focus = view
                         .extension_dialog
                         .take()

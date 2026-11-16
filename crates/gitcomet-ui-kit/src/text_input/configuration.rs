@@ -261,6 +261,16 @@ impl TextInput {
         }
     }
 
+    /// Whether the input answers Tab itself. An editor that cannot be typed
+    /// into has no use for it, and lets it move focus.
+    pub(super) fn keeps_tab(&self) -> bool {
+        match self.tab {
+            TextInputTab::MoveFocus => false,
+            TextInputTab::Report => true,
+            TextInputTab::Insert => !self.read_only,
+        }
+    }
+
     pub fn tab(&self) -> TextInputTab {
         self.tab
     }

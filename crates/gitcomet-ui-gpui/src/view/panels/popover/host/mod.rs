@@ -800,7 +800,7 @@ impl PopoverHost {
         }
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let tab_scope = TabScope::new(cx);
+        let tab_scope = TabScope::modal(cx);
         let create_branch_from_ref_checkout_focus_handle = focus_order::field(cx);
         let create_branch_from_ref_focus = DialogFocus::new(cx);
         let checkout_remote_branch_focus = DialogFocus::new(cx);

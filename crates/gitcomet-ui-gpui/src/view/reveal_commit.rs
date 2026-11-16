@@ -144,7 +144,7 @@ impl RevealCommitView {
 
         Self {
             query_input,
-            tab_scope: TabScope::new(cx),
+            tab_scope: TabScope::modal(cx),
             restore_focus: None,
             fallback_focus: None,
             root_view,

@@ -1490,6 +1490,55 @@ fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::Test
     });
 }
 
+/// The dialog is a form of one field: Tab and Shift-Tab stay on it rather than
+/// reaching the window behind the scrim, and a press on its title is not a
+/// press elsewhere.
+#[gpui::test]
+fn reveal_commit_dialog_keeps_tab_and_focus_inside(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    let query = cx.update(|_window, app| {
+        view.read(app)
+            .reveal_commit_dialog
+            .read(app)
+            .query_input
+            .clone()
+    });
+    let assert_on_query = |cx: &mut gpui::VisualTestContext, after: &str| {
+        cx.run_until_parked();
+        test_support::redraw(cx);
+        cx.update(|window, app| {
+            assert!(
+                query.read(app).focus_handle().is_focused(window),
+                "the query keeps focus after {after}"
+            );
+            assert_eq!(query.read(app).text(), "", "{after} typed nothing");
+        });
+        assert!(reveal_commit_is_open(cx, &view), "open after {after}");
+    };
+
+    cx.simulate_keystrokes("tab");
+    assert_on_query(cx, "Tab");
+    cx.simulate_keystrokes("shift-tab");
+    assert_on_query(cx, "Shift-Tab");
+
+    let title = cx
+        .debug_bounds("reveal_commit_title")
+        .expect("the Go to title")
+        .center();
+    cx.simulate_click(title, gpui::Modifiers::default());
+    assert_on_query(cx, "a press on the title");
+}
+
 /// Both close paths have to leave the dialog reopenable. Escape goes through the
 /// input's transient-key flag while the chord goes through the action, so they
 /// can drift apart.

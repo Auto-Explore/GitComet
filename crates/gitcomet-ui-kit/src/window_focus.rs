@@ -35,9 +35,9 @@ pub fn observe_blur<T: 'static>(
 /// Start keyboard navigation after blur without taking Tab from an element
 /// that keeps it ([`crate::focus_order::CAPTURES_TAB`]).
 ///
-/// [`crate::focus_order::install`] installs this; the Tab bindings answer
-/// everywhere else.
-pub fn observe_tab_navigation(cx: &mut App) -> Subscription {
+/// [`crate::focus_order::install`] installs this, once: a second observer
+/// would move focus twice. The Tab bindings answer everywhere else.
+pub(crate) fn observe_tab_navigation(cx: &mut App) -> Subscription {
     // With no focus GPUI dispatches only through its root node, so a listener
     // inside the window frame would never receive this first Tab, and with no
     // key context on that path the context-bound Tab binding does not match.
@@ -56,11 +56,12 @@ pub fn observe_tab_navigation(cx: &mut App) -> Subscription {
         {
             return;
         }
-        if event.keystroke.modifiers.shift {
-            window.focus_prev(cx);
+        let direction = if event.keystroke.modifiers.shift {
+            crate::focus_order::Direction::Previous
         } else {
-            window.focus_next(cx);
-        }
+            crate::focus_order::Direction::Next
+        };
+        crate::focus_order::move_focus_from_outside_forms(direction, window, cx);
         if window.focused(cx).is_some() {
             cx.stop_propagation();
         }

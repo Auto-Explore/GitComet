@@ -912,7 +912,8 @@ fn authentication_prompt_tabs_between_its_fields_and_buttons(cx: &mut gpui::Test
             window.activate();
         });
         cx.run_until_parked();
-        apply_notification_snapshot(cx, &view, &auth_pull_state(kind));
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
 
         let (username, secret) = cx.update(|_window, app| {
@@ -965,6 +966,26 @@ fn authentication_prompt_tabs_between_its_fields_and_buttons(cx: &mut gpui::Test
             let view = view.read(app);
             assert_eq!(view.auth_prompt_username_input.read(app).text(), "");
             assert_eq!(view.auth_prompt_secret_input.read(app).text(), "");
+        });
+
+        // While the answer is checked Confirm is disabled: Tab passes over it,
+        // from the last field to Cancel and round to the first.
+        state.auth_prompt.as_mut().unwrap().status = AuthPromptStatus::Validating;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        cx.update(|window, app| window.focus(fields.last().unwrap(), app));
+        test_support::redraw(cx);
+        press(cx, "tab");
+        assert!(
+            on_a_button(cx),
+            "{kind:?}: Tab reaches Cancel while checking"
+        );
+        press(cx, "tab");
+        cx.update(|window, _| {
+            assert!(
+                fields[0].is_focused(window),
+                "{kind:?}: Cancel is the only button while checking"
+            )
         });
     }
 }

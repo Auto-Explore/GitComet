@@ -14,10 +14,18 @@ struct Fixture {
     scope: Option<TabScope>,
 }
 
+/// What the fixture's form is.
+#[derive(Clone, Copy, PartialEq)]
+enum Form {
+    Plain,
+    Scope,
+    Modal,
+}
+
 impl Fixture {
     fn new(
         form_indices: &[isize],
-        scoped: bool,
+        form: Form,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -39,7 +47,11 @@ impl Fixture {
             button: field(cx),
             after: input(0, cx),
             form: form_indices.iter().map(|index| input(*index, cx)).collect(),
-            scope: scoped.then(|| TabScope::new(cx)),
+            scope: match form {
+                Form::Plain => None,
+                Form::Scope => Some(TabScope::new(cx)),
+                Form::Modal => Some(TabScope::modal(cx)),
+            },
         }
     }
 
@@ -80,12 +92,21 @@ fn window<'a>(
     form_indices: &'static [isize],
     scoped: bool,
 ) -> (Entity<Fixture>, &'a mut VisualTestContext) {
+    let form = if scoped { Form::Scope } else { Form::Plain };
+    window_with(cx, form_indices, form)
+}
+
+fn window_with<'a>(
+    cx: &'a mut TestAppContext,
+    form_indices: &'static [isize],
+    form: Form,
+) -> (Entity<Fixture>, &'a mut VisualTestContext) {
     cx.update(|cx| {
         cx.bind_keys(key_bindings());
         install(cx);
     });
     let (view, cx) =
-        cx.add_window_view(move |window, cx| Fixture::new(form_indices, scoped, window, cx));
+        cx.add_window_view(move |window, cx| Fixture::new(form_indices, form, window, cx));
     refresh_and_draw(cx);
     (view, cx)
 }
@@ -313,4 +334,276 @@ fn pressing_a_form_off_its_controls_keeps_the_focused_field(cx: &mut TestAppCont
         |app| view.read(app).handle(0, app),
         "the form's first field",
     );
+}
+
+/// Two forms side by side, the second holding a nested form, then a code
+/// editor: what one window shows when a prompt, a dialog and an editor are
+/// all painted.
+struct Forms {
+    first: TabScope,
+    second: TabScope,
+    nested: TabScope,
+    /// The first form: a field at index 1 painted first, one at index 0, then
+    /// a button.
+    first_late: Entity<TextInput>,
+    first_early: Entity<TextInput>,
+    first_button: FocusHandle,
+    second_fields: [Entity<TextInput>; 2],
+    nested_fields: [Entity<TextInput>; 2],
+    editor: Entity<TextInput>,
+}
+
+impl Forms {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        window.activate();
+        let mut input = |options: TextInputOptions, cx: &mut Context<Self>| {
+            cx.new(|cx| TextInput::new(options, window, cx))
+        };
+        let plain = TextInputOptions::default;
+        Self {
+            first: TabScope::new(cx),
+            second: TabScope::new(cx),
+            nested: TabScope::new(cx),
+            first_late: input(
+                TextInputOptions {
+                    tab_index: 1,
+                    ..plain()
+                },
+                cx,
+            ),
+            first_early: input(plain(), cx),
+            first_button: field(cx),
+            second_fields: [input(plain(), cx), input(plain(), cx)],
+            nested_fields: [input(plain(), cx), input(plain(), cx)],
+            editor: input(
+                TextInputOptions {
+                    multiline: true,
+                    tab: TextInputTab::Insert,
+                    ..plain()
+                },
+                cx,
+            ),
+        }
+    }
+}
+
+impl Render for Forms {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            // The window frame's, in the application.
+            .child(
+                gpui::canvas(
+                    |_, _, _| (),
+                    |_, _, window, _| crate::text_selection_owner::install_reset(window),
+                )
+                .size_0(),
+            )
+            .child(
+                div()
+                    .tab_scope(&self.first)
+                    .child(self.first_late.clone())
+                    .child(self.first_early.clone())
+                    .child(
+                        div()
+                            .debug_selector(|| "first_button".into())
+                            .track_focus(&self.first_button)
+                            .h(px(20.0))
+                            .child("Button"),
+                    ),
+            )
+            .child(
+                div()
+                    .tab_scope(&self.second)
+                    .children(self.second_fields.iter().cloned())
+                    .child(
+                        div()
+                            .tab_scope(&self.nested)
+                            .children(self.nested_fields.iter().cloned()),
+                    ),
+            )
+            .child(self.editor.clone())
+    }
+}
+
+fn forms(cx: &mut TestAppContext) -> (Entity<Forms>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.bind_keys(key_bindings());
+        install(cx);
+    });
+    let (view, cx) = cx.add_window_view(Forms::new);
+    refresh_and_draw(cx);
+    (view, cx)
+}
+
+fn handle_of(input: &Entity<TextInput>, cx: &App) -> FocusHandle {
+    input.read(cx).focus_handle()
+}
+
+/// Forms painted in one window do not share their order: each wraps round its
+/// own controls in both directions, whatever indices the other uses.
+#[gpui::test]
+fn forms_in_one_window_each_keep_their_own_order(cx: &mut TestAppContext) {
+    let (view, cx) = forms(cx);
+
+    // The first form, by index: early (0), the button (0), late (1).
+    focus(cx, |app| handle_of(&view.read(app).first_early, app));
+    press(cx, "shift-tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).first_late, app),
+        "the first form's last field, not the second form's",
+    );
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).first_early, app),
+        "the first form's first field",
+    );
+    press(cx, "tab");
+    assert_focused(cx, |app| view.read(app).first_button.clone(), "its button");
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).first_late, app),
+        "its field at a later index, past the second form's fields",
+    );
+
+    // The second form wraps round its own fields: forward past the nested
+    // form's and back to its first, never into the first form.
+    focus(cx, |app| handle_of(&view.read(app).second_fields[1], app));
+    press(cx, "shift-tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).second_fields[0], app),
+        "the second form's first field",
+    );
+    press(cx, "shift-tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).nested_fields[1], app),
+        "the second form's last field, in its nested form",
+    );
+}
+
+/// A form inside a form keeps Tab for itself while focus is in it.
+#[gpui::test]
+fn a_nested_form_keeps_tab_inside_itself(cx: &mut TestAppContext) {
+    let (view, cx) = forms(cx);
+    focus(cx, |app| handle_of(&view.read(app).nested_fields[1], app));
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).nested_fields[0], app),
+        "the nested form's first field",
+    );
+    press(cx, "shift-tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).nested_fields[1], app),
+        "the nested form's last field",
+    );
+}
+
+/// Only a press that no control took keeps the form as it was: a press on a
+/// control is a press elsewhere to the field that held the selection.
+#[gpui::test]
+fn pressing_a_forms_control_releases_another_fields_selection(cx: &mut TestAppContext) {
+    let (view, cx) = forms(cx);
+    cx.update(|window, app| {
+        let input = view.read(app).first_early.clone();
+        input.update(app, |input, cx| {
+            input.set_text("hello world", cx);
+            window.focus(&input.focus_handle(), cx);
+            input.set_selected_range(0..5, false, window, cx);
+        });
+    });
+    refresh_and_draw(cx);
+    let button = cx
+        .debug_bounds("first_button")
+        .expect("the form's button")
+        .center();
+    cx.simulate_click(button, gpui::Modifiers::default());
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+    assert_focused(cx, |app| view.read(app).first_button.clone(), "the button");
+    cx.update(|_, app| {
+        let selection = view.read(app).first_early.read(app).selected_range();
+        assert!(selection.is_empty(), "still selected: {selection:?}");
+    });
+}
+
+/// A code editor types Tab, and is still no trap: Shift-Tab leaves it, and so
+/// does Tab while it cannot be typed into.
+#[gpui::test]
+fn a_code_editor_can_be_left_with_the_keyboard(cx: &mut TestAppContext) {
+    let (view, cx) = forms(cx);
+    let editor = |app: &App| handle_of(&view.read(app).editor, app);
+
+    focus(cx, editor);
+    press(cx, "tab");
+    assert_focused(cx, editor, "the editor, which typed the tab");
+    press(cx, "shift-tab");
+    cx.update(|window, app| {
+        assert!(!editor(app).is_focused(window), "Shift-Tab leaves it");
+        assert_eq!(view.read(app).editor.read(app).text(), "\t");
+    });
+
+    cx.update(|_, app| {
+        let input = view.read(app).editor.clone();
+        input.update(app, |input, cx| input.set_read_only(true, cx));
+    });
+    refresh_and_draw(cx);
+    focus(cx, editor);
+    press(cx, "tab");
+    cx.update(|window, app| {
+        assert!(
+            !editor(app).is_focused(window),
+            "Tab leaves a read-only editor"
+        );
+        assert_eq!(view.read(app).editor.read(app).text(), "\t");
+    });
+}
+
+/// A dialog takes Tab from the rest of its window: with nothing focused, as
+/// after the window was deactivated, and from a control it covers.
+#[gpui::test]
+fn a_modal_form_takes_tab_from_outside_it(cx: &mut TestAppContext) {
+    let (view, cx) = window_with(cx, &[0, 0], Form::Modal);
+    let first = |app: &App| view.read(app).handle(0, app);
+    let last = |app: &App| view.read(app).handle(1, app);
+
+    cx.update(|window, app| window.blur(app));
+    press(cx, "tab");
+    assert_focused(cx, first, "the dialog's first field");
+    cx.update(|window, app| window.blur(app));
+    press(cx, "shift-tab");
+    assert_focused(cx, last, "the dialog's last field");
+
+    focus(cx, |app| view.read(app).button.clone());
+    press(cx, "tab");
+    assert_focused(cx, first, "the dialog, not the control behind it");
+    focus(cx, |app| view.read(app).before.read(app).focus_handle());
+    press(cx, "shift-tab");
+    assert_focused(cx, last, "the dialog, from a field behind it");
+}
+
+/// A dialog that is not shown, or shown in another window, takes nothing.
+#[gpui::test]
+fn a_modal_form_that_is_not_shown_leaves_tab_to_the_window(cx: &mut TestAppContext) {
+    let hidden = cx.update(|app| TabScope::modal(app));
+    let (view, cx) = window_with(cx, &[0], Form::Plain);
+    focus(cx, |app| view.read(app).before.read(app).focus_handle());
+    press(cx, "tab");
+    assert_focused(cx, |app| view.read(app).button.clone(), "the next control");
+    cx.update(|window, app| window.blur(app));
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| view.read(app).before.read(app).focus_handle(),
+        "the window's first field",
+    );
+    drop(hidden);
 }

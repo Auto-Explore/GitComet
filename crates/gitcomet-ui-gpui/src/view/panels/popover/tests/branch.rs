@@ -2526,6 +2526,43 @@ mod checkout_picker {
         assert_eq!(windowed.size.height, short.size.height);
     }
 
+    /// In a picker Tab and Shift-Tab walk the results, as the arrows do: the
+    /// search field keeps focus and nothing is typed into it. The same field
+    /// inside the Create branch prompt is a form field, and Tab leaves it
+    /// (`create_branch_from_ref_popover_tabs_to_checkout_and_wraps`).
+    #[gpui::test]
+    fn tab_walks_the_results_of_a_standalone_picker(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_many_branches(repo_id, 5), repo_id);
+        redraw(cx);
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let host = view.read(app).popover_host.read(app);
+                let input = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("the picker's search field")
+                    .read(app);
+                assert!(
+                    input.focus_handle().is_focused(window),
+                    "the search field keeps focus"
+                );
+                assert_eq!(input.text(), "", "Tab is not typed into the search field");
+                host.branch_picker_selected_index
+            })
+        };
+
+        simulate_key_press(cx, "down");
+        redraw(cx);
+        let start = selected(cx).expect("the arrow selects a row");
+        simulate_key_press(cx, "tab");
+        redraw(cx);
+        assert_eq!(selected(cx), Some(start + 1), "Tab selects the next result");
+        simulate_key_press(cx, "shift-tab");
+        redraw(cx);
+        assert_eq!(selected(cx), Some(start), "Shift-Tab selects the previous");
+    }
+
     /// Arrow-up on a freshly opened picker selects the last row. It is far
     /// outside the window, so it only comes into view if navigation scrolls by
     /// the row geometry rather than by a scroll child that does not exist.

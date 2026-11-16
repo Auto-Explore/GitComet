@@ -1161,18 +1161,22 @@ impl TextInput {
         // Tab moving focus is a binding, answered before keys reach here; an
         // input that keeps Tab sees both Tab and Shift-Tab.
         if key == "tab"
-            && self.tab != TextInputTab::MoveFocus
+            && self.keeps_tab()
             && !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
         {
-            if modifiers.shift {
-                self.interaction.shift_tab_pressed = true;
-            } else {
-                self.interaction.tab_pressed = true;
-                if self.tab == TextInputTab::Insert {
+            match (self.tab, modifiers.shift) {
+                (TextInputTab::Insert, false) => {
                     // Typed here rather than left to the platform, which
                     // delivers no tab character on some systems.
                     self.replace_text_in_range(None, "\t", window, cx);
                 }
+                (TextInputTab::Insert, true) => {
+                    // Nothing to type, so the editor is not a trap: Shift-Tab
+                    // leaves it for the previous field, within its form.
+                    window.dispatch_action(Box::new(crate::focus_order::FocusPrevious), cx);
+                }
+                (_, false) => self.interaction.tab_pressed = true,
+                (_, true) => self.interaction.shift_tab_pressed = true,
             }
             cx.stop_propagation();
             cx.notify();

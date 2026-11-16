@@ -17,17 +17,21 @@
 //!   [`TabScope`] (`element.tab_scope(&scope)`). Past its last field Tab wraps
 //!   to its first, and Shift-Tab the other way. Tab indices restart at zero
 //!   inside each scope, so a form numbers its own fields without knowing the
-//!   window around it.
+//!   window around it. A [`TabScope::modal`] also takes Tab from the rest of
+//!   its window while it is shown.
 //! - **Elements that use Tab themselves** — a terminal, a picker that moves
 //!   its selection, a menu, a code editor — add [`CAPTURES_TAB`] to their key
 //!   context ([`key_context`]), and the binding stands aside for them. A text
 //!   input does this from its [`TextInputTab`](crate::TextInputTab) setting.
+//!   The bindings match at any depth, so a Tab binding of a view's own never
+//!   outranks them: the view captures Tab instead.
 //!
 //! Outside any scope, focus moves through the window's whole order and wraps
 //! at its ends.
 
 use gpui::prelude::*;
 use gpui::{App, Div, FocusHandle, Global, KeyBinding, KeyContext, Window, div};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 gpui::actions!(
     focus_order,
@@ -49,6 +53,10 @@ const OUTSIDE_TAB_CAPTURE: &str = "!CapturesTab";
 /// The key context of a [`TabScope`]. A context on the path keeps the bindings
 /// in reach of a focused control that has none of its own.
 const SCOPE_CONTEXT: &str = "TabScope";
+
+/// The tab-group index of the next [`TabScope`]. GPUI orders the fields of
+/// groups sharing an index as one run, so each scope takes its own.
+static NEXT_GROUP: AtomicIsize = AtomicIsize::new(1);
 
 /// Which way focus moves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +99,58 @@ pub fn move_focus(direction: Direction, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Tab from outside every form: into the dialog covering the window, if one
+/// is shown, and through the whole window otherwise. Focus is outside a shown
+/// dialog after the window was deactivated, which clears it.
+pub(crate) fn move_focus_from_outside_forms(
+    direction: Direction,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !enter_shown_modal(direction, window, cx) {
+        move_focus(direction, window, cx);
+    }
+}
+
+/// The live [`TabScope::modal`]s of every window, oldest first.
+#[derive(Default)]
+struct ModalScopes(Vec<WeakTabScope>);
+
+impl Global for ModalScopes {}
+
+struct WeakTabScope {
+    container: gpui::WeakFocusHandle,
+    end: gpui::WeakFocusHandle,
+    group: isize,
+}
+
+impl WeakTabScope {
+    fn upgrade(&self) -> Option<TabScope> {
+        Some(TabScope {
+            container: self.container.upgrade()?,
+            end: self.end.upgrade()?,
+            group: self.group,
+        })
+    }
+}
+
+/// Enters the newest modal form `window` shows, answering whether one took
+/// focus. A window shows a handful at most, and only this asks which.
+fn enter_shown_modal(direction: Direction, window: &mut Window, cx: &mut App) -> bool {
+    let Some(scopes) = cx.try_global::<ModalScopes>() else {
+        return false;
+    };
+    let live: Vec<TabScope> = scopes.0.iter().filter_map(WeakTabScope::upgrade).collect();
+    if live.len() != scopes.0.len() {
+        cx.global_mut::<ModalScopes>()
+            .0
+            .retain(|scope| scope.upgrade().is_some());
+    }
+    live.iter()
+        .rev()
+        .any(|scope| scope.try_enter(direction, window, cx))
+}
+
 /// App-level actions see no window, and the one dispatching is borrowed
 /// until they return, so the move waits for it.
 fn move_focus_in_current_window(direction: Direction, cx: &mut App) {
@@ -104,7 +164,9 @@ fn move_focus_in_current_window(direction: Direction, cx: &mut App) {
             .into_iter()
             .find(|window| window.window_id() == window_id);
         if let Some(window) = window {
-            let _ = window.update(cx, |_, window, cx| move_focus(direction, window, cx));
+            let _ = window.update(cx, |_, window, cx| {
+                move_focus_from_outside_forms(direction, window, cx)
+            });
         }
     });
 }
@@ -154,6 +216,9 @@ pub fn key_context(name: &'static str, captures_tab: bool) -> KeyContext {
 pub struct TabScope {
     container: FocusHandle,
     end: FocusHandle,
+    /// Its own tab-group index, so its fields and end marker sort apart from
+    /// those of every other scope painted in the window.
+    group: isize,
 }
 
 impl TabScope {
@@ -163,7 +228,21 @@ impl TabScope {
             // from its start, and the end marker to enter from its end.
             container: cx.focus_handle().tab_index(0).tab_stop(false),
             end: cx.focus_handle().tab_index(isize::MAX).tab_stop(false),
+            group: NEXT_GROUP.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    /// A form that covers its window while shown: a dialog, a popover. Tab
+    /// from anywhere outside it — nothing focused, or a control behind it —
+    /// enters it rather than reaching what it covers.
+    pub fn modal(cx: &mut App) -> Self {
+        let scope = Self::new(cx);
+        cx.default_global::<ModalScopes>().0.push(WeakTabScope {
+            container: scope.container.downgrade(),
+            end: scope.end.downgrade(),
+            group: scope.group,
+        });
+        scope
     }
 
     /// `content`, wrapped in this form. The wrapper adds no styling; style it
@@ -179,17 +258,19 @@ impl TabScope {
         let pressed = self.clone();
         element
             // GPUI runs an element's own press listeners before the one that
-            // focuses it: a press on no control of the form keeps the field
-            // that has focus, as pressing a form's label or margin does, and
-            // a text input does not take it for a press elsewhere. From
+            // focuses it, and after its children's: a press no control of the
+            // form took keeps the field that has focus, as pressing a form's
+            // label or margin does, and a text input does not take it for a
+            // press elsewhere. A press a control took is that control's. From
             // outside the form a press still lands on it, and Tab then enters.
             .on_any_mouse_down(move |_, window, cx| {
-                if pressed.holds_field_focus(window, cx) {
+                if !window.default_prevented() && pressed.holds_field_focus(window, cx) {
                     window.prevent_default();
                     crate::text_selection_owner::preserve(cx);
                 }
             })
             .track_focus(&self.container)
+            .tab_index(self.group)
             .tab_group()
             .key_context(SCOPE_CONTEXT)
             .on_action(move |_: &FocusNext, window, cx| next.step(Direction::Next, window, cx))
@@ -232,14 +313,29 @@ impl TabScope {
         if self.holds_field_focus(window, cx) {
             return;
         }
+        // Past an end: wrap. `move_focus` left focus outside the form, so
+        // restore from where it started if the form has no fields.
+        if !self.try_enter(direction, window, cx) {
+            match before {
+                Some(before) => window.focus(&before, cx),
+                None => window.blur(cx),
+            }
+        }
+    }
+
+    /// Enters the form from its start or end, leaving focus as it was when
+    /// the form is not painted in `window` or has no fields.
+    fn try_enter(&self, direction: Direction, window: &mut Window, cx: &mut App) -> bool {
+        let before = window.focused(cx);
         self.enter(direction, window, cx);
         if self.holds_field_focus(window, cx) {
-            return;
+            return true;
         }
         match before {
             Some(before) => window.focus(&before, cx),
             None => window.blur(cx),
         }
+        false
     }
 
     fn enter(&self, direction: Direction, window: &mut Window, cx: &mut App) {
