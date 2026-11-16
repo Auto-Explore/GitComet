@@ -176,7 +176,19 @@ impl TabScope {
     pub fn apply<E: InteractiveElement + ParentElement>(&self, element: E) -> E {
         let next = self.clone();
         let previous = self.clone();
+        let pressed = self.clone();
         element
+            // GPUI runs an element's own press listeners before the one that
+            // focuses it: a press on no control of the form keeps the field
+            // that has focus, as pressing a form's label or margin does, and
+            // a text input does not take it for a press elsewhere. From
+            // outside the form a press still lands on it, and Tab then enters.
+            .on_any_mouse_down(move |_, window, cx| {
+                if pressed.holds_field_focus(window, cx) {
+                    window.prevent_default();
+                    crate::text_selection_owner::preserve(cx);
+                }
+            })
             .track_focus(&self.container)
             .tab_group()
             .key_context(SCOPE_CONTEXT)

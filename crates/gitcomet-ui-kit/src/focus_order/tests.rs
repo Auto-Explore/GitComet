@@ -50,7 +50,16 @@ impl Fixture {
 
 impl Render for Fixture {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let form = div().flex().flex_col().children(self.form.iter().cloned());
+        let form = div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .debug_selector(|| "form_label".into())
+                    .h(px(20.0))
+                    .child("Label"),
+            )
+            .children(self.form.iter().cloned());
         let form = match &self.scope {
             Some(scope) => scope.wrap(form).into_any_element(),
             None => form.into_any_element(),
@@ -270,4 +279,38 @@ fn bindings_stand_aside_where_tab_is_captured() {
         assert!(predicate.eval(&plain));
         assert!(!predicate.eval(&captured));
     }
+}
+
+#[gpui::test]
+fn pressing_a_form_off_its_controls_keeps_the_focused_field(cx: &mut TestAppContext) {
+    let (view, cx) = window(cx, &[0, 0], true);
+    let label = cx
+        .debug_bounds("form_label")
+        .expect("the form's label")
+        .center();
+
+    focus(cx, |app| view.read(app).handle(1, app));
+    cx.simulate_click(label, gpui::Modifiers::default());
+    refresh_and_draw(cx);
+    assert_focused(
+        cx,
+        |app| view.read(app).handle(1, app),
+        "the field that had focus",
+    );
+
+    // From outside, the press lands on the form, and Tab enters it.
+    focus(cx, |app| view.read(app).button.clone());
+    cx.simulate_click(label, gpui::Modifiers::default());
+    refresh_and_draw(cx);
+    assert_focused(
+        cx,
+        |app| view.read(app).scope.as_ref().unwrap().container().clone(),
+        "the form",
+    );
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| view.read(app).handle(0, app),
+        "the form's first field",
+    );
 }
