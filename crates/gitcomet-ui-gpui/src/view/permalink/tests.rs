@@ -633,6 +633,58 @@ fn remote_web_url_serves_git_and_ssh_schemes_over_https() {
     }
 }
 
+/// GitHub, GitLab and Bitbucket also take SSH on a host that serves no web
+/// pages, and Bitbucket Cloud moves all SSH to `ssh.bitbucket.org`. A link
+/// built on that host, `https://ssh.bitbucket.org/team/repo`, leads nowhere.
+#[test]
+fn ssh_only_hosts_link_to_their_forge() {
+    for (url, commit, file) in [
+        (
+            "git@ssh.bitbucket.org:team/repo.git",
+            "https://bitbucket.org/team/repo/commits/abc123",
+            "https://bitbucket.org/team/repo/src/main/a/b.txt",
+        ),
+        (
+            "ssh://git@altssh.bitbucket.org:443/team/repo.git",
+            "https://bitbucket.org/team/repo/commits/abc123",
+            "https://bitbucket.org/team/repo/src/main/a/b.txt",
+        ),
+        (
+            "ssh://git@ssh.github.com:443/org/repo.git",
+            "https://github.com/org/repo/commit/abc123",
+            "https://github.com/org/repo/blob/main/a/b.txt",
+        ),
+        (
+            "ssh://git@altssh.gitlab.com:443/group/repo.git",
+            "https://gitlab.com/group/repo/-/commit/abc123",
+            "https://gitlab.com/group/repo/-/blob/main/a/b.txt",
+        ),
+    ] {
+        let remotes = [remote("origin", url)];
+        assert_eq!(
+            commit_permalink(&remotes, "abc123").as_deref(),
+            Some(commit),
+            "{url}"
+        );
+        assert_eq!(
+            file_permalink(&remotes, "main", "a/b.txt").as_deref(),
+            Some(file),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn remote_web_pages_list_an_ssh_only_host_with_its_web_host_once() {
+    let remotes = [
+        remote("origin", "git@ssh.bitbucket.org:team/repo.git"),
+        remote("https", "https://bitbucket.org/team/repo.git"),
+    ];
+    let pages = remote_web_pages(&remotes);
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].url, "https://bitbucket.org/team/repo");
+}
+
 #[test]
 fn remote_web_url_accepts_scp_syntax_without_a_user() {
     assert_eq!(
