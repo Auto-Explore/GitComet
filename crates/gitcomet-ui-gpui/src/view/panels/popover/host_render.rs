@@ -11,6 +11,12 @@ impl Render for PopoverHost {
         let Some(kind) = self.popover.clone() else {
             return div().into_any_element();
         };
+        self.sync_picker_search_tab(cx);
+        // A menu has no field for Tab to enter, so Tab from outside it lands
+        // on the popover itself. Its keys are the menu's: hand focus on.
+        if popover_is_context_menu(&kind) && self.tab_scope.container().is_focused(window) {
+            window.focus(&self.context_menu_focus_handle, cx);
+        }
 
         let history_refs_menu_active = self.history_refs_menu_active(cx);
         let close = cx.listener(|this, _e: &MouseDownEvent, window, cx| {

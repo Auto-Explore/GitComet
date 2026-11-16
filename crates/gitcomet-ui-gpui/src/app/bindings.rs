@@ -3,7 +3,6 @@
 use super::*;
 
 pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
-    gitcomet_ui_kit::focus_order::install(cx);
     install_global_diff_shortcut_fallback(cx);
     install_global_diff_navigation_actions(cx);
 
@@ -421,7 +420,10 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
     ]);
+    // Tab and Shift-Tab, with what answers them: every window kind binds
+    // these keys, so none may be left with the keys and no handler.
     cx.bind_keys(gitcomet_ui_kit::focus_order::key_bindings());
+    gitcomet_ui_kit::focus_order::install(cx);
     cx.bind_keys([
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),

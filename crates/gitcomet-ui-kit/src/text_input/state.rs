@@ -954,9 +954,6 @@ pub struct TextInput {
     pub(super) display_truncation: Option<TextTruncationProfile>,
     pub(super) masked: bool,
     pub(super) tab: TextInputTab,
-    /// Set by `set_tab_stop`; otherwise an input is a Tab stop unless it is
-    /// selectable text.
-    pub(super) tab_stop_override: Option<bool>,
     pub(super) line_ending: &'static str,
     /// Columns a tab advances to when shaped.
     pub(super) tab_size: usize,

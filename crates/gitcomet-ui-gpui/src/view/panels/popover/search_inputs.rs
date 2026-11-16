@@ -2,25 +2,46 @@ use super::picker_nav::{PickerNavKeys, PickerNavOutcome, PickerNavRows, handle_p
 use super::*;
 
 impl PopoverHost {
+    /// Every picker's search field is made here, and joins `created`, from
+    /// which [`Self::sync_picker_search_tab`] sets what Tab does in it.
     fn ensure_search_input_entity(
+        created: &mut Vec<Entity<components::TextInput>>,
         slot: &mut Option<Entity<components::TextInput>>,
         placeholder: &'static str,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         slot.get_or_insert_with(|| {
-            cx.new(|cx| {
+            let input = cx.new(|cx| {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: placeholder.into(),
+                        // Tab walks the picker's results.
+                        tab: components::TextInputTab::Report,
                         ..Default::default()
                     },
                     window,
                     cx,
                 )
-            })
+            });
+            created.push(input.clone());
+            input
         })
         .clone()
+    }
+
+    /// A picker's search field walks its list with Tab; inside a prompt the
+    /// same field is one of the form's fields, and Tab leaves it. Called from
+    /// render, so it holds however the popover came to be the one shown.
+    pub(super) fn sync_picker_search_tab(&self, cx: &mut gpui::Context<Self>) {
+        let tab = if self.popover_is_prompt() {
+            components::TextInputTab::MoveFocus
+        } else {
+            components::TextInputTab::Report
+        };
+        for input in &self.picker_search_inputs {
+            input.update(cx, |input, cx| input.set_tab(tab, cx));
+        }
     }
 
     /// Resets the search input (text, theme, pending key presses), rewinds the
@@ -192,6 +213,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.repo_picker_search_input,
             "Filter repositories",
             window,
@@ -282,6 +304,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.branch_picker_search_input,
             "Filter branches",
             window,
@@ -428,6 +451,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.remote_picker_search_input,
             "Filter remote branches",
             window,
@@ -502,6 +526,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.worktree_picker_search_input,
             "Filter worktrees",
             window,
@@ -560,6 +585,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.worktree_badge_picker_search_input,
             "Select or type to create a worktree",
             window,
@@ -662,6 +688,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.submodule_picker_search_input,
             "Filter submodules",
             window,
@@ -720,6 +747,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.stash_picker_search_input,
             "Filter stashes",
             window,
@@ -771,6 +799,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.file_history_file_picker_search_input,
             "Filter files",
             window,
@@ -842,6 +871,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
+            &mut self.picker_search_inputs,
             &mut self.history_author_filter_search_input,
             "Filter authors",
             window,

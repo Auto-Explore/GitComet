@@ -2561,6 +2561,46 @@ mod checkout_picker {
         simulate_key_press(cx, "shift-tab");
         redraw(cx);
         assert_eq!(selected(cx), Some(start), "Shift-Tab selects the previous");
+
+        // The Add worktree prompt shows the same field as one of its own:
+        // there Tab leaves it for the prompt's next control.
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        PopoverKind::Repo {
+                            repo_id,
+                            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                        },
+                        gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        redraw(cx);
+        let search = cx.update(|window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let search = host
+                .branch_picker_search_input
+                .as_ref()
+                .expect("the prompt's ref field")
+                .read(app)
+                .focus_handle();
+            window.focus(&search, app);
+            search
+        });
+        redraw(cx);
+        simulate_key_press(cx, "tab");
+        redraw(cx);
+        cx.update(|window, app| {
+            let host = view.read(app).popover_host.read(app);
+            assert!(
+                !search.is_focused(window) && host.tab_scope.contains_focused(window, app),
+                "Tab moves on within the prompt"
+            );
+        });
     }
 
     /// Arrow-up on a freshly opened picker selects the last row. It is far

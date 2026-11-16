@@ -898,6 +898,7 @@ impl PopoverHost {
             active_invoker: None,
             popover_opened_from_diff_panel: false,
             tab_scope,
+            picker_search_inputs: Vec::new(),
             context_menu_selected_ix: None,
             worktree_menu_location: None,
             worktree_menu_location_task: None,
@@ -1484,32 +1485,6 @@ impl PopoverHost {
 
     pub(in crate::view) fn is_open(&self) -> bool {
         self.popover.is_some()
-    }
-
-    /// A picker's search field walks its list with Tab; inside a prompt the
-    /// same field is one of the form's fields, and Tab leaves it.
-    fn sync_search_input_tab(&self, cx: &mut gpui::Context<Self>) {
-        let tab = if self.popover_is_prompt() {
-            components::TextInputTab::MoveFocus
-        } else {
-            components::TextInputTab::Report
-        };
-        for input in [
-            &self.repo_picker_search_input,
-            &self.branch_picker_search_input,
-            &self.remote_picker_search_input,
-            &self.worktree_picker_search_input,
-            &self.worktree_badge_picker_search_input,
-            &self.submodule_picker_search_input,
-            &self.stash_picker_search_input,
-            &self.file_history_file_picker_search_input,
-            &self.history_author_filter_search_input,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            input.update(cx, |input, cx| input.set_tab(tab, cx));
-        }
     }
 
     /// A form the user fills in. Escape dismisses it through
@@ -2458,7 +2433,6 @@ impl PopoverHost {
             }
             self.popover = Some(kind);
         }
-        self.sync_search_input_tab(cx);
         if let Some(popover) = self.popover.as_ref() {
             self.notify_fingerprint =
                 fingerprint::notify_fingerprint(&self.state, popover, self.store.binding);

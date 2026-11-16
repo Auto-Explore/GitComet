@@ -110,7 +110,7 @@ Tab and Shift-Tab move focus as they do in a web browser, on every platform.
 
 - Tab visits the window's text fields, buttons, check boxes and options in the order they are laid out, and wraps at the end. Inside a dialog or popover (a prompt, a confirmation, an extension's dialog, the shortcut cheat sheet, the Go to dialog) and in the authentication prompt (username, password or passphrase, Confirm, Cancel) it stays inside and wraps at its ends.
 - Tab leaves a text field without typing anything, multi-line fields such as the commit message included.
-- Selectable read-only text, such as commit details, is passed over.
+- Selectable read-only text, such as commit details, is passed over. A file shown read-only in an editor is still reached, so its text can be selected.
 - While a dialog or popover is open, Tab from outside it (for example after switching back to the window) moves into it.
 - These keep Tab for themselves: the embedded terminal (the shell completes with it); the diff file editor, the Documents editor and the conflict resolver's output, which type a tab character; pickers, the command palette and the Home search, where it selects the next result; and menus, where it moves the selection. In the editors Shift-Tab still moves to the previous field, and so does Tab while the file cannot be edited.
 

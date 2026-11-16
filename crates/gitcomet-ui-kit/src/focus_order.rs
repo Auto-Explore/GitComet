@@ -9,10 +9,10 @@
 //!   new handle a Tab stop; [`TextInput`](crate::TextInput)s and the kit's
 //!   buttons already are. Fields are visited by tab index, lowest first, and
 //!   fields sharing an index in the order they are painted, so most forms need
-//!   no index at all. [`field_at`], a text input's `tab_index` option or
-//!   `TextInput::set_tab_index` moves one field; numbering every field of a
-//!   form fixes its order outright. A handle with `tab_stop(false)` is still
-//!   focusable by pointer but skipped by Tab, like `tabindex="-1"` on the web.
+//!   no index at all. [`field_at`] or a text input's `tab_index` option moves
+//!   one field; numbering every field of a form fixes its order outright. A
+//!   handle with `tab_stop(false)` is still focusable by pointer but skipped
+//!   by Tab, like `tabindex="-1"` on the web.
 //! - **Forms** that Tab must not leave — a dialog, a prompt — are a
 //!   [`TabScope`] (`element.tab_scope(&scope)`). Past its last field Tab wraps
 //!   to its first, and Shift-Tab the other way. Tab indices restart at zero
@@ -31,7 +31,9 @@
 
 use gpui::prelude::*;
 use gpui::{App, Div, FocusHandle, Global, KeyBinding, KeyContext, Window, div};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 
 gpui::actions!(
     focus_order,
@@ -57,6 +59,9 @@ const SCOPE_CONTEXT: &str = "TabScope";
 /// The tab-group index of the next [`TabScope`]. GPUI orders the fields of
 /// groups sharing an index as one run, so each scope takes its own.
 static NEXT_GROUP: AtomicIsize = AtomicIsize::new(1);
+
+/// Counts scope paints, to tell which of two shown scopes is on top.
+static NEXT_PAINT: AtomicU64 = AtomicU64::new(1);
 
 /// Which way focus moves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,7 +117,8 @@ pub(crate) fn move_focus_from_outside_forms(
     }
 }
 
-/// The live [`TabScope::modal`]s of every window, oldest first.
+/// The live [`TabScope::modal`]s of every window. Dead ones are dropped as
+/// new ones register, so it holds no more than are alive plus one.
 #[derive(Default)]
 struct ModalScopes(Vec<WeakTabScope>);
 
@@ -122,6 +128,7 @@ struct WeakTabScope {
     container: gpui::WeakFocusHandle,
     end: gpui::WeakFocusHandle,
     group: isize,
+    painted: Rc<Cell<u64>>,
 }
 
 impl WeakTabScope {
@@ -130,25 +137,31 @@ impl WeakTabScope {
             container: self.container.upgrade()?,
             end: self.end.upgrade()?,
             group: self.group,
+            painted: Rc::clone(&self.painted),
         })
     }
 }
 
-/// Enters the newest modal form `window` shows, answering whether one took
-/// focus. A window shows a handful at most, and only this asks which.
+/// Gives focus to the modal form on top in `window`, answering whether one is
+/// shown: to its first or last field, or to the form itself when it has none,
+/// so that keys stay off what it covers.
 fn enter_shown_modal(direction: Direction, window: &mut Window, cx: &mut App) -> bool {
-    let Some(scopes) = cx.try_global::<ModalScopes>() else {
+    let top = cx.try_global::<ModalScopes>().and_then(|scopes| {
+        scopes
+            .0
+            .iter()
+            .filter_map(WeakTabScope::upgrade)
+            .filter(|scope| scope.is_shown(window))
+            // Painted last is painted on top.
+            .max_by_key(|scope| scope.painted.get())
+    });
+    let Some(top) = top else {
         return false;
     };
-    let live: Vec<TabScope> = scopes.0.iter().filter_map(WeakTabScope::upgrade).collect();
-    if live.len() != scopes.0.len() {
-        cx.global_mut::<ModalScopes>()
-            .0
-            .retain(|scope| scope.upgrade().is_some());
+    if !top.try_enter(direction, window, cx) {
+        window.focus(&top.container, cx);
     }
-    live.iter()
-        .rev()
-        .any(|scope| scope.try_enter(direction, window, cx))
+    true
 }
 
 /// App-level actions see no window, and the one dispatching is borrowed
@@ -219,6 +232,8 @@ pub struct TabScope {
     /// Its own tab-group index, so its fields and end marker sort apart from
     /// those of every other scope painted in the window.
     group: isize,
+    /// When it was last painted, among all scopes: later is on top.
+    painted: Rc<Cell<u64>>,
 }
 
 impl TabScope {
@@ -229,18 +244,25 @@ impl TabScope {
             container: cx.focus_handle().tab_index(0).tab_stop(false),
             end: cx.focus_handle().tab_index(isize::MAX).tab_stop(false),
             group: NEXT_GROUP.fetch_add(1, Ordering::Relaxed),
+            painted: Rc::default(),
         }
     }
 
     /// A form that covers its window while shown: a dialog, a popover. Tab
     /// from anywhere outside it — nothing focused, or a control behind it —
-    /// enters it rather than reaching what it covers.
+    /// enters it rather than reaching what it covers; with no field to enter,
+    /// focus goes to [`container`](Self::container). Of several shown in one
+    /// window, the one painted last takes it.
     pub fn modal(cx: &mut App) -> Self {
         let scope = Self::new(cx);
-        cx.default_global::<ModalScopes>().0.push(WeakTabScope {
+        let scopes = &mut cx.default_global::<ModalScopes>().0;
+        // Dialogs make a scope each time they open; keep only the live ones.
+        scopes.retain(|scope| scope.upgrade().is_some());
+        scopes.push(WeakTabScope {
             container: scope.container.downgrade(),
             end: scope.end.downgrade(),
             group: scope.group,
+            painted: Rc::clone(&scope.painted),
         });
         scope
     }
@@ -256,6 +278,7 @@ impl TabScope {
         let next = self.clone();
         let previous = self.clone();
         let pressed = self.clone();
+        let painted = Rc::clone(&self.painted);
         element
             // GPUI runs an element's own press listeners before the one that
             // focuses it, and after its children's: a press no control of the
@@ -277,8 +300,20 @@ impl TabScope {
             .on_action(move |_: &FocusPrevious, window, cx| {
                 previous.step(Direction::Previous, window, cx)
             })
-            // Sorts after every field by its index, wherever it is painted.
-            .child(div().track_focus(&self.end).size_0())
+            // The end marker sorts after every field by its index, wherever it
+            // is painted. Out of flow, so the form's layout is its content's.
+            .child(
+                div()
+                    .track_focus(&self.end)
+                    .absolute()
+                    .size_0()
+                    .child(gpui::canvas(
+                        |_, _, _| (),
+                        move |_, _, _, _| {
+                            painted.set(NEXT_PAINT.fetch_add(1, Ordering::Relaxed));
+                        },
+                    )),
+            )
     }
 
     /// Whether focus is on this form or inside it.
@@ -287,22 +322,16 @@ impl TabScope {
     }
 
     /// The handle a host focuses to hold focus on the form without focusing a
-    /// field, before [`focus_first`](Self::focus_first) or after closing a
-    /// nested menu. It is not a Tab stop.
+    /// field: Tab from it enters the form's first field, and Shift-Tab its
+    /// last. It is not a Tab stop.
     pub fn container(&self) -> &FocusHandle {
         &self.container
     }
 
-    /// Focuses the form's first field. Takes effect once the form has been
-    /// painted.
-    pub fn focus_first(&self, window: &mut Window, cx: &mut App) {
-        self.enter(Direction::Next, window, cx);
-    }
-
-    /// Focuses the form's last field. Takes effect once the form has been
-    /// painted.
-    pub fn focus_last(&self, window: &mut Window, cx: &mut App) {
-        self.enter(Direction::Previous, window, cx);
+    /// Whether the form is in the frame `window` last painted.
+    fn is_shown(&self, window: &Window) -> bool {
+        // GPUI answers for two handles only when both were painted.
+        self.container.contains(&self.end, window)
     }
 
     /// Moves focus one field within the form, wrapping at its ends. A form

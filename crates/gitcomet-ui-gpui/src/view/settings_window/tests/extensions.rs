@@ -162,7 +162,6 @@ fn settings_hosted_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
         .expect("valid registration");
         crate::view::extension_host::install(registry, app);
         crate::app::bind_text_input_keys_for_test(app);
-        gitcomet_ui_kit::focus_order::install(app);
     });
     let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
     cx.update(|window, _| window.activate());

@@ -14,7 +14,11 @@ impl TextInput {
         let focus_handle = cx
             .focus_handle()
             .tab_index(options.tab_index)
-            .tab_stop(!(options.read_only && options.chromeless));
+            .tab_stop(is_tab_stop(
+                options.read_only,
+                options.chromeless,
+                options.tab,
+            ));
         let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
             this.clear_selection_on_ownership_loss(cx);
         });
@@ -36,7 +40,6 @@ impl TextInput {
             display_truncation: None,
             masked: false,
             tab: options.tab,
-            tab_stop_override: None,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             tab_size: TEXT_INPUT_WRAP_TAB_STOP_COLUMNS,
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
@@ -255,6 +258,7 @@ impl TextInput {
     pub fn set_tab(&mut self, tab: TextInputTab, cx: &mut Context<Self>) {
         if self.tab != tab {
             self.tab = tab;
+            self.sync_tab_stop();
             // The key context carries the setting, so the next frame must
             // rebuild it.
             cx.notify();
@@ -271,30 +275,12 @@ impl TextInput {
         }
     }
 
-    pub fn tab(&self) -> TextInputTab {
-        self.tab
-    }
-
-    /// The input's position in its form's Tab order: lower indices come
-    /// first, equal ones in paint order. See [`crate::focus_order`].
-    pub fn set_tab_index(&mut self, index: isize) {
-        self.focus_handle = self.focus_handle.clone().tab_index(index);
-    }
-
-    /// Whether Tab stops at the input. Inputs are stops unless they are
-    /// selectable text (read-only and chromeless); one that is not is still
-    /// focused by pointer.
-    pub fn set_tab_stop(&mut self, tab_stop: bool) {
-        self.tab_stop_override = Some(tab_stop);
-        self.sync_tab_stop();
-    }
-
-    /// Selectable text is not a field: Tab passes over it, as a browser passes
-    /// over text on a page.
+    /// Whether Tab stops at the input. Selectable text (read-only, without
+    /// chrome) is not a field: Tab passes over it, as a browser passes over
+    /// text on a page. A code editor is one even while it shows a file that
+    /// cannot be edited, so its text stays reachable for selecting.
     fn sync_tab_stop(&mut self) {
-        let tab_stop = self
-            .tab_stop_override
-            .unwrap_or(!(self.read_only && self.chromeless));
+        let tab_stop = is_tab_stop(self.read_only, self.chromeless, self.tab);
         if self.focus_handle.tab_stop != tab_stop {
             self.focus_handle = self.focus_handle.clone().tab_stop(tab_stop);
         }
@@ -476,4 +462,8 @@ impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+fn is_tab_stop(read_only: bool, chromeless: bool, tab: TextInputTab) -> bool {
+    !(read_only && chromeless) || tab == TextInputTab::Insert
 }

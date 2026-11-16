@@ -53,10 +53,9 @@ impl Render for FocusFixture {
 
 #[gpui::test]
 fn tab_can_start_focus_after_window_blur(cx: &mut gpui::TestAppContext) {
-    cx.update(|app| {
-        app.bind_keys(gitcomet_ui_kit::focus_order::key_bindings());
-        gitcomet_ui_kit::focus_order::install(app);
-    });
+    // What every window kind runs at launch, the focused diff and mergetool
+    // windows included: the Tab keys must bring their handlers with them.
+    cx.update(crate::app::bind_text_input_keys_for_test);
     let (view, cx) = cx.add_window_view(FocusFixture::new);
     refresh_and_draw(cx);
     for (key, expected) in [("tab", 0), ("shift-tab", 1)] {

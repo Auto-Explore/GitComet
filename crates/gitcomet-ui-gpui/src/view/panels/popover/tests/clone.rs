@@ -430,7 +430,6 @@ fn clone_repo_popover_takes_tab_after_the_window_is_reactivated(cx: &mut gpui::T
     });
     cx.update(|window, app| {
         crate::app::bind_text_input_keys_for_test(app);
-        gitcomet_ui_kit::focus_order::install(app);
         let _ = window.draw(app);
     });
     cx.update(|window, app| {

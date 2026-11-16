@@ -276,6 +276,8 @@ pub(in super::super) struct PopoverHost {
     popover_opened_from_diff_panel: bool,
     /// Keeps Tab inside the open popover.
     tab_scope: TabScope,
+    /// Every picker search field made so far.
+    picker_search_inputs: Vec<Entity<components::TextInput>>,
     context_menu_selected_ix: Option<usize>,
     worktree_menu_location: Option<(std::path::PathBuf, bool)>,
     worktree_menu_location_task: Option<gpui::Task<()>>,

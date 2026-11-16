@@ -213,15 +213,14 @@ fn a_scope_keeps_tab_inside_its_form(cx: &mut TestAppContext) {
     press(cx, "shift-tab");
     assert_focused(cx, |app| view.read(app).handle(1, app), "the middle field");
 
-    // Entering from either end.
-    cx.update(|window, app| {
-        let scope = view.read(app).scope.clone().unwrap();
-        scope.focus_last(window, app);
-        assert!(view.read(app).handle(2, app).is_focused(window));
-        scope.focus_first(window, app);
-        assert!(view.read(app).handle(0, app).is_focused(window));
-        assert!(scope.contains_focused(window, app));
-    });
+    // Entering from the form itself, at either end.
+    let container = |app: &App| view.read(app).scope.as_ref().unwrap().container().clone();
+    focus(cx, container);
+    press(cx, "shift-tab");
+    assert_focused(cx, |app| view.read(app).handle(2, app), "the last field");
+    focus(cx, container);
+    press(cx, "tab");
+    assert_focused(cx, |app| view.read(app).handle(0, app), "the first field");
 }
 
 #[gpui::test]
@@ -282,11 +281,41 @@ fn selectable_text_is_not_a_tab_stop(cx: &mut TestAppContext) {
     cx.update(|app| {
         assert!(!label.read(app).focus_handle().tab_stop);
         assert!(field.read(app).focus_handle().tab_stop);
-        field.update(app, |field, _| field.set_tab_stop(false));
-        assert!(!field.read(app).focus_handle().tab_stop);
-        // A document that becomes editable becomes a field.
+        // Text that becomes editable becomes a field, and the other way.
         label.update(app, |label, cx| label.set_read_only(false, cx));
         assert!(label.read(app).focus_handle().tab_stop);
+        label.update(app, |label, cx| label.set_read_only(true, cx));
+        assert!(!label.read(app).focus_handle().tab_stop);
+    });
+}
+
+/// A code editor showing a file that cannot be edited looks like selectable
+/// text, and is still a field: Tab reaches its text for selecting and copying.
+#[gpui::test]
+fn a_read_only_code_editor_stays_a_tab_stop(cx: &mut TestAppContext) {
+    let editor = cx.update(|app| {
+        app.new(|cx| {
+            TextInput::new_inert(
+                TextInputOptions {
+                    tab: TextInputTab::Insert,
+                    ..TextInputOptions::selectable_multiline()
+                },
+                cx,
+            )
+        })
+    });
+    cx.update(|app| {
+        assert!(editor.read(app).focus_handle().tab_stop);
+        editor.update(app, |editor, cx| editor.set_read_only(false, cx));
+        assert!(editor.read(app).focus_handle().tab_stop);
+        editor.update(app, |editor, cx| {
+            editor.set_read_only(true, cx);
+            editor.set_tab(TextInputTab::MoveFocus, cx);
+        });
+        assert!(
+            !editor.read(app).focus_handle().tab_stop,
+            "without Tab of its own it is selectable text"
+        );
     });
 }
 
@@ -606,4 +635,112 @@ fn a_modal_form_that_is_not_shown_leaves_tab_to_the_window(cx: &mut TestAppConte
         "the window's first field",
     );
     drop(hidden);
+}
+
+/// Making an element a form adds nothing to its layout: its children stay
+/// where they were, gaps included.
+#[gpui::test]
+fn a_scope_leaves_its_elements_layout_alone(cx: &mut TestAppContext) {
+    struct Gapped(Option<TabScope>);
+    impl Render for Gapped {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let column = div().flex().flex_col().gap(px(8.0)).p(px(4.0));
+            let column = match &self.0 {
+                Some(scope) => column.tab_scope(scope),
+                None => column,
+            };
+            column
+                .debug_selector(|| "column".into())
+                .child(
+                    div()
+                        .debug_selector(|| "first".into())
+                        .h(px(10.0))
+                        .child("First"),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "second".into())
+                        .h(px(10.0))
+                        .child("Second"),
+                )
+        }
+    }
+    let mut measure = |scoped: bool| {
+        let (_, cx) = cx.add_window_view(move |_, cx| Gapped(scoped.then(|| TabScope::new(cx))));
+        refresh_and_draw(cx);
+        ["column", "first", "second"].map(|name| cx.debug_bounds(name).expect(name))
+    };
+    assert_eq!(measure(true), measure(false));
+}
+
+/// A dialog with nothing to Tab to still takes Tab: focus goes to the dialog
+/// itself, where its own keys are, never to a control behind it.
+#[gpui::test]
+fn a_modal_form_without_fields_takes_focus_itself(cx: &mut TestAppContext) {
+    let (view, cx) = window_with(cx, &[], Form::Modal);
+    let container = |app: &App| view.read(app).scope.as_ref().unwrap().container().clone();
+
+    cx.update(|window, app| window.blur(app));
+    press(cx, "tab");
+    assert_focused(cx, container, "the dialog");
+    focus(cx, |app| view.read(app).button.clone());
+    press(cx, "shift-tab");
+    assert_focused(cx, container, "the dialog, from a control behind it");
+}
+
+/// Of two dialogs shown at once, Tab enters the one painted on top, whichever
+/// was created first.
+#[gpui::test]
+fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
+    struct Stacked {
+        // Created in this order; `under` is painted first.
+        over: TabScope,
+        under: TabScope,
+        over_field: Entity<TextInput>,
+        under_field: Entity<TextInput>,
+    }
+    impl Render for Stacked {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(div().tab_scope(&self.under).child(self.under_field.clone()))
+                .child(div().tab_scope(&self.over).child(self.over_field.clone()))
+        }
+    }
+    cx.update(|cx| {
+        cx.bind_keys(key_bindings());
+        install(cx);
+    });
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        let mut input = || cx.new(|cx| TextInput::new(TextInputOptions::default(), window, cx));
+        let (over_field, under_field) = (input(), input());
+        Stacked {
+            over: TabScope::modal(cx),
+            under: TabScope::modal(cx),
+            over_field,
+            under_field,
+        }
+    });
+    refresh_and_draw(cx);
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).over_field, app),
+        "the dialog on top",
+    );
+}
+
+/// Dialogs make a modal scope each time they open. The ones that closed are
+/// forgotten as the next registers.
+#[gpui::test]
+fn closed_modal_forms_are_forgotten(cx: &mut TestAppContext) {
+    cx.update(|app| {
+        let kept = TabScope::modal(app);
+        for _ in 0..50 {
+            drop(TabScope::modal(app));
+        }
+        let live = app.global::<ModalScopes>().0.len();
+        assert!(live <= 2, "{live} registered for one live dialog");
+        drop(kept);
+    });
 }
