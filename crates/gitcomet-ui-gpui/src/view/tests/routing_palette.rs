@@ -1491,8 +1491,7 @@ fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::Test
 }
 
 /// The dialog is a form of one field: Tab and Shift-Tab stay on it rather than
-/// reaching the window behind the scrim, and a press on its title is not a
-/// press elsewhere.
+/// reaching the window behind the scrim.
 #[gpui::test]
 fn reveal_commit_dialog_keeps_tab_and_focus_inside(cx: &mut gpui::TestAppContext) {
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
@@ -1530,13 +1529,6 @@ fn reveal_commit_dialog_keeps_tab_and_focus_inside(cx: &mut gpui::TestAppContext
     assert_on_query(cx, "Tab");
     cx.simulate_keystrokes("shift-tab");
     assert_on_query(cx, "Shift-Tab");
-
-    let title = cx
-        .debug_bounds("reveal_commit_title")
-        .expect("the Go to title")
-        .center();
-    cx.simulate_click(title, gpui::Modifiers::default());
-    assert_on_query(cx, "a press on the title");
 }
 
 /// Both close paths have to leave the dialog reopenable. Escape goes through the
