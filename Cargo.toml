@@ -232,7 +232,7 @@ signal-hook = "0.4.6"
 shlex = "2"
 # Already in the tree via gpui-ce; glyph advances for the vendored Mermaid
 # renderer's text measurement.
-skrifa = "0.49"
+skrifa = "0.50"
 smallvec = "1.16.5"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
