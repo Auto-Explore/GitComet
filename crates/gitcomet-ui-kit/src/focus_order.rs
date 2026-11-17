@@ -142,9 +142,9 @@ impl WeakTabScope {
     }
 }
 
-/// Gives focus to the modal form on top in `window`, answering whether one is
-/// shown: to its first or last field, or to the form itself when it has none,
-/// so that keys stay off what it covers.
+/// Gives focus to the modal form on top in `window` unless it has it already,
+/// answering whether it did: to its first or last field, or to the form itself
+/// when it has none, so that keys stay off what it covers.
 fn enter_shown_modal(direction: Direction, window: &mut Window, cx: &mut App) -> bool {
     let top = cx.try_global::<ModalScopes>().and_then(|scopes| {
         scopes
@@ -155,7 +155,7 @@ fn enter_shown_modal(direction: Direction, window: &mut Window, cx: &mut App) ->
             // Painted last is painted on top.
             .max_by_key(|scope| scope.painted.get())
     });
-    let Some(top) = top else {
+    let Some(top) = top.filter(|top| !top.contains_focused(window, cx)) else {
         return false;
     };
     if !top.try_enter(direction, window, cx) {
@@ -218,7 +218,7 @@ pub fn key_context(name: &'static str, captures_tab: bool) -> KeyContext {
 /// ```ignore
 /// struct Dialog { tab_scope: TabScope, name: Entity<TextInput>, /* … */ }
 ///
-/// fn render(&mut self, …) -> impl IntoElement {
+/// fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
 ///     div()
 ///         .tab_scope(&self.tab_scope)
 ///         .child(self.name.clone())
@@ -296,9 +296,9 @@ impl TabScope {
             .tab_index(self.group)
             .tab_group()
             .key_context(SCOPE_CONTEXT)
-            .on_action(move |_: &FocusNext, window, cx| next.step(Direction::Next, window, cx))
+            .on_action(move |_: &FocusNext, window, cx| next.tab(Direction::Next, window, cx))
             .on_action(move |_: &FocusPrevious, window, cx| {
-                previous.step(Direction::Previous, window, cx)
+                previous.tab(Direction::Previous, window, cx)
             })
             // The end marker sorts after every field by its index, wherever it
             // is painted. Out of flow, so the form's layout is its content's.
@@ -332,6 +332,14 @@ impl TabScope {
     fn is_shown(&self, window: &Window) -> bool {
         // GPUI answers for two handles only when both were painted.
         self.container.contains(&self.end, window)
+    }
+
+    /// Tab pressed in the form: into the dialog covering it, if one is shown,
+    /// and one field within the form otherwise.
+    fn tab(&self, direction: Direction, window: &mut Window, cx: &mut App) {
+        if !enter_shown_modal(direction, window, cx) {
+            self.step(direction, window, cx);
+        }
     }
 
     /// Moves focus one field within the form, wrapping at its ends. A form

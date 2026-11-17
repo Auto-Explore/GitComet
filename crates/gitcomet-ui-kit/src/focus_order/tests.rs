@@ -688,8 +688,9 @@ fn a_modal_form_without_fields_takes_focus_itself(cx: &mut TestAppContext) {
     assert_focused(cx, container, "the dialog, from a control behind it");
 }
 
-/// Of two dialogs shown at once, Tab enters the one painted on top, whichever
-/// was created first.
+/// Of two forms shown at once, Tab enters the dialog painted on top, whichever
+/// was created first: with nothing focused, and from a field of the form
+/// under it, a dialog itself or not.
 #[gpui::test]
 fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
     struct Stacked {
@@ -710,24 +711,32 @@ fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
         cx.bind_keys(key_bindings());
         install(cx);
     });
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate();
-        let mut input = || cx.new(|cx| TextInput::new(TextInputOptions::default(), window, cx));
-        let (over_field, under_field) = (input(), input());
-        Stacked {
-            over: TabScope::modal(cx),
-            under: TabScope::modal(cx),
-            over_field,
-            under_field,
+    for under_is_modal in [true, false] {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            window.activate();
+            let mut input = || cx.new(|cx| TextInput::new(TextInputOptions::default(), window, cx));
+            let (over_field, under_field) = (input(), input());
+            Stacked {
+                over: TabScope::modal(cx),
+                under: if under_is_modal {
+                    TabScope::modal(cx)
+                } else {
+                    TabScope::new(cx)
+                },
+                over_field,
+                under_field,
+            }
+        });
+        refresh_and_draw(cx);
+        let over = |app: &App| handle_of(&view.read(app).over_field, app);
+        press(cx, "tab");
+        assert_focused(cx, over, "the dialog on top");
+        for keys in ["tab", "shift-tab"] {
+            focus(cx, |app| handle_of(&view.read(app).under_field, app));
+            press(cx, keys);
+            assert_focused(cx, over, "the dialog on top, from the form under it");
         }
-    });
-    refresh_and_draw(cx);
-    press(cx, "tab");
-    assert_focused(
-        cx,
-        |app| handle_of(&view.read(app).over_field, app),
-        "the dialog on top",
-    );
+    }
 }
 
 /// Dialogs make a modal scope each time they open. The ones that closed are
