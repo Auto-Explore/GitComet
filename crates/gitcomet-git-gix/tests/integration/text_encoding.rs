@@ -634,7 +634,7 @@ fn staging_a_crlf_hunk_keeps_its_carriage_returns() {
 enum Discard {
     /// "Discard hunk": the hunk's raw diff lines, reversed in the working tree.
     Hunk,
-    /// "Discard line": the same for the selected lines of a hunk.
+    /// "Discard line": the same for some of a hunk's lines.
     Lines,
     /// The structural view's discard of selected source lines.
     SelectedSource,
@@ -642,10 +642,29 @@ enum Discard {
     File,
 }
 
+/// A setting under which Git stores `notes.txt` in one form and checks it
+/// out in another, or none.
+struct Conversion {
+    name: &'static str,
+    config: &'static [(&'static str, &'static str)],
+    attributes: &'static str,
+    /// The line ending and encoding Git checks the file out with.
+    ending: &'static str,
+    format: gitcomet_core::text_format::TextFormat,
+    /// Whether what Git stores differs from the working file.
+    converts: bool,
+    /// Whether the structural view takes partial actions on the file.
+    structural: bool,
+}
+
 /// Git applies a discard to the stored form and writes the file back through
-/// the path's conversions: the edit that is kept and the file's line endings,
-/// encoding and filtered form survive whichever setting converts it. A patch
-/// built from decoded text instead of the diff's raw bytes no longer applies.
+/// the path's conversions. For a file in the form Git checks out, the edits
+/// that are kept and the file's line endings, encoding and filtered form
+/// survive whichever setting converts it. A patch built from decoded text
+/// instead of the diff's raw bytes no longer applies.
+///
+/// A file that is not in that form (LF under `core.autocrlf`, say) is
+/// rewritten in it by any partial discard, as by `git checkout -p`.
 #[test]
 fn discarding_from_a_converted_file_keeps_its_working_form() {
     use gitcomet_core::partial_patch::{
@@ -660,67 +679,126 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
         encoding: TextEncoding::UTF_16LE,
         bom: true,
     };
-    /// A setting that converts `notes.txt` between Git and the working tree.
-    struct Conversion {
-        name: &'static str,
-        config: &'static [(&'static str, &'static str)],
-        attributes: &'static str,
-        /// The working file's line ending and encoding.
-        ending: &'static str,
-        format: TextFormat,
-    }
-    let conversion = |name, config, attributes, ending, format| Conversion {
-        name,
-        config,
-        attributes,
-        ending,
-        format,
+    let latin1 = TextFormat {
+        encoding: TextEncoding::WINDOWS_1252,
+        bom: false,
     };
     const ROT13: &str = "tr 'A-Za-z' 'N-ZA-Mn-za-m'";
-    let cases = [
-        conversion("no conversion", &[], "", "\n", utf8),
-        conversion("CRLF stored as it is", &[], "", "\r\n", utf8),
-        conversion(
-            "core.autocrlf",
-            &[("core.autocrlf", "true")],
-            "",
-            "\r\n",
-            utf8,
-        ),
-        conversion("eol=crlf", &[], "notes.txt text eol=crlf\n", "\r\n", utf8),
-        conversion(
-            "working-tree-encoding",
-            &[],
-            "notes.txt text working-tree-encoding=UTF-16LE-BOM\n",
-            "\n",
-            utf16,
-        ),
-        conversion(
-            "working-tree-encoding with eol=crlf",
-            &[],
-            "notes.txt text eol=crlf working-tree-encoding=UTF-16LE-BOM\n",
-            "\r\n",
-            utf16,
-        ),
-        conversion(
-            "a clean and smudge filter",
-            &[
+    let mut conversions = vec![
+        Conversion {
+            name: "no conversion",
+            config: &[],
+            attributes: "",
+            ending: "\n",
+            format: utf8,
+            converts: false,
+            structural: true,
+        },
+        Conversion {
+            name: "CRLF stored as it is",
+            config: &[],
+            attributes: "",
+            ending: "\r\n",
+            format: utf8,
+            converts: false,
+            structural: true,
+        },
+        Conversion {
+            name: "Latin-1 stored as it is",
+            config: &[],
+            attributes: "",
+            ending: "\n",
+            format: latin1,
+            converts: false,
+            structural: false,
+        },
+        Conversion {
+            name: "core.autocrlf",
+            config: &[("core.autocrlf", "true")],
+            attributes: "",
+            ending: "\r\n",
+            format: utf8,
+            converts: true,
+            structural: true,
+        },
+        Conversion {
+            name: "eol=crlf",
+            config: &[],
+            attributes: "notes.txt text eol=crlf\n",
+            ending: "\r\n",
+            format: utf8,
+            converts: true,
+            structural: true,
+        },
+        Conversion {
+            name: "working-tree-encoding",
+            config: &[],
+            attributes: "notes.txt text eol=lf working-tree-encoding=UTF-16LE-BOM\n",
+            ending: "\n",
+            format: utf16,
+            converts: true,
+            structural: true,
+        },
+        Conversion {
+            name: "working-tree-encoding with eol=crlf",
+            config: &[],
+            attributes: "notes.txt text eol=crlf working-tree-encoding=UTF-16LE-BOM\n",
+            ending: "\r\n",
+            format: utf16,
+            converts: true,
+            structural: true,
+        },
+    ];
+    if cfg!(unix) {
+        conversions.push(Conversion {
+            name: "a clean and smudge filter",
+            config: &[
                 ("filter.rot13.clean", ROT13),
                 ("filter.rot13.smudge", ROT13),
             ],
-            "notes.txt filter=rot13\n",
-            "\n",
-            utf8,
-        ),
-    ];
-    for Conversion {
-        name,
-        config,
-        attributes,
-        ending,
-        format,
-    } in cases
-    {
+            attributes: "notes.txt filter=rot13\n",
+            ending: "\n",
+            format: utf8,
+            converts: true,
+            structural: true,
+        });
+    }
+    for conversion in conversions {
+        let name = conversion.name;
+        let dir = init_repo();
+        let root = dir.path();
+        for (key, value) in conversion.config {
+            git(root, &["config", key, value]);
+        }
+        fs::write(root.join(".gitattributes"), conversion.attributes).unwrap();
+        // Twelve lines. Lines 2 and 3 change in one hunk, line 11 in another.
+        let working = |second: &str, third: &str, eleventh: &str| {
+            let text: String = (1..=12)
+                .map(|line| {
+                    let text = match line {
+                        2 => second.to_string(),
+                        3 => third.to_string(),
+                        11 => eleventh.to_string(),
+                        _ => format!("café {line}"),
+                    };
+                    text + conversion.ending
+                })
+                .collect();
+            gitcomet_core::text_format::encode(&text, conversion.format)
+                .unwrap()
+                .into_owned()
+        };
+        let file = root.join("notes.txt");
+        let base = working("café 2", "café 3", "café 11");
+        fs::write(&file, &base).unwrap();
+        commit_all(root, "base");
+        assert_eq!(
+            git(root, &["cat-file", "blob", "HEAD:notes.txt"]) != base,
+            conversion.converts,
+            "{name}: what Git stores"
+        );
+        let edited = working("two", "three", "eleven");
+
         for discard in [
             Discard::Hunk,
             Discard::Lines,
@@ -728,30 +806,7 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
             Discard::File,
         ] {
             let case = format!("{name}, {discard:?}");
-            let dir = init_repo();
-            let root = dir.path();
-            for (key, value) in config {
-                git(root, &["config", key, value]);
-            }
-            fs::write(root.join(".gitattributes"), attributes).unwrap();
-            // Twelve lines; the edits to lines 2 and 11 are separate hunks.
-            let working = |second: &str, eleventh: &str| {
-                let text: String = (1..=12)
-                    .map(|line| match line {
-                        2 => format!("{second}{ending}"),
-                        11 => format!("{eleventh}{ending}"),
-                        _ => format!("line {line}{ending}"),
-                    })
-                    .collect();
-                gitcomet_core::text_format::encode(&text, format)
-                    .unwrap()
-                    .into_owned()
-            };
-            let file = root.join("notes.txt");
-            fs::write(&file, working("line 2", "line 11")).unwrap();
-            commit_all(root, "base");
-            fs::write(&file, working("FIRST", "SECOND")).unwrap();
-
+            fs::write(&file, &edited).unwrap();
             let repo = open(root);
             let target = unstaged("notes.txt");
             let lines = gitcomet_core::diff::annotate_unified(&patch(&*repo, &target, None));
@@ -760,6 +815,7 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
                 repo.apply_unified_patch_to_worktree_with_output(&patch, true)
                     .unwrap_or_else(|error| panic!("{case}: {error}"));
             };
+            let mut kept = working("café 2", "three", "eleven");
             match discard {
                 Discard::Hunk => {
                     let hunk = lines
@@ -767,7 +823,10 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
                         .position(|line| line.kind == DiffLineKind::Hunk)
                         .unwrap_or_else(|| panic!("{case}: a hunk"));
                     reverse(build_unified_patch_for_hunk(&lines, hunk));
+                    kept = working("café 2", "café 3", "eleven");
                 }
+                // One of the hunk's two changed lines: the other is the
+                // patch's context.
                 Discard::Lines => {
                     let second_line = lines
                         .iter()
@@ -782,32 +841,37 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
                 }
                 Discard::SelectedSource => {
                     let token = CancellationToken::new();
-                    let snapshot = repo.diff_action_snapshot(&target, &token).unwrap();
-                    let prepared = repo
-                        .prepare_diff_patch(
-                            &target,
-                            PatchOperation::Discard,
-                            &SourceLineSelection {
-                                old: [2].into(),
-                                new: [2].into(),
-                            },
-                            &snapshot.old,
-                            &snapshot.new,
-                            &token,
-                        )
-                        .unwrap_or_else(|error| panic!("{case}: {error}"));
-                    repo.apply_prepared_diff_patch(&prepared)
-                        .unwrap_or_else(|error| panic!("{case}: {error}"));
+                    let prepared =
+                        repo.diff_action_snapshot(&target, &token)
+                            .and_then(|snapshot| {
+                                repo.prepare_diff_patch(
+                                    &target,
+                                    PatchOperation::Discard,
+                                    &SourceLineSelection {
+                                        old: [2].into(),
+                                        new: [2].into(),
+                                    },
+                                    &snapshot.old,
+                                    &snapshot.new,
+                                    &token,
+                                )
+                            });
+                    if conversion.structural {
+                        let prepared = prepared.unwrap_or_else(|error| panic!("{case}: {error}"));
+                        repo.apply_prepared_diff_patch(&prepared)
+                            .unwrap_or_else(|error| panic!("{case}: {error}"));
+                    } else {
+                        assert!(prepared.is_err(), "{case}: refused");
+                        kept = edited.clone();
+                    }
                 }
-                Discard::File => repo
-                    .discard_worktree_changes(&[Path::new("notes.txt")])
-                    .unwrap_or_else(|error| panic!("{case}: {error}")),
+                Discard::File => {
+                    repo.discard_worktree_changes(&[Path::new("notes.txt")])
+                        .unwrap_or_else(|error| panic!("{case}: {error}"));
+                    kept = base.clone();
+                }
             }
-            let kept = match discard {
-                Discard::File => "line 11",
-                _ => "SECOND",
-            };
-            assert_eq!(fs::read(&file).unwrap(), working("line 2", kept), "{case}");
+            assert_eq!(fs::read(&file).unwrap(), kept, "{case}");
         }
     }
 }
