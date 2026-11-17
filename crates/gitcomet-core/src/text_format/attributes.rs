@@ -1,5 +1,4 @@
 use super::{LineEnding, TextEncoding};
-use std::borrow::Cow;
 use std::sync::Arc;
 
 /// The `text` attribute (or the legacy `crlf` one when `text` is unset).
@@ -137,29 +136,6 @@ impl EolPolicy {
             TextAttr::Unset => Self::default(),
         }
     }
-
-    /// Text as Git stores it, with the line endings a checkout writes (git's
-    /// `crlf_to_worktree`): a bare LF becomes CRLF when the checkout ending is
-    /// CRLF, and `auto` leaves text that already holds a CR alone.
-    pub fn checked_out(self, stored: &str) -> Cow<'_, str> {
-        if self.checkout != Some(LineEnding::CrLf)
-            || !stored.contains('\n')
-            || (self.auto && stored.contains('\r'))
-        {
-            return Cow::Borrowed(stored);
-        }
-        let mut out = String::with_capacity(stored.len() + stored.len() / 16);
-        for line in stored.split_inclusive('\n') {
-            match line.strip_suffix('\n') {
-                Some(text) if !text.ends_with('\r') => {
-                    out.push_str(text);
-                    out.push_str("\r\n");
-                }
-                _ => out.push_str(line),
-            }
-        }
-        Cow::Owned(out)
-    }
 }
 
 /// The attributes and config that decide how a path's content is read.
@@ -265,30 +241,6 @@ mod tests {
         assert!(input.normalized);
         assert_eq!(input.checkout, Some(Lf));
         assert_eq!(input.source, EolSource::CoreAutocrlf);
-    }
-
-    #[test]
-    fn checked_out_text_follows_git() {
-        let policy = |checkout, auto| EolPolicy {
-            normalized: true,
-            auto,
-            checkout,
-            source: EolSource::TextAttribute,
-        };
-        let crlf = policy(Some(LineEnding::CrLf), false);
-        assert_eq!(crlf.checked_out("a\nb\n"), "a\r\nb\r\n");
-        assert_eq!(crlf.checked_out("a\nb"), "a\r\nb");
-        // Only bare LF is converted: CRLF and a lone CR stay as they are.
-        assert_eq!(crlf.checked_out("a\r\nb\nc\rd\n"), "a\r\nb\r\nc\rd\r\n");
-        // `auto` converts text Git stores with LF only.
-        let auto = policy(Some(LineEnding::CrLf), true);
-        assert_eq!(auto.checked_out("a\nb\n"), "a\r\nb\r\n");
-        assert_eq!(auto.checked_out("a\r\nb\n"), "a\r\nb\n");
-        assert_eq!(auto.checked_out("a\rb\n"), "a\rb\n");
-        // A checkout never turns CRLF into LF, and no policy touches nothing.
-        for unconverted in [policy(Some(LineEnding::Lf), false), EolPolicy::default()] {
-            assert_eq!(unconverted.checked_out("a\r\nb\n"), "a\r\nb\n");
-        }
     }
 
     #[test]

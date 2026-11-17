@@ -215,7 +215,7 @@ impl DiffRenderer {
         }
     }
 
-    pub(in crate::view) fn selected_text_attributes(&self) -> Arc<TextAttributes> {
+    fn selected_text_attributes(&self) -> Arc<TextAttributes> {
         match self
             .active_repo()
             .map(|repo| &self.bound_diff_state(repo).text_attributes)

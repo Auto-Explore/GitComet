@@ -867,9 +867,10 @@ fn mixed_encoding_conflict_can_save_either_decoded_stage() {
     }
 }
 
-/// The resolver writes a side as the stage's text with the path's checkout
-/// line endings, in the working file's encoding. That is what Git checks the
-/// stage out as, whichever setting converts it.
+/// The resolver writes a side as the stage's text in the line endings and
+/// encoding of the working file Git wrote for the conflict. That is what Git
+/// checks the stage out as, whichever setting converts it, and also where
+/// Git converts nothing: a UTF-16 file it takes for binary, or stored CRLF.
 #[test]
 fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
     use gitcomet_core::text_format::TextFormat;
@@ -878,28 +879,36 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
         encoding: TextEncoding::UTF_16LE,
         bom: true,
     };
-    for (autocrlf, attributes, worktree) in [
-        ("true", "", TextFormat::UTF_8),
-        ("false", "menu.txt text eol=crlf\n", TextFormat::UTF_8),
-        ("false", "menu.txt text eol=lf\n", TextFormat::UTF_8),
+    // (core.autocrlf, attributes, the working file's encoding, line ending)
+    for (autocrlf, attributes, worktree, ending) in [
+        ("true", "", TextFormat::UTF_8, "\n"),
+        // No `working-tree-encoding`: binary to Git, which leaves its LF.
+        ("true", "", utf16, "\n"),
+        // CRLF that Git stores as it is.
+        ("false", "", TextFormat::UTF_8, "\r\n"),
+        ("false", "menu.txt text eol=crlf\n", TextFormat::UTF_8, "\n"),
+        ("false", "menu.txt text eol=lf\n", TextFormat::UTF_8, "\n"),
         (
             "false",
             "menu.txt text working-tree-encoding=UTF-16LE-BOM\n",
             utf16,
+            "\n",
         ),
         (
             "false",
             "menu.txt text eol=crlf working-tree-encoding=UTF-16LE-BOM\n",
             utf16,
+            "\n",
         ),
     ] {
-        let case = format!("core.autocrlf={autocrlf} {attributes:?}");
+        let case = format!("core.autocrlf={autocrlf} {attributes:?} {worktree:?} {ending:?}");
         let dir = init_repo();
         let root = dir.path();
         git(root, &["config", "core.autocrlf", autocrlf]);
         fs::write(root.join(".gitattributes"), attributes).unwrap();
         let write = |text: &str| {
-            let bytes = gitcomet_core::text_format::encode(text, worktree).unwrap();
+            let text = text.replace('\n', ending);
+            let bytes = gitcomet_core::text_format::encode(&text, worktree).unwrap();
             fs::write(root.join("menu.txt"), bytes).unwrap();
         };
         write("café\nbase\n");
@@ -919,7 +928,11 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
         let repo = open(root);
         let path = Path::new("menu.txt");
         let session = repo.conflict_session(path, None).unwrap().unwrap();
-        let policy = repo.text_attributes(path).unwrap().eol_policy;
+        let working = session
+            .current
+            .as_ref()
+            .and_then(|current| current.as_text())
+            .expect("the working file as text");
         let format = session
             .output_format
             .or(session.current_format)
@@ -928,7 +941,8 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
             (":2:menu.txt", &session.ours),
             (":3:menu.txt", &session.theirs),
         ] {
-            let text = policy.checked_out(side.as_text().expect("a text stage"));
+            let stored = side.as_text().expect("a text stage");
+            let text = gitcomet_core::text_format::with_crlf_of(stored, working);
             let written = gitcomet_core::text_format::encode(&text, format.format).unwrap();
             assert_eq!(
                 written.as_ref(),
