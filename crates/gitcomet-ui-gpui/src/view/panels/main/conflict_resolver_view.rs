@@ -512,19 +512,7 @@ impl DiffRenderer {
         };
         let text = self.current_conflict_resolved_output_text(cx);
         let text = self.conflict_resolver_save_contents_from_text(text);
-        // The output is built from the stages, which hold what Git stores;
-        // the file Git checked out has the line endings it writes.
-        let in_crlf = self
-            .conflict_resolver
-            .cached_loaded_file_for_target(repo_id, &path)
-            .and_then(|file| file.current.as_deref())
-            .and_then(
-                |current| match gitcomet_core::text_format::with_crlf_of(&text, current) {
-                    std::borrow::Cow::Owned(converted) => Some(converted),
-                    std::borrow::Cow::Borrowed(_) => None,
-                },
-            );
-        let text = in_crlf.unwrap_or(text);
+        let text = self.conflict_output_text_for_save(repo_id, &path, text);
         let saved_text: Arc<str> = Arc::from(text.as_str());
         let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
             return;

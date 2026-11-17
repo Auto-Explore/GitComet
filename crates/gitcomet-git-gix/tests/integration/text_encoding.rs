@@ -879,35 +879,52 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
         encoding: TextEncoding::UTF_16LE,
         bom: true,
     };
-    // (core.autocrlf, attributes, the working file's encoding, line ending)
-    for (autocrlf, attributes, worktree, ending) in [
-        ("true", "", TextFormat::UTF_8, "\n"),
-        // No `working-tree-encoding`: binary to Git, which leaves its LF.
-        ("true", "", utf16, "\n"),
+    // (core.autocrlf, attributes, working encoding, line ending, first line)
+    for (autocrlf, attributes, worktree, ending, first) in [
+        ("true", "", TextFormat::UTF_8, "\n", "café"),
+        // Binary to Git, which leaves the LF: no `working-tree-encoding`,
+        // and a control byte in a short file.
+        ("true", "", utf16, "\n", "café"),
+        ("true", "", TextFormat::UTF_8, "\n", "header\u{1}"),
         // CRLF that Git stores as it is.
-        ("false", "", TextFormat::UTF_8, "\r\n"),
-        ("false", "menu.txt text eol=crlf\n", TextFormat::UTF_8, "\n"),
-        ("false", "menu.txt text eol=lf\n", TextFormat::UTF_8, "\n"),
+        ("false", "", TextFormat::UTF_8, "\r\n", "café"),
+        (
+            "false",
+            "menu.txt text eol=crlf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "café",
+        ),
+        (
+            "false",
+            "menu.txt text eol=lf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "café",
+        ),
         (
             "false",
             "menu.txt text working-tree-encoding=UTF-16LE-BOM\n",
             utf16,
             "\n",
+            "café",
         ),
         (
             "false",
             "menu.txt text eol=crlf working-tree-encoding=UTF-16LE-BOM\n",
             utf16,
             "\n",
+            "café",
         ),
     ] {
-        let case = format!("core.autocrlf={autocrlf} {attributes:?} {worktree:?} {ending:?}");
+        let case =
+            format!("core.autocrlf={autocrlf} {attributes:?} {worktree:?} {ending:?} {first:?}");
         let dir = init_repo();
         let root = dir.path();
         git(root, &["config", "core.autocrlf", autocrlf]);
         fs::write(root.join(".gitattributes"), attributes).unwrap();
         let write = |text: &str| {
-            let text = text.replace('\n', ending);
+            let text = text.replace("café", first).replace('\n', ending);
             let bytes = gitcomet_core::text_format::encode(&text, worktree).unwrap();
             fs::write(root.join("menu.txt"), bytes).unwrap();
         };
@@ -942,7 +959,7 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
             (":3:menu.txt", &session.theirs),
         ] {
             let stored = side.as_text().expect("a text stage");
-            let text = gitcomet_core::text_format::with_crlf_of(stored, working);
+            let text = gitcomet_core::text_format::with_crlf_of(stored.into(), working);
             let written = gitcomet_core::text_format::encode(&text, format.format).unwrap();
             assert_eq!(
                 written.as_ref(),

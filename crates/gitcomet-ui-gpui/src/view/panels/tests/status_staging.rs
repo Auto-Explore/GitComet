@@ -1408,18 +1408,14 @@ fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppConte
 }
 
 /// With `core.autocrlf=true` the stages hold LF and Git writes the working
-/// file with CRLF, conflict markers included. A resolution is built from the
-/// stages, and saving it as it stood left the file with LF: not what Git
-/// checks out, and refused by `git add` under `core.safecrlf=true`.
-#[gpui::test]
-fn the_resolver_saves_the_line_endings_git_checks_out(cx: &mut gpui::TestAppContext) {
+/// file with CRLF. A resolution built from the stages is saved with CRLF
+/// too, by Save and by the focused window's Save & close; saved as LF,
+/// `git add` refuses it under `core.safecrlf=true`.
+fn save_under_autocrlf(cx: &mut gpui::TestAppContext, close: bool) {
     let (dir, store, view, diff_renderer, cx) =
         open_text_resolver_on(cx, |dir| conflicted_merge_with_autocrlf(dir, true));
     let file = dir.path().join("a.txt");
-    assert!(
-        std::fs::read(&file).unwrap().ends_with(b"theirs\r\n"),
-        "Git checks the conflict out with CRLF"
-    );
+    assert!(std::fs::read(&file).unwrap().ends_with(b"theirs\r\n"));
     wait_for(cx, &view, &store, "the full conflict payload", |repo| {
         repo.conflict_state.conflict_file_load_mode
             == gitcomet_state::model::ConflictFileLoadMode::Full
@@ -1435,22 +1431,36 @@ fn the_resolver_saves_the_line_endings_git_checks_out(cx: &mut gpui::TestAppCont
         });
     });
     draw_and_drain_test_window(cx);
-    let ops_before = store.snapshot().repos[0].ops_rev;
-    click(cx, "conflict_save");
-    wait_for(cx, &view, &store, "save the resolution", |repo| {
-        repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
-    });
+    if close {
+        cx.update(|_, app| {
+            diff_renderer.update(app, |pane, cx| {
+                pane.focused_mergetool_save_and_exit(REPO, "a.txt".into(), cx);
+            });
+        });
+    } else {
+        let ops_before = store.snapshot().repos[0].ops_rev;
+        click(cx, "conflict_save");
+        wait_for(cx, &view, &store, "save the resolution", |repo| {
+            repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
+        });
+        let error = store.snapshot().repos[0].feedback.last_error.clone();
+        assert!(error.is_none(), "{error:?}");
+    }
 
-    let snapshot = store.snapshot();
-    assert!(
-        snapshot.repos[0].feedback.last_error.is_none(),
-        "{:?}",
-        snapshot.repos[0].feedback.last_error
-    );
     assert_eq!(std::fs::read(&file).unwrap(), b"ours\r\n");
     git(dir.path(), &["-c", "core.safecrlf=true", "add", "a.txt"]);
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_saves_the_line_endings_git_checks_out(cx: &mut gpui::TestAppContext) {
+    save_under_autocrlf(cx, false);
+}
+
+#[gpui::test]
+fn save_and_close_writes_the_line_endings_git_checks_out(cx: &mut gpui::TestAppContext) {
+    save_under_autocrlf(cx, true);
 }
 
 /// The bar's plain Save writes the resolution and leaves the file unmerged.

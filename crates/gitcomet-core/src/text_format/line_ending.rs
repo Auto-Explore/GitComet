@@ -170,16 +170,12 @@ pub fn convert_line_endings(text: &str, to: LineEnding) -> Cow<'_, str> {
 }
 
 /// `text`, about to replace `file`, with CRLF for every line break when
-/// `file` has CRLF throughout; as it is otherwise.
-///
-/// For a conflict's resolution: Git checks the conflicted file out with CRLF
-/// (`core.autocrlf`, `eol=crlf`) from stages that hold LF, so a resolution
-/// built from the stages is LF. The file says what Git wrote, including
-/// where it converts nothing: a file it takes for binary, or stored CRLF.
-pub fn with_crlf_of<'a>(text: &'a str, file: &str) -> Cow<'a, str> {
+/// `file` has CRLF throughout; as it is otherwise. A conflict's stages hold
+/// LF where Git checks the conflicted file out with CRLF.
+pub fn with_crlf_of(text: String, file: &str) -> String {
     match LineEndingStats::from_bytes(file.as_bytes()).uniform() {
-        Some(LineEnding::CrLf) => convert_line_endings(text, LineEnding::CrLf),
-        _ => Cow::Borrowed(text),
+        Some(LineEnding::CrLf) => convert_line_endings(&text, LineEnding::CrLf).into_owned(),
+        _ => text,
     }
 }
 
@@ -256,17 +252,15 @@ mod tests {
     #[test]
     fn with_crlf_of_follows_a_file_that_is_crlf_throughout() {
         let crlf = "<<<<<<< ours\r\na\r\n=======\r\nb\r\n>>>>>>> theirs\r\n";
-        assert_eq!(with_crlf_of("a\nb\n", crlf), "a\r\nb\r\n");
-        // A buffer of several sources comes out in one style.
+        assert_eq!(with_crlf_of("a\nb\n".into(), crlf), "a\r\nb\r\n");
         assert_eq!(
-            with_crlf_of("a\npasted\r\nold\rb", crlf),
+            with_crlf_of("a\npasted\r\nold\rb".into(), crlf),
             "a\r\npasted\r\nold\r\nb"
         );
-        assert!(matches!(with_crlf_of("a\r\nb\r\n", crlf), Cow::Borrowed(_)));
-        // Anything else says nothing about CRLF: the text is left alone.
         for file in ["a\nb\n", "a\r\nb\n", "a\rb\r", "no line break", ""] {
-            assert!(
-                matches!(with_crlf_of("a\nb\r\n", file), Cow::Borrowed(_)),
+            assert_eq!(
+                with_crlf_of("a\nb\r\n".into(), file),
+                "a\nb\r\n",
                 "{file:?}"
             );
         }
