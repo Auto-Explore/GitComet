@@ -1208,93 +1208,93 @@ fn file_history_reads_glob_characters_in_names_literally() {
     );
 }
 
-/// Names a pathspec, an option parser or quoted output could read as
-/// something other than one file. Windows forbids most of them.
-fn unusual_names() -> Vec<&'static str> {
-    let mut names = vec![
-        "-n", "--all", " a.txt", "a b.txt", "é.txt", "~a.txt", "@{u}",
-    ];
-    if !cfg!(windows) {
-        names.extend([
-            "*.txt",
-            "?.txt",
-            ":(top)a.txt",
-            ":(glob)*.txt",
-            ":!a.txt",
-            ":/a.txt",
-            "\\*.txt",
-            "a.txt ",
-            "tab\ta.txt",
-            "line\nbreak.txt",
-            "\"quoted\".txt",
-        ]);
-    }
-    names
-}
-
-fn init_with_identity(repo: &Path) {
+/// A repository on `main` with an identity to commit as.
+fn init_on_main(repo: &Path) {
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "core.autocrlf", "false"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 }
 
 /// The glob tests above each cover `[a].txt`; this runs the same operations,
 /// and the reads beside them, over names with pathspec magic, a leading dash,
-/// whitespace, quotes and a line break. Each must address the one file.
+/// whitespace, quotes and a line break. Every name is in one repository with
+/// `a.txt` and `b.txt`, so each is also what another could be misread as, and
+/// each operation must address the one file.
 #[test]
 fn working_tree_operations_address_one_file_whatever_its_name() {
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions};
     test_git_env::ensure_initialized();
-    let token = gitcomet_core::services::CancellationToken::new();
-    for name in unusual_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path();
-        init_with_identity(repo);
-        let path = Path::new(name);
-        let siblings = ["a.txt", "b.txt"];
-        for sibling in siblings {
-            write(repo, sibling, "sibling\n");
-        }
-        run_git(repo, &["add", "."]);
-        run_git(repo, &["commit", "-qm", "siblings"]);
-        write(repo, name, "selected\n");
-        run_git(repo, &["add", "."]);
-        run_git(repo, &["commit", "-qm", "selected"]);
-        let selected = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
-        for sibling in siblings {
-            write(repo, sibling, "sibling edit\n");
-        }
-        write(repo, name, "selected edit\n");
+    let token = CancellationToken::new();
+    let names = git_cli::unusual_file_names();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_on_main(repo);
+    let siblings = ["a.txt", "b.txt"];
+    for sibling in siblings {
+        write(repo, sibling, "sibling\n");
+    }
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "siblings"]);
+    let without_names = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    // One commit adds every name and changes the siblings: a diff or a
+    // history read as a pattern shows more than its file.
+    for (index, name) in names.iter().enumerate() {
+        write(repo, name, format!("file {index}\n"));
+    }
+    for sibling in siblings {
+        write(repo, sibling, "sibling changed\n");
+    }
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "names"]);
+    let with_names = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    let edit = |name: &str, index: usize| {
+        write(repo, name, format!("file {index}\nfile {index} edited\n"));
+    };
+    for (index, name) in names.iter().enumerate() {
+        edit(name, index);
+    }
+    for sibling in siblings {
+        write(repo, sibling, "sibling edited\n");
+    }
 
-        let opened = GixBackend.open(repo).unwrap();
-        let listed = |staged: bool| -> Vec<PathBuf> {
-            let status = opened.status(&token).unwrap();
-            let entries = if staged {
-                &status.staged
-            } else {
-                &status.unstaged
-            };
-            let mut paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
-            paths.sort();
-            paths
+    let opened = GixBackend.open(repo).unwrap();
+    let listed = |staged: bool| -> Vec<PathBuf> {
+        let status = opened.status(&token).unwrap();
+        let entries = if staged {
+            &status.staged
+        } else {
+            &status.unstaged
         };
-        let mut every_file = vec![PathBuf::from("a.txt"), "b.txt".into(), name.into()];
-        every_file.sort();
-        assert_eq!(listed(false), every_file, "{name:?}: status");
+        let mut paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+        paths.sort();
+        paths
+    };
+    let mut every_file: Vec<PathBuf> = names.iter().chain(&siblings).map(PathBuf::from).collect();
+    every_file.sort();
+    assert_eq!(listed(false), every_file, "status");
 
+    for (index, name) in names.iter().enumerate() {
+        let path = Path::new(name);
         let diff = opened
             .diff_unified(&DiffTarget::working_tree(path.into(), DiffArea::Unstaged))
             .unwrap();
         assert!(
-            diff.contains("+selected edit") && !diff.contains("sibling"),
+            diff.contains(&format!("+file {index} edited")) && diff.matches(" edited").count() == 1,
             "{name:?}: working tree diff {diff}"
         );
         let diff = opened
-            .diff_unified(&DiffTarget::commit(selected.clone(), path.into()))
+            .diff_unified(&DiffTarget::commit(with_names.clone(), path.into()))
             .unwrap();
         assert!(
-            diff.contains("+selected") && !diff.contains("sibling"),
+            diff.contains(&format!("+file {index}\n"))
+                && diff.matches("+file ").count() == 1
+                && !diff.contains("sibling"),
             "{name:?}: commit diff {diff}"
         );
 
@@ -1311,114 +1311,153 @@ fn working_tree_operations_address_one_file_whatever_its_name() {
             .iter()
             .map(|commit| commit.summary.as_ref())
             .collect();
-        assert_eq!(summaries, ["selected"], "{name:?}: history");
+        assert_eq!(summaries, ["names"], "{name:?}: history");
+        // The file is not in that commit, so this follows its history.
         assert_eq!(
-            opened.resolve_file_path_at_commit(path, &selected).unwrap(),
-            Some(path.into()),
-            "{name:?}: path at commit"
+            opened
+                .resolve_file_path_at_commit(path, &without_names)
+                .unwrap(),
+            None,
+            "{name:?}: path before the file existed"
         );
-        assert_eq!(opened.blame_file(path, None).unwrap().len(), 1, "{name:?}");
+        // One committed line and one that is not; neither is another file's.
+        let blame = opened
+            .blame_worktree_file(path, DiffArea::Unstaged)
+            .unwrap();
+        let sources: Vec<_> = blame.iter().map(|line| &line.source_path).collect();
+        assert_eq!(sources, [&None, &None], "{name:?}: blame");
 
-        let read = |file: &str| fs::read_to_string(repo.join(file)).unwrap();
         opened.discard_worktree_changes(&[path]).unwrap();
-        assert_eq!(read(name), "selected\n", "{name:?}: discard");
-        for sibling in siblings {
-            assert_eq!(read(sibling), "sibling edit\n", "{name:?}: discard");
-        }
+        let mut still_edited = every_file.clone();
+        still_edited.retain(|file| file != path);
+        assert_eq!(listed(false), still_edited, "{name:?}: discard");
+        edit(name, index);
+    }
 
-        fs::remove_file(repo.join(name)).unwrap();
-        run_git(repo, &["commit", "-qam", "untrack"]);
-        write(repo, name, "untracked\n");
-        write(repo, "untracked.txt", "untracked\n");
+    // Untracked now, every one of them: a comparison lists each by its
+    // name, and a discard removes the one file.
+    run_git(repo, &["rm", "-rq", "--cached", "."]);
+    run_git(repo, &["commit", "-qm", "untrack"]);
+    let head = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    let mut options = ComparisonOptions::direct();
+    options.include_untracked = true;
+    let compared = opened.compare_files(&head, None, &options, &token).unwrap();
+    let mut compared: Vec<PathBuf> = compared.files.into_iter().map(|file| file.path).collect();
+    compared.sort();
+    assert_eq!(compared, every_file, "untracked files in a comparison");
+    let mut remaining = every_file;
+    for name in names {
+        let path = Path::new(name);
         opened.discard_worktree_changes(&[path]).unwrap();
+        remaining.retain(|file| file != path);
         assert!(!repo.join(name).exists(), "{name:?}: untracked discard");
-        assert!(repo.join("untracked.txt").exists(), "{name:?}: its sibling");
+        for file in &remaining {
+            assert!(repo.join(file).exists(), "{name:?}: took {file:?} with it");
+        }
     }
 }
 
-/// As above for a conflicted file: taking a side, the base or a deletion
-/// resolves it and leaves the conflicted `a.txt` beside it alone.
+/// As above for conflicted files: every name and `a.txt` conflict at once,
+/// and taking a side, the base or a deletion resolves the one file.
 #[test]
 fn conflict_operations_address_one_file_whatever_its_name() {
     #[derive(Clone, Copy, Debug)]
     enum Resolve {
         Theirs,
+        Ours,
         Base,
+        /// We deleted the files; the deletion is accepted.
         Deletion,
+        /// We deleted the files; our side, which has no stage, is taken.
+        OursOfDeletion,
     }
     test_git_env::ensure_initialized();
-    for name in unusual_names() {
-        for resolve in [Resolve::Theirs, Resolve::Base, Resolve::Deletion] {
-            let case = format!("{name:?}, {resolve:?}");
-            let dir = tempfile::tempdir().unwrap();
-            let repo = dir.path();
-            init_with_identity(repo);
-            let path = Path::new(name);
-            let files = ["a.txt", name];
-            for file in files {
-                write(repo, file, "base\n");
+    let names = git_cli::unusual_file_names();
+    for resolve in [
+        Resolve::Theirs,
+        Resolve::Ours,
+        Resolve::Base,
+        Resolve::Deletion,
+        Resolve::OursOfDeletion,
+    ] {
+        let deleted = matches!(resolve, Resolve::Deletion | Resolve::OursOfDeletion);
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_on_main(repo);
+        let files: Vec<&str> = names.iter().copied().chain(["a.txt"]).collect();
+        let write_all = |side: &str| {
+            for (index, file) in files.iter().enumerate() {
+                write(repo, file, format!("{side} {index}\n"));
             }
-            run_git(repo, &["add", "."]);
-            run_git(repo, &["commit", "-qm", "base"]);
-            run_git(repo, &["checkout", "-qb", "feature"]);
-            for file in files {
-                write(repo, file, "theirs\n");
-            }
-            run_git(repo, &["commit", "-qam", "theirs"]);
-            run_git(repo, &["checkout", "-q", "main"]);
-            for file in files {
-                if matches!(resolve, Resolve::Deletion) {
-                    // We deleted both; they changed both.
-                    fs::remove_file(repo.join(file)).unwrap();
-                } else {
-                    write(repo, file, "ours\n");
-                }
-            }
-            run_git(repo, &["commit", "-qam", "ours"]);
-            let _ = git_command()
-                .current_dir(repo)
-                .args(["merge", "feature"])
-                .output();
-            let unmerged = || -> Vec<String> {
-                let mut names: Vec<String> = run_git_output(repo, &["ls-files", "-u", "-z"])
-                    .split_terminator('\0')
-                    .map(|entry| entry.split_once('\t').unwrap().1.to_string())
-                    .collect();
-                names.sort();
-                names.dedup();
-                names
-            };
-            let mut both = vec!["a.txt".to_string(), name.to_string()];
-            both.sort();
-            assert_eq!(unmerged(), both, "{case}: both files conflict");
+        };
+        write_all("base");
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-qm", "base"]);
+        run_git(repo, &["checkout", "-qb", "feature"]);
+        write_all("theirs");
+        run_git(repo, &["commit", "-qam", "theirs"]);
+        run_git(repo, &["checkout", "-q", "main"]);
+        if deleted {
+            run_git(repo, &["rm", "-rq", "."]);
+        } else {
+            write_all("ours");
+        }
+        run_git(repo, &["commit", "-qam", "ours"]);
+        run_git_expect_failure(repo, &["merge", "feature"]);
+        let unmerged = || -> Vec<String> {
+            let mut paths: Vec<String> = run_git_output(repo, &["ls-files", "-u", "-z"])
+                .split_terminator('\0')
+                .map(|entry| entry.split_once('\t').unwrap().1.to_string())
+                .collect();
+            paths.sort();
+            paths.dedup();
+            paths
+        };
+        let mut conflicted: Vec<String> = files.iter().map(|file| file.to_string()).collect();
+        conflicted.sort();
+        assert_eq!(unmerged(), conflicted, "{resolve:?}: every file conflicts");
 
-            let opened = GixBackend.open(repo).unwrap();
-            assert!(
-                opened.conflict_session(path, None).unwrap().is_some(),
-                "{case}"
+        let opened = GixBackend.open(repo).unwrap();
+        for (index, name) in names.iter().enumerate() {
+            let case = format!("{name:?}, {resolve:?}");
+            let path = Path::new(name);
+            let session = opened.conflict_session(path, None).unwrap().unwrap();
+            assert_eq!(
+                session.theirs.as_text(),
+                Some(format!("theirs {index}\n").as_str()),
+                "{case}: the session's file"
             );
             let resolved = match resolve {
                 Resolve::Theirs => {
                     opened
                         .checkout_conflict_side(path, ConflictSide::Theirs)
                         .unwrap();
-                    Some("theirs\n")
+                    Some(format!("theirs {index}\n"))
+                }
+                Resolve::Ours => {
+                    opened
+                        .checkout_conflict_side(path, ConflictSide::Ours)
+                        .unwrap();
+                    Some(format!("ours {index}\n"))
                 }
                 Resolve::Base => {
                     opened.checkout_conflict_base(path).unwrap();
-                    Some("base\n")
+                    Some(format!("base {index}\n"))
                 }
                 Resolve::Deletion => {
                     opened.accept_conflict_deletion(path).unwrap();
                     None
                 }
+                Resolve::OursOfDeletion => {
+                    opened
+                        .checkout_conflict_side(path, ConflictSide::Ours)
+                        .unwrap();
+                    None
+                }
             };
-            assert_eq!(
-                fs::read_to_string(repo.join(name)).ok().as_deref(),
-                resolved,
-                "{case}"
-            );
-            assert_eq!(unmerged(), ["a.txt"], "{case}: a.txt stays conflicted");
+            assert_eq!(fs::read_to_string(repo.join(name)).ok(), resolved, "{case}");
+            conflicted.retain(|file| file != name);
+            assert_eq!(unmerged(), conflicted, "{case}: the rest stay conflicted");
         }
     }
 }

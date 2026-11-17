@@ -347,7 +347,13 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
         // `previous <sha> <path>` line is left to the `"previous"` arm, which only
         // flags prior existence.
         if let Some(rest) = raw_line.strip_prefix(b"filename ") {
-            filename = Some(rest.to_vec());
+            // `core.quotePath=false` leaves bytes outside ASCII as they are; a
+            // name with a quote, a backslash or a control character is still
+            // C-quoted, and read raw it never equals the blamed path.
+            filename = Some(match gix::quote::ansi_c::undo(rest.into()) {
+                Ok((name, _)) if rest.starts_with(b"\"") => name.into_owned().into(),
+                _ => rest.to_vec(),
+            });
             continue;
         }
 
@@ -714,6 +720,36 @@ mod tests {
             uncommitted.prior_commit.as_deref(),
             Some("1111111111111111111111111111111111111111")
         );
+    }
+
+    /// Git C-quotes a `filename` holding a quote, a backslash or a control
+    /// character. Read raw, it differed from the blamed path, and every
+    /// committed line looked as if it came from a file renamed since.
+    #[test]
+    fn parse_blame_porcelain_unquotes_the_filename() {
+        let line = |filename: &str| {
+            format!(
+                "1111111111111111111111111111111111111111 1 1 1\n\
+                 author Ada Lovelace\n\
+                 summary initial commit\n\
+                 filename {filename}\n\
+                 \tcommitted line\n"
+            )
+        };
+        for (blamed, filename, source) in [
+            ("tab\ta \"b\".txt", r#""tab\ta \"b\".txt""#, None),
+            ("new.txt", r#""old\\name.txt""#, Some("old\\name.txt")),
+            ("new.txt", "old name.txt", Some("old name.txt")),
+            // Not a quoted name: kept as Git wrote it.
+            ("new.txt", r#""unterminated"#, Some("\"unterminated")),
+        ] {
+            let lines = parse_blame_porcelain(line(filename).as_bytes(), Path::new(blamed));
+            assert_eq!(
+                lines[0].source_path.as_deref(),
+                source.map(Path::new),
+                "{filename}"
+            );
+        }
     }
 
     #[test]
