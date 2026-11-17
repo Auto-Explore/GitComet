@@ -1320,12 +1320,20 @@ fn working_tree_operations_address_one_file_whatever_its_name() {
             None,
             "{name:?}: path before the file existed"
         );
-        // One committed line and one that is not; neither is another file's.
+        // One committed line and one that is not, both this file's own.
         let blame = opened
             .blame_worktree_file(path, DiffArea::Unstaged)
             .unwrap();
-        let sources: Vec<_> = blame.iter().map(|line| &line.source_path).collect();
-        assert_eq!(sources, [&None, &None], "{name:?}: blame");
+        let lines: Vec<_> = blame
+            .iter()
+            .map(|line| (line.line.as_str(), &line.source_path))
+            .collect();
+        let (committed, edited) = (format!("file {index}"), format!("file {index} edited"));
+        assert_eq!(
+            lines,
+            [(committed.as_str(), &None), (edited.as_str(), &None)],
+            "{name:?}: blame"
+        );
 
         opened.discard_worktree_changes(&[path]).unwrap();
         let mut still_edited = every_file.clone();
@@ -1371,6 +1379,7 @@ fn conflict_operations_address_one_file_whatever_its_name() {
         /// We deleted the files; our side, which has no stage, is taken.
         OursOfDeletion,
     }
+    use std::collections::BTreeMap;
     test_git_env::ensure_initialized();
     let names = git_cli::unusual_file_names();
     for resolve in [
@@ -1404,18 +1413,24 @@ fn conflict_operations_address_one_file_whatever_its_name() {
         }
         run_git(repo, &["commit", "-qam", "ours"]);
         run_git_expect_failure(repo, &["merge", "feature"]);
-        let unmerged = || -> Vec<String> {
-            let mut paths: Vec<String> = run_git_output(repo, &["ls-files", "-u", "-z"])
-                .split_terminator('\0')
-                .map(|entry| entry.split_once('\t').unwrap().1.to_string())
-                .collect();
-            paths.sort();
-            paths.dedup();
-            paths
+        // Each file's index records, as `mode blob stage`, and working text.
+        let state = || {
+            let mut state = BTreeMap::new();
+            for file in &files {
+                let working = fs::read_to_string(repo.join(file)).ok();
+                state.insert(*file, (Vec::new(), working));
+            }
+            for record in run_git_output(repo, &["ls-files", "-s", "-z"]).split_terminator('\0') {
+                let (entry, path) = record.split_once('\t').unwrap();
+                state.get_mut(path).unwrap().0.push(entry.to_string());
+            }
+            state
         };
-        let mut conflicted: Vec<String> = files.iter().map(|file| file.to_string()).collect();
-        conflicted.sort();
-        assert_eq!(unmerged(), conflicted, "{resolve:?}: every file conflicts");
+        let mut expected = state();
+        assert!(
+            expected.values().all(|(entries, _)| entries.len() > 1),
+            "{resolve:?}: every file conflicts"
+        );
 
         let opened = GixBackend.open(repo).unwrap();
         for (index, name) in names.iter().enumerate() {
@@ -1427,22 +1442,23 @@ fn conflict_operations_address_one_file_whatever_its_name() {
                 Some(format!("theirs {index}\n").as_str()),
                 "{case}: the session's file"
             );
-            let resolved = match resolve {
+            // The stage taken and the side it holds; a deletion takes none.
+            let taken = match resolve {
                 Resolve::Theirs => {
                     opened
                         .checkout_conflict_side(path, ConflictSide::Theirs)
                         .unwrap();
-                    Some(format!("theirs {index}\n"))
+                    Some((" 3", "theirs"))
                 }
                 Resolve::Ours => {
                     opened
                         .checkout_conflict_side(path, ConflictSide::Ours)
                         .unwrap();
-                    Some(format!("ours {index}\n"))
+                    Some((" 2", "ours"))
                 }
                 Resolve::Base => {
                     opened.checkout_conflict_base(path).unwrap();
-                    Some(format!("base {index}\n"))
+                    Some((" 1", "base"))
                 }
                 Resolve::Deletion => {
                     opened.accept_conflict_deletion(path).unwrap();
@@ -1455,9 +1471,17 @@ fn conflict_operations_address_one_file_whatever_its_name() {
                     None
                 }
             };
-            assert_eq!(fs::read_to_string(repo.join(name)).ok(), resolved, "{case}");
-            conflicted.retain(|file| file != name);
-            assert_eq!(unmerged(), conflicted, "{case}: the rest stay conflicted");
+            // The file is left with that stage alone, as stage 0, and its
+            // content; every other file is as it was.
+            let (entries, working) = expected.get_mut(name).unwrap();
+            entries.retain(|entry| taken.is_some_and(|(stage, _)| entry.ends_with(stage)));
+            for entry in entries {
+                entry.replace_range(entry.len() - 1.., "0");
+            }
+            *working = taken.map(|(_, side)| format!("{side} {index}\n"));
+            for (file, now) in state() {
+                assert_eq!(now, expected[file], "{case}: {file:?}");
+            }
         }
     }
 }
