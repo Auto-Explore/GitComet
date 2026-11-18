@@ -216,13 +216,18 @@ pub fn key_context(name: &'static str, captures_tab: bool) -> KeyContext {
 /// in one ([`wrap`](Self::wrap)):
 ///
 /// ```ignore
-/// struct Dialog { tab_scope: TabScope, name: Entity<TextInput>, /* … */ }
+/// struct Dialog {
+///     tab_scope: TabScope,
+///     name: Entity<TextInput>,
+/// }
 ///
-/// fn render(&mut self, …) -> impl IntoElement {
-///     div()
-///         .tab_scope(&self.tab_scope)
-///         .child(self.name.clone())
-///         .child(ok_button)
+/// impl Render for Dialog {
+///     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+///         div()
+///             .tab_scope(&self.tab_scope)
+///             .child(self.name.clone())
+///             .child(ok_button())
+///     }
 /// }
 /// ```
 #[derive(Clone, Debug)]
