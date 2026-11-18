@@ -1254,6 +1254,12 @@ impl MainPaneView {
                     }),
                 )
                 .size_full();
+                let list_el = crate::kit::elastic_scroll::ElasticScroll::new(
+                    ("irebase_elastic", repo_id.0),
+                    scroll.clone(),
+                    list_el,
+                )
+                .vertical_only();
 
                 let scrollbar_gutter = components::Scrollbar::visible_gutter(
                     scroll.clone(),

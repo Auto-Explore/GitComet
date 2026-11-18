@@ -56,6 +56,10 @@ x11-clipboard = { workspace = true }
 gitcomet-win32-window-utils = { workspace = true }
 raw-window-handle = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true, features = ["std"] }
+objc2-app-kit = { workspace = true, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSResponder", "NSEvent", "objc2-core-foundation"] }
+
 [dev-dependencies]
 # The kit's tests read the text model's test-only counters and state checks.
 gitcomet-text = { workspace = true, features = ["test-support"] }

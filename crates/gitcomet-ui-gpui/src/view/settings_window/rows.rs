@@ -179,7 +179,14 @@ impl SettingsWindowView {
                         scroll.clone(),
                         components::ScrollbarAxis::Vertical,
                     ))
-                    .child(list),
+                    .child(
+                        crate::kit::elastic_scroll::ElasticScroll::new(
+                            format!("{container_id}_elastic"),
+                            scroll.clone(),
+                            list,
+                        )
+                        .vertical_only(),
+                    ),
             )
             .child(
                 components::Scrollbar::new(scrollbar_id, scroll)
@@ -1330,6 +1337,13 @@ impl SettingsWindowView {
                     .w_full()
                     .child(self.search_input.clone()),
             )
-            .child(list)
+            .child(
+                crate::kit::elastic_scroll::ElasticScroll::new(
+                    "settings_nav_elastic",
+                    self.nav_scroll.clone(),
+                    list,
+                )
+                .vertical_only(),
+            )
     }
 }

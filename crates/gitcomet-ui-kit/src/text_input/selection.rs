@@ -507,6 +507,7 @@ impl TextInput {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.reset_elastic_scroll();
         let Some(handle) = self.interaction.vertical_scroll_handle.clone() else {
             self.interaction.pending_cursor_autoscroll = false;
             return false;

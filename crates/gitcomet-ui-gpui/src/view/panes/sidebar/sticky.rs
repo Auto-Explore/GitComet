@@ -664,7 +664,14 @@ impl SidebarPaneView {
 }
 
 pub(super) struct StickyRows {
-    pub(super) view: Entity<SidebarPaneView>,
+    metrics: Rc<std::cell::Cell<Option<StickyMetrics>>>,
+}
+
+#[derive(Clone, Copy)]
+struct StickyMetrics {
+    bounds: Bounds<Pixels>,
+    scroll_offset: Point<Pixels>,
+    row_height: Pixels,
 }
 
 impl gpui::UniformListDecoration for StickyRows {
@@ -675,10 +682,76 @@ impl gpui::UniformListDecoration for StickyRows {
         scroll_offset: Point<Pixels>,
         row_height: Pixels,
         _count: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> AnyElement {
+        self.metrics.set(Some(StickyMetrics {
+            bounds,
+            scroll_offset,
+            row_height,
+        }));
+        div().into_any_element()
+    }
+}
+
+impl StickyRows {
+    pub(super) fn with_overlay(view: Entity<SidebarPaneView>) -> (Self, impl IntoElement) {
+        let metrics = Rc::new(std::cell::Cell::new(None::<StickyMetrics>));
+        let overlay_metrics = metrics.clone();
+        let overlay = gpui::canvas(
+            move |bounds, window, cx| -> Option<AnyElement> {
+                let metrics = overlay_metrics.take()?;
+                let displacement = metrics.bounds.top() - metrics.scroll_offset.y - bounds.top();
+                let mut element = Self::render(&view, metrics, displacement, window, cx);
+                element.layout_as_root(
+                    gpui::size(
+                        gpui::AvailableSpace::Definite(metrics.bounds.size.width),
+                        gpui::AvailableSpace::Definite(metrics.bounds.size.height),
+                    ),
+                    window,
+                    cx,
+                );
+                window.with_content_mask(
+                    Some(gpui::ContentMask {
+                        bounds,
+                        ..Default::default()
+                    }),
+                    |window| element.prepaint_at(bounds.origin + metrics.scroll_offset, window, cx),
+                );
+                Some(element)
+            },
+            |bounds, mut element, window, cx| {
+                if let Some(element) = &mut element {
+                    window.with_content_mask(
+                        Some(gpui::ContentMask {
+                            bounds,
+                            ..Default::default()
+                        }),
+                        |window| element.paint(window, cx),
+                    );
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        (Self { metrics }, overlay)
+    }
+
+    fn render(
+        view: &Entity<SidebarPaneView>,
+        metrics: StickyMetrics,
+        displacement: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        self.view.update(cx, |this, cx| {
+        let StickyMetrics {
+            bounds,
+            scroll_offset,
+            row_height,
+        } = metrics;
+        view.update(cx, |this, cx| {
             let Some(presentation) = this.branch_sidebar_presentation_cached() else {
                 return div().into_any();
             };
@@ -704,6 +777,7 @@ impl gpui::UniformListDecoration for StickyRows {
                 bounds,
                 scroll_offset,
                 row_height,
+                displacement,
                 window,
                 cx,
             );
@@ -714,9 +788,7 @@ impl gpui::UniformListDecoration for StickyRows {
                 .into_any_element()
         })
     }
-}
 
-impl StickyRows {
     #[allow(clippy::too_many_arguments)]
     fn render_rows(
         this: &mut SidebarPaneView,
@@ -726,6 +798,7 @@ impl StickyRows {
         bounds: Bounds<Pixels>,
         scroll_offset: Point<Pixels>,
         row_height: Pixels,
+        displacement: Pixels,
         window: &mut Window,
         cx: &mut gpui::Context<SidebarPaneView>,
     ) -> Vec<AnyElement> {
@@ -734,14 +807,17 @@ impl StickyRows {
             ui_scale::current(cx).percent,
         );
         let position = |rank, ix| {
-            let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
-            let y = sidebar_sticky::row_y(
+            let natural_y = ix as f32 * f32::from(row_height)
+                + f32::from(scroll_offset.y)
+                + f32::from(displacement);
+            let y = sidebar_sticky::elastic_row_y(
                 ix,
                 rank,
                 layout.slots.len(),
                 -f32::from(scroll_offset.y),
                 f32::from(bounds.size.height),
                 f32::from(row_height),
+                f32::from(displacement),
             );
             (y, y != natural_y)
         };
@@ -752,7 +828,22 @@ impl StickyRows {
                 .iter()
                 .enumerate()
                 .filter_map(|(rank, slot)| match slot {
-                    sidebar_sticky::StickySlot::Row(ix) => Some((*ix, position(rank, *ix).1)),
+                    sidebar_sticky::StickySlot::Row(ix) => {
+                        // Navigation depends on logical pinning. A bounce may
+                        // hold a natural header visually without changing its
+                        // usual expand/collapse action.
+                        let natural_y =
+                            *ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
+                        let logical_y = sidebar_sticky::row_y(
+                            *ix,
+                            rank,
+                            layout.slots.len(),
+                            -f32::from(scroll_offset.y),
+                            f32::from(bounds.size.height),
+                            f32::from(row_height),
+                        );
+                        Some((*ix, logical_y != natural_y))
+                    }
                     _ => None,
                 }),
             SidebarRowSurface::Sticky { compact },
@@ -922,7 +1013,7 @@ impl StickyRows {
                     );
                 }
                 if is_header && stuck && !this.theme.is_dark {
-                    let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
+                    let at_top = y <= rank as f32 * f32::from(row_height);
                     row = row.child(
                         div()
                             .debug_selector(move || format!("sidebar_sticky_divider_{ix}"))
@@ -930,8 +1021,8 @@ impl StickyRows {
                             .left_0()
                             .right_0()
                             .h(px(1.0))
-                            .when(y > natural_y, |line| line.bottom_0())
-                            .when(y < natural_y, |line| line.top_0())
+                            .when(at_top, |line| line.bottom_0())
+                            .when(!at_top, |line| line.top_0())
                             .bg(this.theme.colors.stroke.subtle),
                     );
                 }

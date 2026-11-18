@@ -51,9 +51,16 @@ impl DetailsPaneView {
         scroll: &UniformListScrollHandle,
         list: gpui::UniformList,
     ) -> Stateful<Div> {
+        let container_id = container_id.into();
         let list = restrict_scroll_to_vertical_axis(
             list.w_full().h_full().min_h(px(0.0)).track_scroll(scroll),
         );
+        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            (container_id.clone(), "elastic"),
+            scroll.clone(),
+            list,
+        )
+        .vertical_only();
         Self::vertical_scroll_frame_content(theme, container_id, scrollbar_id, scroll, None, list)
     }
 

@@ -145,6 +145,24 @@ impl ScrollbarDriver for HistoryScrollDriver {
     }
 }
 
+impl crate::kit::elastic_scroll::ElasticScrollDriver for HistoryScrollDriver {
+    fn metrics(&self) -> (f64, f64) {
+        if let Some(logical) = &self.interaction.borrow().logical {
+            return (-logical.position(), logical.max());
+        }
+        crate::kit::elastic_scroll::ElasticScrollDriver::metrics(&self.handle)
+    }
+
+    fn scroll_by(&self, delta: Pixels) -> Pixels {
+        if let Some(logical) = &mut self.interaction.borrow_mut().logical {
+            let old = logical.position();
+            logical.set_position(old - f64::from(f32::from(delta)));
+            return px((old - logical.position()) as f32);
+        }
+        crate::kit::elastic_scroll::ElasticScrollDriver::scroll_by(&self.handle, delta)
+    }
+}
+
 impl HistoryView {
     pub(super) fn cancel_history_scroll_reveal(&mut self) {
         self.history_scroll.0.borrow_mut().deferred_scroll_to_item = None;
@@ -160,10 +178,8 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.update_history_row_hover(None, None, cx);
-        self.cancel_history_scroll_reveal();
+        self.history_wheel_interaction(cx);
         let mut scroll = self.scroll_interaction.borrow_mut();
-        scroll.generation = scroll.generation.wrapping_add(1);
         if let Some(logical) = &mut scroll.logical {
             let delta = event.delta.pixel_delta(window.line_height());
             logical.set_position(logical.position() - f64::from(f32::from(delta.y)));
@@ -171,6 +187,13 @@ impl HistoryView {
             cx.notify();
         }
         trace(&scroll, "wheel");
+    }
+
+    pub(super) fn history_wheel_interaction(&mut self, cx: &mut gpui::Context<Self>) {
+        self.update_history_row_hover(None, None, cx);
+        self.cancel_history_scroll_reveal();
+        let mut scroll = self.scroll_interaction.borrow_mut();
+        scroll.generation = scroll.generation.wrapping_add(1);
         drop(scroll);
         let _ = self.root_view.update(cx, |root, cx| {
             root.close_history_refs_hover(cx);

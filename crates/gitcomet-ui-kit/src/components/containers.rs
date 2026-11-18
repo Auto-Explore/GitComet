@@ -146,6 +146,7 @@ pub struct ScrollContainer {
     debug_selector: Option<&'static str>,
     scroll: ScrollHandle,
     max_height: Pixels,
+    elastic_scroll: Option<crate::elastic_scroll::ElasticScrollState>,
 }
 
 impl ScrollContainer {
@@ -162,6 +163,7 @@ impl ScrollContainer {
             debug_selector: None,
             scroll,
             max_height,
+            elastic_scroll: None,
         }
     }
 
@@ -175,7 +177,15 @@ impl ScrollContainer {
         self
     }
 
+    /// Use the contained input's spring so caret and edit reveals can cancel
+    /// the parent's rebound without adding another scroll wrapper.
+    pub fn motion_state(mut self, state: crate::elastic_scroll::ElasticScrollState) -> Self {
+        self.elastic_scroll = Some(state);
+        self
+    }
+
     pub fn render(self, theme: AppTheme, child: impl IntoElement) -> AnyElement {
+        let elastic_id = (self.surface_id.clone(), "elastic");
         let mut surface = div()
             .id(self.surface_id)
             .relative()
@@ -192,11 +202,19 @@ impl ScrollContainer {
             surface = surface.debug_selector(move || selector.to_string());
         }
 
+        let mut body = crate::elastic_scroll::ElasticScroll::vertical(
+            elastic_id,
+            self.scroll.clone(),
+            surface.child(child),
+        );
+        if let Some(state) = self.elastic_scroll {
+            body = body.motion_state(state);
+        }
         let container = div()
             .relative()
             .w_full()
             .min_w(px(0.0))
-            .child(crate::restrict_scroll_to_vertical_axis(surface).child(child))
+            .child(body)
             .child(super::Scrollbar::new(self.scrollbar_id, self.scroll).render(theme));
 
         match self.container_id {

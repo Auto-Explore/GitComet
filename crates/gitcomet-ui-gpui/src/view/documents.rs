@@ -375,6 +375,8 @@ struct StandaloneBuffer {
     root: WeakEntity<GitCometView>,
     input: Entity<TextInput>,
     scroll: gpui::ScrollHandle,
+    elastic_vertical: crate::kit::elastic_scroll::ElasticScrollState,
+    elastic_horizontal: crate::kit::elastic_scroll::ElasticScrollState,
     gutter_scroll: gpui::UniformListScrollHandle,
     gutter_row_height: Pixels,
     /// First gutter row of each line while wrapping; empty otherwise.
@@ -532,6 +534,8 @@ impl StandaloneBuffer {
             root,
             input,
             scroll,
+            elastic_vertical: Default::default(),
+            elastic_horizontal: Default::default(),
             gutter_scroll: gpui::UniformListScrollHandle::new(),
             gutter_row_height: theme.editor_row_height(ui_scale::current(cx).percent),
             wrap_row_starts: Vec::new(),
@@ -1269,6 +1273,10 @@ impl StandaloneBuffer {
         let row_height = theme.editor_row_height(ui_scale_percent);
         self.gutter_row_height = row_height;
         self.input.update(cx, |input, cx| {
+            input.set_elastic_scroll_states(
+                Some(self.elastic_vertical.clone()),
+                Some(self.elastic_horizontal.clone()),
+            );
             input.set_line_height(Some(row_height), cx);
             input.set_soft_wrap(wrap, cx);
             input.set_content_width_layout(!wrap);
@@ -1313,6 +1321,54 @@ impl StandaloneBuffer {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(&self.gutter_scroll);
+
+        let gutter = crate::kit::elastic_scroll::ElasticScroll::new(
+            "document_gutter_elastic",
+            editor_scroll.clone(),
+            gutter,
+        )
+        .vertical_only()
+        .shared_motion(self.elastic_vertical.clone());
+        let editor_surface = div()
+            .id("document_editor_scroll")
+            .debug_selector(|| "document_editor_scroll".into())
+            // A column, so a content-width input overflows to
+            // the right and gives the container a horizontal range.
+            .flex()
+            .flex_col()
+            .when(wrap, |d| d.items_stretch())
+            .when(!wrap, |d| d.items_start())
+            .w_full()
+            .min_w(px(0.0))
+            .h_full()
+            .min_h(px(0.0))
+            .pl_2()
+            .pr(scrollbar_gutter)
+            .when(wrap, |d| {
+                restrict_scroll_to_vertical_axis(d.overflow_hidden().overflow_y_scroll())
+            })
+            .when(!wrap, |d| d.overflow_scroll())
+            .track_scroll(&self.scroll)
+            .child(self.input.clone());
+        let editor_surface = crate::kit::elastic_scroll::ElasticScroll::new(
+            "document_editor_elastic",
+            editor_scroll.clone(),
+            editor_surface,
+        )
+        .vertical_only()
+        .shared_motion(self.elastic_vertical.clone());
+        let editor_surface = if wrap {
+            editor_surface.into_any_element()
+        } else {
+            crate::kit::elastic_scroll::ElasticScroll::horizontal(
+                "document_editor_horizontal_elastic",
+                editor_scroll.clone(),
+                editor_surface,
+            )
+            .horizontal_only()
+            .motion_state(self.elastic_horizontal.clone())
+            .into_any_element()
+        };
 
         div()
             .on_children_prepainted({
@@ -1374,31 +1430,7 @@ impl StandaloneBuffer {
                     .h_full()
                     .pb(horizontal_gutter)
                     .min_h(px(0.0))
-                    .child(
-                        div()
-                            .id("document_editor_scroll")
-                            .debug_selector(|| "document_editor_scroll".into())
-                            // A column, so a content-width input overflows to
-                            // the right and gives the container a horizontal range.
-                            .flex()
-                            .flex_col()
-                            .when(wrap, |d| d.items_stretch())
-                            .when(!wrap, |d| d.items_start())
-                            .w_full()
-                            .min_w(px(0.0))
-                            .h_full()
-                            .min_h(px(0.0))
-                            .pl_2()
-                            .pr(scrollbar_gutter)
-                            .when(wrap, |d| {
-                                restrict_scroll_to_vertical_axis(
-                                    d.overflow_hidden().overflow_y_scroll(),
-                                )
-                            })
-                            .when(!wrap, |d| d.overflow_scroll())
-                            .track_scroll(&self.scroll)
-                            .child(self.input.clone()),
-                    )
+                    .child(editor_surface)
                     // Outside the moving surface, or the offset moves the track too.
                     .child(
                         div()

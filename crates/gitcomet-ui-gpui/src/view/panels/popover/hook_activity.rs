@@ -412,7 +412,14 @@ pub(super) fn visible_scroll_surface(
         .h_full()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(surface)
+        .child(
+            crate::kit::elastic_scroll::ElasticScroll::new(
+                format!("{surface_id}_elastic"),
+                scroll,
+                surface,
+            )
+            .vertical_only(),
+        )
         .child(scrollbar.render(theme))
         .into_any_element()
 }
@@ -857,7 +864,8 @@ fn operation_detail(
                 }),
         )
         .when_some(operation.command.clone(), |detail, command| {
-            detail.child(
+            detail.child(crate::kit::elastic_scroll::ElasticScroll::tracked_vertical(
+                ("hook_activity_command_elastic", operation_id.0),
                 div()
                     .id(("hook_activity_command", operation_id.0))
                     .debug_selector(move || format!("hook_activity_command_{}", operation_id.0))
@@ -874,7 +882,7 @@ fn operation_detail(
                         TextSection::Command,
                         cx,
                     )),
-            )
+            ))
         })
         .child(main_area)
         .child(actions)
