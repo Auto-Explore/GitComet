@@ -26,6 +26,32 @@ pub use plan::{
 /// Default conflict marker width (matches git's default).
 pub const DEFAULT_MARKER_SIZE: usize = 7;
 
+/// A marker size, at least `minimum`, that no line of `texts` can be
+/// mistaken for: one longer than the longest run of `<`, `|`, `=` or `>` that
+/// starts any of their lines.
+///
+/// For marker text GitComet renders only to read back - a resolver's
+/// projection, an auto-solve pass - so content such as a Markdown `=======`
+/// underline cannot split a conflict. Text written for the user keeps the
+/// configured size, as Git does.
+pub fn collision_free_marker_size<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+    minimum: usize,
+) -> usize {
+    let mut longest = 0usize;
+    for text in texts {
+        for line in text.split('\n') {
+            let bytes = line.as_bytes();
+            if let Some(&first) = bytes.first()
+                && matches!(first, b'<' | b'|' | b'=' | b'>')
+            {
+                longest = longest.max(bytes.iter().take_while(|&&byte| byte == first).count());
+            }
+        }
+    }
+    minimum.max(longest.saturating_add(1))
+}
+
 /// How to render the base content in conflict markers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum ConflictStyle {

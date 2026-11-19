@@ -156,9 +156,20 @@ pub fn render_unresolved_marker_block(
     block: ConflictOutputBlockRef<'_>,
     labels: ConflictMarkerLabels<'_>,
 ) -> String {
+    render_unresolved_marker_block_with_size(block, labels, crate::merge::DEFAULT_MARKER_SIZE)
+}
+
+/// [`render_unresolved_marker_block`] with markers `marker_size` long.
+pub fn render_unresolved_marker_block_with_size(
+    block: ConflictOutputBlockRef<'_>,
+    labels: ConflictMarkerLabels<'_>,
+    marker_size: usize,
+) -> String {
     let newline = detect_conflict_block_line_ending(block);
+    let marker = |ch: char| -> String { std::iter::repeat_n(ch, marker_size).collect() };
     let mut out = String::new();
-    out.push_str("<<<<<<< ");
+    out.push_str(&marker('<'));
+    out.push(' ');
     out.push_str(labels.local);
     out.push_str(newline);
     out.push_str(block.ours);
@@ -169,7 +180,8 @@ pub fn render_unresolved_marker_block(
         out.push_str(newline);
     }
     if let Some(base) = block.base {
-        out.push_str("||||||| ");
+        out.push_str(&marker('|'));
+        out.push(' ');
         out.push_str(labels.base);
         out.push_str(newline);
         out.push_str(base);
@@ -177,13 +189,14 @@ pub fn render_unresolved_marker_block(
             out.push_str(newline);
         }
     }
-    out.push_str("=======");
+    out.push_str(&marker('='));
     out.push_str(newline);
     out.push_str(block.theirs);
     if !block.theirs.is_empty() && !block.theirs.ends_with(newline) {
         out.push_str(newline);
     }
-    out.push_str(">>>>>>> ");
+    out.push_str(&marker('>'));
+    out.push(' ');
     out.push_str(labels.remote);
     out.push_str(newline);
     out
