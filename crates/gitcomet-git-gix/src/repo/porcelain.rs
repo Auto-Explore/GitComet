@@ -7,7 +7,9 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::path_utils::{canonicalize_or_original, symlink_free_write_target};
+use gitcomet_core::path_utils::{
+    canonicalize_or_original, symlink_free_write_target, validated_repo_relative_path,
+};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, GitHooks, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1011,9 +1013,14 @@ impl GixRepo {
         }
 
         for path in conflicts.paths {
+            // The paths may come from Git's error text, not a validated tree:
+            // never follow one out of the worktree or into `.git`.
+            let Ok(relative) = validated_repo_relative_path(&path) else {
+                continue;
+            };
             // A symlink at or above the path has no text of its own to merge,
             // and reading and writing through it would rewrite its target.
-            let Ok(ours_path) = symlink_free_write_target(&self.spec.workdir, &path) else {
+            let Ok(ours_path) = symlink_free_write_target(&self.spec.workdir, &relative) else {
                 continue;
             };
             if !ours_path.exists() {
@@ -1469,12 +1476,55 @@ fn build_untracked_conflict_markers(current: &str, stashed: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_untracked_conflict_markers, path_blocks_untracked_restore,
-        paths_may_conflict_on_restore, stash_apply_failure_id,
+        GixRepo, StashUntrackedRestoreConflicts, build_untracked_conflict_markers,
+        path_blocks_untracked_restore, paths_may_conflict_on_restore, stash_apply_failure_id,
         untracked_restore_conflict_paths_from_output,
     };
     use gitcomet_core::error::GitFailureId;
+    use std::path::PathBuf;
     use std::{fs, path::Path};
+
+    /// The conflict paths can come from Git's error text rather than a tree gix
+    /// validated, so the merge must refuse any path that leaves the worktree or
+    /// enters `.git` before it reads or writes it.
+    #[test]
+    fn untracked_restore_merge_never_writes_outside_the_worktree_or_into_git_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workdir = dir.path().join("work");
+        fs::create_dir_all(&workdir).expect("create worktree");
+        let git = gix::init(&workdir).expect("init repository");
+        let repo = GixRepo::new(workdir.clone(), git.into_sync()).expect("open repository");
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, "victim\n").expect("write file outside the worktree");
+        let git_config = workdir.join(".git").join("config");
+        let config_before = fs::read(&git_config).expect("read git config");
+
+        let paths = vec![
+            PathBuf::from("../outside.txt"),
+            outside.clone(),
+            PathBuf::from(".git/config"),
+        ];
+        let conflicts = StashUntrackedRestoreConflicts {
+            stashed_contents: paths
+                .iter()
+                .map(|path| (path.clone(), b"attacker\n".to_vec()))
+                .collect(),
+            paths,
+            untracked_parent_id: None,
+        };
+        let _ = repo.merge_untracked_restore_conflicts_from_stash(0, conflicts);
+
+        assert_eq!(
+            fs::read_to_string(&outside).expect("read file outside the worktree"),
+            "victim\n",
+            "the merge wrote conflict markers into a file outside the worktree"
+        );
+        assert_eq!(
+            fs::read(&git_config).expect("read git config"),
+            config_before,
+            "the merge wrote conflict markers into .git/config"
+        );
+    }
 
     #[test]
     fn parses_untracked_restore_conflict_paths_with_optional_error_prefixes() {

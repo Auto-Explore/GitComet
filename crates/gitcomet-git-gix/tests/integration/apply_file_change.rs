@@ -1099,3 +1099,39 @@ fn multi_file_commit_retry_commits_every_file() {
     );
     assert_eq!(status(&repo), "");
 }
+
+/// A file-history row from before a rename names the file as it is called
+/// now. The picked commit turned `old.txt` into a symlink; it was later turned
+/// back and renamed to `new.txt`. Re-applying the change must make `new.txt`
+/// the symlink, not delete it and re-create the link under the old name.
+#[cfg(unix)]
+#[test]
+fn a_type_change_applies_to_the_file_under_its_current_name() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let body: String = (1..=8).map(|n| format!("line {n}\n")).collect();
+    write(&repo, "old.txt", &body);
+    commit_all(&repo, "base");
+    fs::remove_file(repo.join("old.txt")).expect("remove file");
+    std::os::unix::fs::symlink("target.txt", repo.join("old.txt")).expect("create symlink");
+    let picked = commit_all(&repo, "make old.txt a symlink");
+    fs::remove_file(repo.join("old.txt")).expect("remove symlink");
+    write(&repo, "old.txt", &body);
+    commit_all(&repo, "make old.txt a file again");
+    run_git(&repo, &["mv", "old.txt", "new.txt"]);
+    commit_all(&repo, "rename");
+
+    open_backend(&repo)
+        .apply_file_change_with_output(&commit_target(&picked, "new.txt"), true)
+        .expect("apply the type change");
+
+    assert!(
+        fs::symlink_metadata(repo.join("old.txt")).is_err(),
+        "the change re-created the file under its old name"
+    );
+    assert_eq!(
+        fs::read_link(repo.join("new.txt")).expect("new.txt should be a symlink"),
+        Path::new("target.txt")
+    );
+}
