@@ -895,6 +895,14 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
             "\n",
             "café",
         ),
+        // Git's checkout leaves a lone CR, which is no line break, alone.
+        (
+            "false",
+            "menu.txt text eol=crlf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "x\ry",
+        ),
         (
             "false",
             "menu.txt text eol=lf\n",

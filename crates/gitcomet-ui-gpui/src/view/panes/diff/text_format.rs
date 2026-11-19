@@ -186,8 +186,8 @@ impl DiffRenderer {
         }
     }
 
-    /// The resolved output in the line endings of the file Git checked out
-    /// for the conflict at `path`.
+    /// The resolved output, with CRLF where Git checked the conflicted file
+    /// at `path` out with CRLF.
     pub(in crate::view) fn conflict_output_text_for_save(
         &self,
         repo_id: RepoId,

@@ -169,14 +169,31 @@ pub fn convert_line_endings(text: &str, to: LineEnding) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// `text`, about to replace `file`, with CRLF for every line break when
-/// `file` has CRLF throughout; as it is otherwise. A conflict's stages hold
-/// LF where Git checks the conflicted file out with CRLF.
+/// `text`, about to replace `file`, as Git would check it out where it checked
+/// `file` out with CRLF (no bare LF in `file`, at least one CRLF): a CR before
+/// every bare LF. A lone CR is no line break there and stays as it is. A
+/// conflict's stages hold LF where Git checks the conflicted file out with CRLF.
 pub fn with_crlf_of(text: String, file: &str) -> String {
-    match LineEndingStats::from_bytes(file.as_bytes()).uniform() {
-        Some(LineEnding::CrLf) => convert_line_endings(&text, LineEnding::CrLf).into_owned(),
-        _ => text,
+    let file = LineEndingStats::from_bytes(file.as_bytes());
+    if file.lf > 0 || file.crlf == 0 {
+        return text;
     }
+    let bare_lf = LineEndingStats::from_bytes(text.as_bytes()).lf as usize;
+    if bare_lf == 0 {
+        return text;
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + bare_lf);
+    let mut start = 0;
+    for lf in memchr::memchr_iter(b'\n', bytes) {
+        if lf == 0 || bytes[lf - 1] != b'\r' {
+            out.push_str(&text[start..lf]);
+            out.push_str("\r\n");
+            start = lf + 1;
+        }
+    }
+    out.push_str(&text[start..]);
+    out
 }
 
 #[cfg(test)]
@@ -253,16 +270,36 @@ mod tests {
     fn with_crlf_of_follows_a_file_that_is_crlf_throughout() {
         let crlf = "<<<<<<< ours\r\na\r\n=======\r\nb\r\n>>>>>>> theirs\r\n";
         assert_eq!(with_crlf_of("a\nb\n".into(), crlf), "a\r\nb\r\n");
+        // As in Git's checkout, a lone CR is no line break and stays as it is.
         assert_eq!(
             with_crlf_of("a\npasted\r\nold\rb".into(), crlf),
-            "a\r\npasted\r\nold\r\nb"
+            "a\r\npasted\r\nold\rb"
         );
-        for file in ["a\nb\n", "a\r\nb\n", "a\rb\r", "no line break", ""] {
+        assert_eq!(
+            with_crlf_of("x\ry\nz\n".into(), "x\ry\r\nz\r\n"),
+            "x\ry\r\nz\r\n"
+        );
+        for file in [
+            "a\nb\n",
+            "a\r\nb\n",
+            "a\r\nb\r\nc\n",
+            "a\rb\r",
+            "no line break",
+            "",
+        ] {
             assert_eq!(
                 with_crlf_of("a\nb\r\n".into(), file),
                 "a\nb\r\n",
                 "{file:?}"
             );
         }
+    }
+
+    #[test]
+    fn with_crlf_of_returns_text_without_a_bare_lf_as_it_is() {
+        let text = String::from("a\r\nb\r\n");
+        let allocation = text.as_ptr();
+        let kept = with_crlf_of(text, "a\r\nb\r\n");
+        assert_eq!(kept.as_ptr(), allocation);
     }
 }

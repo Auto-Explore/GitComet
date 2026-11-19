@@ -276,7 +276,6 @@ impl DiffRenderer {
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        // Written back in the line endings and encoding the file was read in.
         let output = self.conflict_output_text_for_save(repo_id, &path, save_payload.output);
         let Some(output) = self.conflict_output_bytes_for_save(output, cx) else {
             cx.notify();
