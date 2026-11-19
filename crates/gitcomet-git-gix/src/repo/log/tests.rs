@@ -522,6 +522,37 @@ fn rename_destination_at_commit_resolves_rename_introduced_at_merge() {
     assert_eq!(resolved, Some(PathBuf::from("lib/new.txt")));
 }
 
+/// Git C-quotes a name with a quote, a backslash or a control character even
+/// with `core.quotePath=false`. Read raw, neither name of such a rename matched,
+/// and a file renamed away from one lost its name at that commit.
+#[cfg(not(windows))]
+#[test]
+fn rename_destination_at_commit_reads_quoted_names() {
+    use gitcomet_core::services::GitRepository as _;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let (old, new) = ("tab\told.txt", "new \"quoted\\name\".txt");
+    commit_file(repo, old, "alpha\nbeta\n", "base");
+    git_success(repo, &["mv", "--", old, new]);
+    git_success(repo, &["commit", "-m", "rename"]);
+    let rename = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+
+    let opened = open_repo(repo);
+    assert_eq!(
+        opened
+            .rename_destination_at_commit(&rename, Path::new(old))
+            .expect("rename resolution should not error"),
+        Some(PathBuf::from(new))
+    );
+    assert_eq!(
+        opened
+            .resolve_file_path_at_commit(Path::new(old), &rename)
+            .expect("path resolution should not error"),
+        Some(PathBuf::from(new))
+    );
+}
+
 #[test]
 fn recent_commit_message_limits_cap_large_requests_without_panicking() {
     assert_eq!(recent_commit_message_limits(0), None);

@@ -1241,7 +1241,8 @@ fn working_tree_operations_address_one_file_whatever_its_name() {
     }
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-qm", "siblings"]);
-    let without_names = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    let head_id = || CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let without_names = head_id();
     // One commit adds every name and changes the siblings: a diff or a
     // history read as a pattern shows more than its file.
     for (index, name) in names.iter().enumerate() {
@@ -1252,7 +1253,7 @@ fn working_tree_operations_address_one_file_whatever_its_name() {
     }
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-qm", "names"]);
-    let with_names = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    let with_names = head_id();
     let edit = |name: &str, index: usize| {
         write(repo, name, format!("file {index}\nfile {index} edited\n"));
     };
@@ -1346,13 +1347,32 @@ fn working_tree_operations_address_one_file_whatever_its_name() {
     // name, and a discard removes the one file.
     run_git(repo, &["rm", "-rq", "--cached", "."]);
     run_git(repo, &["commit", "-qm", "untrack"]);
-    let head = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
     let mut options = ComparisonOptions::direct();
     options.include_untracked = true;
-    let compared = opened.compare_files(&head, None, &options, &token).unwrap();
-    let mut compared: Vec<PathBuf> = compared.files.into_iter().map(|file| file.path).collect();
-    compared.sort();
-    assert_eq!(compared, every_file, "untracked files in a comparison");
+    let compared = |from: &CommitId, kind: FileStatusKind| -> Vec<PathBuf> {
+        let compared = opened.compare_files(from, None, &options, &token).unwrap();
+        let mut paths: Vec<PathBuf> = compared
+            .files
+            .into_iter()
+            .filter(|file| file.kind == kind)
+            .map(|file| file.path)
+            .collect();
+        paths.sort();
+        paths
+    };
+    assert_eq!(
+        compared(&head_id(), FileStatusKind::Untracked),
+        every_file,
+        "untracked files in a comparison"
+    );
+    // Against a commit that has them, git diffs each with its own name in an
+    // index the untracked files are added to by pathspec. A name that pathspec
+    // misread would be left out of it, and list as deleted, not modified.
+    assert_eq!(
+        compared(&with_names, FileStatusKind::Modified),
+        every_file,
+        "untracked files against a commit that has them"
+    );
     let mut remaining = every_file;
     for name in names {
         let path = Path::new(name);

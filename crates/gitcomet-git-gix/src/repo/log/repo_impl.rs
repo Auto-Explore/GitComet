@@ -353,22 +353,14 @@ impl GixRepo {
         let status = fields.next().unwrap_or_default();
         let first = fields.next();
         let second = fields.next();
-        let to_path = |s: &str| {
-            let (bytes, _) = gix::quote::ansi_c::undo(s.as_bytes().into()).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "invalid git name-status path: {e}"
-                )))
-            })?;
-            path_buf_from_git_bytes(&bytes, "git name-status path")
-        };
         match status.chars().next() {
             // Rename/copy: the destination is the name in this commit's tree.
-            Some('R') | Some('C') => second.map(to_path).transpose(),
+            Some('R') | Some('C') => second.map(name_status_path).transpose(),
             // Added/modified/type-change: the listed path is the name here.
-            Some('A') | Some('M') | Some('T') => first.map(to_path).transpose(),
+            Some('A') | Some('M') | Some('T') => first.map(name_status_path).transpose(),
             // Deleted under the followed name: it was renamed away at this commit,
             // so the tree holds the rename destination — recover it.
-            Some('D') => match first.map(to_path).transpose()? {
+            Some('D') => match first.map(name_status_path).transpose()? {
                 Some(old) => self.rename_destination_at_commit(commit, &old),
                 None => Ok(None),
             },
@@ -421,12 +413,8 @@ impl GixRepo {
             let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
                 continue;
             };
-            let old = path_buf_from_git_bytes(old.as_bytes(), "git diff-tree old path")?;
-            if old == old_path {
-                return Ok(Some(path_buf_from_git_bytes(
-                    new.as_bytes(),
-                    "git diff-tree new path",
-                )?));
+            if name_status_path(old)? == old_path {
+                return name_status_path(new).map(Some);
             }
         }
         Ok(None)
@@ -1222,6 +1210,18 @@ impl GixRepo {
 /// Resolves a `CommitId` to its commit. A full id in the repository's format is
 /// looked up directly; anything else (a 40-digit id is an abbreviation in a
 /// SHA-256 repository) goes through the kind-aware `refs::resolve`.
+/// A path field of `--name-status` output. `core.quotePath=false` leaves bytes
+/// outside ASCII as they are, but Git still C-quotes a name with a quote, a
+/// backslash or a control character.
+fn name_status_path(field: &str) -> Result<PathBuf> {
+    let (bytes, _) = gix::quote::ansi_c::undo(field.as_bytes().into()).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "invalid git name-status path: {e}"
+        )))
+    })?;
+    path_buf_from_git_bytes(&bytes, "git name-status path")
+}
+
 fn find_commit_by_id<'repo>(
     repo: &'repo gix::Repository,
     id: &CommitId,
