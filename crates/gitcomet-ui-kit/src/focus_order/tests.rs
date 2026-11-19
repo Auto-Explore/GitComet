@@ -183,15 +183,30 @@ fn tab_moves_out_of_text_inputs_through_every_field(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn tab_index_orders_fields_before_paint_order(cx: &mut TestAppContext) {
-    // Painted 0, 1, 2; visited 1, 2, 0.
-    let (view, cx) = window(cx, &[3, 1, 2], true);
-    focus(cx, |app| view.read(app).handle(1, app));
+    // Painted 0, 1, 2; visited 0, 2, 1, which no wrap of paint order is.
+    let (view, cx) = window(cx, &[0, 2, 1], true);
+    focus(cx, |app| view.read(app).handle(0, app));
     press(cx, "tab");
-    assert_focused(cx, |app| view.read(app).handle(2, app), "index 2");
+    assert_focused(cx, |app| view.read(app).handle(2, app), "index 1");
     press(cx, "tab");
-    assert_focused(cx, |app| view.read(app).handle(0, app), "index 3");
+    assert_focused(cx, |app| view.read(app).handle(1, app), "index 2");
     press(cx, "shift-tab shift-tab");
-    assert_focused(cx, |app| view.read(app).handle(1, app), "index 1");
+    assert_focused(cx, |app| view.read(app).handle(0, app), "index 0");
+}
+
+/// A negative index puts a field first in its form, for Tab as for Shift-Tab.
+#[gpui::test]
+fn a_negative_tab_index_comes_first_in_a_scope(cx: &mut TestAppContext) {
+    let (view, cx) = window(cx, &[0, -1], true);
+    focus(cx, |app| view.read(app).handle(0, app));
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| view.read(app).handle(1, app),
+        "index -1, wrapping",
+    );
+    press(cx, "shift-tab");
+    assert_focused(cx, |app| view.read(app).handle(0, app), "index 0, wrapping");
 }
 
 #[gpui::test]
@@ -619,7 +634,7 @@ fn a_modal_form_takes_tab_from_outside_it(cx: &mut TestAppContext) {
     assert_focused(cx, last, "the dialog, from a field behind it");
 }
 
-/// A dialog that is not shown, or shown in another window, takes nothing.
+/// A dialog that is not shown takes nothing.
 #[gpui::test]
 fn a_modal_form_that_is_not_shown_leaves_tab_to_the_window(cx: &mut TestAppContext) {
     let hidden = cx.update(TabScope::modal);
@@ -635,6 +650,22 @@ fn a_modal_form_that_is_not_shown_leaves_tab_to_the_window(cx: &mut TestAppConte
         "the window's first field",
     );
     drop(hidden);
+}
+
+/// Every window's dialogs are registered together; one shown in another
+/// window takes nothing from this one.
+#[gpui::test]
+fn a_modal_form_takes_tab_only_in_its_own_window(cx: &mut TestAppContext) {
+    let (_elsewhere, _) = window_with(cx, &[0], Form::Modal);
+    let (view, cx) = cx.add_window_view(|window, cx| Fixture::new(&[0], Form::Plain, window, cx));
+    refresh_and_draw(cx);
+    cx.update(|window, app| window.blur(app));
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| view.read(app).before.read(app).focus_handle(),
+        "this window's first field",
+    );
 }
 
 /// Making an element a form adds nothing to its layout: its children stay
@@ -693,17 +724,22 @@ fn a_modal_form_without_fields_takes_focus_itself(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
     struct Stacked {
-        // Created in this order; `under` is painted first.
+        // Created in this order; `under` is painted first until swapped.
         over: TabScope,
         under: TabScope,
         over_field: Entity<TextInput>,
         under_field: Entity<TextInput>,
+        swapped: bool,
     }
     impl Render for Stacked {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .child(div().tab_scope(&self.under).child(self.under_field.clone()))
-                .child(div().tab_scope(&self.over).child(self.over_field.clone()))
+            let under = div().tab_scope(&self.under).child(self.under_field.clone());
+            let over = div().tab_scope(&self.over).child(self.over_field.clone());
+            if self.swapped {
+                div().child(over).child(under)
+            } else {
+                div().child(under).child(over)
+            }
         }
     }
     cx.update(|cx| {
@@ -719,6 +755,7 @@ fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
             under: TabScope::modal(cx),
             over_field,
             under_field,
+            swapped: false,
         }
     });
     refresh_and_draw(cx);
@@ -727,6 +764,18 @@ fn the_modal_form_painted_last_takes_tab(cx: &mut TestAppContext) {
         cx,
         |app| handle_of(&view.read(app).over_field, app),
         "the dialog on top",
+    );
+    view.update(cx, |view, cx| {
+        view.swapped = true;
+        cx.notify();
+    });
+    refresh_and_draw(cx);
+    cx.update(|window, app| window.blur(app));
+    press(cx, "tab");
+    assert_focused(
+        cx,
+        |app| handle_of(&view.read(app).under_field, app),
+        "the dialog now on top",
     );
 }
 

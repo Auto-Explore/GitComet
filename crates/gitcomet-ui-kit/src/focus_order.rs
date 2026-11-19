@@ -97,7 +97,7 @@ pub fn install(cx: &mut App) {
 }
 
 /// Moves focus one field through the whole window, wrapping at its ends.
-pub fn move_focus(direction: Direction, window: &mut Window, cx: &mut App) {
+fn move_focus(direction: Direction, window: &mut Window, cx: &mut App) {
     match direction {
         Direction::Next => window.focus_next(cx),
         Direction::Previous => window.focus_prev(cx),
@@ -242,11 +242,15 @@ pub struct TabScope {
 }
 
 impl TabScope {
+    /// A form inside its window. In the window's order the form sorts as one
+    /// field with a tab index above zero: after the fields at zero or below,
+    /// wherever it is painted.
     pub fn new(cx: &App) -> Self {
         Self {
             // Not stops themselves: the container is focused only to enter
-            // from its start, and the end marker to enter from its end.
-            container: cx.focus_handle().tab_index(0).tab_stop(false),
+            // from its start, and the end marker to enter from its end. They
+            // sort before and after every field, whatever its index.
+            container: cx.focus_handle().tab_index(isize::MIN).tab_stop(false),
             end: cx.focus_handle().tab_index(isize::MAX).tab_stop(false),
             group: NEXT_GROUP.fetch_add(1, Ordering::Relaxed),
             painted: Rc::default(),
@@ -278,49 +282,6 @@ impl TabScope {
         div().tab_scope(self).child(content)
     }
 
-    /// Makes `element` this form. See [`TabScopeExt::tab_scope`].
-    pub fn apply<E: InteractiveElement + ParentElement>(&self, element: E) -> E {
-        let next = self.clone();
-        let previous = self.clone();
-        let pressed = self.clone();
-        let painted = Rc::clone(&self.painted);
-        element
-            // GPUI runs an element's own press listeners before the one that
-            // focuses it, and after its children's: a press no control of the
-            // form took keeps the field that has focus, as pressing a form's
-            // label or margin does, and a text input does not take it for a
-            // press elsewhere. A press a control took is that control's. From
-            // outside the form a press still lands on it, and Tab then enters.
-            .on_any_mouse_down(move |_, window, cx| {
-                if !window.default_prevented() && pressed.holds_field_focus(window, cx) {
-                    window.prevent_default();
-                    crate::text_selection_owner::preserve(cx);
-                }
-            })
-            .track_focus(&self.container)
-            .tab_index(self.group)
-            .tab_group()
-            .key_context(SCOPE_CONTEXT)
-            .on_action(move |_: &FocusNext, window, cx| next.step(Direction::Next, window, cx))
-            .on_action(move |_: &FocusPrevious, window, cx| {
-                previous.step(Direction::Previous, window, cx)
-            })
-            // The end marker sorts after every field by its index, wherever it
-            // is painted. Out of flow, so the form's layout is its content's.
-            .child(
-                div()
-                    .track_focus(&self.end)
-                    .absolute()
-                    .size_0()
-                    .child(gpui::canvas(
-                        |_, _, _| (),
-                        move |_, _, _, _| {
-                            painted.set(NEXT_PAINT.fetch_add(1, Ordering::Relaxed));
-                        },
-                    )),
-            )
-    }
-
     /// Whether focus is on this form or inside it.
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
         self.container.contains_focused(window, cx)
@@ -344,12 +305,8 @@ impl TabScope {
     pub fn step(&self, direction: Direction, window: &mut Window, cx: &mut App) {
         let before = window.focused(cx);
         move_focus(direction, window, cx);
-        if self.holds_field_focus(window, cx) {
-            return;
-        }
-        // Past an end: wrap. `move_focus` left focus outside the form, so
-        // restore from where it started if the form has no fields.
-        if !self.try_enter(direction, window, cx) {
+        // Past an end: wrap.
+        if !self.holds_field_focus(window, cx) && !self.try_enter(direction, window, cx) {
             match before {
                 Some(before) => window.focus(&before, cx),
                 None => window.blur(cx),
@@ -357,27 +314,16 @@ impl TabScope {
         }
     }
 
-    /// Enters the form from its start or end, leaving focus as it was when
-    /// the form is not painted in `window` or has no fields.
+    /// Focuses the form's first or last field, answering whether it has one.
+    /// When it has none, where focus goes is the caller's to decide.
     fn try_enter(&self, direction: Direction, window: &mut Window, cx: &mut App) -> bool {
-        let before = window.focused(cx);
-        self.enter(direction, window, cx);
-        if self.holds_field_focus(window, cx) {
-            return true;
-        }
-        match before {
-            Some(before) => window.focus(&before, cx),
-            None => window.blur(cx),
-        }
-        false
-    }
-
-    fn enter(&self, direction: Direction, window: &mut Window, cx: &mut App) {
-        match direction {
-            Direction::Next => window.focus(&self.container, cx),
-            Direction::Previous => window.focus(&self.end, cx),
-        }
+        let from = match direction {
+            Direction::Next => &self.container,
+            Direction::Previous => &self.end,
+        };
+        window.focus(from, cx);
         move_focus(direction, window, cx);
+        self.holds_field_focus(window, cx)
     }
 
     fn holds_field_focus(&self, window: &Window, cx: &App) -> bool {
@@ -394,7 +340,45 @@ pub trait TabScopeExt: InteractiveElement + ParentElement + Sized {
     /// no focus handle or key context of its own, and wrap it in an element
     /// that has them instead.
     fn tab_scope(self, scope: &TabScope) -> Self {
-        scope.apply(self)
+        let next = scope.clone();
+        let previous = scope.clone();
+        let pressed = scope.clone();
+        let painted = Rc::clone(&scope.painted);
+        self
+            // GPUI runs an element's own press listeners before the one that
+            // focuses it, and after its children's: a press no control of the
+            // form took keeps the field that has focus, as pressing a form's
+            // label or margin does, and a text input does not take it for a
+            // press elsewhere. A press a control took is that control's. From
+            // outside the form a press still lands on it, and Tab then enters.
+            .on_any_mouse_down(move |_, window, cx| {
+                if !window.default_prevented() && pressed.holds_field_focus(window, cx) {
+                    window.prevent_default();
+                    crate::text_selection_owner::preserve(cx);
+                }
+            })
+            .track_focus(&scope.container)
+            .tab_index(scope.group)
+            .tab_group()
+            .key_context(SCOPE_CONTEXT)
+            .on_action(move |_: &FocusNext, window, cx| next.step(Direction::Next, window, cx))
+            .on_action(move |_: &FocusPrevious, window, cx| {
+                previous.step(Direction::Previous, window, cx)
+            })
+            // The end marker sorts after every field by its index, wherever it
+            // is painted. Out of flow, so the form's layout is its content's.
+            .child(
+                div()
+                    .track_focus(&scope.end)
+                    .absolute()
+                    .size_0()
+                    .child(gpui::canvas(
+                        |_, _, _| (),
+                        move |_, _, _, _| {
+                            painted.set(NEXT_PAINT.fetch_add(1, Ordering::Relaxed));
+                        },
+                    )),
+            )
     }
 }
 

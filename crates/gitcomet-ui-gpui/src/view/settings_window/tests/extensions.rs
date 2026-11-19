@@ -152,7 +152,8 @@ fn settings_pages_open_dialogs_and_toasts_through_their_host(cx: &mut gpui::Test
 }
 
 /// A settings page's dialog is a form Tab does not leave: it goes round the
-/// dialog's own buttons, never onto the page behind the scrim.
+/// dialog's own buttons, never onto the page behind the scrim, and enters the
+/// dialog once the window comes back with nothing focused.
 #[gpui::test]
 fn settings_hosted_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
     cx.update(|app| {
@@ -196,6 +197,23 @@ fn settings_hosted_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
     assert_eq!(visited[0], visited[2], "Tab wraps");
     assert_eq!(visited[3], visited[1], "Shift-Tab goes back");
     assert_eq!(visited[5], visited[1], "Shift-Tab wraps");
+
+    cx.deactivate_window();
+    cx.update(|window, _| window.activate());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    cx.update(|window, app| assert!(window.focused(app).is_none(), "deactivation clears focus"));
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let dialog = settings.read(app).extension_dialog.as_ref().unwrap();
+        assert_eq!(
+            window.focused(app).as_ref(),
+            Some(&visited[0]),
+            "Tab enters the dialog"
+        );
+        assert!(dialog.tab_scope.contains_focused(window, app));
+    });
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();

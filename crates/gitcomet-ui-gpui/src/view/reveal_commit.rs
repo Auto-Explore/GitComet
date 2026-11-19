@@ -101,7 +101,6 @@ fn reveal_row<'a>(query: &str, lookup: Option<&'a CommitLookup>) -> RevealRow<'a
 
 pub(crate) struct RevealCommitView {
     pub(crate) query_input: Entity<components::TextInput>,
-    /// A modal: Tab stays in it.
     tab_scope: TabScope,
     restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,

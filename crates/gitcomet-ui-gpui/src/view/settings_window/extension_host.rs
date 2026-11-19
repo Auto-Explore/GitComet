@@ -623,7 +623,6 @@ impl SettingsWindowView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        // Tab is the dialog's tab scope's.
         if self.extension_dialog.is_none() || event.keystroke.key != "escape" {
             return;
         }

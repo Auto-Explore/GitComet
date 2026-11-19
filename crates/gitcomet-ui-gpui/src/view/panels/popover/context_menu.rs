@@ -394,14 +394,18 @@ impl PopoverHost {
                                 this.close_popover_and_restore_focus(window, cx);
                             }
                         }
-                        "up" | "down" | "home" | "end" if !for_keys.is_empty() => {
-                            let next = match event.keystroke.key.as_str() {
+                        "up" | "down" | "home" | "end" | "tab" if !for_keys.is_empty() => {
+                            let key = event.keystroke.key.as_str();
+                            let next = match key {
                                 "home" => 0,
                                 "end" => for_keys.len() - 1,
-                                "up" => this
-                                    .context_menu_selected_ix
-                                    .unwrap_or(for_keys.len())
-                                    .saturating_sub(1),
+                                _ if key == "up"
+                                    || (key == "tab" && event.keystroke.modifiers.shift) =>
+                                {
+                                    this.context_menu_selected_ix
+                                        .unwrap_or(for_keys.len())
+                                        .saturating_sub(1)
+                                }
                                 _ => this
                                     .context_menu_selected_ix
                                     .map_or(0, |ix| (ix + 1).min(for_keys.len() - 1)),

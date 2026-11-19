@@ -32,11 +32,12 @@ pub fn observe_blur<T: 'static>(
     ]
 }
 
-/// Start keyboard navigation after blur without taking Tab from an element
-/// that keeps it ([`crate::focus_order::CAPTURES_TAB`]).
+/// Answers Tab and Shift-Tab where the focus-order bindings cannot match:
+/// with nothing focused, or on a control with no key context on its path. An
+/// element that keeps Tab ([`crate::focus_order::CAPTURES_TAB`]) keeps it.
 ///
 /// [`crate::focus_order::install`] installs this, once: a second observer
-/// would move focus twice. The Tab bindings answer everywhere else.
+/// would move focus twice.
 pub(crate) fn observe_tab_navigation(cx: &mut App) -> Subscription {
     // With no focus GPUI dispatches only through its root node, so a listener
     // inside the window frame would never receive this first Tab, and with no

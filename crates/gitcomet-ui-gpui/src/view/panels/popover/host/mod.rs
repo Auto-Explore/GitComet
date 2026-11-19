@@ -799,7 +799,8 @@ impl PopoverHost {
             ));
         }
 
-        let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        // A menu's one Tab stop: Tab from outside the menu lands on its keys.
+        let context_menu_focus_handle = focus_order::field(cx);
         let tab_scope = TabScope::modal(cx);
         let create_branch_from_ref_checkout_focus_handle = focus_order::field(cx);
         let create_branch_from_ref_focus = DialogFocus::new(cx);
@@ -1489,8 +1490,7 @@ impl PopoverHost {
 
     /// A form the user fills in. Escape dismisses it through
     /// `dismiss_prompt_popover`, and a picker's search field inside it is one
-    /// of its fields rather than the list's navigator. Tab needs no list:
-    /// every popover keeps it inside (`tab_scope`).
+    /// of its fields rather than the list's navigator.
     pub(super) fn popover_is_prompt(&self) -> bool {
         matches!(
             self.popover,
@@ -2416,8 +2416,8 @@ impl PopoverHost {
                     window.focus(self.tab_scope.container(), cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which
-                // would otherwise swallow it and park focus on the tab group
-                // instead of the pattern field.
+                // would otherwise swallow it and park focus on the tab scope's
+                // container instead of the pattern field.
                 PopoverKind::AddToGitignorePrompt {
                     repo_id,
                     area,

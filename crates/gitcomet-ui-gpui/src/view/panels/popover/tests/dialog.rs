@@ -805,6 +805,7 @@ fn hosted_extension_dialog_keeps_tab_inside(cx: &mut gpui::TestAppContext) {
         let host = view.read(app).popover_host.read(app);
         assert!(
             host.tab_scope.contains_focused(window, app)
+                && !host.tab_scope.container().is_focused(window)
                 && !field(app, false).is_focused(window)
                 && !field(app, true).is_focused(window),
             "Tab moves on to the dialog's Close button"

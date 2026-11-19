@@ -563,6 +563,12 @@ fn app_menu_takes_the_keyboard_back_on_tab(cx: &mut gpui::TestAppContext) {
 
     simulate_key_press(cx, "down");
     assert_ne!(selected(cx), before, "the arrows walk the menu again");
+    // A menu keeps Tab: it walks the selection rather than moving focus.
+    let walked = selected(cx);
+    simulate_key_press(cx, "tab");
+    assert_ne!(selected(cx), walked, "Tab walks the menu");
+    simulate_key_press(cx, "shift-tab");
+    assert_eq!(selected(cx), walked, "Shift-Tab walks back");
     simulate_key_press(cx, "escape");
     cx.update(|_window, app| {
         assert!(!view.read(app).popover_host.read(app).is_open());

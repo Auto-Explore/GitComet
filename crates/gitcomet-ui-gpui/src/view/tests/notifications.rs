@@ -934,9 +934,9 @@ fn authentication_prompt_tabs_between_its_fields_and_buttons(cx: &mut gpui::Test
         };
         let on_a_button = |cx: &mut gpui::VisualTestContext| {
             cx.update(|window, app| {
-                view.read(app)
-                    .auth_prompt_tab_scope
-                    .contains_focused(window, app)
+                let scope = &view.read(app).auth_prompt_tab_scope;
+                scope.contains_focused(window, app)
+                    && !scope.container().is_focused(window)
                     && !username.is_focused(window)
                     && !secret.is_focused(window)
             })
