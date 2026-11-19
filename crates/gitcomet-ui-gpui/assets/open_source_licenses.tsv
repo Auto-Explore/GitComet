@@ -826,6 +826,7 @@ ureq	3.5.1	MIT OR Apache-2.0
 ureq-proto	0.7.1	MIT OR Apache-2.0
 url	2.5.8	MIT OR Apache-2.0
 usvg	0.49.0	Apache-2.0 OR MIT
+usvg	0.50.0	Apache-2.0 OR MIT
 utf8-zero	0.8.1	MIT OR Apache-2.0
 utf8_iter	1.1.0	Apache-2.0 OR MIT
 utf8parse	0.2.2	Apache-2.0 OR MIT
