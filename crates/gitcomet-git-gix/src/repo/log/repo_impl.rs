@@ -393,28 +393,34 @@ impl GixRepo {
             return Ok(None);
         };
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("core.quotePath=false")
-            .arg("diff-tree")
+        cmd.arg("diff-tree")
             .arg("-M")
             .arg("-r")
+            .arg("-z")
             .arg("--name-status")
             .arg("--no-commit-id")
             .arg(&parent)
             .arg(commit.as_ref());
-        let output = run_git_capture(cmd, "git diff-tree -M")?;
-
-        for line in output.lines() {
-            let mut fields = line.split('\t');
-            let status = fields.next().unwrap_or_default();
-            if !status.starts_with('R') && !status.starts_with('C') {
-                continue;
-            }
-            let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
-                continue;
-            };
-            if name_status_path(old)? == old_path {
-                return name_status_path(new).map(Some);
+        let output = crate::util::run_git_capture_bytes(cmd, "git diff-tree -M")?;
+        // `<status>\0<path>\0`, with a second path after a rename or copy. The
+        // names are raw: none is quoted, whatever bytes it holds.
+        let mut fields = output.split(|byte| *byte == 0);
+        while let Some(status) = fields.next() {
+            match status.first() {
+                Some(b'R' | b'C') => {
+                    let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
+                        break;
+                    };
+                    if path_buf_from_git_bytes(old, "git diff-tree old path")
+                        .is_ok_and(|old| old == old_path)
+                    {
+                        return path_buf_from_git_bytes(new, "git diff-tree new path").map(Some);
+                    }
+                }
+                Some(_) => {
+                    fields.next();
+                }
+                None => {}
             }
         }
         Ok(None)
@@ -1207,9 +1213,6 @@ impl GixRepo {
     }
 }
 
-/// Resolves a `CommitId` to its commit. A full id in the repository's format is
-/// looked up directly; anything else (a 40-digit id is an abbreviation in a
-/// SHA-256 repository) goes through the kind-aware `refs::resolve`.
 /// A path field of `--name-status` output. `core.quotePath=false` leaves bytes
 /// outside ASCII as they are, but Git still C-quotes a name with a quote, a
 /// backslash or a control character.
@@ -1222,6 +1225,9 @@ fn name_status_path(field: &str) -> Result<PathBuf> {
     path_buf_from_git_bytes(&bytes, "git name-status path")
 }
 
+/// Resolves a `CommitId` to its commit. A full id in the repository's format is
+/// looked up directly; anything else (a 40-digit id is an abbreviation in a
+/// SHA-256 repository) goes through the kind-aware `refs::resolve`.
 fn find_commit_by_id<'repo>(
     repo: &'repo gix::Repository,
     id: &CommitId,

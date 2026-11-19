@@ -756,8 +756,8 @@ mod tests {
         }
     }
 
-    /// With `core.quotePath=false` the `previous` path is raw. One that is not
-    /// UTF-8 dropped the line, and with it the prior revision.
+    /// With `core.quotePath=false` the `previous` path is raw; one that is not
+    /// UTF-8 still gives the line its prior revision.
     #[test]
     fn parse_blame_porcelain_reads_previous_whatever_its_path() {
         let mut output = Vec::new();

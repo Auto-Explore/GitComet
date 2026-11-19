@@ -522,9 +522,8 @@ fn rename_destination_at_commit_resolves_rename_introduced_at_merge() {
     assert_eq!(resolved, Some(PathBuf::from("lib/new.txt")));
 }
 
-/// Git C-quotes a name with a quote, a backslash or a control character even
-/// with `core.quotePath=false`. Read raw, neither name of such a rename matched,
-/// and a file renamed away from one lost its name at that commit.
+/// A rename between names Git would quote, for a quote, a backslash or a
+/// control character, resolves by the names themselves.
 #[cfg(not(windows))]
 #[test]
 fn rename_destination_at_commit_reads_quoted_names() {
@@ -551,6 +550,48 @@ fn rename_destination_at_commit_reads_quoted_names() {
             .expect("path resolution should not error"),
         Some(PathBuf::from(new))
     );
+}
+
+/// A name that is not UTF-8 resolves as the bytes it is, and a rename beside
+/// it in the same commit resolves too. Not on macOS, whose file system takes
+/// only UTF-8 names.
+#[cfg(target_os = "linux")]
+#[test]
+fn rename_destination_at_commit_reads_names_that_are_not_utf8() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let latin1 = OsStr::from_bytes(b"caf\xe9 \"v1\".txt");
+    fs::write(repo.join(latin1), "latin\n").expect("write the Latin-1 name");
+    write_file(repo, "a.txt", "alpha\n");
+    git_success(repo, &["add", "-A"]);
+    git_success(repo, &["commit", "-m", "base"]);
+    for (from, to) in [(latin1, "v1.txt"), (OsStr::new("a.txt"), "b.txt")] {
+        let status = git_command()
+            .arg("-C")
+            .arg(repo)
+            .args(["mv", "--"])
+            .arg(from)
+            .arg(to)
+            .status()
+            .expect("spawn git mv");
+        assert!(status.success(), "git mv {from:?}");
+    }
+    git_success(repo, &["commit", "-m", "rename both"]);
+    let rename = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+
+    let opened = open_repo(repo);
+    for (old, new) in [(Path::new("a.txt"), "b.txt"), (Path::new(latin1), "v1.txt")] {
+        assert_eq!(
+            opened
+                .rename_destination_at_commit(&rename, old)
+                .expect("rename resolution should not error"),
+            Some(PathBuf::from(new)),
+            "{old:?}"
+        );
+    }
 }
 
 #[test]
