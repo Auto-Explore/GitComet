@@ -385,9 +385,9 @@ itertools	0.13.0	MIT OR Apache-2.0
 itertools	0.14.0	MIT OR Apache-2.0
 itertools	0.15.0	MIT OR Apache-2.0
 itoa	1.0.19	MIT OR Apache-2.0
-jiff	0.2.42	Unlicense OR MIT
-jiff-core	0.1.4	Unlicense OR MIT
-jiff-static	0.2.42	Unlicense OR MIT
+jiff	0.2.46	Unlicense OR MIT
+jiff-core	0.1.8	Unlicense OR MIT
+jiff-static	0.2.46	Unlicense OR MIT
 jiff-tzdb	0.1.9	Unlicense OR MIT
 jiff-tzdb-platform	0.1.3	Unlicense OR MIT
 jni-sys	0.3.1	MIT OR Apache-2.0
