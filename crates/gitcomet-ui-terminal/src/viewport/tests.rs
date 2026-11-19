@@ -850,6 +850,13 @@ fn tab_is_the_shells_while_the_terminal_has_focus(cx: &mut gpui::TestAppContext)
         window.focus(&focus, app);
         let _ = window.draw(app);
         let stack = window.context_stack();
+        // An empty stack matches no binding either, so check what is on it.
+        assert!(
+            stack
+                .iter()
+                .any(|context| context.contains(gitcomet_ui_kit::focus_order::CAPTURES_TAB)),
+            "the terminal keeps Tab: {stack:?}"
+        );
         for binding in gitcomet_ui_kit::focus_order::key_bindings() {
             let predicate = binding.predicate().expect("a context-bound binding");
             assert!(
