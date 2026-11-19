@@ -169,7 +169,7 @@ defmt	0.3.101	MIT OR Apache-2.0
 defmt	1.2.0	MIT OR Apache-2.0
 defmt-macros	1.2.0	MIT OR Apache-2.0
 defmt-parser	1.1.0	MIT OR Apache-2.0
-dekobon-tree-sitter-groovy	0.4.0	Apache-2.0 OR MIT
+dekobon-tree-sitter-groovy	0.6.0	Apache-2.0 OR MIT
 deranged	0.5.9	MIT OR Apache-2.0
 derive_more	2.1.1	MIT
 derive_more-impl	2.1.1	MIT
