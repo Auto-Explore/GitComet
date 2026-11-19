@@ -587,6 +587,7 @@ rayon	1.12.0	MIT OR Apache-2.0
 rayon-core	1.13.0	MIT OR Apache-2.0
 read-fonts	0.41.0	MIT OR Apache-2.0
 read-fonts	0.46.0	MIT OR Apache-2.0
+read-fonts	0.47.0	MIT OR Apache-2.0
 redox_syscall	0.5.18	MIT
 redox_syscall	0.9.5	MIT
 redox_users	0.5.3	MIT
@@ -645,6 +646,7 @@ siphasher	1.0.4	MIT OR Apache-2.0
 sirocco	0.2.1	MIT OR Apache-2.0
 skrifa	0.44.0	MIT OR Apache-2.0
 skrifa	0.49.0	MIT OR Apache-2.0
+skrifa	0.50.0	MIT OR Apache-2.0
 slab	0.4.12	MIT
 slotmap	1.1.1	Zlib
 smallvec	1.16.5	MIT OR Apache-2.0
