@@ -17,6 +17,7 @@ mod backend;
 mod background_fetch;
 mod blame;
 mod cherry_pick;
+mod commit_diff_header;
 mod commit_signature;
 mod comparison;
 mod conflict_base_checkout;

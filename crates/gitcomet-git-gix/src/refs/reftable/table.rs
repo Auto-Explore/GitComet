@@ -5,6 +5,19 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// No real ref name comes near this; Git's files backend cannot store one
+/// longer than a path.
+const MAX_REF_NAME_BYTES: usize = 64 * 1024;
+
+/// Decoded ref names allowed per byte of table, plus a fixed floor.
+///
+/// Prefix compression lets a record of a few bytes repeat the whole previous
+/// name, so a crafted table of kilobytes can decode to gigabytes. Real tables
+/// decode to roughly their own size; tombstones for long names reach tens of
+/// bytes per byte, well inside this.
+const DECODED_NAME_BYTES_PER_TABLE_BYTE: usize = 64;
+const DECODED_NAME_BYTES_FLOOR: usize = 16 * 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub(crate) struct Record {
     pub target: gix::refs::Target,
@@ -118,6 +131,11 @@ impl Table {
         }
         let mut base = 0usize;
         let mut prior_name = Vec::new();
+        let mut name_budget = out
+            .bytes
+            .len()
+            .saturating_mul(DECODED_NAME_BYTES_PER_TABLE_BYTE)
+            .saturating_add(DECODED_NAME_BYTES_FLOOR);
         while base < refs_end && (base != 0 || header_len < refs_end) {
             cancel.check_cancelled()?;
             let header = if base == 0 { header_len } else { base };
@@ -139,7 +157,7 @@ impl Table {
             if end < header + 6 {
                 return Err(b.error("invalid ref block length"));
             }
-            for (name, record) in out.decode_refs(base, header + 4, end)? {
+            for (name, record) in out.decode_refs(base, header + 4, end, &mut name_budget)? {
                 if !prior_name.is_empty() && name <= prior_name {
                     return Err(b.error("unsorted or duplicate ref"));
                 }
@@ -170,6 +188,7 @@ impl Table {
         base: usize,
         start: usize,
         end: usize,
+        name_budget: &mut usize,
     ) -> Result<Vec<(Vec<u8>, Option<Record>)>> {
         let (records_end, restarts) =
             restart_table(&self.bytes[base..end], start - base, &self.path, base)?;
@@ -189,12 +208,20 @@ impl Table {
             } else if restarts.get(next_restart).is_some_and(|r| *r < offset) {
                 return Err(c.error("restart is not a record boundary"));
             }
-            let mut name = prior
+            let shared = prior
                 .get(..prefix)
-                .ok_or_else(|| c.error("prefix exceeds previous key"))?
-                .to_vec();
+                .ok_or_else(|| c.error("prefix exceeds previous key"))?;
             let suffix_len =
                 usize::try_from(suffix >> 3).map_err(|_| c.error("suffix overflow"))?;
+            let name_len = prefix
+                .checked_add(suffix_len)
+                .filter(|len| *len <= MAX_REF_NAME_BYTES)
+                .ok_or_else(|| c.error("ref name too long"))?;
+            *name_budget = name_budget
+                .checked_sub(name_len)
+                .ok_or_else(|| c.error("ref names decode to far more than the table holds"))?;
+            let mut name = Vec::with_capacity(name_len);
+            name.extend_from_slice(shared);
             name.extend_from_slice(c.take(suffix_len)?);
             let full_name =
                 gix::refs::FullName::try_from(name.as_bstr()).map_err(|e| c.error(e))?;
