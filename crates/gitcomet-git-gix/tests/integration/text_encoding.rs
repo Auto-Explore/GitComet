@@ -648,8 +648,9 @@ struct Conversion {
     name: &'static str,
     config: &'static [(&'static str, &'static str)],
     attributes: &'static str,
-    /// The line ending and encoding Git checks the file out with.
+    /// The line ending Git checks the file out with.
     ending: &'static str,
+    /// The encoding Git checks the file out in.
     format: gitcomet_core::text_format::TextFormat,
     /// Whether what Git stores differs from the working file.
     converts: bool,
@@ -797,6 +798,7 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
             conversion.converts,
             "{name}: what Git stores"
         );
+        let stored = git(root, &["rev-parse", "HEAD:notes.txt"]);
         let edited = working("two", "three", "eleven");
 
         for discard in [
@@ -861,7 +863,8 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
                         repo.apply_prepared_diff_patch(&prepared)
                             .unwrap_or_else(|error| panic!("{case}: {error}"));
                     } else {
-                        assert!(prepared.is_err(), "{case}: refused");
+                        let error = prepared.err().unwrap_or_else(|| panic!("{case}: refused"));
+                        assert!(error.to_string().contains("UTF-8"), "{case}: {error}");
                         kept = edited.clone();
                     }
                 }
@@ -872,6 +875,12 @@ fn discarding_from_a_converted_file_keeps_its_working_form() {
                 }
             }
             assert_eq!(fs::read(&file).unwrap(), kept, "{case}");
+            // A discard is the working tree's alone.
+            assert_eq!(
+                git(root, &["rev-parse", ":notes.txt"]),
+                stored,
+                "{case}: the index"
+            );
         }
     }
 }
