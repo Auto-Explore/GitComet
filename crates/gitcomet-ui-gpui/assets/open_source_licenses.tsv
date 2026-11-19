@@ -680,7 +680,7 @@ swash	0.2.10	Apache-2.0 OR MIT
 syn	2.0.119	MIT OR Apache-2.0
 syn	3.0.10	MIT OR Apache-2.0
 synstructure	0.14.0	MIT
-sysinfo	0.40.1	MIT
+sysinfo	0.40.3	MIT
 taffy	0.15.1	MIT
 target-features	0.1.6	MIT OR Apache-2.0
 tauri-winrt-notification	0.8.1	MIT OR Apache-2.0
