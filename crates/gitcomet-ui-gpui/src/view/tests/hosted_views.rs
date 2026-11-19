@@ -1761,6 +1761,100 @@ fn over_views_float_below_their_line(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// Row-bound overlays follow elastic content in either column while their
+/// viewport and scrollbar gutters stay fixed.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_over_views_follow_their_lines_in_fixed_viewports(cx: &mut gpui::TestAppContext) {
+    for (layout, synced) in [
+        (DiffLayout::Inline, true),
+        (DiffLayout::Split, true),
+        (DiffLayout::Split, false),
+    ] {
+        let (old, new) = three_lines();
+        let ((left, right), _pane, renderer, id, cx) = mount_views(cx, layout, old, new, |app| {
+            let left = new_hint(app, 80.0);
+            let right = new_hint(app, 80.0);
+            let views = vec![
+                DiffHostedView::over(
+                    DiffScrollAnchor {
+                        side: DiffLineSide::Old,
+                        line: 1,
+                    },
+                    DiffAlign::Start,
+                    left.clone(),
+                ),
+                DiffHostedView::over(on_new(1), DiffAlign::Start, right.clone()),
+            ];
+            ((left, right), views)
+        });
+        crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+            cx.update(|window, app| {
+                renderer.update(app, |renderer, cx| {
+                    if !synced {
+                        renderer.diff_scroll_sync = crate::view::DiffScrollSync::Horizontal;
+                    }
+                    cx.notify();
+                });
+                window.refresh();
+            });
+            draw(cx);
+            let regions = if layout == DiffLayout::Inline {
+                vec![(DiffTextRegion::Inline, right.clone())]
+            } else {
+                vec![
+                    (DiffTextRegion::SplitLeft, left),
+                    (DiffTextRegion::SplitRight, right),
+                ]
+            };
+            let before: Vec<_> = regions
+                .iter()
+                .map(|(region, hint)| {
+                    (
+                        *region,
+                        hint.clone(),
+                        painted(cx, &renderer, *region, "one"),
+                        cx.debug_bounds(view_frame(id, hint)).unwrap(),
+                        cx.debug_bounds(over_layer(id, *region)).unwrap(),
+                    )
+                })
+                .collect();
+            let position = before.last().unwrap().4.center();
+            for (delta, phase) in [
+                (100.0, gpui::TouchPhase::Started),
+                (0.0, gpui::TouchPhase::Ended),
+            ] {
+                cx.simulate_event(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(delta))),
+                    touch_phase: phase,
+                    modifiers: Default::default(),
+                });
+                draw(cx);
+                for (region, hint, text, frame, layer) in &before {
+                    let moved = painted(cx, &renderer, *region, "one");
+                    let current = cx.debug_bounds(view_frame(id, hint)).unwrap();
+                    if !synced && *region == DiffTextRegion::SplitLeft {
+                        assert_eq!(moved, *text, "independent left column");
+                    } else if phase == gpui::TouchPhase::Started {
+                        assert!(moved.top() > text.top() + px(20.0), "{layout:?} {region:?}");
+                    }
+                    assert_near(current.top(), moved.bottom(), "attached to its line");
+                    assert_eq!(current.left(), frame.left());
+                    assert_eq!(cx.debug_bounds(over_layer(id, *region)).unwrap(), *layer);
+                }
+            }
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(1));
+            draw(cx);
+            for (region, hint, text, frame, _) in before {
+                assert_eq!(painted(cx, &renderer, region, "one"), text);
+                assert_eq!(cx.debug_bounds(view_frame(id, &hint)).unwrap(), frame);
+            }
+        });
+    }
+}
+
 /// A view that would run past the pane's bottom goes above its line; one
 /// that fits neither way stays below it, clipped.
 #[gpui::test]

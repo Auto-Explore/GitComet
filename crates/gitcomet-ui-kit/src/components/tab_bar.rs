@@ -12,9 +12,19 @@ const SCROLL_EPSILON: Pixels = px(0.5);
 /// Scroll state of a tab strip. The view owns one of these so the offset and
 /// the last measured overflow state survive re-renders. Repository tabs use
 /// wheel/trackpad input and active-tab reveal instead of visible scroll arrows.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TabBarScroll {
     handle: ScrollHandle,
+    elastic: crate::elastic_scroll::ElasticScrollState,
+    pending_reveal: std::rc::Rc<std::cell::Cell<Option<usize>>>,
+}
+
+impl std::fmt::Debug for TabBarScroll {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TabBarScroll")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for TabBarScroll {
@@ -81,7 +91,9 @@ impl Element for TabBarEnd {
                     .tab_count
                     .checked_sub(1)
                     .and_then(|ix| scroll.tab_bounds(ix))
-                    .map_or(viewport.left(), |last| last.right().min(viewport.right()));
+                    .map_or(viewport.left(), |last| {
+                        (last.right() - scroll.elastic.displacement()).min(viewport.right())
+                    });
                 (viewport.size.width > px(0.0)).then(|| (desired_left - bounds.left()).min(px(0.0)))
             })
             .unwrap_or(px(0.0));
@@ -109,18 +121,52 @@ impl TabBarScroll {
     pub fn new() -> Self {
         Self {
             handle: ScrollHandle::new(),
+            elastic: Default::default(),
+            pending_reveal: Default::default(),
         }
     }
 
     /// Scroll the strip so the tab at `ix` is fully visible. Applied during the
     /// next prepaint, when the tab bounds for this frame are known.
     pub fn scroll_to_tab(&self, ix: usize) {
-        self.handle.scroll_to_item(ix);
+        // Recheck after layout too: a resize or a new tab can change the
+        // viewport between this request and the next prepaint.
+        self.pending_reveal.set(Some(ix));
+        if !self.reveal_measured_tab(ix) {
+            self.elastic.reset();
+        }
     }
 
-    /// Whether the strip has been laid out at least once. GPUI resolves
-    /// `scroll_to_tab` against the previous frame's viewport, so asking before
-    /// the first measurement silently does nothing.
+    fn reveal_measured_tab(&self, ix: usize) -> bool {
+        // GPUI resolves deferred reveal with a previously painted viewport.
+        // During a rebound that viewport includes the old translation, while
+        // the next frame's child bounds no longer do. Resolve known tabs in
+        // fixed coordinates before clearing motion to avoid that mismatch.
+        if let Some(mut tab) = self.handle.bounds_for_item(ix)
+            && self.is_measured()
+        {
+            let viewport = self.viewport();
+            tab.origin.x -= self.elastic.displacement();
+            let current = self.handle.offset();
+            let target = if tab.size.width > viewport.size.width
+                || tab.left() + current.x < viewport.left()
+            {
+                viewport.left() - tab.left()
+            } else if tab.right() + current.x > viewport.right() {
+                viewport.right() - tab.right()
+            } else {
+                current.x
+            };
+            self.elastic.reset();
+            self.handle
+                .set_offset(point(target.clamp(-self.max_scroll(), px(0.0)), current.y));
+            return true;
+        }
+        false
+    }
+
+    /// Whether the strip has been laid out at least once. Reveal requests made
+    /// before measurement are retained until their tab has bounds.
     pub fn is_measured(&self) -> bool {
         self.handle.bounds().size.width > px(0.0)
     }
@@ -129,10 +175,11 @@ impl TabBarScroll {
     /// measured layout. A tab too wide to ever fit counts as shown once its
     /// left edge is in view, so callers can't wait on it forever.
     pub fn tab_is_visible(&self, ix: usize) -> bool {
-        let viewport = self.handle.bounds();
-        let Some(tab) = self.handle.bounds_for_item(ix) else {
+        let viewport = self.viewport();
+        let Some(mut tab) = self.handle.bounds_for_item(ix) else {
             return false;
         };
+        tab.origin.x -= self.elastic.displacement();
         let offset_x = self.offset().x;
         let left = tab.left() + offset_x;
         let right = tab.right() + offset_x;
@@ -158,7 +205,9 @@ impl TabBarScroll {
 
     /// Bounds of the visible strip, as measured during the last prepaint.
     pub fn viewport(&self) -> Bounds<Pixels> {
-        self.handle.bounds()
+        let mut bounds = self.handle.bounds();
+        bounds.origin.x -= self.elastic.displacement();
+        bounds
     }
 
     /// Where the tab at `ix` is actually painted: its layout box shifted by the
@@ -183,6 +232,7 @@ impl TabBarScroll {
     /// Scrolls by `delta` (positive moves the tabs left, revealing later ones).
     /// Returns whether the offset actually moved.
     pub fn scroll_by(&self, delta: Pixels) -> bool {
+        self.elastic.reset();
         let offset = self.offset();
         let x = (offset.x - delta).clamp(-self.max_scroll(), px(0.0));
         if x == offset.x {
@@ -246,7 +296,21 @@ impl TabBar {
         // GPUI measures scrollable content from its immediate children, so a
         // wrapper row would report the viewport width and the strip would clip
         // instead of scroll.
+        let reveal = scroll.clone();
         let tabs = div()
+            .on_children_prepainted(move |_, window, _| {
+                if let Some(scroll) = &reveal
+                    && let Some(ix) = scroll.pending_reveal.get()
+                {
+                    let before = scroll.handle.offset();
+                    if scroll.reveal_measured_tab(ix) {
+                        scroll.pending_reveal.set(None);
+                        if scroll.handle.offset() != before {
+                            window.on_next_frame(|window, _| window.refresh());
+                        }
+                    }
+                }
+            })
             .id((id.clone(), "tabs"))
             .flex()
             .items_end()
@@ -258,6 +322,17 @@ impl TabBar {
                 this.track_scroll(&scroll.handle)
             })
             .children(tabs);
+
+        let tabs = match &scroll {
+            Some(scroll) => crate::elastic_scroll::ElasticScroll::horizontal(
+                (id.clone(), "elastic"),
+                scroll.handle.clone(),
+                tabs,
+            )
+            .motion_state(scroll.elastic.clone())
+            .into_any_element(),
+            None => tabs.into_any_element(),
+        };
 
         let viewport = div()
             .relative()

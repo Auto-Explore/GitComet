@@ -141,6 +141,11 @@ pub(super) fn panel(
                     patterns_scroll,
                     scaled_px(120.0),
                 )
+                .motion_state(
+                    this.gitignore_patterns_input
+                        .read(cx)
+                        .vertical_elastic_scroll_state(),
+                )
                 .render(theme, this.gitignore_patterns_input.clone()),
             ),
         )

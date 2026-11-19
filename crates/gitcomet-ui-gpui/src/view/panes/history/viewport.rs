@@ -48,6 +48,7 @@ impl HistoryView {
         }) {
             return;
         }
+        self.reset_history_scroll_motion();
         let paths = match &repo.worktree_dirty {
             Loadable::Ready(dirty) => dirty.iter().map(|summary| summary.path.clone()).collect(),
             _ => Vec::new(),

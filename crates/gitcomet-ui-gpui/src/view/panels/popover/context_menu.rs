@@ -368,6 +368,12 @@ impl PopoverHost {
         )
         .h_full()
         .track_scroll(&self.pin_menu_scroll);
+        let list = crate::kit::elastic_scroll::ElasticScroll::new(
+            "pin_overflow_elastic",
+            self.pin_menu_scroll.clone(),
+            list,
+        )
+        .vertical_only();
         div()
             .w(scale.px(280.0))
             .flex()

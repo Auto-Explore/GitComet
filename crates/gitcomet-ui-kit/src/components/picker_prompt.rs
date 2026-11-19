@@ -969,6 +969,12 @@ impl PickerPrompt {
         // Mirrors the list's left padding so rows stay centred in the list, with
         // the scrollbar's own gutter added on top of it when one is showing.
         let list = list.pr(scrollbar_gutter + scaled_px(LIST_PAD_PX));
+        let list = crate::elastic_scroll::ElasticScroll::new(
+            "picker_prompt_elastic",
+            scroll_handle.clone(),
+            list,
+        )
+        .vertical_only();
         let scrollbar = {
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(any(test, feature = "test-support"))]

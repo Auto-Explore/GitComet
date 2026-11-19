@@ -1792,6 +1792,53 @@ fn indexed_viewport(
     })
 }
 
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn elastic_indexed_history_drives_the_logical_viewport_in_pixels(cx: &mut gpui::TestAppContext) {
+    use crate::kit::elastic_scroll::ElasticScrollDriver;
+
+    let (view, _store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        draw_and_park(cx);
+        let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+        cx.update(|window, app| {
+            window.dispatch_event(
+                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    position: bounds.center(),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-0.25))),
+                    touch_phase: gpui::TouchPhase::Started,
+                    modifiers: Default::default(),
+                }),
+                app,
+            );
+        });
+        draw_and_park(cx);
+        assert_eq!(
+            indexed_viewport(cx, &view).0,
+            0.25,
+            "a pixel delta is not a scrollbar fraction"
+        );
+        cx.update(|_, app| {
+            history_view(&view, app).update(app, |history, cx| {
+                let driver = super::super::scroll::HistoryScrollDriver {
+                    view: cx.entity().downgrade(),
+                    handle: history.history_scroll.clone(),
+                    interaction: history.scroll_interaction.clone(),
+                };
+                let original = history.scroll_interaction.borrow().logical.clone();
+                let mut large = super::super::scroll::LogicalViewport::new(2_000_000, 56.0, 800.0);
+                large.set_position(1_900_000.0 * 56.0 + 0.25);
+                history.scroll_interaction.borrow_mut().logical = Some(large);
+                for _ in 0..100 {
+                    assert_eq!(driver.scroll_by(px(-0.25)), px(-0.25));
+                }
+                assert_eq!(driver.metrics().0, -(1_900_000.0 * 56.0 + 25.25));
+                history.scroll_interaction.borrow_mut().logical = original;
+            });
+        });
+    });
+}
+
 /// The top of visible row `visible_ix`, in the indexed list's coordinates.
 fn indexed_row_top(
     cx: &mut gpui::VisualTestContext,

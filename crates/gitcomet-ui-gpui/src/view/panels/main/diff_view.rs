@@ -1128,6 +1128,7 @@ impl DiffRenderer {
         if self.is_conflict_rendered_preview_active()
             && !self.is_conflict_rendered_markdown_preview_active()
         {
+            self.reset_diff_elastic_scroll();
             self.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Text;
         }
         let was_search_active = self.diff_search_active;
@@ -1631,20 +1632,30 @@ impl DiffRenderer {
         )
         .floating()
         .input(
-            div()
-                .id("diff_search_input_scroll")
-                .relative()
-                .w_full()
-                .min_w(px(0.0))
-                .h(search_input_height)
-                .py(pad_y)
-                .pr(components::Scrollbar::visible_gutter(
-                    self.diff_search_scroll.clone(),
-                    components::ScrollbarAxis::Vertical,
-                ))
-                .overflow_y_scroll()
-                .track_scroll(&self.diff_search_scroll)
-                .child(self.diff_search_input.clone()),
+            crate::kit::elastic_scroll::ElasticScroll::new(
+                "diff_search_elastic",
+                self.diff_search_scroll.clone(),
+                div()
+                    .id("diff_search_input_scroll")
+                    .relative()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .h(search_input_height)
+                    .py(pad_y)
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.diff_search_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.diff_search_scroll)
+                    .child(self.diff_search_input.clone()),
+            )
+            .vertical_only()
+            .motion_state(
+                self.diff_search_input
+                    .read(cx)
+                    .vertical_elastic_scroll_state(),
+            ),
         )
         // Only a query past the visible lines scrolls.
         .input(div().when(lines as f32 > DIFF_SEARCH_MAX_LINES, |slot| {
@@ -2398,19 +2409,25 @@ impl DiffRenderer {
                                         .min_h(px(0.0))
                                         .bg(content_bg)
                                         .child(
-                                            div()
-                                                .id("worktree_markdown_preview_document")
-                                                .debug_selector(|| {
-                                                    "worktree_markdown_preview_document".to_string()
-                                                })
-                                                .size_full()
-                                                .min_h(px(0.0))
-                                                .overflow_y_scroll()
-                                                .track_scroll(&scroll_handle)
-                                                .pt(edge_gap)
-                                                .pb(edge_gap)
-                                                .pr(scrollbar_gutter)
-                                                .child(body),
+                                            self.elastic_diff_vertical(
+                                                "worktree_markdown_document_elastic",
+                                                scroll_handle.clone(),
+                                                div()
+                                                    .id("worktree_markdown_preview_document")
+                                                    .debug_selector(|| {
+                                                        "worktree_markdown_preview_document"
+                                                            .to_string()
+                                                    })
+                                                    .size_full()
+                                                    .min_h(px(0.0))
+                                                    .overflow_y_scroll()
+                                                    .track_scroll(&scroll_handle)
+                                                    .pt(edge_gap)
+                                                    .pb(edge_gap)
+                                                    .pr(scrollbar_gutter)
+                                                    .child(body),
+                                                true,
+                                            ),
                                         )
                                         .child(
                                             components::Scrollbar::new(
@@ -2435,18 +2452,23 @@ impl DiffRenderer {
                             input.set_text(e.clone(), cx);
                             input.set_read_only(true, cx);
                         });
-                        div()
-                            .id("worktree_preview_error_scroll")
-                            .bg(content_bg)
-                            .font_family(editor_font_family.clone())
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.diff_raw_scroll)
-                            .child(self.diff_raw_input.clone())
-                            .into_any_element()
+                        self.elastic_diff_vertical(
+                            "worktree_preview_error_scroll_elastic",
+                            self.diff_raw_scroll.clone(),
+                            div()
+                                .id("worktree_preview_error_scroll")
+                                .bg(content_bg)
+                                .font_family(editor_font_family.clone())
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.diff_raw_scroll)
+                                .child(self.diff_raw_input.clone()),
+                            true,
+                        )
+                        .into_any_element()
                     }
                     Loadable::Ready(line_count) => {
                         let line_count = *line_count;
@@ -2482,6 +2504,23 @@ impl DiffRenderer {
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
+                            let list = self.elastic_diff_vertical(
+                                "worktree_preview_elastic",
+                                self.worktree_preview_scroll.clone(),
+                                list,
+                                true,
+                            );
+                            let list = if wrapped {
+                                list.into_any_element()
+                            } else {
+                                self.elastic_diff_horizontal(
+                                    "worktree_preview_horizontal_elastic",
+                                    self.worktree_preview_scroll.0.borrow().base_handle.clone(),
+                                    list,
+                                    true,
+                                )
+                                .into_any_element()
+                            };
 
                             let scroll_handle =
                                 self.worktree_preview_scroll.0.borrow().base_handle.clone();
@@ -2613,6 +2652,19 @@ impl DiffRenderer {
                                 .track_scroll(&self.diff_scroll)
                                 .with_horizontal_sizing_behavior(
                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                );
+
+                                let list = self.elastic_diff_vertical(
+                                    "conflict_compare_elastic",
+                                    self.diff_scroll.clone(),
+                                    list,
+                                    true,
+                                );
+                                let list = self.elastic_diff_horizontal(
+                                    "conflict_compare_horizontal_elastic",
+                                    scroll_handle.clone(),
+                                    list,
+                                    true,
                                 );
 
                                 div()

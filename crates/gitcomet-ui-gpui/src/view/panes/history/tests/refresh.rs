@@ -2183,6 +2183,370 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
 }
 
 #[gpui::test]
+fn indexed_history_precise_wheel_routing_preserves_axis_lock_and_fallbacks(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let live = crate::ui_runtime::UiRuntime::live();
+    let deterministic = crate::ui_runtime::UiRuntime::deterministic();
+    for (runtime, reduced, owns_precise) in [
+        (live, false, cfg!(target_os = "macos")),
+        (live, true, cfg!(target_os = "macos")),
+        (deterministic, false, false),
+    ] {
+        crate::ui_runtime::with_override(runtime, || {
+            cx.update(|window, app| {
+                window.activate();
+                app.set_reduce_motion(reduced);
+                history.update(app, |history, cx| {
+                    history
+                        .scroll_interaction
+                        .borrow_mut()
+                        .logical
+                        .as_mut()
+                        .unwrap()
+                        .set_position(100.0);
+                    cx.notify();
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            let position = cx
+                .debug_bounds("indexed_history_viewport")
+                .unwrap()
+                .center();
+            cx.update(|window, app| {
+                let mut positions = Vec::new();
+                // Dispatch as one batch so rendering cannot introduce the
+                // axis tracker's 28ms gesture timeout between these packets.
+                for (x, phase) in [
+                    (-5.0, gpui::TouchPhase::Started),
+                    (0.0, gpui::TouchPhase::Moved),
+                    (-0.1, gpui::TouchPhase::Moved),
+                ] {
+                    window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                        position,
+                        delta: gpui::ScrollDelta::Pixels(point(px(x), px(-4.0))),
+                        touch_phase: phase,
+                        modifiers: Default::default(),
+                    }), app);
+                    positions.push(history.read(app).history_scroll_position());
+                }
+                assert_eq!(positions, if owns_precise { vec![100.0, 100.0, 100.0] } else { vec![104.0, 108.0, 112.0] },
+                    "runtime={runtime:?}, reduced_motion={reduced}: off-axis packets must not fall back to raw vertical deltas");
+                let before_vertical = history.read(app).history_scroll_position();
+                window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-5.0))),
+                    touch_phase: gpui::TouchPhase::Started,
+                    modifiers: Default::default(),
+                }), app);
+                assert_eq!(history.read(app).history_scroll_position(), before_vertical + 5.0,
+                    "a new vertical gesture moves exactly once");
+                let before_lines = history.read(app).history_scroll_position();
+                let line_height = f64::from(f32::from(window.line_height()));
+                window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                    position,
+                    delta: gpui::ScrollDelta::Lines(point(0.0, -1.0)),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    modifiers: Default::default(),
+                }), app);
+                assert_eq!(history.read(app).history_scroll_position(), before_lines + line_height,
+                    "ordinary line wheels retain the indexed fallback");
+            });
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn indexed_history_pending_momentum_follows_the_live_owner_and_stops_when_hidden(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::kit::elastic_scroll::{ReplayInput, ReplaySource, with_replay_input};
+
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, _| window.activate());
+        // The test platform delivers activation on its foreground executor.
+        // A queued frame must see an active window, just as native dispatch does.
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            assert!(window.is_window_active());
+            history.update(app, |history, cx| {
+                history
+                    .scroll_interaction
+                    .borrow_mut()
+                    .logical
+                    .as_mut()
+                    .unwrap()
+                    .set_position(100.0);
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        let position = cx
+            .debug_bounds("indexed_history_viewport")
+            .unwrap()
+            .center();
+        let packet = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let at = app.background_executor().now();
+                with_replay_input(
+                    ReplayInput {
+                        source: ReplaySource::Momentum,
+                        phase: gpui::TouchPhase::Moved,
+                        at,
+                        momentum_ended: false,
+                    },
+                    || {
+                        window.dispatch_event(
+                            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                position,
+                                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+                                touch_phase: gpui::TouchPhase::Moved,
+                                modifiers: Default::default(),
+                            }),
+                            app,
+                        );
+                    },
+                );
+            });
+        };
+        let before = history.read_with(cx, |history, _| history.history_scroll_position());
+        let geometry = |cx: &gpui::VisualTestContext| {
+            history.read_with(cx, |history, _| {
+                let scroll = history.scroll_interaction.borrow();
+                let logical = scroll.logical.as_ref().unwrap();
+                (
+                    logical.viewport,
+                    logical.height,
+                    logical.total,
+                    logical.max(),
+                )
+            })
+        };
+        let before_geometry = geometry(cx);
+        packet(cx);
+        assert!(history.read_with(cx, |h, _| h.scroll_elastic.pending_native_momentum()));
+        assert_eq!(
+            history.read_with(cx, |h, _| h.history_scroll_position()),
+            before
+        );
+        // History renders a fresh driver. Its old callback must resolve the
+        // current driver and update the logical viewport before the next draw.
+        cx.update(|window, app| {
+            history.update(app, |_, cx| cx.notify());
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        assert_eq!(
+            geometry(cx),
+            before_geometry,
+            "a driver redraw preserves geometry"
+        );
+        assert!(
+            history.read_with(cx, |h, _| h.scroll_elastic.pending_native_momentum()),
+            "a driver redraw must preserve an accepted queue with unchanged geometry"
+        );
+        cx.executor().advance_clock(Duration::from_millis(30));
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+        });
+        assert_eq!(
+            history.read_with(cx, |h, _| h.history_scroll_position()),
+            before + 80.0
+        );
+        packet(cx);
+        let hidden_at = history.read_with(cx, |h, _| h.history_scroll_position());
+        state.repos[0].diff_state.diff_target =
+            Some(gitcomet_core::domain::DiffTarget::working_tree(
+                "file.rs".into(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
+        state.repos[0].diff_state.diff_target_rev += 1;
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_with_store(cx, &view);
+        cx.update(|_, app| {
+            assert!(
+                !view
+                    .read(app)
+                    .main_pane
+                    .read(app)
+                    .history_is_active_surface(app)
+            );
+        });
+        cx.executor().advance_clock(Duration::from_millis(30));
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+        });
+        assert_eq!(
+            history.read_with(cx, |h, _| h.history_scroll_position()),
+            hidden_at,
+            "queued native travel must not advance the hidden history owner"
+        );
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn pruning_a_parked_indexed_owner_cancels_queued_native_momentum(cx: &mut gpui::TestAppContext) {
+    use crate::kit::elastic_scroll::{ReplayInput, ReplaySource, with_replay_input};
+
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, _| window.activate());
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            history.update(app, |history, cx| {
+                history
+                    .scroll_interaction
+                    .borrow_mut()
+                    .logical
+                    .as_mut()
+                    .unwrap()
+                    .set_position(100.0);
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        let position = cx
+            .debug_bounds("indexed_history_viewport")
+            .unwrap()
+            .center();
+        cx.update(|window, app| {
+            let at = app.background_executor().now();
+            with_replay_input(
+                ReplayInput {
+                    source: ReplaySource::Momentum,
+                    phase: gpui::TouchPhase::Moved,
+                    at,
+                    momentum_ended: false,
+                },
+                || {
+                    window.dispatch_event(
+                        gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                            position,
+                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+                            touch_phase: gpui::TouchPhase::Moved,
+                            modifiers: Default::default(),
+                        }),
+                        app,
+                    );
+                },
+            );
+            history.update(app, |history, _| {
+                assert!(history.scroll_elastic.pending_native_momentum());
+                assert_eq!(history.history_scroll_position(), 100.0);
+                // The model observer calls this teardown before a hidden pane
+                // can repaint or refresh the driver's weak frame binding.
+                let mut parked = (*history.state).clone();
+                parked.repos[0].set_backend_parked_for_test(true);
+                history.state = Arc::new(parked);
+                history.prune_retained_indexed_history();
+                assert!(history.indexed.presentation.is_none());
+                assert!(history.scroll_interaction.borrow().logical.is_none());
+                assert!(
+                    !history.scroll_elastic.pending_native_momentum(),
+                    "dropping a cold indexed owner cancels its accepted native travel immediately"
+                );
+            });
+        });
+    });
+}
+
+#[gpui::test]
+#[cfg(target_os = "macos")]
+fn uniform_history_two_native_packets_preserve_their_queued_endpoint(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::kit::elastic_scroll::{ReplayInput, ReplaySource, with_replay_input};
+
+    let (view, cx, _, _) = mount(cx, Arc::new(log_page(commits(400), None)));
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        cx.update(|window, _| window.activate());
+        cx.run_until_parked();
+        scroll(cx, &view, Some(10));
+        let position = history.read_with(cx, |history, _| {
+            assert!(history.indexed.presentation.is_none());
+            assert!(history.scroll_interaction.borrow().logical.is_none());
+            history
+                .history_scroll
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .center()
+        });
+        let before = history.read_with(cx, |history, _| history.history_scroll_position());
+        cx.update(|window, app| {
+            assert!(window.is_window_active());
+            for delta in [-40.0, -5.0] {
+                let at = app.background_executor().now();
+                with_replay_input(
+                    ReplayInput {
+                        source: ReplaySource::Momentum,
+                        phase: gpui::TouchPhase::Moved,
+                        at,
+                        momentum_ended: delta == -5.0,
+                    },
+                    || {
+                        window.dispatch_event(
+                            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                position,
+                                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                                touch_phase: gpui::TouchPhase::Moved,
+                                modifiers: Default::default(),
+                            }),
+                            app,
+                        );
+                    },
+                );
+                assert!(history.read(app).scroll_elastic.pending_native_momentum());
+                assert_eq!(history.read(app).history_scroll_position(), before);
+            }
+        });
+        cx.executor().advance_clock(Duration::from_millis(30));
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+        });
+        assert_eq!(
+            history.read_with(cx, |h, _| h.history_scroll_position()),
+            before + 45.0,
+            "the uniform child wheel handler must not reset an earlier accepted packet"
+        );
+        assert!(!history.read_with(cx, |h, _| h.scroll_elastic.pending_native_momentum()));
+    });
+}
+
+#[gpui::test]
 fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
     let (index, commits) = indexed_fixture(10);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
