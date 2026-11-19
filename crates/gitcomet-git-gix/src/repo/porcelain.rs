@@ -765,7 +765,10 @@ impl GixRepo {
         validate_ref_like_arg(name, "branch name")?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("checkout").arg(name);
+        // The trailing `--` makes `name` a branch or nothing: without it a
+        // branch that no longer exists falls back to restoring a file of that
+        // name and silently discards its edits.
+        cmd.arg("checkout").arg(name).arg("--");
         run_git_simple(cmd, "git checkout")
     }
 
