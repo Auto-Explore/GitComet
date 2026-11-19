@@ -654,6 +654,7 @@ fn ssh_only_hosts_link_to_their_forge() {
     );
     for (url, (commit, file)) in [
         ("git@ssh.bitbucket.org:org/repo.git", bitbucket),
+        ("git@SSH.Bitbucket.org:org/repo.git", bitbucket),
         ("ssh://git@ssh.bitbucket.org/org/repo.git", bitbucket),
         ("ssh://git@altssh.bitbucket.org:443/org/repo.git", bitbucket),
         ("[git@altssh.bitbucket.org:443]:org/repo.git", bitbucket),
@@ -705,8 +706,13 @@ fn other_hosts_keep_their_own_name() {
     ] {
         assert_eq!(remote_web_url(url).as_deref(), Some(page), "{url}");
     }
-    // An address in brackets is not a host with a web page.
-    for url in ["[::1]:org/repo.git", "git@[2001:db8::1]:org/repo.git"] {
+    // An address in brackets is not a host with a web page, even one with
+    // dots that cutting only a numeric port would leave looking like a host.
+    for url in [
+        "[::1]:org/repo.git",
+        "git@[2001:db8::1]:org/repo.git",
+        "git@[::ffff:192.0.2.1]:org/repo.git",
+    ] {
         assert_eq!(remote_web_url(url), None, "{url}");
     }
 }

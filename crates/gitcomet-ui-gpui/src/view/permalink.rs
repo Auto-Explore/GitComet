@@ -208,7 +208,7 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
         && !user_host.contains('/')
         && path.contains('/')
     {
-        let host_port = user_host.rsplit('@').next()?;
+        let host_port = user_host.rsplit('@').next()?.trim_start_matches('[');
         let host = host_port
             .split_once(':')
             .map_or(host_port, |(host, _)| host);
@@ -248,15 +248,11 @@ fn web_port<'a>(scheme: &str, port: Option<&'a str>) -> Option<&'a str> {
 /// The `user@host` and the path of an scp-like remote. Brackets let the form
 /// carry a port, around the host or around the user and the host:
 /// `git@[host:443]:path` and `[git@host:443]:path` come back as
-/// `git@host:443` and `path`.
-fn scp_like(url: &str) -> Option<(std::borrow::Cow<'_, str>, &str)> {
+/// `git@[host:443` and `[git@host:443` with `path`, opening bracket kept.
+fn scp_like(url: &str) -> Option<(&str, &str)> {
     match url.split_once("]:") {
-        Some((bracketed, path)) if bracketed.contains('[') => {
-            Some((bracketed.replacen('[', "", 1).into(), path))
-        }
-        _ => url
-            .split_once(':')
-            .map(|(user_host, path)| (user_host.into(), path)),
+        Some((bracketed, path)) if bracketed.contains('[') => Some((bracketed, path)),
+        _ => url.split_once(':'),
     }
 }
 
