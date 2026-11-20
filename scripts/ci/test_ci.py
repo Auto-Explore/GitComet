@@ -2170,6 +2170,17 @@ const F: &str = "after the test module: gitcomet-gui";
         self.assertTrue(any("1 new identifier" in problem for problem in problems))
         self.assertTrue(any("b.rs: display-name exception allows 1 but 0 remain" in problem for problem in problems))
 
+    def test_new_literal_is_reported_with_its_line_and_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.rs").write_text('fn main() {\n    let old = "gitcomet";\n    let new = "gitcomet-tool";\n'
+                                       '    let other = "GitComet";\n}\n')
+            with patch.object(identity_literals, "ROOT", root):
+                problems = identity_literals.compare({("a.rs", "identifier"): 2}, {("a.rs", "identifier"): (1, "x")},
+                                                     identity_literals.locate)
+        self.assertEqual(problems, ['a.rs: 1 new identifier literal(s) (line 2: "gitcomet", line 3: "gitcomet-tool"); '
+                                    'use gitcomet_core::identity'])
+
     def test_allowlist_round_trips_reasons(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "allow.txt"
