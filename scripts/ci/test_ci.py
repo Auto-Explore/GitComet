@@ -874,6 +874,15 @@ class CacheTests(unittest.TestCase):
         budgets = sum(cache.COMPILED_BUDGETS_MIB.values()) + 3 * cache.SOURCES_BUDGET_MIB
         self.assertLessEqual(budgets * 1024**2 + 64 * 1024**2, cache.CACHE_ALLOWANCE_BYTES)
 
+    def test_lanes_with_a_compiled_bundle_have_time_to_build_it_cold(self):
+        # A miss costs these lanes a cold compile and, on the default branch, the pack as well. windows-arm64
+        # had the short limit: it passed every test in an hour and was cancelled while uploading its reports.
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/cross-platform-tests.yml").read_text(encoding="utf-8")
+        long_lanes = re.search(r"^    timeout-minutes: \$\{\{ inputs\.execution-samples > 1 && 180 \|\| \((.+)\) && 90 \|\| 60 \}\}$",
+                               workflow, re.MULTILINE)
+        self.assertLessEqual({context.removesuffix("-workspace-ci-test") for context in cache.COMPILED_BUDGETS_MIB},
+                             set(re.findall(r"matrix\.name == '([\w-]+)'", long_lanes[1])))
+
     def test_budget_changes_keep_every_cache_key(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
                 patch.object(cache.platform, "platform", return_value="test-platform"), \

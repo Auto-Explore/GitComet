@@ -115,7 +115,9 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64') && 90 || 60 }}
+    # The lanes with a compiled dependency bundle are the longest. A miss costs them a cold compile
+    # and, on the default branch, packing the bundle as well.
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64' || matrix.name == 'windows-arm64') && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
