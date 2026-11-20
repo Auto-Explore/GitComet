@@ -1899,7 +1899,11 @@ fn sweep_removes_dead_instances_but_keeps_retained_items_and_live_locks() {
     fs::create_dir(root.join("4-40")).unwrap();
     fs::create_dir(root.join("5-50")).unwrap();
     let stale = filetime::FileTime::from_unix_time(1_000_000, 0);
-    filetime::set_file_mtime(root.join("5-50"), stale).unwrap();
+    fs::set_times(
+        root.join("5-50"),
+        fs::FileTimes::new().set_modified(stale.into()),
+    )
+    .unwrap();
     fs::create_dir(root.join("notes")).unwrap();
 
     sweep_leaked_journal_storage(root);

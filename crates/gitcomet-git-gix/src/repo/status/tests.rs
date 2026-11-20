@@ -1169,7 +1169,7 @@ fn cold_status_retains_clean_file_stats_and_invalidates_them_after_staging() {
     let touched = STAT_REFRESH_MIN_ENTRIES + 16;
     for ix in 0..touched {
         write_file(workdir, &format!("{ix:03}.txt"), "unchanged\n");
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(format!("{ix:03}.txt")),
             filetime::FileTime::from_unix_time(timestamp, 0),
         )
@@ -1179,7 +1179,7 @@ fn cold_status_retains_clean_file_stats_and_invalidates_them_after_staging() {
     git_success(workdir, &["commit", "-q", "-m", "seed"]);
     let index_before = std::fs::read(workdir.join(".git/index")).unwrap();
     for ix in 0..touched {
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(format!("{ix:03}.txt")),
             filetime::FileTime::from_unix_time(timestamp + 1, 0),
         )
@@ -1236,7 +1236,7 @@ fn repeated_status_does_not_run_clean_filters_again_after_the_first_scan() {
     );
     git_success(workdir, &["config", "filter.count.clean", &clean]);
     let timestamp = filetime::FileTime::now().unix_seconds() - 30;
-    filetime::set_file_mtime(
+    crate::test_support::set_file_mtime(
         workdir.join("large.txt"),
         filetime::FileTime::from_unix_time(timestamp, 0),
     )
@@ -1244,7 +1244,7 @@ fn repeated_status_does_not_run_clean_filters_again_after_the_first_scan() {
     git_success(workdir, &["add", "."]);
     git_success(workdir, &["commit", "-q", "-m", "seed"]);
     std::fs::remove_file(workdir.join(".git/hash-count")).unwrap();
-    filetime::set_file_mtime(
+    crate::test_support::set_file_mtime(
         workdir.join("large.txt"),
         filetime::FileTime::from_unix_time(timestamp + 1, 0),
     )
@@ -1299,21 +1299,21 @@ fn stat_refresh_keeps_a_racily_modified_file_modified() {
 
     let now = filetime::FileTime::now().unix_seconds();
     let entry_mtime = filetime::FileTime::from_unix_time(now - 50, 0);
-    filetime::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
+    crate::test_support::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
     git_success(workdir, &["update-index", "-q", "--refresh"]);
     // Same size and mtime as the index entry, different content.
     write_file(workdir, "racy.txt", "bar\n");
-    filetime::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
+    crate::test_support::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
     for index in 0..touched {
         write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(format!("touched/{index:03}.txt")),
             filetime::FileTime::from_unix_time(now - 10, 0),
         )
         .expect("touched mtime");
     }
     // An index older than the entry makes it racy.
-    filetime::set_file_mtime(
+    crate::test_support::set_file_mtime(
         workdir.join(".git/index"),
         filetime::FileTime::from_unix_time(now - 100, 0),
     )
@@ -1367,7 +1367,7 @@ fn stat_refresh_catches_a_write_stamped_just_before_the_walk() {
     // The stamp a write a few milliseconds after the walk starts can get
     // from the file clock: the last instant of the previous second.
     let just_before = filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 999_000_000);
-    filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+    crate::test_support::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
     assert_eq!(
         repo.worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
             .expect("status"),
@@ -1386,7 +1386,7 @@ fn stat_refresh_catches_a_write_stamped_just_before_the_walk() {
 
     // Same size and stat as the refreshed entry, different content.
     write_file(workdir, "racy.txt", "bar\n");
-    filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+    crate::test_support::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
     assert_eq!(
         repo.worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
             .expect("status"),
