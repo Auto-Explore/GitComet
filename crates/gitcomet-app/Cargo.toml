@@ -16,7 +16,9 @@ default = ["ui-gpui", "gix"]
 # difftool/mergetool, Git tool setup, and fixture extraction still work.
 ui-gpui-runtime = [
     "dep:gitcomet-extension-api",
-    "dep:gitcomet-ui-gpui",
+    # Not `dep:`: the implicit `gitcomet-ui-gpui` feature lets the crate tell when
+    # a feature selection links the UI host without its runtime.
+    "gitcomet-ui-gpui",
     "dep:gitcomet-win32-window-utils",
     "dep:sysinfo",
     "dep:process-wrap",
