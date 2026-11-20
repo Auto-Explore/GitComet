@@ -1321,10 +1321,15 @@ class RunnerTests(unittest.TestCase):
         packages = {"core": "gitcomet-core", "ui": runner.UI}
         suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}},
                   "ui": {"package-id": "ui", "binary-name": "gitcomet_ui_gpui"}}
-        for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"), ("nextest", "ui")):
+        # A failed test as nextest reports it: exit status 100, failure counts and the failed case.
+        failed_report = ('<testsuites failures="1" errors="0"><testsuite name="core" failures="1" errors="0">'
+                         '<testcase name="required"><failure type="test failure"/></testcase></testsuite></testsuites>')
+        for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"),
+                                                       ("nextest-test", "nextest-status", "ui")):
             with self.subTest(platform=platform_name, schedule=schedule, failed=failed), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                    patch.object(runner.sys, "platform", platform_name), patch.object(runner, "available_cpus", return_value=4):
+                    patch.object(runner.sys, "platform", platform_name), patch.object(runner, "available_cpus", return_value=4), \
+                    redirect_stdout(io.StringIO()) as console:
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
@@ -1332,9 +1337,12 @@ class RunnerTests(unittest.TestCase):
                 completed = []
 
                 def run_nextest(*args, **kwargs):
-                    self.write_junit(target / "nextest/ci/junit.xml", ["core"])
+                    if failed == "nextest-test":
+                        (target / "nextest/ci/junit.xml").write_text(failed_report)
+                    else:
+                        self.write_junit(target / "nextest/ci/junit.xml", ["core"])
                     completed.append("nextest")
-                    return 100 if failed == "nextest" else 0
+                    return 100 if failed.startswith("nextest") else 0
 
                 def run_ui(*args, **kwargs):
                     completed.append("ui")
@@ -1347,6 +1355,8 @@ class RunnerTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "test execution failed"):
                         runner.execute("workspace", schedule)
                 self.assertCountEqual(completed, ["nextest", "ui"], "one failed runner must not skip the rest")
+                self.assertEqual("::error title=Test failed::workspace: core required" in console.getvalue().splitlines(),
+                                 failed == "nextest-test", "a failed test is named on the run page")
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertFalse(execution["success"])
                 self.assertEqual(execution["effective_schedule"], schedule)
