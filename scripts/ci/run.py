@@ -49,8 +49,12 @@ PURE_BATCHES = {
 # headless workspace context must not inherit.
 EXAMPLE_PACKAGES = ("gitcomet-extension-example", "gitcomet-extension-example-app")
 CONTEXTS = {
+    # `gitcomet-ui-gpui?/default` gives the UI host its own default features
+    # back. The `?` keeps the application crates headless: without it the same
+    # switch also turns on their optional UI host dependency, with no runtime
+    # feature to use it.
     "workspace": ["--workspace", *(arg for package in EXAMPLE_PACKAGES for arg in ("--exclude", package)),
-                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
+                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui?/default"],
     "core": ["-p", "gitcomet-core"],
     "diagrams": ["-p", "gitcomet-diagrams"],
     "state": ["-p", "gitcomet-state"],

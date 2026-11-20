@@ -1040,7 +1040,7 @@ class RunnerTests(unittest.TestCase):
     def test_metadata_keeps_feature_switches_but_not_package_selection(self):
         self.assertEqual(runner.feature_args(runner.CONTEXTS["app"]), ["--no-default-features", "--features", "gix"])
         self.assertEqual(runner.feature_args(runner.CONTEXTS["workspace"]),
-                         ["--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"])
+                         ["--no-default-features", "--features", "gix,gitcomet-ui-gpui?/default"])
         self.assertEqual(runner.feature_args(runner.CONTEXTS["core"]), [])
         self.assertEqual(runner.feature_args(runner.CONTEXTS["example"]), [])
 

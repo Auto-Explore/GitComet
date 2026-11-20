@@ -22,10 +22,6 @@ mod crashlog;
 // links the backend without using it.
 #[cfg(all(feature = "gix", not(feature = "ui-gpui-runtime")))]
 use gitcomet_git_gix as _;
-// CI's workspace context selects `gitcomet-ui-gpui/default`, which links the UI
-// host here without the runtime that uses it.
-#[cfg(all(feature = "gitcomet-ui-gpui", not(feature = "ui-gpui-runtime")))]
-use gitcomet_ui_gpui as _;
 
 mod difftool_mode;
 mod extract_fixtures_mode;
