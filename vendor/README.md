@@ -71,12 +71,16 @@ without a renderer patch. Windows continues to use DX12.
 
 ## Difftastic
 
-`difftastic/` is Difftastic 0.71.0 (MIT) as a library, for
+`difftastic/` is Difftastic 0.72.0 (MIT) as a library, for
 `crates/gitcomet-difftastic` to call in-process. The import commit is the
-pristine baseline, built by this recipe:
+pristine 0.71.0 baseline, and 0.72.0 was applied to it as the upstream diff
+between the two baselines. Both are built by this recipe:
 
 - Source: `https://codeload.github.com/Wilfred/difftastic/tar.gz/refs/tags/0.71.0`,
-  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`.
+  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`;
+  for 0.72.0, the tree of tag `0.72.0`, commit
+  `6201bc988aba1f5fc49cd0799461fba2aed5e0cf` (`git archive 0.72.0` gives the
+  same files as the tag tarball).
 - Keep only `Cargo.toml`, `LICENSE`, `README.md`, `clippy.toml`, `src/**` and
   `vendored_parsers/highlights/*.scm`; delete everything else.
 - Follow symlinks to their target files, and store `src/main.rs` as `src/lib.rs`.
@@ -135,6 +139,14 @@ Changes against the baseline (`git log -- vendor/difftastic`):
   rescanning them for every line, and `display/hunks.rs` scans a hunk's
   matched lines forward from its start instead of back from the end. A 1 MB
   release diff took 11 s before and 2.4 s after.
+- 0.72.0 is taken in full for the files GitComet keeps (`diff/unchanged.rs`,
+  `display/hunks.rs`, `parse/tree_sitter_parser.rs`), except where it removes
+  languages: F# and Smali stay, since GitComet ships both grammars anyway, and
+  Verilog was already gone. Its delimiter and trailing-punctuation settings
+  apply to GitComet's grammar for each language, Java's to tree-sitter-java.
+  Its terminal-width change has no counterpart here, and its
+  `vendored_parsers/` changes are deletions only, so the Janet, LaTeX and Smali
+  crates still match 0.71.0's copies.
 
 To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
 this import's tree, and apply that upstream diff to `difftastic/`. Then

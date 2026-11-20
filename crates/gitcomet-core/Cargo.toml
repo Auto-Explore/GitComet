@@ -19,7 +19,6 @@ gitcomet-base = { workspace = true }
 chardetng = { workspace = true }
 encoding_rs = { workspace = true }
 faster-hex = { workspace = true }
-filetime = { workspace = true }
 fnv = { workspace = true }
 gix-quote = { workspace = true }
 gix-validate = { workspace = true }
@@ -40,6 +39,7 @@ thiserror = { workspace = true }
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+filetime = { workspace = true }
 # Make the shared fixture helpers available to this crate's integration tests.
 gitcomet-core = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }

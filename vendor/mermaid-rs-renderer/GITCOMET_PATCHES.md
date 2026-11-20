@@ -19,7 +19,8 @@ The checked-in source is the published crate, with these focused changes:
   Restore the five comparison fixtures used by upstream's unit tests from the
   published crate's source revision, `2f993bd79a55235eb59a34d807852276ba25bea7`,
   so unit tests and doc examples build with workspace checks, including
-  `--all-targets`. Two upstream clippy style lints are allowed.
+  `--all-targets`. Two upstream clippy style lints are allowed. The manifest
+  drops `homepage`, which repeats `repository` and which Cargo warns about.
 * Align the upstream parser test with the explicit-header requirement. Check
   subgraph entry alignment using node centers, independently of edge ports
   that are deliberately spaced apart for multiple incoming connections.

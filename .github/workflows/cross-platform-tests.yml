@@ -248,7 +248,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     container:
-      image: fedora:41
+      image: fedora:45
     steps:
       - name: Install native dependencies
         run: |
@@ -263,7 +263,7 @@ jobs:
       - uses: ./.github/actions/ci-setup
         id: setup
         with:
-          context: fedora41-x64-workspace-ci-test
+          context: fedora45-x64-workspace-ci-test
           cold-cache: ${{ inputs.cold-cache }}
           python: "false"
       - name: Verify test prerequisites
@@ -302,4 +302,4 @@ jobs:
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
-          name: fedora41-x64
+          name: fedora45-x64
