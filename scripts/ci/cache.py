@@ -30,7 +30,7 @@ def load_budgets(path):
 
 CACHE_ALLOWANCE_BYTES, SOURCES_BUDGET_MIB, COMPILED_BUDGETS_MIB = load_budgets(
     Path(__file__).with_name("cache-budgets.toml"))
-UNIT_HASH = re.compile(r"-([0-9a-f]{16})(?:\..*)?$")
+UNIT = re.compile(r"[0-9a-f]{16}")
 PACKAGE_ID = re.compile(r"(registry|sparse|git|path)\+[^#]+#(?:([^@#]+)@)?(\S+)")
 
 
@@ -79,8 +79,16 @@ def cache_keys(context):
             "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
 
 
+def unit_directory(path):
+    """<profile>/build/<package>/<unit>, where Cargo keeps the whole unit a path it reported belongs to."""
+    for directory in (path, *path.parents):
+        if UNIT.fullmatch(directory.name) and directory.parent.parent.name == "build":
+            return "/".join(directory.parts[-4:])
+    return None
+
+
 def build_record():
-    """Unit hashes and registry crates this job's cargo builds compiled or found fresh, from run.py's messages."""
+    """External units and registry crates this job's cargo builds compiled or found fresh, from run.py's messages."""
     logs = sorted(REPORTS.glob("*/cargo-messages.jsonl"))
     if not logs:
         raise RuntimeError(f"no */cargo-messages.jsonl under {REPORTS}; compile with scripts/ci/run.py before packing")
@@ -88,38 +96,33 @@ def build_record():
     for log in logs:
         for line in log.read_text(encoding="utf-8").splitlines():
             message = json.loads(line)
-            if "package_id" in message:
-                package = PACKAGE_ID.fullmatch(message["package_id"])
-                if not package or (package[1] in ("registry", "sparse") and not package[2]):
-                    raise RuntimeError(f"unrecognised cargo package id {message['package_id']!r} in {log}")
-                if package[1] in ("registry", "sparse"):
-                    crates.add(f"{package[2]}-{package[3]}")
-            paths = [*message.get("filenames", []), *([message["out_dir"]] if "out_dir" in message else [])]
-            for path in map(Path, paths):
-                # deps/libname-HASH.rlib, build/name-HASH/build-script-build, build/name-HASH/out
-                match = UNIT_HASH.search(path.name) or UNIT_HASH.search(path.parent.name)
-                if match:
-                    units.add(match[1])
+            if "package_id" not in message:
+                continue
+            package = PACKAGE_ID.fullmatch(message["package_id"])
+            if not package or (package[1] in ("registry", "sparse") and not package[2]):
+                raise RuntimeError(f"unrecognised cargo package id {message['package_id']!r} in {log}")
+            if package[1] == "path":
+                continue  # Workspace and vendored path dependencies rebuild from checkout.
+            if package[1] in ("registry", "sparse"):
+                crates.add(f"{package[2]}-{package[3]}")
+            for path in [*message.get("filenames", []), *filter(None, [message.get("out_dir")])]:
+                unit = unit_directory(Path(path))
+                if unit is None:
+                    # Skipping it would save a bundle without that unit, and every restore would rebuild it.
+                    raise RuntimeError(f"{path} in {log} is not inside <profile>/build/<package>/<unit>; "
+                                       "cargo's build directory layout is not the one this cache packs")
+                units.add(unit)
+    if not units:
+        raise RuntimeError(f"the cargo messages under {REPORTS} report no external unit")
     return units, crates
 
 
-def dependency_entries(target, metadata, units):
-    """Complete external units this job used; a prefix restore's stale units stay behind."""
-    names = set()
-    for package in metadata["packages"]:
-        if not package.get("source"):
-            continue  # Workspace and vendored path dependencies rebuild from checkout.
-        names.add(package["name"])
-        names.update(item["name"].replace("-", "_") for item in package["targets"])
-    lib_names = names | {"lib" + name.replace("-", "_") for name in names}
-    for kind in ("build", ".fingerprint", "deps"):
-        directory = target / "ci-test" / kind
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.iterdir()):
-            match = UNIT_HASH.search(path.name)
-            if match and match[1] in units and path.name[:match.start()] in (lib_names if kind == "deps" else names):
-                yield path, "target/" + str(path.relative_to(target)).replace(os.sep, "/")
+def dependency_entries(target, units):
+    """The unit directories of this job's external dependencies; a prefix restore's stale units stay behind."""
+    for unit in sorted(units):
+        if not (target / unit).is_dir():
+            raise RuntimeError(f"cargo reported the unit {unit}, which is not a directory under {target}")
+        yield target / unit, f"target/{unit}"
 
 
 def cargo_metadata():
@@ -258,7 +261,7 @@ def report_restore():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["key", "pack-compiled", "pack-sources", "restore", "state"])
+    parser.add_argument("operation", choices=["key", "check-compiled", "pack-compiled", "pack-sources", "restore", "state"])
     parser.add_argument("--context", default="local")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--cargo-home", type=Path, default=Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")))
@@ -275,6 +278,9 @@ def main():
         entries = fetched_entries(args.cargo_home, registry_crates(metadata), git_checkouts(args.cargo_home, metadata))
         pack(args.bundle, list(entries), mode="sources",
              budget_mib=SOURCES_BUDGET_MIB)
+    elif args.operation == "check-compiled":
+        units, _ = build_record()
+        print(f"The compiled cache would hold {len(list(dependency_entries(args.target, units)))} external units")
     elif args.operation == "pack-compiled":
         if args.context not in COMPILED_BUDGETS_MIB:
             parser.error(f"{args.context} has no compiled bundle budget in cache-budgets.toml")
@@ -283,7 +289,7 @@ def main():
         checkouts = git_checkouts(args.cargo_home, metadata)
         entries = [*fetched_entries(args.cargo_home, registry_crates(metadata), checkouts),
                    *extracted_entries(args.cargo_home, built_crates, checkouts),
-                   *dependency_entries(args.target, metadata, units)]
+                   *dependency_entries(args.target, units)]
         pack(args.bundle, entries, mode="compiled", budget_mib=COMPILED_BUDGETS_MIB[args.context])
     else:
         report = restore(args.bundle, args.cargo_home, args.target)

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -500,11 +501,12 @@ class CacheTests(unittest.TestCase):
             source.write_text("retained timestamp")
             os.utime(source, (1700000000, 1700000000))
             bundle = root / "cache.tar.gz"
-            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="compiled")
+            unit = "target/ci-test/build/external/0123456789abcdef/out/libexternal-0123456789abcdef.rlib"
+            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, unit)], mode="compiled")
             details = cache.restore(bundle, root / "cargo", root / "target")
             self.assertEqual(details["mode"], "compiled")
             self.assertEqual((root / "cargo/registry/src/source").stat().st_mtime, 1700000000)
-            self.assertTrue((root / "target/ci-test/deps/libexternal.rlib").exists())
+            self.assertEqual((root / unit).stat().st_mtime, 1700000000)
             reports = root / "target/ci-reports"
             reports.mkdir()
             (reports / "cache-unpack.json").write_text(json.dumps(details))
@@ -583,20 +585,34 @@ class CacheTests(unittest.TestCase):
             self.assertFalse((root / "escaped").exists())
 
     def test_dependency_cache_excludes_workspace_and_vendored_code(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            deps = root / "ci-test/deps"
-            deps.mkdir(parents=True)
-            for name in ("libserde-0123456789abcdef.rlib", "libgitcomet_core-0123456789abcdef.rlib",
-                         "libvendored_grammar-0123456789abcdef.rlib", "random-test-executable"):
-                (deps / name).touch()
-            metadata = {"packages": [
-                {"name": "serde", "source": "registry+url", "targets": [{"name": "serde"}]},
-                {"name": "gitcomet-core", "source": None, "targets": [{"name": "gitcomet_core"}]},
-                {"name": "vendored-grammar", "source": None, "targets": [{"name": "vendored_grammar"}]},
-            ]}
-            entries = list(cache.dependency_entries(root, metadata, {"0123456789abcdef"}))
-            self.assertEqual([p.name for p, _ in entries], ["libserde-0123456789abcdef.rlib"])
+        with tempfile.TemporaryDirectory() as directory, patch.object(cache, "REPORTS", Path(directory) / "reports"):
+            build = Path(directory) / "target/ci-test/build"
+            packages = {
+                "serde": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2",
+                "gpui": "git+https://example.com/gpui.git?rev=abcdef0#gpui@0.4.0",
+                "gitcomet-core": f"path+file://{directory}/crates/gitcomet-core#0.3.0",
+                "vendored-grammar": f"path+file://{directory}/vendor/vendored-grammar#0.1.0",
+            }
+            messages = [{"reason": "compiler-artifact", "package_id": package_id,
+                         "filenames": [str(build / name / "0123456789abcdef/out/libunit-0123456789abcdef.rlib")]}
+                        for name, package_id in packages.items()]
+            (cache.REPORTS / "workspace").mkdir(parents=True)
+            (cache.REPORTS / "workspace/cargo-messages.jsonl").write_text(
+                "".join(json.dumps(message) + "\n" for message in messages))
+            units, crates = cache.build_record()
+            self.assertEqual(units, {"ci-test/build/serde/0123456789abcdef", "ci-test/build/gpui/0123456789abcdef"})
+            self.assertEqual(crates, {"serde-1.0.2"})
+
+    def test_a_unit_is_the_whole_directory_cargo_keeps_it_in(self):
+        build = Path("/work/target/ci-test/build")
+        for reported in ("libc/1fed9ae464324867/out/liblibc-1fed9ae464324867.rlib",  # a library
+                         "libc/1fed9ae464324867/out/build_script_build",             # a build script: no hash in its name
+                         "libc/1fed9ae464324867/out"):                                # a build script's OUT_DIR
+            self.assertEqual(cache.unit_directory(build / reported), "ci-test/build/libc/1fed9ae464324867")
+        # Cargo up to 1.99 kept units' files apart, in deps/, .fingerprint/ and build/<name>-<hash>/.
+        for reported in ("deps/libserde-1111111111111111.rlib", "build/serde-3333333333333333/build-script-build",
+                         "build/serde-4444444444444444/out", "gitcomet"):
+            self.assertIsNone(cache.unit_directory(Path("/work/target/ci-test") / reported))
 
     def cache_job(self, root):
         # A finished CI job after a prefix restore: current and stale units, current and older crates.
@@ -614,25 +630,30 @@ class CacheTests(unittest.TestCase):
             "cargo-home/git/checkouts/gpui-0000/1234567/src/lib.rs": "older lockfile's checkout",
             "cargo-home/git/db/dropped-0000/objects/pack/pack-2.pack": "a repository the lockfile dropped",
             "cargo-home/git/checkouts/dropped-0000/7654321/src/lib.rs": "a repository the lockfile dropped",
-            "target/ci-test/deps/libserde-1111111111111111.rlib": "current unit",
-            "target/ci-test/deps/libserde-2222222222222222.rlib": "stale unit",
-            "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde": "current fingerprint",
-            "target/ci-test/.fingerprint/serde-2222222222222222/lib-serde": "stale fingerprint",
-            "target/ci-test/build/serde-3333333333333333/build-script-build": "current build script",
-            "target/ci-test/build/serde-4444444444444444/out/generated.rs": "current script output",
-            "target/ci-test/build/serde-5555555555555555/out/generated.rs": "stale script output",
+            "target/ci-test/build/serde/1111111111111111/out/libserde-1111111111111111.rlib": "current unit",
+            "target/ci-test/build/serde/1111111111111111/fingerprint/lib-serde": "current fingerprint",
+            "target/ci-test/build/serde/2222222222222222/out/libserde-2222222222222222.rlib": "stale unit",
+            "target/ci-test/build/serde/2222222222222222/fingerprint/lib-serde": "stale fingerprint",
+            "target/ci-test/build/serde/3333333333333333/out/build_script_build": "current build script",
+            "target/ci-test/build/serde/4444444444444444/out/generated.rs": "current script output",
+            "target/ci-test/build/serde/4444444444444444/run/stdout": "current script run",
+            "target/ci-test/build/serde/5555555555555555/out/generated.rs": "stale script output",
+            "target/ci-test/build/gitcomet-core/6666666666666666/out/libgitcomet_core-6666666666666666.rlib": "workspace unit",
         }
         for name, text in files.items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text)
         package = "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2"
+        build = target / "ci-test/build"
         messages = [
             {"reason": "compiler-artifact", "package_id": package,
-             "filenames": [str(target / "ci-test/deps/libserde-1111111111111111.rlib")]},
+             "filenames": [str(build / "serde/1111111111111111/out/libserde-1111111111111111.rlib")]},
             {"reason": "compiler-artifact", "package_id": package,
-             "filenames": [str(target / "ci-test/build/serde-3333333333333333/build-script-build")]},
+             "filenames": [str(build / "serde/3333333333333333/out/build_script_build")]},
             {"reason": "build-script-executed", "package_id": package,
-             "out_dir": str(target / "ci-test/build/serde-4444444444444444/out")},
+             "out_dir": str(build / "serde/4444444444444444/out")},
+            {"reason": "compiler-artifact", "package_id": f"path+file://{root}/crates/gitcomet-core#0.3.0",
+             "filenames": [str(build / "gitcomet-core/6666666666666666/out/libgitcomet_core-6666666666666666.rlib")]},
             {"reason": "build-finished", "success": True},
         ]
         reports = target / "ci-reports/workspace"
@@ -677,18 +698,79 @@ class CacheTests(unittest.TestCase):
                 "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs",
                 "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
                 "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs",
-                "target/ci-test/deps/libserde-1111111111111111.rlib",
-                "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde",
-                "target/ci-test/build/serde-3333333333333333/build-script-build",
-                "target/ci-test/build/serde-4444444444444444/out/generated.rs",
+                "target/ci-test/build/serde/1111111111111111/out/libserde-1111111111111111.rlib",
+                "target/ci-test/build/serde/1111111111111111/fingerprint/lib-serde",
+                "target/ci-test/build/serde/3333333333333333/out/build_script_build",
+                "target/ci-test/build/serde/4444444444444444/out/generated.rs",
+                "target/ci-test/build/serde/4444444444444444/run/stdout",
             })
+
+    def pack_compiled_fixture(self, root, cargo, target, metadata):
+        self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test",
+                       "--bundle", str(root / "bundle.tar.gz"), "--cargo-home", str(cargo), "--target", str(target))
+
+    def test_compiled_pack_refuses_a_build_directory_layout_it_does_not_know(self):
+        # Rust 1.100 moved every unit into build/<package>/<unit>/. The packer of the time matched none of them,
+        # and would have saved, without a word, a compiled bundle holding no compiled unit.
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            messages = target / "ci-reports/workspace/cargo-messages.jsonl"
+            earlier_layout = {"reason": "compiler-artifact",
+                              "package_id": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2",
+                              "filenames": [str(target / "ci-test/deps/libserde-1111111111111111.rlib")]}
+            messages.write_text(json.dumps(earlier_layout) + "\n" + messages.read_text())
+            with self.assertRaisesRegex(RuntimeError, r"libserde-1111111111111111\.rlib in .* build directory layout"):
+                self.pack_compiled_fixture(root, cargo, target, metadata)
+            self.assertFalse((root / "bundle.tar.gz").exists())
+
+    def test_compiled_pack_refuses_a_unit_cargo_reported_but_did_not_leave(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            shutil.rmtree(target / "ci-test/build/serde/3333333333333333")
+            with self.assertRaisesRegex(RuntimeError, "ci-test/build/serde/3333333333333333, which is not a directory"):
+                self.pack_compiled_fixture(root, cargo, target, metadata)
+            self.assertFalse((root / "bundle.tar.gz").exists())
+
+    def test_compiled_pack_refuses_a_job_that_built_no_external_unit(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            messages = target / "ci-reports/workspace/cargo-messages.jsonl"
+            messages.write_text("".join(line + "\n" for line in messages.read_text().splitlines() if "serde" not in line))
+            with self.assertRaisesRegex(RuntimeError, "report no external unit"):
+                self.pack_compiled_fixture(root, cargo, target, metadata)
+            self.assertFalse((root / "bundle.tar.gz").exists())
+
+    def test_check_compiled_finds_what_a_pack_would_hold_without_packing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, target, metadata = self.cache_job(root)
+            printed = self.run_cache(root, metadata, "check-compiled", "--target", str(target))
+            self.assertEqual(printed, "The compiled cache would hold 3 external units\n")
+            shutil.rmtree(target / "ci-test/build/serde/4444444444444444")
+            with self.assertRaisesRegex(RuntimeError, "4444444444444444, which is not a directory"):
+                self.run_cache(root, metadata, "check-compiled", "--target", str(target))
+
+    def test_every_event_checks_the_units_only_the_default_branch_packs(self):
+        # A toolchain change arrives as a pull request. Gated like the pack, the first build to meet a
+        # build directory layout the packer cannot read would be the default branch's.
+        finish = (Path(__file__).resolve().parents[2] / ".github/actions/ci-finish/action.yml").read_text(encoding="utf-8")
+        gate = re.search(r"^      if: (.*)\n      shell: bash\n      run: python3 scripts/ci/cache\.py check-compiled$",
+                         finish, re.MULTILINE)
+        self.assertEqual(gate[1], "${{ !cancelled() && job.status == 'success' && env.CI_CACHE_COMPILED == 'true' }}")
 
     def test_compiled_bundle_over_budget_fails_and_leaves_nothing_to_save(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
             root = Path(directory)
             cargo, target, metadata = self.cache_job(root)
-            (target / "ci-test/deps/libserde-1111111111111111.rlib").write_bytes(os.urandom(2 * 1024**2))
+            (target / "ci-test/build/serde/1111111111111111/out/libserde-1111111111111111.rlib").write_bytes(
+                os.urandom(2 * 1024**2))
             bundle = root / "bundle.tar.gz"
             with self.assertRaisesRegex(RuntimeError, "over its 1 MiB budget"):
                 self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
@@ -1794,7 +1876,8 @@ class ApplicationProbeTests(unittest.TestCase):
     def test_compile_keeps_cargo_messages_apart_from_the_binary_list(self):
         suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
         listing = {"rust-build-meta": {"target-directory": "target"}, "rust-binaries": {}}
-        artifact = {"reason": "compiler-artifact", "filenames": ["target/ci-test/deps/libserde-1111111111111111.rlib"]}
+        artifact = {"reason": "compiler-artifact",
+                    "filenames": ["target/ci-test/build/serde/1111111111111111/out/libserde-1111111111111111.rlib"]}
         commands = {}
 
         def nextest(name, command, *, output=None, **kwargs):
