@@ -179,6 +179,8 @@ gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", re
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", features = ["font-kit"] }
 gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
 gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", default-features = false }
+# The portable glyph rasterizer the kit's test text backend paints with.
+gpui_render = { package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", features = ["swash"] }
 gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
 gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
 hashbrown = "0.17.1"

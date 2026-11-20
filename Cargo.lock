@@ -2841,6 +2841,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_parley",
  "gpui_ce_platform",
+ "gpui_ce_render",
  "lru",
  "memchr",
  "palette",
