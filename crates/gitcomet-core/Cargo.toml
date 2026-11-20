@@ -23,7 +23,6 @@ faster-hex = { workspace = true }
 fnv = { workspace = true }
 gix-quote = { workspace = true }
 gix-validate = { workspace = true }
-jiff = { workspace = true }
 md-5 = { workspace = true }
 sha2 = { workspace = true }
 memchr = { workspace = true }
@@ -38,6 +37,15 @@ thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["fs"] }
+
+# The deletion date in a freedesktop trash record. Windows and macOS use their
+# native trash instead.
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
+jiff = { workspace = true }
+
+# macOS compiles the freedesktop trash code for its tests only.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+jiff = { workspace = true }
 
 [dev-dependencies]
 filetime = { workspace = true }
