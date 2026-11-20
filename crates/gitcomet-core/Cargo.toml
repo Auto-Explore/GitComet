@@ -12,7 +12,8 @@ workspace = true
 
 [features]
 test-support = []
-benchmarks = ["gitcomet-base/benchmarks"]
+# The Levenshtein comparison benchmarks also measure strsim.
+benchmarks = ["gitcomet-base/benchmarks", "dep:strsim"]
 
 [dependencies]
 gitcomet-base = { workspace = true }
@@ -31,7 +32,7 @@ process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
-strsim = { workspace = true }
+strsim = { workspace = true, optional = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 
@@ -43,6 +44,8 @@ filetime = { workspace = true }
 # Make the shared fixture helpers available to this crate's integration tests.
 gitcomet-core = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
+# A test oracle for the scratch Levenshtein distance.
+strsim = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
