@@ -286,8 +286,8 @@ impl DetailsPaneView {
         card: &CommitCard,
         now: std::time::SystemTime,
         show_border: bool,
+        theme: AppTheme,
     ) -> AnyElement {
-        let theme = self.theme;
         let ui_scale = self.ui_scale();
         let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
 
@@ -383,9 +383,10 @@ impl DetailsPaneView {
         let cards = this.comparison_cards(repo, &ordered[start..end], start);
         let last_ix = ordered.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
+        let theme = AppTheme::current(cx);
         range
             .filter_map(|ix| cards.get(ix - start).map(|card| (ix, card)))
-            .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix))
+            .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix, theme))
             .collect()
     }
 
@@ -399,7 +400,7 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
         Self::vertical_scroll_frame(
-            self.theme,
+            AppTheme::current(cx),
             ("commit_multi_container", repo_id.0),
             ("commit_multi_scrollbar", repo_id.0),
             &self.commit_multi_scroll,
@@ -417,7 +418,7 @@ impl DetailsPaneView {
         count: usize,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
 
         let header = components::content_header_bar(theme, ui_scale)
@@ -490,7 +491,7 @@ impl DetailsPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
 
         /// What the files section has to say for itself, kept separate from the

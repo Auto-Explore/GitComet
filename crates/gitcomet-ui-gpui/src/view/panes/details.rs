@@ -73,7 +73,6 @@ pub(in super::super) struct DetailsPaneView {
     >,
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
@@ -214,7 +213,6 @@ pub(in super::super) struct DetailsPaneView {
 }
 
 pub(in super::super) struct DetailsPaneInit {
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in super::super) diff_renderer: WeakEntity<DiffRenderer>,
     pub(in super::super) history_view: Entity<HistoryView>,
@@ -386,7 +384,6 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let DetailsPaneInit {
-            theme,
             root_view,
             diff_renderer,
             history_view,
@@ -558,7 +555,6 @@ impl DetailsPaneView {
         let mut pane = Self {
             store,
             state,
-            theme,
             change_tracking_view,
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
@@ -653,7 +649,6 @@ impl DetailsPaneView {
             render_count: 0,
         };
         pane.sync_scaled_section_heights_from_design();
-        pane.set_theme(theme, cx);
         pane
     }
 
@@ -663,11 +658,6 @@ impl DetailsPaneView {
 
     pub(in super::super) fn current_change_tracking_stack_bounds(&self) -> Option<Bounds<Pixels>> {
         *self.change_tracking_stack_bounds_ref.borrow()
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {

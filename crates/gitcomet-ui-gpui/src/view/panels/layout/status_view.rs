@@ -98,7 +98,7 @@ impl DetailsPaneView {
     pub(super) fn status_sections_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         if self.active_repo().is_some_and(RepoState::is_bare) {
             return components::empty_state(
-                self.theme,
+                AppTheme::current(cx),
                 "No working tree in bare mode",
                 "Select a commit to browse its files and changes. Fetch and push remain available.",
             )
@@ -153,7 +153,7 @@ impl DetailsPaneView {
     }
 
     fn status_view_inputs(&self, cx: &mut gpui::Context<Self>) -> StatusViewInputs {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let local_actions_in_flight = self
             .active_repo()

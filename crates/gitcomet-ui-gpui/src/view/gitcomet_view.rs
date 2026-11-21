@@ -895,7 +895,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 DetailsPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                     diff_renderer: diff_renderer.downgrade(),
                     history_view: main_pane.read(cx).history_view.clone(),
@@ -1428,8 +1427,6 @@ impl GitCometView {
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));

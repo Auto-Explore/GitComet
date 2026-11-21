@@ -69,7 +69,7 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let show_delayed_loading = self
             .commit_details_delay

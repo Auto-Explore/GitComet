@@ -101,12 +101,13 @@ impl DetailsPaneView {
         &self,
         _repo_id: RepoId,
         list: crate::view::rows::FileListId,
+        cx: &App,
     ) -> Option<usize> {
         use crate::view::rows::FileListId;
         let (scroll, row_height) = match list {
-            FileListId::CommitFiles => (&self.commit_files_scroll, self.sidebar_row_height()),
-            FileListId::RangeFiles => (&self.range_files_scroll, self.sidebar_row_height()),
-            FileListId::WorktreeFiles => (&self.worktree_files_scroll, self.sidebar_row_height()),
+            FileListId::CommitFiles => (&self.commit_files_scroll, self.sidebar_row_height(cx)),
+            FileListId::RangeFiles => (&self.range_files_scroll, self.sidebar_row_height(cx)),
+            FileListId::WorktreeFiles => (&self.worktree_files_scroll, self.sidebar_row_height(cx)),
             FileListId::Status(section) => {
                 let scroll = match section {
                     StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
@@ -127,8 +128,11 @@ impl DetailsPaneView {
             .then(|| (viewport / row_height).floor().max(1.0) as usize)
     }
 
-    fn sidebar_row_height(&self) -> Pixels {
-        crate::view::rows::sidebar::sidebar_list_row_height(self.theme, self.ui_scale_percent)
+    fn sidebar_row_height(&self, cx: &App) -> Pixels {
+        crate::view::rows::sidebar::sidebar_list_row_height(
+            AppTheme::current(cx),
+            self.ui_scale_percent,
+        )
     }
 
     pub(in crate::view) fn changed_file_list(
@@ -225,7 +229,7 @@ impl DetailsPaneView {
                                                         .inset_0()
                                                         .border_1()
                                                         .border_color(
-                                                            pane.theme
+                                                            AppTheme::current(cx)
                                                                 .colors
                                                                 .interaction
                                                                 .focus_ring,
@@ -277,7 +281,7 @@ impl DetailsPaneView {
             }
         };
         let pane = cx.weak_entity();
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         Some(crate::view::rows::StickyGroupHeaders {
             headers,

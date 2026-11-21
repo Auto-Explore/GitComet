@@ -13,7 +13,7 @@ impl DetailsPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
 
         // Only the counts and the chip's three fields are needed here. Cloning the

@@ -243,7 +243,7 @@ impl DetailsPaneView {
             )
             .navigation(can_step, step(false), step(true))
             .on_close(move |this, window, cx| this.close_review_search(list, window, cx))
-            .render(self.theme, scale, cx);
+            .render(AppTheme::current(cx), scale, cx);
         Some(
             div()
                 .id("review_file_search")

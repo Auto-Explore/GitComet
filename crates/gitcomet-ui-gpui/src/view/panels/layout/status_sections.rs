@@ -670,7 +670,7 @@ impl DetailsPaneView {
         section: StatusSection,
         count: usize,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         if count == 0 {
             return components::empty_state_message(theme, "Working tree clean.")
                 .into_any_element();
