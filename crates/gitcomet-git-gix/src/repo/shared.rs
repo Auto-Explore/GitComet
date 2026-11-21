@@ -314,7 +314,7 @@ pub(super) struct SharedStore {
     reusable: AtomicBool,
     pub topology: Arc<log::TopologyCache>,
     indexes: Arc<Mutex<Vec<IndexEntry>>>,
-    pub decode: Arc<Mutex<()>>,
+    pub decode: Arc<super::shared_ranges::DecodeFlights>,
 }
 
 struct IndexEntry {
