@@ -1427,13 +1427,6 @@ impl GitCometView {
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_theme(theme, cx);
         }
-        for session in self.terminal_sessions.values() {
-            for instance in &session.instances {
-                instance.viewport.update(cx, |viewport, cx| {
-                    viewport.set_theme(theme, cx);
-                });
-            }
-        }
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
