@@ -34,7 +34,7 @@ and recheck the current anchor before publication.
 
 ## Measurements
 
-[Recorded paired backend results](performance/indexed-history-2026-09-11.json)
+The recorded paired backend results
 contain five before/after samples, pinned HEADs, ref digests, commit-graph hashes,
 CPU and profile. These are optimized **test-profile** measurements on a shared
 developer workstation, not dedicated-runner shipping limits.
@@ -61,7 +61,7 @@ These are medians of five runs, each containing ten first-touch and thirty warm
 
 ## Frame and release measurements
 
-[Frame samples](performance/indexed-history-frames-2026-09-11.json) record five
+The frame samples record five
 paired runs at 5,261 frontier lanes and 80 graph pixels, plus one-pair width/scale
 controls. The viewport displays 38 rows with the renderer's bounded overscan.
 
@@ -89,7 +89,7 @@ budgets. Recorded release cases use 100% scale. Earlier probes that configured
 the view scale without applying it to the test window are retained only as
 discarded samples in the JSON.
 
-[Release Criterion results](performance/indexed-history-release-2026-09-11.json)
+The release Criterion results
 include narrow and wide construction, first touch, warm reuse, distant jumps,
 changing selections, SHA-1/SHA-256 IDs, allocations and checkpoint payload bytes.
 The eight 100k/2M phase probes are included in the frame results. At two million

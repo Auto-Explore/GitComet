@@ -59,6 +59,10 @@ jobs:
           python-version: "3.15"
       - name: Check CI helpers
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Check structural scorecard
+        run: python3 scripts/ci/scorecard.py check
+      - name: Check documentation links
+        run: python3 scripts/ci/doc_links.py
       - name: Test performance capture policy and workload witnesses
         run: python3 -m unittest discover -s scripts/profiling -p 'test_*.py' -v
       - name: Lint workflows

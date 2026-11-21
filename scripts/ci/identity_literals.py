@@ -54,6 +54,11 @@ def is_test_path(path):
 
 def strip_comments_and_test_modules(text):
     """Blank out comments and inline test modules, keeping line numbers."""
+    return strip_test_modules(strip_comments(text))
+
+
+def strip_comments(text):
+    """Blank out comments, keeping line numbers and string literals."""
     out = []
     i, n = 0, len(text)
     while token := TOKEN_START.search(text, i):
@@ -88,8 +93,11 @@ def strip_comments_and_test_modules(text):
         out.append(text[i])
         i += 1
     out.append(text[i:])
-    code = "".join(out)
-    # Remove `#[cfg(test)] mod x { ... }` bodies by brace matching.
+    return "".join(out)
+
+
+def strip_test_modules(code):
+    """Blank out `#[cfg(test)] mod x { ... }` bodies by brace matching."""
     result, position = [], 0
     for match in TEST_MODULE.finditer(code):
         if match.start() < position:
@@ -151,11 +159,17 @@ def test_module_files_in_code(path, code):
     return found
 
 
-def scan():
+def rust_sources():
+    """{path: text} for every Rust file under crates/, tracked or new."""
     files = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "crates/**/*.rs"], cwd=ROOT,
                            stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
     files = sorted({path for path in files if path and (ROOT / path).is_file()})
-    texts = {path: (ROOT / path).read_text(encoding="utf-8") for path in files}
+    return {path: (ROOT / path).read_text(encoding="utf-8") for path in files}
+
+
+def production_code(texts):
+    """{path: code} for production files, with comments and inline test modules blanked."""
+    files = sorted(texts)
     # Module discovery and literal counting share one lexical pass per file.
     # A known test file without #[cfg(...)] cannot match TEST_MODULE_FILE.
     # Others still need discovery: #[path] can name a module outside their tree.
@@ -177,11 +191,13 @@ def scan():
             return True
         parent = parent_module(path)
         return parent is not None and parent not in seen and in_test_module(parent, (*seen, path))
+    return {path: code for path, code in codes.items() if not in_test_module(path)}
+
+
+def scan():
     found = {}
-    for path in codes:
-        if in_test_module(path):
-            continue
-        counts = Counter(kind for _, kind, _ in occurrences_in_code(codes[path]))
+    for path, code in production_code(rust_sources()).items():
+        counts = Counter(kind for _, kind, _ in occurrences_in_code(code))
         for kind, count in counts.items():
             found[(path, kind)] = count
     return found

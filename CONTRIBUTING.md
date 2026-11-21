@@ -176,6 +176,8 @@ bash scripts/generate-open-source-licenses.sh --check
 
 After a dependency change, run `scripts/generate-open-source-licenses.sh` to refresh the open-source licence list the app shows.
 
+Before pushing, `python3 scripts/dev/preflight.py` runs the quick checks in under a minute: formatting, source layout, identity literals, the structural scorecard, documentation links, the licence list and crate boundaries. The [scorecard](scripts/ci/scorecard.py) holds counts such as long functions and glob imports at their recorded values; when a change lowers one, run `python3 scripts/ci/scorecard.py check --write`.
+
 Coverage (local + CI-compatible):
 
 ```bash
