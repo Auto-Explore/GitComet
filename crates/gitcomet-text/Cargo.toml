@@ -22,4 +22,7 @@ lru = { workspace = true }
 jiff = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
+
+# The path display cache's hash buckets. Windows keys that cache by path instead.
+[target.'cfg(not(windows))'.dependencies]
 smallvec = { workspace = true }

@@ -51,12 +51,15 @@ itertools = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
-rustix = { workspace = true, features = ["fs"] }
 same-file = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }
+
+# Process groups, signals and no-replace renames: Unix only.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 gitcomet-win32-window-utils = { workspace = true }

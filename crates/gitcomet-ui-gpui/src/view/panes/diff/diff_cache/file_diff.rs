@@ -737,8 +737,9 @@ fn visual_kinds_for_file_diff_plan(
             }
 
             if old_stripped == new_stripped {
-                for neutral_run_ix in group_start..run_ix {
-                    let run = &plan.runs[neutral_run_ix];
+                for (neutral_run_ix, run) in
+                    plan.runs.iter().enumerate().take(run_ix).skip(group_start)
+                {
                     let split_start = starts.split.get(neutral_run_ix).copied().unwrap_or(0);
                     let inline_start = starts.inline.get(neutral_run_ix).copied().unwrap_or(0);
                     for row_ix in

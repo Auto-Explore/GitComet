@@ -95,7 +95,7 @@ jobs:
       # report.py imports cache.py, which needs tomllib (3.11+); the runner's system Python is 3.10.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - name: Verify every validation lane completed
         env:
           CI_RESULTS: ${{ toJSON(needs) }}

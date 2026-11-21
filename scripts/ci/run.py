@@ -49,8 +49,12 @@ PURE_BATCHES = {
 # headless workspace context must not inherit.
 EXAMPLE_PACKAGES = ("gitcomet-extension-example", "gitcomet-extension-example-app")
 CONTEXTS = {
+    # `gitcomet-ui-gpui?/default` gives the UI host its own default features
+    # back. The `?` keeps the application crates headless: without it the same
+    # switch also turns on their optional UI host dependency, with no runtime
+    # feature to use it.
     "workspace": ["--workspace", *(arg for package in EXAMPLE_PACKAGES for arg in ("--exclude", package)),
-                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
+                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui?/default"],
     "core": ["-p", "gitcomet-core"],
     "diagrams": ["-p", "gitcomet-diagrams"],
     "state": ["-p", "gitcomet-state"],
@@ -184,6 +188,10 @@ def record_runtime_exclusions(name, text):
     with CONSOLE_LOCK:
         print(f"::warning title=Incomplete test coverage::{name}: {len(notices)} runtime skip notice(s); "
               "see runtime-exclusions.log in the test artifact", flush=True)
+
+
+class TestsFailed(RuntimeError):
+    """Every test ran and some failed: a result, unlike missing or malformed results."""
 
 
 def annotate_failures(name, tests):
@@ -615,11 +623,13 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
                                 for field in ("failures", "errors"))
     except ValueError as error:
         raise RuntimeError(f"{context}: malformed nextest failure counts") from error
-    if reported_failures:
-        raise RuntimeError(f"{context}: nextest JUnit reports failures or errors")
     if any(not suite.get("name") or any(not case.get("name") for case in suite.findall("testcase"))
            for suite in xml.getroot().findall("testsuite")):
         raise RuntimeError(f"{context}: malformed nextest case identity")
+    failures = failed_junit_cases(junit)
+    if reported_failures and not failures:
+        # A count with no failed case cannot be attributed to a test.
+        raise RuntimeError(f"{context}: nextest JUnit reports failures or errors")
     for case in xml.iter("testcase"):
         reject_prerequisite_skips(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
@@ -632,10 +642,9 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
     for case in xml.iter("testcase"):
         record_runtime_exclusions(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
-    failures = failed_junit_cases(junit)
     if failures:
         annotate_failures(context, failures)
-        raise RuntimeError(f"{context}: nextest reported {len(failures)} failed tests")
+        raise TestsFailed(f"{context}: nextest reported {len(failures)} failed tests")
 
 
 def watcher_stress(context="workspace", iterations=10, nextest_threads=None):
@@ -907,11 +916,15 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         if threads is not None:
             command += ["--test-threads", str(threads)]
         code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True, resources=resources)
-        if junit.exists():
-            shutil.copyfile(junit, paths(context) / "junit.xml")
-            check_nextest_results(context, suites, packages, junit, excluded=batched)
-        else:
+        if not junit.exists():
             raise RuntimeError(f"{context}: nextest produced no results")
+        shutil.copyfile(junit, paths(context) / "junit.xml")
+        try:
+            check_nextest_results(context, suites, packages, junit, excluded=batched)
+        except TestsFailed:
+            # Failed tests are already annotated by name. Report them as this
+            # family's result, so the families after it still run.
+            return code or 1
         return code
 
     def ui(*, cancel=None, live=True):

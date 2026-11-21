@@ -31,8 +31,8 @@ pub fn project_conflict_ranges_to_aligned_rows(
     for block_ix in 0..block_count {
         let mut start = usize::MAX;
         let mut end = 0usize;
-        for side in 0..3 {
-            let side_range = &maps.conflict_ranges[side][block_ix];
+        for (side, side_ranges) in maps.conflict_ranges.iter().enumerate() {
+            let side_range = &side_ranges[block_ix];
             if side_range.is_empty() {
                 continue;
             }

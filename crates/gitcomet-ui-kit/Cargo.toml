@@ -21,6 +21,8 @@ test-support = [
     "gpui/test-support",
     "dep:regex",
     "dep:gpui_parley",
+    "gpui_parley/system-fonts",
+    "dep:gpui_render",
 ]
 # Exposes internals the host's benchmarks measure.
 benchmarks = ["gitcomet-text/benchmarks"]
@@ -30,6 +32,7 @@ benchmarks = ["gitcomet-text/benchmarks"]
 [dependencies]
 gitcomet-fonts.workspace = true
 gpui_parley = { workspace = true, optional = true }
+gpui_render = { workspace = true, optional = true }
 fontdb = { workspace = true }
 gitcomet-base = { workspace = true }
 gitcomet-text = { workspace = true }
@@ -59,7 +62,8 @@ raw-window-handle = { workspace = true }
 [dev-dependencies]
 # The kit's tests read the text model's test-only counters and state checks.
 gitcomet-text = { workspace = true, features = ["test-support"] }
-gpui_parley = { workspace = true }
+gpui_parley = { workspace = true, features = ["system-fonts"] }
+gpui_render = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true }
 regex = { workspace = true }

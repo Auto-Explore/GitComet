@@ -444,11 +444,7 @@ pub(super) fn copy_tree(
             )?;
         }
         fs::set_permissions(destination, metadata.permissions())?;
-        filetime::set_file_times(
-            destination,
-            filetime::FileTime::from_last_access_time(&metadata),
-            filetime::FileTime::from_last_modification_time(&metadata),
-        )?;
+        fs::set_times(destination, source_times(&metadata)?)?;
     } else if metadata.is_file() {
         let mut input = open_regular_file(source)?;
         let mut output = OpenOptions::new()
@@ -465,16 +461,19 @@ pub(super) fn copy_tree(
             output.write_all(&buffer[..len])?;
         }
         output.set_permissions(metadata.permissions())?;
-        filetime::set_file_handle_times(
-            &output,
-            Some(filetime::FileTime::from_last_access_time(&metadata)),
-            Some(filetime::FileTime::from_last_modification_time(&metadata)),
-        )?;
+        output.set_times(source_times(&metadata)?)?;
         output.sync_all()?;
     } else {
         return Err(invalid("Special filesystem items cannot be transferred"));
     }
     Ok(())
+}
+
+/// The access and modification times a copy keeps from its source.
+fn source_times(metadata: &fs::Metadata) -> io::Result<fs::FileTimes> {
+    Ok(fs::FileTimes::new()
+        .set_accessed(metadata.accessed()?)
+        .set_modified(metadata.modified()?))
 }
 
 /// Never replace a directory entry created by another process after validation.

@@ -318,8 +318,8 @@ fn alpha_correct_thumbnail(buffer: image::RgbaImage, max_edge_px: u32) -> image:
     let mut straight_samples = Vec::with_capacity(resized.as_raw().len());
     for pixel in resized.pixels() {
         let alpha = pixel.0[3].min(255);
-        for channel in 0..3 {
-            let straight = (pixel.0[channel] + alpha / 2)
+        for &sample in &pixel.0[..3] {
+            let straight = (sample + alpha / 2)
                 .checked_div(alpha)
                 .unwrap_or(0)
                 .min(255) as u8;

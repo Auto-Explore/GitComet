@@ -924,6 +924,11 @@ static enum TokenType find_possible_compiler_directive(TSLexer *lexer) {
             if (expected_char == '\0') {
                 full_match = dir_idx;
                 lexer->mark_end(lexer);
+                // The directive has matched in full. Stop considering it: at the
+                // end of input the lookahead is 0 as well, and comparing it with
+                // the terminator would carry the match past the end of the string.
+                possible_directives[dir_idx] = false;
+                continue;
             }
 
             if (expected_char != lexer->lookahead) {

@@ -71,12 +71,16 @@ without a renderer patch. Windows continues to use DX12.
 
 ## Difftastic
 
-`difftastic/` is Difftastic 0.71.0 (MIT) as a library, for
+`difftastic/` is Difftastic 0.72.0 (MIT) as a library, for
 `crates/gitcomet-difftastic` to call in-process. The import commit is the
-pristine baseline, built by this recipe:
+pristine 0.71.0 baseline, and 0.72.0 was applied to it as the upstream diff
+between the two baselines. Both are built by this recipe:
 
 - Source: `https://codeload.github.com/Wilfred/difftastic/tar.gz/refs/tags/0.71.0`,
-  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`.
+  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`;
+  for 0.72.0, the tree of tag `0.72.0`, commit
+  `6201bc988aba1f5fc49cd0799461fba2aed5e0cf` (`git archive 0.72.0` gives the
+  same files as the tag tarball).
 - Keep only `Cargo.toml`, `LICENSE`, `README.md`, `clippy.toml`, `src/**` and
   `vendored_parsers/highlights/*.scm`; delete everything else.
 - Follow symlinks to their target files, and store `src/main.rs` as `src/lib.rs`.
@@ -135,6 +139,14 @@ Changes against the baseline (`git log -- vendor/difftastic`):
   rescanning them for every line, and `display/hunks.rs` scans a hunk's
   matched lines forward from its start instead of back from the end. A 1 MB
   release diff took 11 s before and 2.4 s after.
+- 0.72.0 is taken in full for the files GitComet keeps (`diff/unchanged.rs`,
+  `display/hunks.rs`, `parse/tree_sitter_parser.rs`), except where it removes
+  languages: F# and Smali stay, since GitComet ships both grammars anyway, and
+  Verilog was already gone. Its delimiter and trailing-punctuation settings
+  apply to GitComet's grammar for each language, Java's to tree-sitter-java.
+  Its terminal-width change has no counterpart here, and its
+  `vendored_parsers/` changes are deletions only, so the Janet, LaTeX and Smali
+  crates still match 0.71.0's copies.
 
 To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
 this import's tree, and apply that upstream diff to `difftastic/`. Then
@@ -372,8 +384,9 @@ should still pass — `vendored_grammars_keep_the_small_state_retune` holds the
 ## Taking a newer upstream
 
 The grammars here are pinned, so nothing tells you when upstream fixes a bug.
-The last sweep was 2026-10-08; the results are below and in each updated
-`Cargo.toml` header.
+The last full sweep was 2026-10-08. A check on 2026-11-20 took only fixes that
+need no regeneration and lists what is waiting for the next one. Both are below,
+and each updated `Cargo.toml` header has the details.
 The routine that worked:
 
 1. Find the rev each copy corresponds to by hashing its `grammar.js`,
@@ -392,6 +405,61 @@ The routine that worked:
    updated in the same commit as the grammar.
 5. Watch for a fork that lags: `tree-sitter-kotlin-sg` is ast-grep's fork of
    fwcd's grammar, and the fixes land in fwcd first.
+
+## Upstream check: 2026-11-20
+
+Every externally sourced grammar was compared with its upstream history since
+the 2026-10-08 boundary below, or since the revision in its `Cargo.toml` for the
+six crates added after that sweep (janet-simple, LaTeX, properties,
+razor-modern, Smali, Solidity). Each boundary is an ancestor of upstream HEAD,
+and the vendored grammar, scanner and query files match their boundary, apart
+from the documented local patches.
+
+Taken here: scanner or query fixes that apply to the vendored files unchanged,
+add no external token, and leave `parser.c` alone.
+
+| Crate | Upstream | Fix |
+|---|---|---|
+| kotlin-sg | fwcd c8f0180, 57091f6 | The 513th open string start called `abort()` and killed the host. A `$` run past 255, or past 65535 inside a string, saturated or wrapped and moved the interpolation trigger. |
+| swift | 0c5444e | Input ending exactly in `#if`, `#else`, `#elseif` or `#endif` read past the end of the directive's string. |
+| ocaml | a1c562e (query) | OxCaml's SIMD types are builtin types. |
+
+Waiting for the next full sweep. Each needs `parser.c` regenerated, its counts
+checked against upstream, and its fixes proved on a corpus:
+
+- **c-sharp**: 14 commits, almost all fixes for valid C#. They cover generic
+  names against comparisons, `?.` before logical operators, list patterns,
+  `#if` around bodies, interpolated-string scanner fixes, and C# 14 `#:`
+  directives. Upstream now generates with CLI 0.27.2. razor-modern imports this
+  grammar and repeats its external-token order, so the two move together.
+- **cue**: 24 commits, a deliberate move toward CUE's own parser. It adds new
+  syntax and changes some tree shapes (`-1` becomes a unary expression).
+- **fsharp**: 0.3.13. Scanner fixes for a quoted `*)` in a comment, columns past
+  255 and comment-only lines in layout, plus F# 9 syntax, and a highlights
+  rewrite that moves with the grammar.
+- **kotlin-sg**: fwcd's grammar fixes after 1852ea1.
+- **php** (0.25.2): cast keywords as names, and cast precedence.
+- **powershell** (0.26.6): native-command arguments such as `git log -- path`.
+- **scala** (to 0.26.13): scanner and indentation fixes, and a faster lexer.
+- **sequel** (0.3.13): new dialect syntax and fixes. Upstream commits no
+  `parser.c`.
+- **swift**: grammar fixes, and Swift's own precedence groups, which is a large
+  tree-shape change.
+- **v**: upstream found that the 0.0.4 crate's parser does not match its own
+  `grammar.js`, and regenerated one that does, with a new scanner.
+- **janet-simple**, **latex**: lexical fixes. LaTeX's label nodes change shape,
+  so GitComet's query and difftastic's must change in the same commit.
+- **razor-modern**: v1.0.0 is a breaking rewrite. GitComet's copy is rebased on
+  its own C# grammar, so only a manual port fits.
+
+No relevant upstream change: asm, caddyfile, coffee, cpp, css, csv, dhall, ebnf,
+gitignore, haskell, html, jinja-dialects, julia, just, kdl, objc, ron, ruby,
+rust, spirv, typescript, vue and wat. Smali's two commits are cosmetic.
+properties still needs its local end-of-file patch, and solidity still needs its
+query patch, since upstream PR #80 is open.
+
+The shared `parser.h`, `alloc.h` and `array.h` are unchanged from tree-sitter
+0.27.0 through 0.27.2.
 
 ## Upstream sweep: 2026-10-08
 
