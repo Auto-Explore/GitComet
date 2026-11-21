@@ -1,3 +1,4 @@
+mod class;
 mod conflict_plan_origin;
 mod conflict_region_origin;
 mod control;
@@ -15,6 +16,7 @@ mod repository_requirement;
 mod status;
 mod store_event;
 
+pub(crate) use class::{NavHistory, ViewNavigation};
 pub use conflict_plan_origin::ConflictPlanOrigin;
 pub use conflict_region_origin::ConflictRegionOrigin;
 pub use control::ControlEffect;

@@ -42,6 +42,8 @@ UI or filesystem event → Msg → prepare inputs → reducer → AppState snaps
                                                                 → completion Msg → worker
 ```
 
+The [message classification](../crates/gitcomet-state/src/msg/class.rs) holds one row per message: whether it needs Git, how it moves the main view, whether it is a control message or a completion, and which facts it prepares. The worker's queue, the preparation step and the reducer's entry read that row. The table has no fallback, so a new message does not compile without one.
+
 The public [`msg`](../crates/gitcomet-state/src/msg.rs) facade exposes typed effect families for persistence, control, status, references, and repository commands. Their [schedulers](../crates/gitcomet-state/src/store/effects.rs) select the existing executor pools. Background worktree scans, history searches, persistence, and foreground loads retain separate scheduling needs; file-management mutations use the shared filesystem executor.
 
 File-history and conflict loading have private feature owners on both sides of the effect boundary. Their [history reducer](../crates/gitcomet-state/src/store/reducer/file_history.rs) and [conflict reducer](../crates/gitcomet-state/src/store/reducer/conflict_load.rs) own feature transitions and completion handling. The matching [history scheduler](../crates/gitcomet-state/src/store/effects/file_history.rs) and [conflict scheduler](../crates/gitcomet-state/src/store/effects/conflict_load.rs) own executor payloads and reads. The central reducer and scheduler dispatch to these modules; request admission remains in the model owners described below.

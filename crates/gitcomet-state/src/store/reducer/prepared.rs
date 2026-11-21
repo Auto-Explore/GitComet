@@ -560,61 +560,7 @@ fn normalize_internal_paths(message: &mut InternalMsg, normalized: &[(PathBuf, P
 }
 
 fn needs_preparation(message: &Msg) -> bool {
-    matches!(
-        message,
-        Msg::OpenRepo(_)
-            | Msg::OpenRepoFromExternalDrop(_)
-            | Msg::OpenDocumentRepository { .. }
-            | Msg::RestoreSession { .. }
-            | Msg::SetActiveRepo { .. }
-            | Msg::CloseRepo { .. }
-            | Msg::MoveRepoOut { .. }
-            | Msg::CloseRepos { .. }
-            | Msg::RemoveWorktree { .. }
-            | Msg::ForceRemoveWorktree { .. }
-            | Msg::SubmitAuthPrompt { .. }
-            | Msg::SelectDiff { .. }
-            | Msg::OpenFileContent { .. }
-            | Msg::OpenFileEditor { .. }
-            | Msg::ExitDiffEditMode { .. }
-            | Msg::ViewerNavBack { .. }
-            | Msg::ViewerNavForward { .. }
-            | Msg::GlobalNavBack { .. }
-            | Msg::GlobalNavForward { .. }
-            | Msg::ReloadRepo { .. }
-            | Msg::RepoExternallyChanged { .. }
-            | Msg::SetTextOverride { .. }
-            | Msg::FilesystemPathsChanged(_)
-            | Msg::FilesystemFinished(_)
-    ) || matches!(message, Msg::Internal(message) if internal_needs_preparation(message))
-}
-
-fn internal_needs_preparation(message: &InternalMsg) -> bool {
-    match message {
-        InternalMsg::GitOperationFinished { .. } => true,
-        InternalMsg::RepoLoadFinished { message, .. } => internal_needs_preparation(message),
-        InternalMsg::RepoOpenedOk { .. }
-        | InternalMsg::RepoOpenedErr { .. }
-        | InternalMsg::RepoActionFinished { .. }
-        | InternalMsg::RepoPathsActionFinished { .. }
-        | InternalMsg::BranchAlreadyExists { .. }
-        | InternalMsg::BranchNotFullyMerged { .. }
-        | InternalMsg::RepoActionFinishedInWorktree { .. }
-        | InternalMsg::RepoCommandFinished { .. }
-        | InternalMsg::DiffLoaded { .. }
-        | InternalMsg::DiffFileLoaded { .. }
-        | InternalMsg::DiffFileImageLoaded { .. }
-        | InternalMsg::DiffPreviewTextFileLoaded { .. }
-        | InternalMsg::SubmoduleSummaryLoaded { .. }
-        | InternalMsg::TextAttributesLoaded { .. }
-        | InternalMsg::CommitDetailsLoaded { .. }
-        | InternalMsg::StatusLoaded { .. }
-        | InternalMsg::WorktreeStatusLoaded { .. }
-        | InternalMsg::StagedStatusLoaded { .. }
-        | InternalMsg::LargeFileSupportLoaded { .. }
-        | InternalMsg::FileBrowserLoaded { .. } => true,
-        _ => false,
-    }
+    message.class().facts.any()
 }
 
 fn capture_message(

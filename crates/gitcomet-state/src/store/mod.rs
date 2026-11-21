@@ -155,29 +155,12 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     }
 }
 
-/// Feedback acknowledgements only release entries the window has shown. The
-/// worker applies them in the next reducer pass instead of copying and
-/// publishing the whole state for them alone; the window already finds new
-/// entries by sequence, so entries it has shown may linger until then.
 fn is_feedback_acknowledgement(msg: &Msg) -> bool {
-    matches!(
-        msg,
-        Msg::AcknowledgeNotifications { .. } | Msg::AcknowledgeRepoFeedback { .. }
-    )
+    msg.class().feedback_acknowledgement
 }
 
 fn is_control_msg(msg: &Msg) -> bool {
-    matches!(
-        msg,
-        Msg::OpenRepo(_)
-            | Msg::OpenRepoFromExternalDrop(_)
-            | Msg::CloseRepo { .. }
-            | Msg::MoveRepoOut { .. }
-            | Msg::CloseRepos { .. }
-            | Msg::CancelGitOperation { .. }
-            | Msg::SetActiveRepo { .. }
-            | Msg::ReorderRepoTabs { .. }
-    )
+    msg.class().control
 }
 
 fn is_control_command(command: &StoreWorkerCommand) -> bool {
@@ -199,7 +182,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
 }
 
 fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
-    matches!(command.msg(), Some(Msg::Internal(_)))
+    command.msg().is_some_and(|msg| msg.class().completion)
         || matches!(command, StoreWorkerCommand::ActivationRefresh(_))
 }
 
