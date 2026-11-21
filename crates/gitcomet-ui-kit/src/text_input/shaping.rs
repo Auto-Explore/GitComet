@@ -232,6 +232,11 @@ pub(super) enum LineTextSource<'a> {
         text: &'a str,
         starts: &'a [usize],
     },
+    /// The flattened document, its rows found through the rope.
+    Flat {
+        text: &'a str,
+        rope: &'a crate::rope::Rope,
+    },
     Window {
         rows: Range<usize>,
         text: String,
@@ -240,6 +245,16 @@ pub(super) enum LineTextSource<'a> {
         /// shaped to place the caret.
         stray: Option<(usize, String)>,
     },
+}
+
+impl<'a> LineTextSource<'a> {
+    /// `text` as one string, with `starts` locating its rows.
+    pub(super) fn whole(text: &'a str, starts: &'a LineStarts) -> Self {
+        match starts {
+            LineStarts::Whole(starts) => Self::Whole { text, starts },
+            LineStarts::Document(rope) => Self::Flat { text, rope },
+        }
+    }
 }
 
 impl LineTextSource<'_> {
@@ -292,6 +307,9 @@ impl LineTextSource<'_> {
     pub(super) fn line_text(&self, line_ix: usize) -> &str {
         match self {
             Self::Whole { text, starts } => line_text_for_index(text, starts, line_ix),
+            Self::Flat { text, rope } => {
+                row_text(text, rope.line_start(line_ix), rope.line_start(line_ix + 1))
+            }
             Self::Window {
                 rows,
                 text,
@@ -313,19 +331,24 @@ impl LineTextSource<'_> {
 }
 
 pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: usize) -> &'a str {
+    row_text(
+        text,
+        starts.line_start(line_ix),
+        starts.line_start(line_ix + 1),
+    )
+}
+
+/// The row of `text` from `start` to the next row's start, less its terminator.
+fn row_text(text: &str, start: Option<usize>, next_start: Option<usize>) -> &str {
     let text_len = text.len();
-    let Some(start) = starts.get(line_ix).copied() else {
+    let Some(start) = start else {
         return "";
     };
     if start >= text_len {
         return "";
     }
 
-    let mut end = starts
-        .get(line_ix + 1)
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
+    let mut end = next_start.unwrap_or(text_len).min(text_len);
     if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
         end -= 1;
     }
@@ -398,17 +421,17 @@ pub(super) fn truncated_line_source_offset_for_x(line: &TruncatedLineLayout, x: 
 /// one of the shaped ones; for a line outside the shaped window callers pair
 /// this with `PlainLineLayouts::get`, which yields `None`, so the unclamped
 /// offset is never turned into geometry.
-pub(super) fn line_for_offset(
-    starts: &[usize],
+pub(super) fn line_for_offset<S: LineStartLookup + ?Sized>(
+    starts: &S,
     lines: &PlainLineLayouts,
     offset: usize,
 ) -> (usize, usize) {
-    let mut ix = starts.partition_point(|&s| s <= offset);
+    let mut ix = starts.lines_starting_through(offset);
     if ix == 0 {
         ix = 1;
     }
     let line_ix = (ix - 1).min(lines.line_count().saturating_sub(1));
-    let start = starts.get(line_ix).copied().unwrap_or(0);
+    let start = starts.line_start(line_ix).unwrap_or(0);
     let local = offset.saturating_sub(start);
     let local = match lines.get(line_ix) {
         Some(line) => local.min(line.len()),

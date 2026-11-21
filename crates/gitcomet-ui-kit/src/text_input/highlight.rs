@@ -265,11 +265,11 @@ impl<'a> HighlightCursor<'a> {
     }
 }
 
-pub(super) fn build_streamed_highlight_runs_for_visible_window(
+pub(super) fn build_streamed_highlight_runs_for_visible_window<S: LineStartLookup + ?Sized>(
     base_font: &gpui::Font,
     base_color: gpui::Hsla,
     display_text: &LineTextSource<'_>,
-    line_starts: &[usize],
+    line_starts: &S,
     visible_line_range: Range<usize>,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> VisibleWindowTextRuns {
@@ -278,12 +278,11 @@ pub(super) fn build_streamed_highlight_runs_for_visible_window(
         return line_runs;
     }
     let first_line_start = line_starts
-        .get(visible_line_range.start)
-        .copied()
+        .line_start(visible_line_range.start)
         .unwrap_or(0);
     let mut cursor = HighlightCursor::new_at_offset(highlights, first_line_start);
     for line_ix in visible_line_range {
-        let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+        let line_start = line_starts.line_start(line_ix).unwrap_or(0);
         let line_text = display_text.line_text(line_ix);
         let capped_line_text = build_shaping_line_slice(line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let capped_line_text = capped_line_text.as_ref();

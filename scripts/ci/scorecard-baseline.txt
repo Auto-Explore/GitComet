@@ -266,7 +266,7 @@ fn-lines crates/gitcomet-ui-kit/src/components/picker_prompt.rs::render_with_rem
 fn-lines crates/gitcomet-ui-kit/src/components/quick_search_bar.rs::render_bar 251 -
 fn-lines crates/gitcomet-ui-kit/src/scrollbar.rs::render 404 -
 fn-lines crates/gitcomet-ui-kit/src/text_input/element.rs::paint 238 -
-fn-lines crates/gitcomet-ui-kit/src/text_input/element.rs::prepaint 542 -
+fn-lines crates/gitcomet-ui-kit/src/text_input/element.rs::prepaint 530 -
 fn-lines crates/gitcomet-ui-kit/src/text_input/render.rs::render 380 -
 fn-lines crates/gitcomet-ui-kit/src/ui_probe.rs::start_if_enabled 192 -
 fn-lines crates/gitcomet-ui-media/src/diagram_preview/surface.rs::render_viewport 187 -

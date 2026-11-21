@@ -99,6 +99,8 @@ mod element;
 mod highlight;
 mod highlight_provider;
 mod layout_cache;
+mod line_starts;
+use line_starts::{LineStartLookup, LineStarts};
 mod platform_input;
 mod render;
 mod selection;

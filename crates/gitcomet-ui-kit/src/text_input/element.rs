@@ -59,7 +59,7 @@ pub(super) struct PrepaintState {
     layout: Option<TextInputLayout>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
-    line_starts: Option<Arc<[usize]>>,
+    line_starts: Option<LineStarts>,
     wrap_cache: Option<WrapCache>,
     scroll_x: Pixels,
     visible_line_range: Range<usize>,
@@ -104,7 +104,7 @@ impl Element for TextElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         if input.multiline {
-            let line_count = input.content.line_starts().len().max(1) as f32;
+            let line_count = input.content.snapshot().line_count() as f32;
             if input.soft_wrap
                 && let Some(cache) = input.wrap.cache
                 && cache.rows > 0
@@ -185,15 +185,14 @@ impl Element for TextElement {
             let line_height = input.effective_line_height(window);
             let base_font = style.font();
 
-            let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
-                Some(text) => compute_line_starts(text).into(),
-                None => content.shared_line_starts(),
-            };
+            // Document rows are looked up through the rope: an edit costs no
+            // whole-document line index.
+            let line_starts = LineStarts::for_display(substitute_text.as_deref(), &content);
             let display_len = substitute_text
                 .as_ref()
                 .map(|text| text.len())
                 .unwrap_or_else(|| content.len());
-            let line_count = line_starts.len().max(1);
+            let line_count = line_starts.line_count().max(1);
             let (visible_top, visible_bottom) =
                 visible_vertical_window(bounds, input.interaction.vertical_scroll_handle.as_ref());
             let guard_rows = guard_rows(input.interaction.is_selecting, line_height);
@@ -205,7 +204,7 @@ impl Element for TextElement {
                 None
             } else {
                 let byte_range = provider_prefetch_byte_range_for_visible_window(
-                    line_starts.as_ref(),
+                    &line_starts,
                     display_len,
                     line_count,
                     line_height,
@@ -316,23 +315,12 @@ impl Element for TextElement {
                     visible_line_range = 0..line_count.min(1);
                 }
 
-                let cursor_line_ix =
-                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+                let cursor_line_ix = line_index_for_offset(&line_starts, cursor, line_count);
                 // The rows this frame will shape: the viewport, plus the caret's
                 // row when it has scrolled out of it. Every *text* read below
                 // goes through this, so shaping costs the viewport.
-                //
-                // The frame as a whole is not yet free of the document:
-                // `line_starts` above is still the whole-document array, and an
-                // edit drops that cache, so each post-edit frame rebuilds it
-                // (~1.6ms at 100k rows). Closing that means giving the handful
-                // of `line_starts` readers in prepaint and paint a windowed
-                // equivalent.
-                let line_source = match substitute_text.as_ref() {
-                    Some(text) => LineTextSource::Whole {
-                        text,
-                        starts: line_starts.as_ref(),
-                    },
+                let line_source = match substitute_text.as_deref() {
+                    Some(text) => LineTextSource::whole(text, &line_starts),
                     None => LineTextSource::window(
                         &content,
                         visible_line_range.clone(),
@@ -342,7 +330,7 @@ impl Element for TextElement {
 
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     &line_source,
-                    line_starts.as_ref(),
+                    &line_starts,
                     visible_line_range.clone(),
                     &shape_style,
                 );
@@ -363,7 +351,7 @@ impl Element for TextElement {
                     let shaped = input.shape_plain_line_cached(
                         LineShapeInput {
                             line_ix,
-                            line_start: line_starts.get(line_ix).copied().unwrap_or(0),
+                            line_start: line_starts.line_start(line_ix).unwrap_or(0),
                             line_text: line_source.line_text(line_ix),
                         },
                         precomputed_runs,
@@ -380,7 +368,7 @@ impl Element for TextElement {
                     let shaped = input.shape_plain_line_cached(
                         LineShapeInput {
                             line_ix: cursor_line_ix,
-                            line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
+                            line_start: line_starts.line_start(cursor_line_ix).unwrap_or(0),
                             line_text: line_source.line_text(cursor_line_ix),
                         },
                         None,
@@ -391,7 +379,7 @@ impl Element for TextElement {
                 }
 
                 let single_line_cursor = if !input.multiline && !lines.is_empty() {
-                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
+                    let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                     lines
                         .get(line_ix)
                         .map(|line| (line.x_for_index(local_ix), line.width))
@@ -416,7 +404,7 @@ impl Element for TextElement {
                 }
 
                 let (cursor_quad, selections) = if selected_range.is_empty() {
-                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
+                    let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                     let x = lines
                         .get(line_ix)
                         .map(|line| line.x_for_index(local_ix))
@@ -436,8 +424,8 @@ impl Element for TextElement {
                         let Some(line) = lines.get(ix) else {
                             continue;
                         };
-                        let start = line_starts.get(ix).copied().unwrap_or(0);
-                        let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
+                        let start = line_starts.line_start(ix).unwrap_or(0);
+                        let next_start = line_starts.line_start(ix + 1).unwrap_or(display_len);
                         let line_end = start + line.len();
 
                         let seg_start = selected_range.start.max(start);
@@ -520,26 +508,26 @@ impl Element for TextElement {
                 }
                 input.request_wrap_recompute();
             }
-            input.maybe_recompute_wrap_rows(
-                display_text_str,
-                line_starts.as_ref(),
-                rounded_wrap_width,
-                font_size,
-                line_count,
-                cx,
-            );
+            if input.wrap.recompute_requested {
+                // Estimating every row is the one pass that wants the array.
+                input.maybe_recompute_wrap_rows(
+                    display_text_str,
+                    &line_starts.to_array(&content),
+                    rounded_wrap_width,
+                    font_size,
+                    line_count,
+                    cx,
+                );
+            }
 
-            let cursor_line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+            let cursor_line_ix = line_index_for_offset(&line_starts, cursor, line_count);
             pending_lines.push(cursor_line_ix);
             let mut y_offsets = vec![Pixels::ZERO; line_count];
             let mut lines = (0..line_count)
                 .map(|_| EditorLine::default())
                 .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
-            let wrapped_line_source = LineTextSource::Whole {
-                text: display_text_str,
-                starts: line_starts.as_ref(),
-            };
+            let wrapped_line_source = LineTextSource::whole(display_text_str, &line_starts);
             let mut visible_line_range;
             loop {
                 let mut y = Pixels::ZERO;
@@ -557,7 +545,7 @@ impl Element for TextElement {
                 );
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     &wrapped_line_source,
-                    line_starts.as_ref(),
+                    &line_starts,
                     visible_line_range.clone(),
                     &shape_style,
                 );
@@ -567,8 +555,8 @@ impl Element for TextElement {
                     if shaped_mask[line_ix] {
                         continue;
                     }
-                    let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-                    let line_text = line_text_for_index(display_text_str, &line_starts, line_ix);
+                    let line_start = line_starts.line_start(line_ix).unwrap_or(0);
+                    let line_text = wrapped_line_source.line_text(line_ix);
                     let precomputed_runs = visible_line_range
                         .contains(&line_ix)
                         .then(|| {
@@ -628,8 +616,8 @@ impl Element for TextElement {
             });
 
             let (cursor_quad, selections) = if selected_range.is_empty() {
-                let line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
-                let start = line_starts.get(line_ix).copied().unwrap_or(0);
+                let line_ix = line_index_for_offset(&line_starts, cursor, line_count);
+                let start = line_starts.line_start(line_ix).unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
                 let (caret_h, caret_top_inset) = caret_metrics(line_height);
                 let pos = lines[line_ix]
@@ -645,8 +633,8 @@ impl Element for TextElement {
             } else {
                 let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 for ix in visible_line_range.clone() {
-                    let start = line_starts.get(ix).copied().unwrap_or(0);
-                    let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
+                    let start = line_starts.line_start(ix).unwrap_or(0);
+                    let next_start = line_starts.line_start(ix + 1).unwrap_or(display_len);
                     let line_len = lines[ix].len();
                     let line_end = start + line_len;
 
