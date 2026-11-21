@@ -584,6 +584,26 @@ fn history_reads_reuse_the_repository_and_still_see_moved_refs() {
     assert_eq!(count(Work::RepositoryReopen), 0, "a moved branch");
 }
 
+#[test]
+fn head_commit_id_follows_head_without_reopening() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let head = || git_stdout(dir.path(), &["rev-parse", "HEAD"]);
+    let _capture = capture();
+    let before = repo.head_commit_id().unwrap().unwrap();
+    assert_eq!(before.as_ref(), head().trim());
+    run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~1"]);
+    assert_ne!(repo.head_commit_id().unwrap().unwrap(), before);
+    for packed in [false, true] {
+        if packed {
+            run_git(dir.path(), &["pack-refs", "--all", "--prune"]);
+        }
+        let id = repo.head_commit_id().unwrap().unwrap();
+        assert_eq!(id.as_ref(), head().trim(), "packed={packed}");
+    }
+    assert_eq!(count(Work::RepositoryReopen), 0);
+}
+
 /// The read after `change` must open a fresh handle, reject the index of the
 /// previous object interpretation and build one of `rows_after` rows.
 #[track_caller]
