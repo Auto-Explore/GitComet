@@ -650,6 +650,7 @@ impl GitCometView {
             .unwrap_or(&theme_mode)
             .resolve_theme(window_appearance)
             .with_appearance(crate::appearance::current(cx));
+        crate::theme::set_window_theme(cx, window.window_handle().window_id(), initial_theme);
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
@@ -789,9 +790,8 @@ impl GitCometView {
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let history_refs_hover_host =
             cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
-        let commit_message_hover_host = cx.new(|_cx| {
-            CommitMessageHoverHost::new(initial_theme, Arc::clone(&store), ui_model.clone())
-        });
+        let commit_message_hover_host =
+            cx.new(|_cx| CommitMessageHoverHost::new(Arc::clone(&store), ui_model.clone()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
@@ -1486,8 +1486,6 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.history_refs_hover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.commit_message_hover_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.command_palette
@@ -1505,6 +1503,12 @@ impl GitCometView {
     pub(super) fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
         let metrics = crate::appearance::current(cx);
         self.set_theme(self.theme.with_appearance(metrics), cx);
+        // A font family or zoom change leaves the theme equal, but every view
+        // draws differently.
+        let window = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, _| window.refresh());
+        });
         self.update_ui_preferences(cx, move |prefs| prefs.appearance.metrics = metrics);
         self.details_pane
             .update(cx, |pane, _| pane.appearance_metrics = metrics);
