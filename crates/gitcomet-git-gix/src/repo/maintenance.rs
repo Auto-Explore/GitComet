@@ -20,30 +20,50 @@ const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// git's default `gc.autoPackLimit`.
 const DEFAULT_AUTO_PACK_LIMIT: u64 = 50;
+/// History builds read every commit the commit-graph does not cover: about a
+/// quarter second for this many, which a `commit-graph write` saves each time.
+const COMMIT_GRAPH_STALE_COMMITS: usize = 5_000;
 
 impl GixRepo {
     pub(crate) fn common_dir_impl(&self) -> PathBuf {
         canonicalize_or_original(self.repo().common_dir().to_path_buf())
     }
 
-    /// Only gc's thresholds count: since git 2.54 the default strategy's own
-    /// checks ask after ~500 loose objects or one stale worktree, expecting to
-    /// run after every command, which GitComet turns off.
+    /// Recommended when history reads would walk many commits outside the
+    /// commit-graph, or when gc's thresholds are reached. Only gc's own
+    /// thresholds count among git's checks: since git 2.54 the default
+    /// strategy asks after ~500 loose objects or one stale worktree, expecting
+    /// to run after every command, which GitComet turns off.
     pub(super) fn maintenance_needed_impl(&self) -> Result<bool> {
-        // `is-needed` arrived in git 2.53; older git gets no recommendation.
-        if current_git_runtime()
-            .version()
-            .is_none_or(|version| version < GitVersion::MAINTENANCE_IS_NEEDED)
-        {
-            return Ok(false);
-        }
         // `git maintenance register` turns this off because a scheduler runs
         // maintenance. Read the user's value: git itself would see our `-c`.
         let config = self.repo_with_current_config()?;
         if config.config_snapshot().boolean("maintenance.auto") == Some(false) {
             return Ok(false);
         }
+        if commit_graph_is_behind(&config, COMMIT_GRAPH_STALE_COMMITS) {
+            return Ok(true);
+        }
+        // `is-needed` arrived in git 2.53; older git gets no gc recommendation.
+        if current_git_runtime()
+            .version()
+            .is_none_or(|version| version < GitVersion::MAINTENANCE_IS_NEEDED)
+        {
+            return Ok(false);
+        }
         Ok(self.is_needed(Some("gc"))?.status.code() == Some(0))
+    }
+
+    /// Writes the commit-graph when the recommendation was about it.
+    fn write_commit_graph_if_behind(&self) -> Result<Option<CommandOutput>> {
+        let repo = self.repo_with_current_config()?;
+        if !commit_graph_is_behind(&repo, COMMIT_GRAPH_STALE_COMMITS) {
+            return Ok(None);
+        }
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args(["commit-graph", "write", "--reachable", "--split"]);
+        run_git_with_output_and_timeout(cmd, "git commit-graph write", MAINTENANCE_TIMEOUT)
+            .map(Some)
     }
 
     /// `git maintenance is-needed --auto`: exit 0 when needed, 1 when not.
@@ -67,11 +87,14 @@ impl GixRepo {
                 lock.display()
             ))));
         }
+        let commit_graph = self.write_commit_graph_if_behind()?;
         // The run prints nothing over a pipe, so only this check can tell a
         // run that did nothing; the recommendation may be hours old.
         let check = self.is_needed(None)?;
         if check.status.code() == Some(1) {
-            return Ok(command_output(MAINTENANCE_CHECK_COMMAND, &check));
+            return Ok(
+                commit_graph.unwrap_or_else(|| command_output(MAINTENANCE_CHECK_COMMAND, &check))
+            );
         }
         let pack_limit = self
             .repo_with_current_config()
@@ -93,6 +116,38 @@ impl GixRepo {
         }
         result
     }
+}
+
+/// Whether at least `threshold` commits reachable from HEAD are outside the
+/// commit-graph. Repositories where git itself ignores the graph are left
+/// alone: `core.commitGraph=false`, and shallow clones.
+fn commit_graph_is_behind(repo: &gix::Repository, threshold: usize) -> bool {
+    if repo.config_snapshot().boolean("core.commitGraph") == Some(false)
+        || !matches!(repo.is_shallow(), Ok(false))
+    {
+        return false;
+    }
+    let Ok(head) = repo.head_id() else {
+        return false;
+    };
+    let graph = repo.commit_graph_if_enabled().ok().flatten();
+    let mut pending = vec![head.detach()];
+    let mut uncovered = FxHashSet::default();
+    while let Some(id) = pending.pop() {
+        let covered = graph
+            .as_ref()
+            .is_some_and(|graph| graph.lookup(id).is_some());
+        if covered || !uncovered.insert(id) {
+            continue;
+        }
+        if uncovered.len() >= threshold {
+            return true;
+        }
+        if let Ok(commit) = repo.find_commit(id) {
+            pending.extend(commit.parent_ids().map(|parent| parent.detach()));
+        }
+    }
+    false
 }
 
 fn was_killed(kind: &ErrorKind) -> bool {

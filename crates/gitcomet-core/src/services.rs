@@ -1632,16 +1632,17 @@ pub trait GitRepository: Send + Sync {
         None
     }
     /// Whether the repository needs substantial maintenance: git's gc
-    /// thresholds (`gc.auto` loose objects, `gc.autoPackLimit` packs).
+    /// thresholds (`gc.auto` loose objects, `gc.autoPackLimit` packs), or
+    /// thousands of commits outside the commit-graph.
     fn maintenance_needed(&self) -> Result<bool> {
         Err(Error::new(ErrorKind::Unsupported(
             "maintenance checks are not implemented for this backend",
         )))
     }
-    /// Runs the maintenance git recommends, in the foreground, reporting
-    /// progress through the attached git operation. When git finds nothing
-    /// to do it skips the run and returns the check, labelled
-    /// [`MAINTENANCE_CHECK_COMMAND`].
+    /// Runs the recommended maintenance in the foreground, reporting progress
+    /// through the attached git operation: writes the commit-graph when it is
+    /// behind, then runs what git recommends. When there is nothing to do it
+    /// returns git's check, labelled [`MAINTENANCE_CHECK_COMMAND`].
     fn run_maintenance_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "maintenance is not implemented for this backend",

@@ -2108,7 +2108,7 @@ impl SettingsWindowView {
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(format!(
-                        "Once a day {name} asks Git whether a repository has collected enough loose objects or packs to slow it down (gc.auto, gc.autoPackLimit) and, if so, offers to run git maintenance. {name} never starts maintenance on its own. To skip one repository, set maintenance.auto to false in its Git config.",
+                        "Once a day {name} checks whether a repository has collected enough loose objects or packs to slow it down (gc.auto, gc.autoPackLimit), or has thousands of commits outside Git's commit-graph, and, if so, offers to run git maintenance and write the commit-graph. {name} never starts maintenance on its own. To skip one repository, set maintenance.auto to false in its Git config.",
                         name = crate::view::product_name()
                     )),
             )
