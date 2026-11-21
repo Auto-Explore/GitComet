@@ -273,7 +273,8 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
                 })
                 .unwrap_or(false);
             if handled {
-                window.refresh();
+                // The key changed the diff only; other panes follow the store.
+                let _ = entry.diff_renderer.update(cx, |_, cx| cx.notify());
                 cx.stop_propagation();
             }
             return;
@@ -285,7 +286,6 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
                 let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
                 if handled {
                     cx.notify();
-                    window.refresh();
                 }
                 handled
             })

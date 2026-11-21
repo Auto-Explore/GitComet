@@ -2542,11 +2542,11 @@ impl GitCometView {
                 }) else {
                     return;
                 };
-                let (handled, in_diff) = if target.entity_id() == primary {
+                let (handled, in_diff, drawn_by) = if target.entity_id() == primary {
                     let in_diff = !main.read(cx).history_is_active_surface(cx);
                     let handled =
                         main.update(cx, |main, cx| main.navigate_search_match(forward, cx));
-                    (handled, in_diff)
+                    (handled, in_diff, main.entity_id())
                 } else {
                     let handled = target.update(cx, |pane, cx| {
                         if forward {
@@ -2555,7 +2555,7 @@ impl GitCometView {
                             pane.navigate_prev_search_match_or_diff_change(cx)
                         }
                     });
-                    (handled, true)
+                    (handled, true, target.entity_id())
                 };
                 if handled {
                     if in_diff && pressed_in == NavKeyFocus::Elsewhere {
@@ -2563,7 +2563,9 @@ impl GitCometView {
                             pane.focus_diff_after_navigation(window, cx);
                         });
                     }
-                    window.refresh();
+                    // The step moved only what that view draws; other panes
+                    // follow the store.
+                    gpui::AppContext::notify(cx, drawn_by);
                 }
             });
         });
@@ -2589,7 +2591,6 @@ impl GitCometView {
                 pane.update(cx, |pane, cx| {
                     if action(pane, window, cx) {
                         cx.notify();
-                        window.refresh();
                     }
                 });
             });

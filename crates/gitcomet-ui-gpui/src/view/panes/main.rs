@@ -25,6 +25,8 @@ pub(crate) struct MainPaneView {
     active_context_menu_invoker: Option<SharedString>,
     pub(in crate::view) interactive_rebase_states: FxHashMap<RepoId, IRebaseViewState>,
     _subscription: gpui::Subscription,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 impl MainPaneView {
@@ -100,6 +102,8 @@ impl MainPaneView {
             active_context_menu_invoker: None,
             interactive_rebase_states: FxHashMap::default(),
             _subscription: subscription,
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         }
     }
 
@@ -494,6 +498,10 @@ impl MainPaneView {
 
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         let width = self.diff_renderer.update(cx, |pane, cx| {
             pane.last_window_size = window.viewport_size();
             pane.sync_layout_snapshot(cx);
