@@ -1,0 +1,25 @@
+# A crate's clippy.toml replaces the workspace file: keep its settings here too.
+too-many-arguments-threshold = 9
+
+# Disk and process work blocks the UI thread unless it runs on a background
+# executor. A file that needs it says so with a file-level `#![expect]`.
+disallowed-methods = [
+    { path = "std::fs::read", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::read_to_string", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::read_dir", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::metadata", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::symlink_metadata", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::canonicalize", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::write", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::create_dir", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::create_dir_all", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::remove_file", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::remove_dir", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::remove_dir_all", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::rename", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::copy", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::File::open", reason = "disk reads belong on a background executor or in the state store" },
+    { path = "std::fs::File::create", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::fs::OpenOptions::new", reason = "writes go through the state store's filesystem requests" },
+    { path = "std::process::Command::new", reason = "processes are spawned off the UI thread" },
+]

@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
+
 use crate::msg::RepoCommandEffect;
 use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;

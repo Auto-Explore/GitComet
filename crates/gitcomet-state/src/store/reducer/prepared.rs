@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(test),
+    expect(
+        clippy::disallowed_methods,
+        reason = "the one place reducer inputs read the clock and the disk"
+    )
+)]
+
 use super::{diff_selection, util};
 use crate::model::{
     AppState, AuthRetryOperation, GitOperationOuterOutcome, Loadable, RepoId, RepoLifetime,

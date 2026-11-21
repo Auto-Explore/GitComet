@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "manages the image diff disk cache"
+)]
+
 use super::*;
 use crate::view::diff_utils::image_format_for_path;
 use crate::view::image_preview::{limit_decoder, svg};

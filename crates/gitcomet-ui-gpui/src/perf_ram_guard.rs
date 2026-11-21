@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reads /proc for the benchmark memory guard"
+)]
+
 #[cfg(target_os = "linux")]
 use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 #[cfg(target_os = "linux")]

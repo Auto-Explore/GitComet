@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "classifies dropped paths on a background task"
+)]
+
 use gpui::ExternalPaths;
 use std::path::PathBuf;
 

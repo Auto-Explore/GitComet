@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "stats and reads diff sides for syntax documents"
+)]
+
 use super::*;
 
 #[derive(Debug)]

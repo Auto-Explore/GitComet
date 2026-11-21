@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "opens documents and stats dropped paths"
+)]
+
 use super::panes::diff::TextDecodeRequest;
 use super::panes::diff::file_editor::{file_editor_gutter_width, file_editor_line_for_visual_row};
 use super::panes::diff::helpers::state::FileImagePreviewAnimationSide;

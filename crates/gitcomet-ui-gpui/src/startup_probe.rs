@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reads /proc for the opt-in startup probe"
+)]
+
 use gitcomet_state::model::{AppState, Loadable};
 use serde_json::{Map, Value, json};
 use std::env;

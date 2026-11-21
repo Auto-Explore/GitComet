@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "scans desktop entries and PATH for installed editors"
+)]
+
 use gitcomet_core::process::background_command;
 use gitcomet_state::session::{self, ExternalCodeEditorSetting};
 use std::collections::BTreeSet;

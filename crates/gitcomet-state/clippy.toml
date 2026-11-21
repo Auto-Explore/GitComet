@@ -1,0 +1,27 @@
+# A crate's clippy.toml replaces the workspace file: keep its settings here too.
+too-many-arguments-threshold = 9
+
+# Enforced in `store/reducer` only (`lib.rs` allows the lint, `store/reducer.rs`
+# denies it): reducers read time, disk and processes through prepared facts.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "reducers take time from ReducerInputs" },
+    { path = "std::time::SystemTime::now", reason = "reducers take time from ReducerInputs" },
+    { path = "std::fs::read", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::read_to_string", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::read_dir", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::metadata", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::symlink_metadata", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::canonicalize", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::write", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::create_dir", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::create_dir_all", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::remove_file", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::remove_dir", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::remove_dir_all", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::rename", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::copy", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::File::open", reason = "reducers read disk facts from PreparedReduction" },
+    { path = "std::fs::File::create", reason = "reducers return effects; they do not write" },
+    { path = "std::fs::OpenOptions::new", reason = "reducers return effects; they do not write" },
+    { path = "std::process::Command::new", reason = "reducers return effects; they do not spawn" },
+]

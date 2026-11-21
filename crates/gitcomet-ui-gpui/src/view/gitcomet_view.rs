@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "deletes the crash log the user dismissed"
+)]
+
 use super::repository_views::MainSlot;
 use super::*;
 

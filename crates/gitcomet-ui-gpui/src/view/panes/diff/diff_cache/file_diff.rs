@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "indexes file-backed diff sides")]
+
 use super::*;
 use std::io::Read;
 

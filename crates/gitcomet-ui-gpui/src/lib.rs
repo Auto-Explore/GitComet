@@ -1,3 +1,6 @@
+// `clippy.toml` bans disk and process calls; tests and benchmark fixtures are exempt.
+#![cfg_attr(any(test, feature = "benchmarks"), allow(clippy::disallowed_methods))]
+
 mod app;
 mod browser_requests;
 pub use browser_requests::{

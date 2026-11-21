@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "launches the platform's open helpers"
+)]
+
 use gpui::AppContext as _;
 use std::io;
 use std::path::Path;
