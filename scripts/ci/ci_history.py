@@ -6,9 +6,10 @@
     ci_history.py timings target/ci-history
 
 `download` fetches the `ci-*` diagnostics artifacts (kept for seven days) of
-recent runs with `gh`. `flakes` lists tests that failed, marking those that
-also passed on the same lane. `timings` shows a package's compile units per
-lane from Cargo's timing reports.
+recent runs with `gh`. `flakes` lists tests that failed, from the JUnit reports
+and the libtest logs, marking those that also passed on the same lane at the
+same commit. `timings` shows a package's compile units per lane from Cargo's
+timing reports.
 """
 
 import argparse
@@ -22,6 +23,8 @@ import sys
 import xml.etree.ElementTree as ElementTree
 
 UNIT_DATA = re.compile(r"const UNIT_DATA = (\[.*?\]);\s*\n", re.S)
+COMMIT_FILE = "commit.txt"
+LIBTEST_RESULT = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)$", re.M)
 
 
 def junit_outcomes(xml_text):
@@ -35,15 +38,28 @@ def junit_outcomes(xml_text):
     return outcomes
 
 
+def libtest_outcomes(log_text, suite):
+    """(suite, test, failed) for every result line of a libtest log."""
+    return [(suite, test, result == "FAILED") for test, result in LIBTEST_RESULT.findall(log_text)]
+
+
 def flaky_tests(runs):
-    """`runs` is [(lane, outcomes)]. Tests with a failure, most failures first."""
-    counts = defaultdict(lambda: [0, 0])
-    for lane, outcomes in runs:
+    """`runs` is [(commit, lane, outcomes)]. Tests with a failure, most failures first.
+
+    A test is flaky when one commit both passed and failed it on a lane; a
+    test that fails on one commit and passes on another was broken and fixed.
+    """
+    by_commit = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    for commit, lane, outcomes in runs:
         for suite, test, failed in outcomes:
-            counts[(lane, suite, test)][failed] += 1
-    found = [{"lane": lane, "suite": suite, "test": test, "passed": passed, "failed": failed,
-              "flaky": passed > 0}
-             for (lane, suite, test), (passed, failed) in counts.items() if failed]
+            by_commit[(lane, suite, test)][commit][failed] += 1
+    found = []
+    for (lane, suite, test), commits in by_commit.items():
+        failed = sum(counts[1] for counts in commits.values())
+        if failed:
+            found.append({"lane": lane, "suite": suite, "test": test, "failed": failed,
+                          "passed": sum(counts[0] for counts in commits.values()),
+                          "flaky": any(passed and failed for passed, failed in commits.values())})
     return sorted(found, key=lambda item: (-item["failed"], item["lane"], item["suite"], item["test"]))
 
 
@@ -75,22 +91,40 @@ def lane_of(path, root):
 def download(args):
     runs = json.loads(subprocess.check_output(
         ["gh", "run", "list", "--workflow", args.workflow, "--limit", str(args.runs),
-         "--status", "completed", "--json", "databaseId"], text=True))
+         "--status", "completed", "--json", "databaseId,headSha"], text=True))
     root = Path(args.dir)
     for run in runs:
         target = root / str(run["databaseId"])
+        if not target.exists():
+            result = subprocess.run(["gh", "run", "download", str(run["databaseId"]), "-p", "ci-*", "-D", str(target)])
+            if result.returncode:
+                print(f"run {run['databaseId']}: no artifacts left", file=sys.stderr)
         if target.exists():
-            continue
-        result = subprocess.run(["gh", "run", "download", str(run["databaseId"]), "-p", "ci-*", "-D", str(target)])
-        if result.returncode:
-            print(f"run {run['databaseId']}: no artifacts left", file=sys.stderr)
+            (target / COMMIT_FILE).write_text(run["headSha"] + "\n", encoding="utf-8")
     return 0
 
 
+def test_reports(root):
+    """[(commit, lane, outcomes)] for every JUnit report and libtest log under `root`."""
+    reports = []
+    for run in sorted(path for path in root.iterdir() if path.is_dir()):
+        commit_file = run / COMMIT_FILE
+        # Without the commit, every run counts as its own.
+        commit = commit_file.read_text(encoding="utf-8").strip() if commit_file.exists() else run.name
+        for path in sorted(run.rglob("junit.xml")):
+            reports.append((commit, lane_of(path, root), junit_outcomes(path.read_text(encoding="utf-8"))))
+        for path in sorted(run.rglob("*.log")):
+            # nextest logs repeat the libtest output of tests its JUnit report already counts.
+            if "nextest" in path.name:
+                continue
+            outcomes = libtest_outcomes(path.read_text(encoding="utf-8", errors="replace"), path.stem)
+            if outcomes:
+                reports.append((commit, lane_of(path, root), outcomes))
+    return reports
+
+
 def flakes(args):
-    root = Path(args.dir)
-    runs = [(lane_of(path, root), junit_outcomes(path.read_text(encoding="utf-8")))
-            for path in sorted(root.rglob("junit.xml"))]
+    runs = test_reports(Path(args.dir))
     found = flaky_tests(runs)
     print(f"{len(runs)} test reports, {len(found)} tests with a failure")
     for item in found[:args.limit]:
