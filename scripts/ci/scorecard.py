@@ -9,7 +9,8 @@
   one fails; one that is gone or under the threshold needs its entry removed.
 - every other metric is a count: more fails, fewer needs the count lowered.
 
-`check --write` regenerates the baseline, keeping recorded reasons. `report`
+`check --write` lowers the baseline to the tree, keeping recorded reasons; it
+never raises a value or adds an entry, which is done by hand with a reason. `report`
 adds numbers no single change controls (hub-file churn, co-change, CI
 duration), so those never fail a check.
 """
@@ -193,10 +194,18 @@ def compare(found, recorded):
 
 
 def write(found, recorded, path=BASELINE):
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("#")] \
-        if path.exists() else []
-    for (metric, name), value in sorted(found.items()):
-        lines.append(f"{metric} {name} {value} {recorded.get((metric, name), (0, '-'))[1]}")
+    """Lowers recorded values to what was found and drops entries that are gone.
+
+    A value above its entry and a new entry are left for `compare` to report: a
+    line is added or raised by hand, with its reason. With no baseline yet,
+    everything found is recorded.
+    """
+    first = not path.exists()
+    lines = [] if first else [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("#")]
+    for key, value in sorted(found.items()):
+        limit, reason = recorded.get(key, (value, "-"))
+        if first or key in recorded:
+            lines.append(f"{key[0]} {key[1]} {min(value, limit)} {reason}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -302,7 +311,7 @@ def main():
     recorded = read_baseline() if BASELINE.exists() else {}
     if args.write:
         write(found, recorded)
-        return 0
+        recorded = read_baseline()
     problems = compare(found, recorded)
     for problem in problems:
         print(f"::error::{problem}", file=sys.stderr)

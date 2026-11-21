@@ -99,14 +99,21 @@ class ScorecardTests(unittest.TestCase):
         ])
         self.assertEqual(scorecard.compare({("fn-lines", "a.rs::shrunk"): 180}, {("fn-lines", "a.rs::shrunk"): (200, "-")}), [])
 
-    def test_write_keeps_comments_and_reasons(self):
+    def test_write_lowers_values_and_never_raises_or_adds_one(self):
         with tempfile.TemporaryDirectory() as directory:
             baseline = Path(directory) / "baseline.txt"
-            baseline.write_text("# header\nfn-lines a.rs::table 300 a data table\n", encoding="utf-8")
+            baseline.write_text("# header\nfn-lines a.rs::gone 200 -\nfn-lines a.rs::table 300 a data table\n"
+                                "glob-super gitcomet-state 9 -\n", encoding="utf-8")
             recorded = scorecard.read_baseline(baseline)
-            scorecard.write({("fn-lines", "a.rs::table"): 310, ("glob-super", "gitcomet-core"): 2}, recorded, baseline)
+            found = {("fn-lines", "a.rs::table"): 310, ("glob-super", "gitcomet-core"): 2,
+                     ("glob-super", "gitcomet-state"): 7}
+            scorecard.write(found, recorded, baseline)
             self.assertEqual(baseline.read_text(encoding="utf-8"),
-                             "# header\nfn-lines a.rs::table 310 a data table\nglob-super gitcomet-core 2 -\n")
+                             "# header\nfn-lines a.rs::table 300 a data table\nglob-super gitcomet-state 7 -\n")
+            self.assertEqual(len(scorecard.compare(found, scorecard.read_baseline(baseline))), 2)
+            baseline.unlink()
+            scorecard.write(found, {}, baseline)
+            self.assertEqual(scorecard.compare(found, scorecard.read_baseline(baseline)), [])
             with self.assertRaisesRegex(ValueError, "expected"):
                 baseline.write_text("fn-lines broken\n", encoding="utf-8")
                 scorecard.read_baseline(baseline)
