@@ -204,11 +204,14 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
     // `https://…` also splits on ':' (`https`, `//…`), so only enter this
     // branch when the whole URL has no `://`.
     if !url.contains("://")
-        && let Some((user_host, path)) = url.split_once(':')
+        && let Some((user_host, path)) = scp_like(url)
         && !user_host.contains('/')
         && path.contains('/')
     {
-        let host = user_host.rsplit('@').next()?;
+        let host_port = user_host.rsplit('@').next()?.trim_start_matches('[');
+        let host = host_port
+            .split_once(':')
+            .map_or(host_port, |(host, _)| host);
         return build_base(host, None, path, "https");
     }
 
@@ -242,6 +245,17 @@ fn web_port<'a>(scheme: &str, port: Option<&'a str>) -> Option<&'a str> {
     }
 }
 
+/// The `user@host` and the path of an scp-like remote. Brackets let the form
+/// carry a port, around the host or around the user and the host:
+/// `git@[host:443]:path` and `[git@host:443]:path` come back as
+/// `git@[host:443` and `[git@host:443` with `path`, opening bracket kept.
+fn scp_like(url: &str) -> Option<(&str, &str)> {
+    match url.split_once("]:") {
+        Some((bracketed, path)) if bracketed.contains('[') => Some((bracketed, path)),
+        _ => url.split_once(':'),
+    }
+}
+
 fn build_base(host: &str, port: Option<&str>, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     let host = host.trim().to_ascii_lowercase();
     let path = path.trim();
@@ -261,12 +275,17 @@ fn build_base(host: &str, port: Option<&str>, path: &str, scheme: &str) -> Optio
     if owner_repo.is_empty() || !owner_repo.contains('/') {
         return None;
     }
-    let kind = match host.as_str() {
-        "github.com" => ForgeKind::GitHub,
-        "gitlab.com" => ForgeKind::GitLab,
-        "bitbucket.org" => ForgeKind::Bitbucket,
-        "codeberg.org" | "gitea.com" | "code.forgejo.org" => ForgeKind::Gitea,
-        _ => ForgeKind::Generic,
+    // GitHub, GitLab and Bitbucket each take SSH on a host that serves no
+    // pages: one for port 443, and Bitbucket Cloud all of it on
+    // `ssh.bitbucket.org`. Their links go to the forge's web host.
+    let (kind, host) = match host.as_str() {
+        "github.com" | "ssh.github.com" => (ForgeKind::GitHub, "github.com"),
+        "gitlab.com" | "altssh.gitlab.com" => (ForgeKind::GitLab, "gitlab.com"),
+        "bitbucket.org" | "ssh.bitbucket.org" | "altssh.bitbucket.org" => {
+            (ForgeKind::Bitbucket, "bitbucket.org")
+        }
+        host @ ("codeberg.org" | "gitea.com" | "code.forgejo.org") => (ForgeKind::Gitea, host),
+        host => (ForgeKind::Generic, host),
     };
     // Keep the remote's own scheme: an http-only self-hosted forge stays
     // reachable over http rather than getting an https URL that may not exist.
