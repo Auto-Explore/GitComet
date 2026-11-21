@@ -31,6 +31,7 @@ fn-lines crates/gitcomet-git-gix/src/repo/mergetool.rs::launch_mergetool_impl 18
 fn-lines crates/gitcomet-git-gix/src/repo/mergetool_builtin.rs::builtin_merge_command 266 -
 fn-lines crates/gitcomet-markdown/src/flatten.rs::apply_html 193 -
 fn-lines crates/gitcomet-perf/src/bin/perf_budget_report/report.rs::build_report_markdown 166 -
+fn-lines crates/gitcomet-state/src/msg/class.rs::msg_class 254 one row per message variant
 fn-lines crates/gitcomet-state/src/msg/message_debug.rs::fmt 718 -
 fn-lines crates/gitcomet-state/src/msg/repo_command.rs::failed 456 -
 fn-lines crates/gitcomet-state/src/msg/repository_requirement.rs::repository_requirement 304 -
