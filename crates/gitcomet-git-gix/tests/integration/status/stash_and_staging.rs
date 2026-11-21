@@ -1033,6 +1033,47 @@ fn staging_a_file_replaced_by_a_directory_stages_only_its_deletion() {
     );
 }
 
+/// Staging reads the index before `git rm --cached` rewrites it. Filesystem
+/// timestamps are coarse, so the rewrite can keep the index's modification
+/// time, and gix reloads its shared index only when that time moves on.
+#[test]
+fn status_reads_an_index_rewritten_within_one_timestamp_tick() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_file_replaced_by_directory(repo);
+    let index = repo.join(".git/index");
+    let before = fs::metadata(&index).unwrap().modified().unwrap();
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.stage(&[Path::new("foo")]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&index)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(before))
+        .unwrap();
+
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let staged: Vec<_> = status
+        .staged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(staged, [(PathBuf::from("foo"), FileStatusKind::Deleted)]);
+    let unstaged: Vec<_> = status
+        .unstaged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(
+        unstaged,
+        [(PathBuf::from("foo/new.txt"), FileStatusKind::Untracked)]
+    );
+}
+
 /// Restoring `foo` means removing the directory in its place, and a forced
 /// checkout does that without asking: discarding the deleted file also
 /// deleted every untracked and ignored file under the directory.
