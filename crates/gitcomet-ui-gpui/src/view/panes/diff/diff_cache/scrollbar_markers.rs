@@ -198,10 +198,7 @@ impl DiffRenderer {
         let current_len = if collapsed_projection_active {
             self.collapsed_diff_visible_rows.len()
         } else if is_file_view {
-            match self.diff_view {
-                DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                DiffViewMode::Split => self.file_diff_split_row_len(),
-            }
+            self.file_diff_row_len()
         } else {
             match self.diff_view {
                 DiffViewMode::Inline => self.patch_diff_row_len(),

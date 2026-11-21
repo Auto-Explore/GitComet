@@ -279,6 +279,9 @@ impl GitRepository for UnsupportedRepo {
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
+    fn rename_source_at_commit(&self, _path: &Path, _commit: &CommitId) -> Result<Option<PathBuf>> {
+        unsupported_repo_result()
+    }
 }
 
 struct PanicOpenBackend;
@@ -1314,6 +1317,7 @@ fn run_effect_with_fixture(
 
 mod cancellation;
 mod load_scheduling;
+mod open_file_at_commit;
 mod prepared_patch;
 mod repository_operations;
 mod retries_errors;

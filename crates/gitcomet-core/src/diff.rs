@@ -143,6 +143,12 @@ pub fn unified_diff_file_path<'a>(
         .or_else(|| parse_diff_git_header_path(header))
 }
 
+/// Whether `line` is the header git writes for a rename's source. A copy
+/// writes `copy from` instead.
+pub fn is_rename_source_header(line: &str) -> bool {
+    line.starts_with("rename from ")
+}
+
 /// Path on a `--- <name>` or `+++ <name>` line, or `None` for `/dev/null`.
 fn parse_unified_path_header(line: &str) -> Option<String> {
     let rest = line

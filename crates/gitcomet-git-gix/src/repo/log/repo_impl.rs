@@ -230,7 +230,7 @@ impl GixRepo {
     ) -> Result<Option<PathBuf>> {
         let path = &self.head_name_of(path);
         // Fast path: the file is named `path` in this commit already.
-        if self.path_exists_in_commit_tree(commit, path) {
+        if self.entry_mode_in_commit_tree(commit, path).is_some() {
             return Ok(Some(path.to_path_buf()));
         }
         // Otherwise the file is named differently in this commit; follow renames
@@ -286,17 +286,16 @@ impl GixRepo {
         None
     }
 
-    /// Whether `path` is present in the tree of `commit`. Best-effort: any lookup
+    /// The mode of `path` in the tree of `commit`. Best-effort: any lookup
     /// failure (bad rev, missing object) is treated as "not present".
-    pub(super) fn path_exists_in_commit_tree(&self, commit: &CommitId, path: &Path) -> bool {
+    fn entry_mode_in_commit_tree(
+        &self,
+        commit: &CommitId,
+        path: &Path,
+    ) -> Option<gix::objs::tree::EntryMode> {
         let repo = self.repo();
-        let Ok(commit) = find_commit_by_id(&repo, commit) else {
-            return false;
-        };
-        let Ok(tree) = commit.tree() else {
-            return false;
-        };
-        matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
+        let tree = find_commit_by_id(&repo, commit).ok()?.tree().ok()?;
+        Some(tree.lookup_entry_by_path(path).ok()??.mode())
     }
 
     /// Find the file's name in `commit`'s tree by following renames from `path`.
@@ -353,22 +352,14 @@ impl GixRepo {
         let status = fields.next().unwrap_or_default();
         let first = fields.next();
         let second = fields.next();
-        let to_path = |s: &str| {
-            let (bytes, _) = gix::quote::ansi_c::undo(s.as_bytes().into()).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "invalid git name-status path: {e}"
-                )))
-            })?;
-            path_buf_from_git_bytes(&bytes, "git name-status path")
-        };
         match status.chars().next() {
             // Rename/copy: the destination is the name in this commit's tree.
-            Some('R') | Some('C') => second.map(to_path).transpose(),
+            Some('R') | Some('C') => second.map(name_status_path).transpose(),
             // Added/modified/type-change: the listed path is the name here.
-            Some('A') | Some('M') | Some('T') => first.map(to_path).transpose(),
+            Some('A') | Some('M') | Some('T') => first.map(name_status_path).transpose(),
             // Deleted under the followed name: it was renamed away at this commit,
             // so the tree holds the rename destination — recover it.
-            Some('D') => match first.map(to_path).transpose()? {
+            Some('D') => match first.map(name_status_path).transpose()? {
                 Some(old) => self.rename_destination_at_commit(commit, &old),
                 None => Ok(None),
             },
@@ -391,45 +382,73 @@ impl GixRepo {
         commit: &CommitId,
         old_path: &Path,
     ) -> Result<Option<PathBuf>> {
-        // Diff against the first parent explicitly. A bare `git diff-tree <merge>`
-        // emits no per-file rows for a merge commit (it needs -m/-c/--cc), which
-        // would silently fail to resolve a rename introduced at a merge; passing
-        // both endpoints makes diff-tree produce a normal first-parent diff. For a
-        // non-merge commit this is identical to the implicit single-arg form, and
-        // for a root commit (no parent) there is no rename to find.
         let Some(parent) = self.first_parent_id(commit) else {
             return Ok(None);
         };
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("core.quotePath=false")
-            .arg("diff-tree")
-            .arg("-M")
-            .arg("-r")
-            .arg("--name-status")
-            .arg("--no-commit-id")
-            .arg(&parent)
-            .arg(commit.as_ref());
-        let output = run_git_capture(cmd, "git diff-tree -M")?;
-
-        for line in output.lines() {
-            let mut fields = line.split('\t');
-            let status = fields.next().unwrap_or_default();
-            if !status.starts_with('R') && !status.starts_with('C') {
-                continue;
-            }
-            let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
-                continue;
-            };
-            let old = path_buf_from_git_bytes(old.as_bytes(), "git diff-tree old path")?;
-            if old == old_path {
-                return Ok(Some(path_buf_from_git_bytes(
-                    new.as_bytes(),
-                    "git diff-tree new path",
-                )?));
+        for (old, new) in self.renames_between(&parent, commit.as_ref())? {
+            if path_buf_from_git_bytes(&old, "git diff-tree old path")
+                .is_ok_and(|old| old == old_path)
+            {
+                return path_buf_from_git_bytes(&new, "git diff-tree new path").map(Some);
             }
         }
         Ok(None)
+    }
+
+    pub(in super::super) fn rename_source_at_commit_impl(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        let Some(parent) = self.first_parent_id(commit) else {
+            return Ok(None);
+        };
+        let was_a_file_before = self
+            .entry_mode_in_commit_tree(&CommitId(parent.as_str().into()), path)
+            .is_some_and(|mode| !mode.is_tree());
+        if was_a_file_before {
+            return Ok(None);
+        }
+        for (old, new) in self.renames_between(&parent, commit.as_ref())? {
+            if path_buf_from_git_bytes(&new, "git diff-tree new path").is_ok_and(|new| new == path)
+            {
+                return path_buf_from_git_bytes(&old, "git diff-tree old path").map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    /// The raw `(source, destination)` names of every rename from `base` to
+    /// `tip`. Both are named, so a merge commit diffs against the given parent
+    /// (a bare `git diff-tree <merge>` prints no per-file rows).
+    pub(in super::super) fn renames_between(
+        &self,
+        base: &str,
+        tip: &str,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args(["diff-tree", "-M", "-r", "-z", "--name-status"])
+            .arg(base)
+            .arg(tip);
+        let output = crate::util::run_git_capture_bytes(cmd, "git diff-tree -M --name-status")?;
+        // `<status>\0<path>\0`, with a second path after a rename or copy. The
+        // names are raw: none is quoted, whatever bytes it holds.
+        let mut renames = Vec::new();
+        let mut fields = output.split(|byte| *byte == 0);
+        while let Some(status) = fields.next() {
+            let Some(first) = fields.next() else {
+                break;
+            };
+            if matches!(status.first(), Some(b'R' | b'C')) {
+                let Some(second) = fields.next() else {
+                    break;
+                };
+                if status.first() == Some(&b'R') {
+                    renames.push((first.to_vec(), second.to_vec()));
+                }
+            }
+        }
+        Ok(renames)
     }
 
     pub(super) fn log_follow_commits(
@@ -1217,6 +1236,18 @@ impl GixRepo {
             })
             .collect()
     }
+}
+
+/// A path field of `--name-status` output. `core.quotePath=false` leaves bytes
+/// outside ASCII as they are, but Git still C-quotes a name with a quote, a
+/// backslash or a control character.
+fn name_status_path(field: &str) -> Result<PathBuf> {
+    let (bytes, _) = gix::quote::ansi_c::undo(field.as_bytes().into()).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "invalid git name-status path: {e}"
+        )))
+    })?;
+    path_buf_from_git_bytes(&bytes, "git name-status path")
 }
 
 /// Resolves a `CommitId` to its commit. A full id in the repository's format is

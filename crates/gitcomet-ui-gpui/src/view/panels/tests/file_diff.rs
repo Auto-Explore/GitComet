@@ -40,16 +40,45 @@ fn push_regular_diff_content_mode_state_with_rev(
     old_text: String,
     new_text: String,
 ) -> gitcomet_core::domain::DiffTarget {
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        path,
+    );
+    push_commit_file_diff_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        target.clone(),
+        diff_rev,
+        unified,
+        old_text,
+        new_text,
+    );
+    target
+}
+
+fn push_commit_file_diff_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    target: gitcomet_core::domain::DiffTarget,
+    diff_rev: u64,
+    unified: String,
+    old_text: String,
+    new_text: String,
+) {
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_{}_regular_root",
         std::process::id(),
         fixture_name
     ));
     let _ = std::fs::create_dir_all(&workdir);
-    let target = gitcomet_core::domain::DiffTarget::commit(
-        gitcomet_core::domain::CommitId("deadbeef".into()),
-        path.clone(),
-    );
+    let path = target
+        .file_path()
+        .expect("a commit file target names its file")
+        .to_path_buf();
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff =
         gitcomet_core::domain::FileDiffText::new(path.clone(), Some(old_text), Some(new_text));
@@ -67,8 +96,6 @@ fn push_regular_diff_content_mode_state_with_rev(
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
-
-    target
 }
 
 fn build_collapsed_diff_fixture_texts() -> (String, String, String) {
@@ -1089,3 +1116,4 @@ mod navigation;
 mod rebuild_retry;
 mod selection;
 mod wrapping;
+mod zero_rows;

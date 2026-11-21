@@ -1949,6 +1949,12 @@ pub trait GitRepository: Send + Sync {
         Ok(None)
     }
 
+    /// The name `path` was renamed from in `commit`, against its first parent;
+    /// `None` when that commit did not rename it.
+    fn rename_source_at_commit(&self, _path: &Path, _commit: &CommitId) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
+
     /// Blame the working-tree content shown on the new side of a staged/unstaged
     /// diff. Lines matching committed history are attributed to their commit;
     /// lines not yet committed are returned as "Not Committed Yet" entries.
