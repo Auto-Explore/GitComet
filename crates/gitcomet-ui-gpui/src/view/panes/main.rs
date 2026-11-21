@@ -20,7 +20,6 @@ pub(crate) struct MainPaneView {
     state: Arc<AppState>,
     store: Arc<AppStore>,
     root_view: WeakEntity<GitCometView>,
-    theme: AppTheme,
     view_mode: GitCometViewMode,
     active_context_menu_invoker: Option<SharedString>,
     pub(in crate::view) interactive_rebase_states: FxHashMap<RepoId, IRebaseViewState>,
@@ -41,13 +40,11 @@ impl MainPaneView {
     ) -> Self {
         let state = ui_model.read(cx).state.clone();
         let preferences = ui_model.read(cx).preferences.clone();
-        let theme = diff_renderer.read(cx).theme;
         let view_mode = diff_renderer.read(cx).view_mode;
         let history_view = cx.new(|cx| {
             HistoryView::new(
                 store.clone(),
                 ui_model.clone(),
-                theme,
                 ui_scale::current(cx).percent,
                 preferences.appearance.date_time_format,
                 preferences.appearance.timezone,
@@ -97,7 +94,6 @@ impl MainPaneView {
             state,
             store,
             root_view,
-            theme,
             view_mode,
             active_context_menu_invoker: None,
             interactive_rebase_states: FxHashMap::default(),
@@ -209,12 +205,6 @@ impl MainPaneView {
                 pane.navigate_prev_search_match_or_diff_change(cx)
             }
         })
-    }
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        self.history_view
-            .update(cx, |view, cx| view.set_theme(theme, cx));
-        cx.notify();
     }
     pub(in crate::view) fn set_active_context_menu_invoker(
         &mut self,

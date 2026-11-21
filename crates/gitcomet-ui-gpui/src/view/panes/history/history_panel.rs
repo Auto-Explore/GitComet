@@ -49,7 +49,7 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scrollbar_gutter = super::history_scrollbar_gutter();
         let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
         if manual {
@@ -108,7 +108,7 @@ impl HistoryView {
                 .when(
                     self.loading
                         .initial_skeleton_visible(cx.background_executor().now()),
-                    |body| body.children((0..rows).map(|row| self.history_skeleton_row(row, None))),
+                    |el| el.children((0..rows).map(|ix| self.history_skeleton_row(ix, None, cx))),
                 )
                 .into_any_element()
         } else if count == 0 {
@@ -813,7 +813,7 @@ impl HistoryView {
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scaled_px = ui_scale::scaler(self.ui_scale_percent);
         let ui_scale =
             ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);

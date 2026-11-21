@@ -166,21 +166,21 @@ fn assert_graph_gradient_changes_only_the_fade(cx: &mut gpui::TestAppContext, in
         (true, 0.0, 0.0),
         (true, 0.10, 0.10),
     ] {
-        cx.update(|_, app| {
+        cx.update(|window, app| {
             view.update(app, |view, cx| {
                 view.set_history_show_graph_gradient(enabled, cx)
             });
-            history.update(app, |history, cx| {
-                if history.theme.graph_fade_opacity != opacity {
-                    history.set_theme(
-                        AppTheme {
-                            graph_fade_opacity: opacity,
-                            ..history.theme
-                        },
-                        cx,
-                    );
-                }
-            });
+            let theme = AppTheme::current(app);
+            if theme.graph_fade_opacity != opacity {
+                crate::theme::set_window_theme(
+                    app,
+                    window.window_handle().window_id(),
+                    AppTheme {
+                        graph_fade_opacity: opacity,
+                        ..theme
+                    },
+                );
+            }
         });
         let paint = graph_paint(cx, area);
         assert_eq!(

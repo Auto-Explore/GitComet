@@ -1429,8 +1429,6 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.popover_host

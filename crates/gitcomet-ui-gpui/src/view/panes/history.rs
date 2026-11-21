@@ -529,7 +529,6 @@ fn decide_pending_history_reveal(
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: DateTimeFormat,
@@ -806,7 +805,6 @@ impl HistoryView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         ui_scale_percent: u32,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
@@ -939,7 +937,6 @@ impl HistoryView {
             history_annotations,
             store: store.into(),
             state,
-            theme,
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
             date_time_format,
@@ -1405,11 +1402,6 @@ impl HistoryView {
             HistoryColResizeHandle::Date => &mut self.history_col_date,
             HistoryColResizeHandle::Sha => &mut self.history_col_sha,
         }
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in super::super) fn set_appearance_metrics(
@@ -2315,7 +2307,7 @@ impl HistoryView {
         let seq = self.history_cache_seq;
         self.history_cache_inflight = Some(request_for_task.clone());
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
 
         cx.spawn(
             async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {

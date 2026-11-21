@@ -896,7 +896,7 @@ impl HistoryView {
     ) -> Option<AnyElement> {
         let find = self.find.as_ref().filter(|find| find.open)?;
         let (input, options, bar) = (find.input.clone(), find.options, find.bar.clone());
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale =
             ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);
         let status = self.history_find_status();
