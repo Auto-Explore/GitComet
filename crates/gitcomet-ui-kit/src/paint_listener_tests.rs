@@ -1,13 +1,13 @@
 //! Pointer listeners installed during paint dirty the view that painted them:
 //! a press or drag redraws that view and leaves cached siblings alone.
 
-use crate::MinimapColumn;
 use crate::interaction::{InteractionState, InteractionStyle};
 use crate::interaction_paint::InteractionPaint;
 use crate::theme::AppTheme;
+use crate::{MinimapColumn, Scrollbar};
 use gpui::prelude::*;
 use gpui::{
-    AnyView, Context, Entity, Modifiers, MouseButton, Pixels, Point, StyleRefinement,
+    AnyView, Context, Entity, Modifiers, MouseButton, Pixels, Point, ScrollHandle, StyleRefinement,
     TestAppContext, VisualTestContext, Window, div, point, px,
 };
 use std::cell::Cell;
@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 enum Subject {
+    Scrollbar,
     Minimap,
     PaintedRow,
 }
@@ -24,6 +25,7 @@ enum Subject {
 struct Owner {
     subject: Subject,
     theme: AppTheme,
+    scroll: ScrollHandle,
     jumps: Rc<Cell<usize>>,
     renders: usize,
 }
@@ -33,6 +35,24 @@ impl Render for Owner {
         self.renders += 1;
         let theme = self.theme;
         let subject = match self.subject {
+            Subject::Scrollbar => div()
+                .relative()
+                .size_full()
+                .child(
+                    div()
+                        .id("content")
+                        .size_full()
+                        .overflow_scroll()
+                        .track_scroll(&self.scroll)
+                        .child(div().w(px(100.0)).h(px(1200.0)).flex_none()),
+                )
+                .child(
+                    Scrollbar::new("bar", self.scroll.clone())
+                        .always_visible()
+                        .debug_selector("subject")
+                        .render(theme),
+                )
+                .into_any_element(),
             Subject::Minimap => {
                 let jumps = self.jumps.clone();
                 div()
@@ -109,6 +129,7 @@ impl Fixture<'_> {
             owner: cx.new(|_| Owner {
                 subject,
                 theme: AppTheme::gitcomet_light(),
+                scroll: ScrollHandle::new(),
                 jumps: Rc::default(),
                 renders: 0,
             }),
@@ -157,6 +178,31 @@ fn down(at: Point<Pixels>) -> impl FnOnce(&mut VisualTestContext) {
 
 fn drag(to: Point<Pixels>) -> impl FnOnce(&mut VisualTestContext) {
     move |cx| cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::default())
+}
+
+fn up(at: Point<Pixels>) -> impl FnOnce(&mut VisualTestContext) {
+    move |cx| cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::default())
+}
+
+#[gpui::test]
+fn scrollbar_gestures_redraw_only_the_view_that_painted_the_bar(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, Subject::Scrollbar);
+    let bar = fixture.subject;
+    let thumb = point(bar.right() - px(2.0), bar.top() + px(6.0));
+    let dragged = point(thumb.x, thumb.y + px(40.0));
+
+    fixture.assert_redraws_owner_only("a thumb press", down(thumb));
+    fixture.assert_redraws_owner_only("a thumb drag", drag(dragged));
+    fixture.assert_redraws_owner_only("a thumb release", up(dragged));
+    let root = fixture.root.clone();
+    let offset = fixture
+        .cx
+        .update(|_, app| root.read(app).owner.read(app).scroll.offset());
+    assert!(offset.y < px(0.0), "the drag must scroll the content");
+
+    // A press on the track pages the content.
+    let track = point(thumb.x, bar.bottom() - px(6.0));
+    fixture.assert_redraws_owner_only("a track press", down(track));
 }
 
 #[gpui::test]

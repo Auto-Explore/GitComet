@@ -177,8 +177,10 @@ fn scrollbar_allows_dragging_thumb_to_scroll(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// A drag dirties the view that painted the bar, once per pointer event. It
+/// used to refresh the window instead, which re-rendered every cached pane.
 #[gpui::test]
-fn scrollbar_drag_does_not_notify_parent_view_for_each_mouse_move(cx: &mut gpui::TestAppContext) {
+fn scrollbar_drag_notifies_its_view_once_per_pointer_event(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(200));
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -217,10 +219,10 @@ fn scrollbar_drag_does_not_notify_parent_view_for_each_mouse_move(cx: &mut gpui:
     );
     cx.run_until_parked();
 
-    let notifies = notify_count.load(Ordering::Relaxed);
-    assert!(
-        notifies <= 1,
-        "expected scrollbar drag to avoid repeated parent-view notifications, got {notifies}"
+    assert_eq!(
+        notify_count.load(Ordering::Relaxed),
+        6,
+        "the press, each of the four moves and the release notify the view once"
     );
 }
 

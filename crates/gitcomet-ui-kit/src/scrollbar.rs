@@ -391,9 +391,9 @@ impl Scrollbar {
                     cx,
                     |_window, _cx| ScrollbarInteractionState::default(),
                 );
+                let view = window.current_view(); // gestures dirty this view only
                 let thumb_visible = prepaint.is_some();
-                let visibility_changed = interaction.read(cx).thumb_visible != thumb_visible;
-                if visibility_changed {
+                if interaction.read(cx).thumb_visible != thumb_visible {
                     interaction.update(cx, |interaction, cx| {
                         interaction.thumb_visible = thumb_visible;
                         cx.notify();
@@ -594,7 +594,7 @@ impl Scrollbar {
                         }
 
                         driver.interaction_changed(cx);
-                        window.refresh();
+                        cx.notify(view);
                         cx.stop_propagation();
                     }
                 });
@@ -635,7 +635,7 @@ impl Scrollbar {
                             interaction.update(cx, |state, _cx| state.showing = true);
                         }
                         driver.interaction_changed(cx);
-                        _window.refresh();
+                        cx.notify(view);
                         cx.stop_propagation();
                     }
                 });
@@ -643,7 +643,7 @@ impl Scrollbar {
                 window.on_mouse_event({
                     let interaction = interaction.clone();
                     let driver = driver.clone();
-                    move |event: &MouseUpEvent, phase, window, cx| {
+                    move |event: &MouseUpEvent, phase, _window, cx| {
                         if phase != capture_phase || event.button != MouseButton::Left {
                             return;
                         }
@@ -653,7 +653,7 @@ impl Scrollbar {
                         driver.drag_ended(axis);
                         interaction.update(cx, |state, _cx| state.drag_offset = None);
                         driver.interaction_changed(cx);
-                        window.refresh();
+                        cx.notify(view);
                         cx.stop_propagation();
                     }
                 });
