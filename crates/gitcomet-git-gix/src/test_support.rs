@@ -197,6 +197,17 @@ pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+/// Sets only the modification time of `path`, following symlinks: what
+/// `filetime::set_file_mtime` does through std since Rust 1.99, when filetime
+/// deprecated it.
+#[cfg(test)]
+pub(crate) fn set_file_mtime(
+    path: impl AsRef<Path>,
+    mtime: filetime::FileTime,
+) -> std::io::Result<()> {
+    fs::set_times(path, fs::FileTimes::new().set_modified(mtime.into()))
+}
+
 /// Reads only the repository's own config, as `git_command` runs git: a
 /// developer's global config must not decide what a test sees.
 #[cfg(test)]

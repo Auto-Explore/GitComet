@@ -833,7 +833,7 @@ mod tests {
             // Restore the checkout's bytes, including CRLF when configured,
             // while keeping its cached stat information deterministically stale.
             std::fs::write(d.path().join("file"), original_bytes).unwrap();
-            filetime::set_file_mtime(
+            crate::test_support::set_file_mtime(
                 d.path().join("file"),
                 filetime::FileTime::from_unix_time(
                     filetime::FileTime::now().unix_seconds() - 120,

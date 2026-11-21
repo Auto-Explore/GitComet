@@ -12,6 +12,13 @@
 #   * 6cf02d4, 1852ea1: `public abstract class B {}` parsed as an infix
 #     expression, so the query coloured its keywords as variables.
 #
+# The scanner also carries fwcd's c8f0180 and 57091f6 (2026-11-20 sweep),
+# scanner-only and needing no regeneration: the 513th open string start
+# called abort() and killed the host process, and a `$` run past 255 (or
+# 65535 inside a string) saturated or wrapped and changed which `$` starts an
+# interpolation. No input can reach an abort() any more. fwcd's later grammar
+# changes wait for a regeneration.
+#
 # fwcd's own `parser.c` has the same STATE_COUNT (10180) and SYMBOL_COUNT (374).
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in

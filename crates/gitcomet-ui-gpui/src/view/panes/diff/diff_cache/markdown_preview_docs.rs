@@ -44,7 +44,7 @@ impl FileDiffPreparedSyntaxApplyResult {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SyncFileDiffPreparedSyntaxApplyResult {
-    pub(super) inserted: bool,
+    pub(super) changed: bool,
     pub(super) needs_background_prepare: bool,
 }
 

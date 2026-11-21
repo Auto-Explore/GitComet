@@ -199,14 +199,23 @@ def read_allowlist(path=ALLOWLIST):
     return entries
 
 
-def compare(found, allowed):
+def locate(path, kind):
+    """Where the `kind` literals of `path` are: `line 27: "literal"`, comma-separated."""
+    text = (ROOT / path).read_text(encoding="utf-8")
+    return ", ".join(f'line {line}: "{excerpt}"' for line, found, excerpt in occurrences(text) if found == kind)
+
+
+def compare(found, allowed, locate=None):
+    """Problems as text. `locate(path, kind)` names the literals of a file that has new ones."""
     problems = []
     for key in sorted(set(found) | set(allowed)):
         have = found.get(key, 0)
         limit = allowed.get(key, (0, ""))[0]
         path, kind = key
         if have > limit:
-            problems.append(f"{path}: {have - limit} new {kind} literal(s); use gitcomet_core::identity")
+            # The count alone leaves the reader to find the literal.
+            where = f" ({locate(path, kind)})" if locate else ""
+            problems.append(f"{path}: {have - limit} new {kind} literal(s){where}; use gitcomet_core::identity")
         elif have < limit:
             problems.append(f"{path}: {kind} exception allows {limit} but {have} remain; lower the count")
     return problems
@@ -236,7 +245,7 @@ def main():
     if args.write:
         write(found, allowed)
         return 0
-    problems = compare(found, allowed)
+    problems = compare(found, allowed, locate)
     for problem in problems:
         print(f"::error::{problem}", file=sys.stderr)
     if not problems:

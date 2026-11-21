@@ -16,7 +16,7 @@ The engine is independent of presentation:
 
 Only the changed tokens are highlighted; a changed line keeps the plain background, and its line number shows the change. A line whose own side has no changed tokens is not shown as removed or added: Inline shows such a pair once, from the side that changed, with both line numbers. An added or removed final newline is not a token either, so it changes no row. Split keeps both source texts side by side, including formatting that Difftastic considers structurally unchanged. In collapsed mode, a formatting-only comparison shows **Difftastic - Collapsed mode** and **No syntactic changes; text differs** on the main canvas, with **Show full text** and **Show line changes** actions. Ignore whitespace is unavailable while a structural result is displayed; the saved whitespace preference remains intact. Show line changes selects the line engine with whitespace shown; when the viewer's engine changes again or the viewer closes, the whitespace mode returns to what it was.
 
-If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. Unlike the Difftastic command-line tool, GitComet does not compare Verilog or Fortran structurally. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
+If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. Unlike the Difftastic command-line tool, GitComet does not compare Fortran structurally, and it still compares F# and Smali, which the tool dropped in 0.72. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
 
 Standalone GUI file comparisons also use full sources and support both engines. Regular UTF-8 file pairs up to the source limit are eligible. Directory, patch-only, non-UTF-8, binary, symlink, oversized, mode-change, and BOM-change inputs retain the patch view. Before/After labels are preserved separately from the language-detection filename.
 
@@ -30,7 +30,7 @@ These actions preserve unrelated edits, line endings, and missing final newlines
 
 ## Building and packaging
 
-Difftastic is [0.71.0](https://github.com/Wilfred/difftastic/releases/tag/0.71.0). It and its grammars are listed under **Settings → Links → Open source licenses**. `vendor/README.md` records the import recipe and how to upgrade.
+Difftastic is [0.72.0](https://github.com/Wilfred/difftastic/releases/tag/0.72.0). It and its grammars are listed under **Settings → Links → Open source licenses**. `vendor/README.md` records the import recipe and how to upgrade.
 
 ## Runtime contract
 

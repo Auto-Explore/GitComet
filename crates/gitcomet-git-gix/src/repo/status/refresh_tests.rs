@@ -298,7 +298,7 @@ fn small_clean_filtered_files_keep_refreshed_stats_without_restarting_filters() 
     for number in 0..10 {
         let name = format!("{number}.txt");
         write_file(workdir, &name, &"unchanged text\n".repeat(80));
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(name),
             filetime::FileTime::from_unix_time(timestamp, 0),
         )
@@ -311,7 +311,7 @@ fn small_clean_filtered_files_keep_refreshed_stats_without_restarting_filters() 
     let index_mtime = std::fs::metadata(&index_path).unwrap().modified().unwrap();
     std::fs::write(&counter, []).unwrap();
     for number in 0..10 {
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(format!("{number}.txt")),
             filetime::FileTime::from_unix_time(timestamp + 1, 0),
         )
@@ -361,7 +361,7 @@ fn one_small_plain_touch_does_not_clone_a_large_index() {
     for number in 0..=super::STAT_REFRESH_SMALL_INDEX_ENTRIES {
         let name = format!("{number:03}.txt");
         write_file(workdir, &name, "unchanged\n");
-        filetime::set_file_mtime(
+        crate::test_support::set_file_mtime(
             workdir.join(name),
             filetime::FileTime::from_unix_time(timestamp, 0),
         )
@@ -369,7 +369,7 @@ fn one_small_plain_touch_does_not_clone_a_large_index() {
     }
     git_success(workdir, &["add", "."]);
     git_success(workdir, &["commit", "-qm", "seed"]);
-    filetime::set_file_mtime(
+    crate::test_support::set_file_mtime(
         workdir.join("000.txt"),
         filetime::FileTime::from_unix_time(timestamp + 1, 0),
     )

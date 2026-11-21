@@ -123,6 +123,20 @@ pub(in crate::view) struct PreparedSyntaxDocumentKey {
     pub(in crate::view) view_mode: PreparedSyntaxViewMode,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct CachedPreparedSyntaxDocument {
+    pub(in crate::view) document: rows::PreparedDiffSyntaxDocument,
+    pub(in crate::view) insertion_sequence: u64,
+}
+
+/// Retry budget for the current row/source generation; cleared when it advances.
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct FileDiffSideSyntaxAttempt {
+    pub(in crate::view) retries: usize,
+    pub(in crate::view) retry_pending: bool,
+    pub(in crate::view) stopped: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffExpansionKind {
     #[default]
@@ -767,6 +781,9 @@ pub(crate) struct DiffRenderer {
     /// The value identifies the syntax generation that owns the marker, so a
     /// superseded worker cannot remove a newer generation's marker.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    pub(in crate::view) file_diff_side_syntax_attempts:
+        FxHashMap<DiffTextRegion, FileDiffSideSyntaxAttempt>,
+    pub(in crate::view) file_diff_side_syntax_deferred: FxHashMap<DiffTextRegion, u64>,
     /// Test-only switch for the eager source-backed prepare. Off, a source-backed
     /// side gets a document only when clicked, which is what the click-path tests
     /// are there to cover and what they would otherwise stop exercising.
@@ -817,14 +834,19 @@ pub(crate) struct DiffRenderer {
         rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
+    /// Content signature of the build in `file_diff_cache_inflight`.
+    pub(in crate::view) file_diff_cache_inflight_signature: u64,
     /// Identity of the row/source generation currently visible to clicks.
     /// Kept stable while a same-target replacement builds, then advanced at the
     /// atomic row swap.
     pub(in crate::view) file_diff_syntax_generation: u64,
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
+    pub(in crate::view) file_diff_syntax_availability: [Option<bool>; 2],
+    pub(in crate::view) file_diff_resident_syntax_inflight: bool,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
-        FxHashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
+        FxHashMap<PreparedSyntaxDocumentKey, CachedPreparedSyntaxDocument>,
+    pub(in crate::view) prepared_syntax_document_insert_sequence: u64,
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
     #[cfg(test)]
@@ -891,6 +913,11 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
     pub(in crate::view) worktree_preview_cache_write_blocked_until_rev: Option<u64>,
+    /// The content a preview parse was last requested for. Kept while that
+    /// parse runs and after it yields no document, so frames ask only once.
+    pub(in crate::view) worktree_preview_syntax_requested: Option<PreparedSyntaxDocumentKey>,
+    /// Rows were styled without the preview's document.
+    pub(in crate::view) worktree_preview_syntax_missing: bool,
     pub(in crate::view) worktree_preview_segments_cache:
         FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,

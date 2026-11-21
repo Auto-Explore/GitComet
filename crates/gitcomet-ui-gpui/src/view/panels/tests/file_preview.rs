@@ -3696,3 +3696,76 @@ fn revisiting_previews_keeps_one_cached_parse_per_file(cx: &mut gpui::TestAppCon
     });
     std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
 }
+
+/// Unrelated documents can push the visible preview's document out of the
+/// shared caches. The preview asks for it again and recolours the rows it
+/// styled meanwhile, whether the parse fits a frame or runs in the background.
+#[gpui::test]
+fn preview_recovers_a_document_dropped_by_the_shared_caches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(397);
+    let workdir = preview_fixture_workdir("preview_recovers_dropped_document");
+    let helpers = Path::new("helpers.ts");
+    let path = workdir.join(helpers);
+    let text = helpers_ts_before_insert();
+    select_untracked_preview_file(cx, &view, repo_id, &workdir, helpers);
+    wait_for_parsed_untracked_preview(cx, &view, &path, &text);
+
+    let mut unrelated = 0usize;
+    for background in [false, true] {
+        if background {
+            force_background_preview_parses(cx, &view);
+        }
+        let document = cx.update(|_window, app| {
+            view.read(app)
+                .diff_renderer
+                .read(app)
+                .worktree_preview_prepared_syntax_document()
+                .expect("the preview starts with its document")
+        });
+        // Checking availability refreshes the document in the shared caches,
+        // so each check is followed by more documents than those hold recent.
+        while rows::prepared_diff_syntax_document_is_available(document) {
+            for _ in 0..16 {
+                let source = format!("export const unrelated_{unrelated} = {unrelated};\n");
+                let (shared, line_starts) = shared_text_and_line_starts(&source);
+                let parsed = rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                    rows::DiffSyntaxLanguage::TypeScript,
+                    rows::DiffSyntaxMode::Auto,
+                    shared,
+                    line_starts,
+                    None,
+                    None,
+                )
+                .expect("unrelated document");
+                let _ = rows::inject_background_prepared_diff_syntax_document(parsed);
+                unrelated += 1;
+            }
+            assert!(unrelated < 50_000, "could not evict the preview document");
+        }
+        // Rows scrolled into view now are styled without the document.
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    pane.worktree_preview_segments_cache.clear();
+                    cx.notify();
+                });
+            });
+        });
+
+        wait_for_parsed_untracked_preview(cx, &view, &path, &text);
+        cx.update(|_window, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            let wrong = preview_rows_coloured_unlike_a_fresh_parse(pane, &text);
+            assert!(
+                wrong.is_empty(),
+                "rows kept the colours they had without the document (background={background}):\n{}",
+                wrong.join("\n")
+            );
+        });
+    }
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
+}

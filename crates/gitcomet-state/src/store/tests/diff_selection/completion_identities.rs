@@ -359,6 +359,165 @@ fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
     assert_eq!(state.repos[0].diff_state.diff_target_rev, 3);
 }
 
+/// Exercises the reload that can overlap source-backed syntax preparation in
+/// #754. Use real Git snapshots, rather than assigning a new revision or
+/// cloning a fabricated payload, to establish that unchanged source identities
+/// survive a fresh backend read through the actual selection messages.
+fn source_backed_reload_revision_case(reselect: bool) {
+    for area in [DiffArea::Staged, DiffArea::Unstaged] {
+        let directory = tempfile::tempdir().expect("source-backed reload fixture");
+        let workdir = directory.path();
+        init_test_repository(workdir);
+        let path = PathBuf::from("fixture.rs");
+        fs::write(workdir.join(&path), "fn value() -> i32 { 0 }\n").unwrap();
+        run_git(workdir, &["add", "fixture.rs"]);
+        run_git(workdir, &["commit", "-q", "-m", "baseline"]);
+        fs::write(workdir.join(&path), "fn value() -> i32 { 1 }\n").unwrap();
+        run_git(workdir, &["add", "fixture.rs"]);
+        fs::write(workdir.join(&path), "fn value() -> i32 { 2 }\n").unwrap();
+
+        let repository = gitcomet_git_gix::GixBackend
+            .open(workdir)
+            .expect("open source-backed reload fixture");
+        let cancellation = CancellationToken::new();
+        let repo_id = RepoId(1);
+        let target = DiffTarget::working_tree(path, area);
+        let mut repo = RepoState::new_opening(repo_id, repository.spec().clone());
+        repo.set_open(Loadable::Ready(()));
+        repo.set_status(Loadable::Ready(Arc::new(
+            repository.status(&cancellation).unwrap(),
+        )));
+        let mut state = AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, Arc::clone(&repository));
+        let ids = AtomicU64::new(2);
+
+        let effects = reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: target.clone(),
+            },
+        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSelectedDiff {
+                load_file_text: true,
+                ..
+            }
+        )));
+        assert!(matches!(
+            state.repos[0].diff_state.diff_file,
+            Loadable::Loading
+        ));
+        for message in [
+            Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                repo_id,
+                target: target.clone(),
+                result: repository.diff_parsed(&target, None, &cancellation),
+            }),
+            Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                repo_id,
+                target: target.clone(),
+                result: repository.diff_file_text(&target, None, &cancellation),
+            }),
+        ] {
+            reduce(&mut repos, &ids, &mut state, message);
+        }
+        let before = &state.repos[0].diff_state;
+        let original = match &before.diff_file {
+            Loadable::Ready(Some(file)) => Arc::clone(file),
+            other => panic!("expected loaded source-backed file, got {other:?}"),
+        };
+        assert!(original.old.is_none() && original.new.is_none());
+        assert!(original.old_source.is_some() && original.new_source.is_some());
+        let file_rev = before.diff_file_rev;
+        let target_rev = before.diff_target_rev;
+
+        let message = if reselect {
+            Msg::SelectDiff {
+                repo_id,
+                target: target.clone(),
+            }
+        } else {
+            // An index notification reloads both staged and unstaged diffs
+            // while retaining the loaded result for content comparison.
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: crate::msg::RepoExternalChange::Index,
+            }
+        };
+        let effects = reduce(&mut repos, &ids, &mut state, message);
+        let loading = &state.repos[0].diff_state;
+        assert_eq!(loading.diff_target.as_ref(), Some(&target));
+        assert_eq!(loading.diff_target_rev, target_rev);
+        assert_eq!(loading.diff_file_rev, file_rev);
+        if reselect {
+            assert!(effects.iter().any(|effect| matches!(
+                effect,
+                Effect::LoadSelectedDiff {
+                    load_file_text: true,
+                    ..
+                }
+            )));
+            assert!(matches!(loading.diff_file, Loadable::Loading));
+        } else {
+            assert!(effects.iter().any(|effect| matches!(
+                effect,
+                Effect::LoadDiffFile { target: loaded_target, .. } if loaded_target == &target
+            )));
+            assert!(matches!(&loading.diff_file,
+                Loadable::Ready(Some(file)) if Arc::ptr_eq(file, &original)));
+        }
+
+        let reloaded = repository
+            .diff_file_text(&target, None, &cancellation)
+            .unwrap()
+            .expect("reloaded source-backed file");
+        assert_eq!(reloaded, *original, "fresh backend reads must be unchanged");
+        assert_eq!(reloaded.content_signature(), original.content_signature());
+        for message in [
+            Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                repo_id,
+                target: target.clone(),
+                result: repository.diff_parsed(&target, None, &cancellation),
+            }),
+            Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                repo_id,
+                target: target.clone(),
+                result: Ok(Some(reloaded)),
+            }),
+        ] {
+            reduce(&mut repos, &ids, &mut state, message);
+        }
+        let after = &state.repos[0].diff_state;
+        assert_eq!(after.diff_target.as_ref(), Some(&target));
+        assert_eq!(after.diff_target_rev, target_rev);
+        assert_eq!(after.diff_file_rev, file_rev + u64::from(reselect));
+        let Loadable::Ready(Some(file)) = &after.diff_file else {
+            panic!("reload did not restore the ready file");
+        };
+        assert_eq!(file.as_ref(), original.as_ref());
+        assert_eq!(Arc::ptr_eq(file, &original), !reselect);
+    }
+}
+
+#[test]
+fn source_backed_same_target_reselection_advances_file_rev_with_identical_content() {
+    source_backed_reload_revision_case(true);
+}
+
+#[test]
+fn source_backed_background_refresh_preserves_file_rev_with_identical_content() {
+    source_backed_reload_revision_case(false);
+}
+
 #[test]
 fn clear_diff_selection_bumps_diff_state_rev() {
     let mut repos: RepositoryRuntimes = Default::default();

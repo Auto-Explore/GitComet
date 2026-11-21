@@ -1086,5 +1086,6 @@ mod engine;
 mod folding;
 mod layout;
 mod navigation;
+mod rebuild_retry;
 mod selection;
 mod wrapping;

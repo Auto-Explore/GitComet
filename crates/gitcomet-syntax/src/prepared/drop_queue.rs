@@ -189,7 +189,7 @@ impl Drop for SyntaxTestScope {
             store
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .retain(|key, _| key.test_scope != self.0);
+                .remove_scope(self.0);
         }
     }
 }
@@ -244,13 +244,76 @@ pub(crate) fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxC
         .as_ref()
 }
 
-static SHARED_DOCUMENT_SEEDS: OnceLock<
-    Mutex<FxHashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>>,
-> = OnceLock::new();
+#[derive(Default)]
+pub(crate) struct SharedPreparedDocumentSeedStore {
+    by_key: FxHashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>,
+    insertion_order: VecDeque<PreparedSyntaxCacheKey>,
+}
+
+impl SharedPreparedDocumentSeedStore {
+    pub(crate) fn get(&self, key: &PreparedSyntaxCacheKey) -> Option<&PreparedSyntaxDocumentData> {
+        self.by_key.get(key)
+    }
+
+    pub(crate) fn get_mut(
+        &mut self,
+        key: &PreparedSyntaxCacheKey,
+    ) -> Option<&mut PreparedSyntaxDocumentData> {
+        self.by_key.get_mut(key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(&self, key: &PreparedSyntaxCacheKey) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    fn insert(&mut self, document: &PreparedSyntaxDocumentData) {
+        let key = document.cache_key;
+        if let Some(stored) = self.by_key.get_mut(&key) {
+            // Updating a seed neither evicts another document nor adds another
+            // queue entry. Its first insertion still determines its FIFO age.
+            *stored = document.clone();
+            return;
+        }
+
+        let belongs_to_scope = |candidate: &PreparedSyntaxCacheKey| {
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                candidate.test_scope == key.test_scope
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                let _ = candidate;
+                true
+            }
+        };
+        if self
+            .insertion_order
+            .iter()
+            .filter(|candidate| belongs_to_scope(candidate))
+            .count()
+            >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES
+            && let Some(index) = self.insertion_order.iter().position(belongs_to_scope)
+            && let Some(oldest) = self.insertion_order.remove(index)
+        {
+            self.by_key.remove(&oldest);
+        }
+        self.by_key.insert(key, document.clone());
+        self.insertion_order.push_back(key);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn remove_scope(&mut self, scope: u64) {
+        self.by_key.retain(|key, _| key.test_scope != scope);
+        self.insertion_order.retain(|key| key.test_scope != scope);
+    }
+}
+
+static SHARED_DOCUMENT_SEEDS: OnceLock<Mutex<SharedPreparedDocumentSeedStore>> = OnceLock::new();
 
 pub(crate) fn shared_prepared_document_seed_store()
--> &'static Mutex<FxHashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>> {
-    SHARED_DOCUMENT_SEEDS.get_or_init(|| Mutex::new(FxHashMap::default()))
+-> &'static Mutex<SharedPreparedDocumentSeedStore> {
+    SHARED_DOCUMENT_SEEDS.get_or_init(|| Mutex::new(SharedPreparedDocumentSeedStore::default()))
 }
 
 pub(crate) fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocumentData) {
@@ -266,29 +329,7 @@ pub(crate) fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocum
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    let belongs_to_scope = |key: &&PreparedSyntaxCacheKey| {
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            key.test_scope == document.cache_key.test_scope
-        }
-        #[cfg(not(any(test, feature = "test-support")))]
-        {
-            let _ = key;
-            true
-        }
-    };
-    #[cfg(any(test, feature = "test-support"))]
-    let at_capacity =
-        store.keys().filter(belongs_to_scope).count() >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES;
-    #[cfg(not(any(test, feature = "test-support")))]
-    let at_capacity = store.len() >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES;
-    if at_capacity
-        && let Some(evict_key) = store.keys().find(belongs_to_scope).copied()
-        && evict_key != document.cache_key
-    {
-        store.remove(&evict_key);
-    }
-    store.insert(document.cache_key, document.clone());
+    store.insert(document);
 }
 
 pub(crate) fn merge_shared_prepared_document_chunk(

@@ -19,18 +19,20 @@ extract_macos_symbols() {
   symbol_input="${repo_root}/target/${mode}/gitcomet.dSYM"
   if [[ ! -d "$symbol_input" ]]; then
     # Only reached when Cargo left no uplifted symlink; the bundle then sits
-    # beside the hashed artifact. `|| true` so a missing deps/ does not abort
-    # before the diagnostic below.
-    candidates="$(find "${repo_root}/target/${mode}/deps" -maxdepth 1 -type d \
-      -name 'gitcomet-*.dSYM' 2>/dev/null | sort || true)"
+    # beside the binary, which Rust 1.100 builds in build/gitcomet/<unit>/out.
+    # `|| true` so a missing directory does not abort before the diagnostic
+    # below.
+    unit_outputs="${repo_root}/target/${mode}/build/gitcomet"
+    candidates="$(find "$unit_outputs" -mindepth 3 -maxdepth 3 -type d \
+      -path '*/out/gitcomet.dSYM' 2>/dev/null | sort || true)"
 
     if [[ -n "$candidates" ]]; then
       candidate_count="$(printf '%s\n' "$candidates" | wc -l | tr -d '[:space:]')"
       if [[ "$candidate_count" -gt 1 ]]; then
-        # `cargo test` and benches leave identically-named bundles here. Picking
-        # one arbitrarily would publish symbols keyed to the wrong binary's
-        # UUID, and every later check would still pass.
-        echo "Multiple dSYM bundles under ${repo_root}/target/${mode}/deps:" >&2
+        # Builds with other features leave identically-named bundles in sibling
+        # units. Picking one arbitrarily would publish symbols keyed to the
+        # wrong binary's UUID, and every later check would still pass.
+        echo "Multiple dSYM bundles under ${unit_outputs}:" >&2
         printf '%s\n' "$candidates" >&2
         echo "Cannot tell which belongs to the gitcomet binary; clean the target directory." >&2
         exit 1

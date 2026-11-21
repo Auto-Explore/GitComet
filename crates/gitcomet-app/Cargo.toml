@@ -21,6 +21,8 @@ ui-gpui-runtime = [
     "dep:sysinfo",
     "dep:process-wrap",
     "dep:rustix",
+    "dep:signal-hook",
+    "dep:wayland-client",
 ]
 ui-gpui = ["ui-gpui-runtime"]
 gix = ["dep:gitcomet-git-gix"]
@@ -42,10 +44,10 @@ tempfile = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-wayland-client = { workspace = true }
+wayland-client = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
-signal-hook = { workspace = true }
+signal-hook = { workspace = true, optional = true }
 process-wrap = { workspace = true, features = ["process-session"], optional = true }
 rustix = { workspace = true, features = ["stdio"], optional = true }
 

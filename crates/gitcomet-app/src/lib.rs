@@ -17,6 +17,12 @@ mod browser_instance;
 pub mod cli;
 #[cfg(feature = "ui-gpui-runtime")]
 mod crashlog;
+
+// Only the windowed modes open repositories, so a headless build with `gix`
+// links the backend without using it.
+#[cfg(all(feature = "gix", not(feature = "ui-gpui-runtime")))]
+use gitcomet_git_gix as _;
+
 mod difftool_mode;
 mod extract_fixtures_mode;
 mod git_root;

@@ -56,7 +56,7 @@ jobs:
       - name: Install Python for CI helpers
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - name: Check CI helpers
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Test performance capture policy and workload witnesses
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
-      CARGO_AUDIT_VERSION: "0.22.2"
+      CARGO_AUDIT_VERSION: "0.23.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install repository toolchain

@@ -6,6 +6,9 @@
 # indented multiline regex closers, backDeployed attributes, and Swift 6.2
 # strict-memory-safety `unsafe` expressions. The scanner handles allocation
 # failure explicitly. Earlier Windows try! and prefix-navigation fixes remain.
+# The scanner also carries upstream 0c5444e (2026-11-20 sweep): input ending
+# exactly in `#if`, `#else`, `#elseif` or `#endif` read past the end of the
+# directive's string. It is scanner-only; parser.c is unchanged.
 # The highlights query moves with the grammar to colour unsafe expressions.
 #
 # Generated with tree-sitter-cli 0.27.0, ABI 15, TS_SMALL_STATE_THRESHOLD=128.

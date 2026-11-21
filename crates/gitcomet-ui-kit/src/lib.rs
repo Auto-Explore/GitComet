@@ -121,6 +121,7 @@ mod version_contract {
             "gpui_platform",
             "gpui_wgpu",
             "gpui_parley",
+            "gpui_render",
             "gpui_shared_string",
             "gpui_sum_tree",
         ] {
