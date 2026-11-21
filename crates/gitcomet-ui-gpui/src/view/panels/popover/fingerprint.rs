@@ -394,12 +394,6 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.file_browser.file_browser_rev.hash(hasher);
         }
 
-        // Its check marks read `show_hidden` / `show_ignored`; the menu stays
-        // open while they toggle.
-        PopoverKind::ExplorerSettingsMenu { .. } => {
-            repo.file_browser.file_browser_rev.hash(hasher);
-        }
-
         // File counts come from the lists' files, and Apply follows the busy
         // state. Collapse state is view-local and only changes by closing it.
         PopoverKind::FileListFolderMenu { .. } | PopoverKind::DiscardFolderChangesConfirm { .. } => {
@@ -670,7 +664,9 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::KeyboardShortcuts
         | PopoverKind::Hosted { .. }
-        | PopoverKind::CommitPrompt { .. } => {}
+        | PopoverKind::CommitPrompt { .. }
+        // A menu repaints when its model changes, whatever state that read.
+        | PopoverKind::ExplorerSettingsMenu { .. } => {}
         PopoverKind::Repo {
             kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
             ..
@@ -896,30 +892,6 @@ mod tests {
             retrying,
             notify_fingerprint(&state, &PopoverKind::PullPicker, None)
         );
-    }
-
-    #[test]
-    fn explorer_settings_menu_fingerprint_changes_when_file_browser_rev_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_explorer_settings_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let kind = PopoverKind::ExplorerSettingsMenu { repo_id };
-        let before = notify_fingerprint(&state, &kind, None);
-        state.repos[0].file_browser.show_ignored = true;
-        state.repos[0].file_browser.bump_rev();
-        let after = notify_fingerprint(&state, &kind, None);
-
-        assert_ne!(before, after, "the check marks read the visibility flags");
     }
 
     #[test]

@@ -204,14 +204,7 @@ impl PopoverHost {
                     .is_interacting(hook_activity::TextSection::Hooks, cx)
                 && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
-            let selected_action = this
-                .popover
-                .as_ref()
-                .and_then(|kind| this.context_menu_model(kind, cx))
-                .and_then(|model| {
-                    this.context_menu_selected_ix
-                        .and_then(|ix| context_menu::selection_key(&model, ix))
-                });
+            let shown_menu = this.open_menu_model(cx);
             let next_state = Arc::clone(&model.read(cx).state);
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
                 next_state
@@ -223,23 +216,7 @@ impl PopoverHost {
             this.state = next_state;
             this.sync_bare_mode_confirmation(cx);
             this.close_working_tree_prompt_in_bare_mode(cx);
-            if let Some(selected_action) = selected_action
-                && let Some(model) = this
-                    .popover
-                    .as_ref()
-                    .and_then(|kind| this.context_menu_model(kind, cx))
-            {
-                this.context_menu_selected_ix = model
-                    .items
-                    .iter()
-                    .enumerate()
-                    .find_map(|(ix, _)| {
-                        context_menu::selection_key(&model, ix)
-                            .filter(|key| *key == selected_action)
-                            .map(|_| ix)
-                    })
-                    .or_else(|| model.first_selectable());
-            }
+            this.follow_open_menu(shown_menu, cx);
             this.sync_tag_push_previews(cx);
             if matches!(
                 this.popover,
@@ -1343,6 +1320,31 @@ impl PopoverHost {
             if let Some(state) = self.store.snapshot() {
                 self.state = state;
             }
+        }
+    }
+
+    fn open_menu_model(&self, cx: &gpui::Context<Self>) -> Option<ContextMenuModel> {
+        self.popover
+            .as_ref()
+            .and_then(|kind| self.context_menu_model(kind, cx))
+    }
+
+    /// After new state: repaints the open menu when its model differs from
+    /// `shown`, and keeps the keyboard selection on the same action.
+    fn follow_open_menu(&mut self, shown: Option<ContextMenuModel>, cx: &mut gpui::Context<Self>) {
+        let menu = self.open_menu_model(cx);
+        if menu == shown {
+            return;
+        }
+        cx.notify();
+        let selected = shown.and_then(|shown| {
+            self.context_menu_selected_ix
+                .and_then(|ix| context_menu::selection_key(&shown, ix))
+        });
+        if let (Some(selected), Some(menu)) = (selected, menu) {
+            self.context_menu_selected_ix = (0..menu.items.len())
+                .find(|ix| context_menu::selection_key(&menu, *ix).as_ref() == Some(&selected))
+                .or_else(|| menu.first_selectable());
         }
     }
 

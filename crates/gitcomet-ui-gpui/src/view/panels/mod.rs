@@ -5,7 +5,7 @@ use gitcomet_core::services::InteractiveRebaseAction;
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 pub(in crate::view) const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(in crate::view) enum AppMenuAction {
     CommandPalette,
     /// Reveal the open file in the sidebar's file explorer. Like every other
@@ -41,7 +41,7 @@ pub(in crate::view) enum AppMenuAction {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(in crate::view) enum AddRepoMenuAction {
     Open,
     Clone,
@@ -74,7 +74,7 @@ impl CommitMenuRefs {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(in crate::view) enum ContextMenuAction {
     PreviewDisableBareMode {
         repo_id: RepoId,
@@ -718,7 +718,7 @@ pub(in crate::view) enum ContextMenuAction {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum ContextMenuItem {
     Separator,
     Header(components::ContextMenuText),
@@ -743,7 +743,7 @@ enum ContextMenuItem {
 }
 
 /// One option inside a [`ContextMenuItem::Segmented`] row.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct ContextMenuSegment {
     /// Stable element id, also used as the debug selector.
     id: SharedString,
@@ -753,7 +753,7 @@ struct ContextMenuSegment {
     action: ContextMenuAction,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct ContextMenuModel {
     items: Vec<ContextMenuItem>,
     /// Render shortcut labels as individual keycaps, matching the Command

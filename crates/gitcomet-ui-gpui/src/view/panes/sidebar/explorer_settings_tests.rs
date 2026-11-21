@@ -125,6 +125,39 @@ fn files_settings_menu_toggles_ignored_files_and_stays_open(cx: &mut gpui::TestA
     );
 }
 
+/// The menu's check marks read the explorer's visibility flags. Nothing lists
+/// that for the menu: it repaints because the model built from the new state
+/// differs from the one it shows.
+#[gpui::test]
+fn the_open_settings_menu_is_notified_when_its_model_changes(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = sidebar_window(cx, files_state(SidebarMode::Files));
+    click(cx, "sidebar_explorer_settings");
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        let notified = notified.clone();
+        app.observe(&host, move |_, _| notified.set(notified.get() + 1))
+            .detach();
+    });
+    let push = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                view.store.replace_snapshot_for_test(Arc::clone(&state));
+                test_support::push_test_state(view, state, cx);
+            })
+        });
+    };
+
+    // The same content under a new snapshot draws the same menu.
+    push(cx, files_state(SidebarMode::Files));
+    assert_eq!(notified.get(), 0);
+
+    let mut state = (*files_state(SidebarMode::Files)).clone();
+    state.repos[0].file_browser.show_ignored = true;
+    push(cx, Arc::new(state));
+    assert_eq!(notified.get(), 1);
+}
+
 fn visibility_state(show_hidden: bool) -> Arc<AppState> {
     let entry = |name: &str, kind, ignored| FileEntry {
         name: name.to_string(),
