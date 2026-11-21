@@ -690,7 +690,7 @@ impl GitCometView {
                 cx,
             )
         });
-        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
+        let tooltip_host = cx.new(|_cx| TooltipHost::default());
         let diff_environment = super::hosted::environment::DiffPaneEnvironment {
             services: super::panes::diff::services::DiffServices {
                 store: store.clone().into(),
@@ -943,7 +943,6 @@ impl GitCometView {
 
         let command_palette = cx.new(|cx| {
             command_palette::CommandPaletteView::new(
-                initial_theme,
                 initial_state.active_repo.is_some(),
                 weak_view.clone(),
                 window,
@@ -1177,14 +1176,7 @@ impl GitCometView {
         let document_picker = {
             let status_bar = bottom_status_bar.entity_id();
             cx.new(|cx| {
-                documents::DocumentPicker::new(
-                    initial_theme,
-                    documents_root,
-                    &documents,
-                    status_bar,
-                    window,
-                    cx,
-                )
+                documents::DocumentPicker::new(documents_root, &documents, status_bar, window, cx)
             })
         };
 
@@ -1430,8 +1422,6 @@ impl GitCometView {
         crate::theme::set_window_theme(cx, self.window_handle.window_id(), theme);
         self.documents
             .update(cx, |documents, cx| documents.set_theme(theme, cx));
-        self.document_picker
-            .update(cx, |picker, cx| picker.set_theme(theme, cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {
@@ -1456,12 +1446,8 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.file_history_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.tooltip_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.command_palette
-            .update(cx, |palette, cx| palette.set_theme(theme, cx));
         cx.notify();
     }
 

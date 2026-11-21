@@ -3,7 +3,7 @@ use super::*;
 #[gpui::test]
 fn long_tooltips_wrap_to_the_visible_window_width(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
-    let (host, cx) = cx.add_window_view(|_window, _cx| TooltipHost::new(AppTheme::gitcomet_dark()));
+    let (host, cx) = cx.add_window_view(|_window, _cx| TooltipHost::default());
     let mut short_size = None;
     for (width, anchor_x, right_margin) in [
         (320.0, 0.0, 0.0),

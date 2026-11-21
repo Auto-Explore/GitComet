@@ -56,7 +56,7 @@ impl SettingsExtensions {
             }
         });
         let window = window.window_handle();
-        let tooltip = cx.new(|_| TooltipHost::new(theme));
+        let tooltip = cx.new(|_| TooltipHost::default());
         let diff_environment = crate::view::hosted::environment::DiffPaneEnvironment {
             services: crate::view::panes::diff::services::DiffServices {
                 store: crate::view::pane_store::PaneStore::read_only(),
