@@ -805,7 +805,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 panes::file_history::FileHistoryPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                 },
                 window,
@@ -912,7 +911,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 ReflogPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                 },
                 cx,
@@ -1434,10 +1432,6 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.details_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.reflog_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.file_history_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
