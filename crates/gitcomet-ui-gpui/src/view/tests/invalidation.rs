@@ -644,3 +644,45 @@ fn timing_divider_drag_moves(cx: &mut gpui::TestAppContext) {
         );
     }
 }
+
+/// The panes hold no theme and nothing tells them of one. Setting the
+/// window's theme has to redraw them, though they sit behind a cache.
+#[gpui::test]
+fn a_theme_change_redraws_the_cached_panes_with_the_new_theme(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _handles, _cache_guard) = resize_test_shell(cx, &["pane_resize_sidebar"]);
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            [
+                root.bottom_status_bar.read(app).render_count,
+                root.sidebar_pane.read(app).render_count,
+                root.main_pane.read(app).render_count,
+                root.details_pane.read(app).render_count,
+            ]
+        })
+    };
+
+    // Away from the theme the window starts in first: the same theme is no change.
+    let (light, dark) = (AppTheme::gitcomet_light(), AppTheme::gitcomet_dark());
+    let starts_dark = cx.update(|_window, app| AppTheme::current(app).is_dark);
+    for theme in if starts_dark {
+        [light, dark]
+    } else {
+        [dark, light]
+    } {
+        cx.run_until_parked();
+        let before = renders(cx);
+        cx.update(|_window, app| view.update(app, |view, cx| view.set_theme(theme, cx)));
+        cx.run_until_parked();
+        for (before, after) in before.into_iter().zip(renders(cx)) {
+            assert!(after > before, "a pane kept the frame it drew before");
+        }
+        let chrome: gpui::Background = theme.colors.surface.chrome.into();
+        assert!(
+            crate::kit::test_support::painted_control_quads(cx, "action_bar")
+                .iter()
+                .any(|(fill, _)| *fill == chrome),
+            "the action bar did not paint with the window's theme"
+        );
+    }
+}
