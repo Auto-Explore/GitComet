@@ -314,11 +314,11 @@ fn absolute_file_target_produces_repo_relative_attribute_pattern(cx: &mut gpui::
 fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
     cx: &mut gpui::TestAppContext,
 ) {
+    use crate::test_support::git;
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
     use gitcomet_core::domain::{DiffArea, FileConflictKind, FileStatusKind};
     use gitcomet_core::text_format::SideKind;
     let (view, cx) = open_window(cx);
-    let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9520);
     for (original, encoding) in [
         (b"caf\xe9\n".as_slice(), TextEncoding::WINDOWS_1252),
@@ -347,8 +347,31 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
             Path::new(FILE),
             &session,
         );
-        let bytes = conflict_side_output_bytes(&file, ThreeWayColumn::Base).unwrap();
-        assert_eq!(bytes.as_ref(), original);
+        assert_eq!(file.base_bytes.as_deref(), Some(original));
+        // Ours changed the file and theirs deleted it, so the index holds
+        // the original as the base.
+        let workdir = tempfile::tempdir().unwrap();
+        let root = workdir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.name", "GitComet"]);
+        git(root, &["config", "user.email", "gitcomet@example.com"]);
+        git(root, &["config", "core.autocrlf", "false"]);
+        std::fs::write(root.join(FILE), original).unwrap();
+        git(root, &["add", FILE]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["checkout", "-qb", "theirs"]);
+        git(root, &["rm", "-q", FILE]);
+        git(root, &["commit", "-qm", "delete"]);
+        git(root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join(FILE), [original, b"ours\n"].concat()).unwrap();
+        git(root, &["commit", "-qam", "ours"]);
+        let merged = gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(root)
+            .args(["merge", "-q", "theirs"])
+            .output()
+            .unwrap();
+        assert!(!merged.status.success(), "the merge conflicts");
         let mut repo = opening_repo_state(repo_id, workdir.path());
         set_test_file_status_with_conflict(
             &mut repo,
@@ -376,7 +399,7 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
                     pane.focused_mergetool_write_side_and_exit(
                         repo_id,
                         Path::new(FILE),
-                        &bytes,
+                        ThreeWayColumn::Base,
                         cx,
                     );
                 });

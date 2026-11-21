@@ -241,11 +241,11 @@ impl GixRepo {
         // Git locale.
         cmd.env("LC_ALL", "C");
         cmd.arg("for-each-ref")
-            .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:remotename)\t%(upstream:remoteref)")
+            .arg("--format=%(refname:lstrip=2)\t%(objectname)\t%(upstream:lstrip=2)\t%(upstream:track)\t%(upstream:remotename)\t%(upstream:remoteref)")
             .arg("refs/heads");
         let output = run_git_capture(
             cmd,
-            "git for-each-ref --format=%(refname:short)\\t%(objectname)\\t%(upstream:short)\\t%(upstream:track)\\t%(upstream:remotename)\\t%(upstream:remoteref) refs/heads",
+            "git for-each-ref --format=%(refname:lstrip=2)\\t%(objectname)\\t%(upstream:lstrip=2)\\t%(upstream:track)\\t%(upstream:remotename)\\t%(upstream:remoteref) refs/heads",
         )?;
         let mut branches = parse_local_branches_for_each_ref(&output)?;
         let repo = self.reopen_repo()?;
@@ -325,13 +325,13 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("for-each-ref")
             .arg(
-                "--format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)",
+                "--format=%(refname:lstrip=2)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)",
             )
             .arg("refs/heads")
             .arg("refs/remotes");
         let output = run_git_capture(
             cmd,
-            "git for-each-ref --format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject) refs/heads refs/remotes",
+            "git for-each-ref --format=%(refname:lstrip=2)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject) refs/heads refs/remotes",
         )?;
         Ok(parse_ref_metadata_for_each_ref(&output))
     }
@@ -429,7 +429,7 @@ fn collect_local_branches(
     Ok(branches)
 }
 
-/// Parses `%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)`
+/// Parses `%(refname:lstrip=2)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)`
 /// records. Malformed lines are skipped rather than failing the call: this data
 /// is decorative, and losing one row is better than losing the whole picker.
 fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {

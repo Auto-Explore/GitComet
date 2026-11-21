@@ -36,19 +36,35 @@ pub fn validated_repo_relative_path(path: &Path) -> io::Result<PathBuf> {
 
 /// `.git` under any spelling the filesystem accepts, compared as bytes so a
 /// name that is not valid UTF-8 cannot slip past.
+///
+/// Every platform checks every spelling, as Git does (`core.protectNTFS` is on
+/// everywhere by default): a Linux build can write to an NTFS volume, and a
+/// macOS share is case-insensitive HFS+ or APFS.
 pub fn is_git_metadata_component(component: &std::ffi::OsStr) -> bool {
     let bytes = component.as_encoded_bytes();
-    #[cfg(windows)]
     // NTFS: a stream after `:`, ignored trailing dots and spaces, and `git~1`.
-    let bytes = {
-        let bytes = bytes.split(|&byte| byte == b':').next().unwrap_or(bytes);
-        let end = bytes
-            .iter()
-            .rposition(|&byte| byte != b'.' && byte != b' ')
-            .map_or(0, |index| index + 1);
-        &bytes[..end]
-    };
-    bytes.eq_ignore_ascii_case(b".git") || (cfg!(windows) && bytes.eq_ignore_ascii_case(b"git~1"))
+    let ntfs = bytes.split(|&byte| byte == b':').next().unwrap_or(bytes);
+    let end = ntfs
+        .iter()
+        .rposition(|&byte| byte != b'.' && byte != b' ')
+        .map_or(0, |index| index + 1);
+    let ntfs = &ntfs[..end];
+    if ntfs.eq_ignore_ascii_case(b".git") || ntfs.eq_ignore_ascii_case(b"git~1") {
+        return true;
+    }
+    // HFS+ ignores some code points, so `.g\u{200c}it` is `.git` there.
+    matches!(
+        gix_validate::path::component(
+            bytes.into(),
+            None,
+            gix_validate::path::component::Options {
+                protect_windows: false,
+                protect_hfs: true,
+                protect_ntfs: true,
+            },
+        ),
+        Err(gix_validate::path::component::Error::DotGitDir)
+    )
 }
 
 /// Name prefix of the filesystem service's staging and undo areas.
@@ -204,12 +220,49 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
 mod tests {
     use super::{
         canonicalize_or_original, git_dir_for_workdir, has_service_owned_component,
-        has_service_owned_git_component, is_service_owned_name, resolved_git_dir,
-        symlink_free_write_target, validated_repo_relative_path,
+        has_service_owned_git_component, is_git_metadata_component, is_service_owned_name,
+        resolved_git_dir, symlink_free_write_target, validated_repo_relative_path,
     };
+    use std::ffi::OsStr;
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
+
+    /// Git refuses these names everywhere (`core.protectNTFS` is on by default
+    /// on every platform; HFS+ ignores some code points). A Linux build can
+    /// still write to an NTFS volume or a macOS share, so the check must not
+    /// depend on where GitComet was compiled.
+    #[test]
+    fn git_metadata_component_matches_every_spelling_git_refuses() {
+        for name in [
+            ".git",
+            ".GIT",
+            "git~1",
+            "GIT~1",
+            ".git.",
+            ".git ",
+            ".git . .",
+            ".git::$INDEX_ALLOCATION",
+            ".g\u{200c}it",
+            ".GI\u{200d}T",
+            "\u{feff}.git",
+        ] {
+            assert!(
+                is_git_metadata_component(OsStr::new(name)),
+                "{name:?} names .git"
+            );
+            assert!(
+                validated_repo_relative_path(&Path::new(name).join("config")).is_err(),
+                "{name:?}/config must not validate as a repository path"
+            );
+        }
+        for name in [".github", ".gitignore", "git", ".gitz", "git~2", "a.git"] {
+            assert!(
+                !is_git_metadata_component(OsStr::new(name)),
+                "{name:?} does not name .git"
+            );
+        }
+    }
 
     #[test]
     fn service_owned_names_cover_operation_areas_and_save_staging_only() {

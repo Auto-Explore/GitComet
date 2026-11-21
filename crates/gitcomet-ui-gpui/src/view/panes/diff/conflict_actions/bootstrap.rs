@@ -26,6 +26,8 @@ pub(super) fn conflict_session_plan_projection(
         } else {
             gitcomet_core::merge::ConflictStyle::Merge
         },
+        // Parsed back below, so no line of the file may read as a marker.
+        marker_size: session.collision_free_marker_size(),
         ..Default::default()
     };
     Some((

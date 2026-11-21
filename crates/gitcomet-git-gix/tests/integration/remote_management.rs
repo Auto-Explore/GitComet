@@ -536,9 +536,11 @@ fn delete_remote_branches_with_output_deletes_every_branch_in_one_push() {
 /// A failed batch must not prune the tracking refs of branches that are still on
 /// the remote.
 ///
-/// For a missing refspec git rejects the whole push and deletes nothing, so
-/// blanket-pruning on failure — the obvious shortcut — would erase the sidebar
-/// rows for branches that very much still exist.
+/// When the server rejects the push it deletes nothing, so blanket-pruning on
+/// failure — the obvious shortcut — would erase the sidebar rows for branches
+/// that very much still exist. (Deletes name `refs/heads/<branch>` in full, so
+/// a branch that is already gone no longer fails the batch: the server treats
+/// it as deleted. A `pre-receive` hook stands in for a protected-branch rule.)
 #[test]
 fn delete_remote_branches_keeps_tracking_refs_when_the_batch_deletes_nothing() {
     let _guard = remote_management_test_lock();
@@ -569,23 +571,34 @@ fn delete_remote_branches_keeps_tracking_refs_when_the_batch_deletes_nothing() {
         .to_string();
     run_git(&work_repo, &["checkout", "-b", "feat/a", &base]);
     run_git(&work_repo, &["push", "-u", "origin", "feat/a"]);
+    run_git(&work_repo, &["push", "origin", "feat/a:feat/b"]);
     run_git(&work_repo, &["checkout", &base]);
     run_git(&work_repo, &["fetch", "--all"]);
 
+    let hooks = remote_repo.join("hooks");
+    fs::create_dir_all(&hooks).expect("create remote hooks dir");
+    let hook = hooks.join("pre-receive");
+    fs::write(
+        &hook,
+        "#!/bin/sh\necho 'branch deletion is not allowed' >&2\nexit 1\n",
+    )
+    .expect("write pre-receive hook");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
+            .expect("make pre-receive hook executable");
+    }
+
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    // `feat/gone` never existed on the remote, so the push exits non-zero.
     let result = opened.delete_remote_branches_with_output(
         "origin",
-        &["feat/a".to_string(), "feat/gone".to_string()],
+        &["feat/a".to_string(), "feat/b".to_string()],
     );
-    assert!(
-        result.is_err(),
-        "a missing refspec must surface as an error"
-    );
+    assert!(result.is_err(), "a rejected push must surface as an error");
 
-    // git refuses the whole push when a refspec names a ref the remote does not
-    // have, so `feat/a` survives...
+    // The server refused the whole push, so `feat/a` survives...
     assert!(
         !run_git_capture(&work_repo, &["ls-remote", "--heads", "origin", "feat/a"])
             .trim()

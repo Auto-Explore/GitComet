@@ -22,6 +22,7 @@ use autosolve::{
 };
 #[cfg(test)]
 use history::history_section_suffix;
+pub(crate) use marker_parse::conflict_marker_run;
 #[cfg(test)]
 use marker_parse::parse_conflict_regions_from_markers;
 #[cfg(test)]
@@ -783,10 +784,11 @@ impl ConflictSession {
         ours: &str,
         theirs: &str,
         options: &MergeOptions,
+        marker_size: usize,
     ) -> Arc<str> {
         use crate::conflict_output::{
             ConflictMarkerLabels, ConflictOutputBlockRef, ConflictOutputChoice,
-            render_unresolved_marker_block,
+            render_unresolved_marker_block_with_size,
         };
 
         let labels = ConflictMarkerLabels {
@@ -794,7 +796,7 @@ impl ConflictSession {
             remote: options.labels.theirs.as_deref().unwrap_or("theirs"),
             base: options.labels.base.as_deref().unwrap_or("base"),
         };
-        Arc::from(render_unresolved_marker_block(
+        Arc::from(render_unresolved_marker_block_with_size(
             ConflictOutputBlockRef {
                 base,
                 ours,
@@ -803,7 +805,21 @@ impl ConflictSession {
                 resolved: false,
             },
             labels,
+            marker_size,
         ))
+    }
+
+    /// The marker size for marker text rendered from this session's stages
+    /// only to be read back, such as the resolver's projection: one no line of
+    /// the stages can be mistaken for. See
+    /// [`collision_free_marker_size`](crate::merge::collision_free_marker_size).
+    pub fn collision_free_marker_size(&self) -> usize {
+        crate::merge::collision_free_marker_size(
+            [&self.base, &self.ours, &self.theirs]
+                .into_iter()
+                .filter_map(ConflictPayload::as_text),
+            crate::merge::DEFAULT_MARKER_SIZE,
+        )
     }
 
     /// Build a fresh full-text session from Git stage inputs.
@@ -886,8 +902,14 @@ impl ConflictSession {
         session.region_plan_blocks = Vec::new();
         session.region_source_ranges = Vec::new();
 
+        // The projection is read back below; see `collision_free_marker_size`.
+        let marker_size = crate::merge::collision_free_marker_size(
+            [base_text.unwrap_or_default(), ours_text, theirs_text],
+            options.marker_size.max(crate::merge::DEFAULT_MARKER_SIZE),
+        );
         let marker_text = if let Some(plan) = plan.as_ref() {
             let mut marker_options = options.clone();
+            marker_options.marker_size = marker_size;
             marker_options.style = if plan.has_base() {
                 ConflictStyle::Diff3
             } else {
@@ -907,7 +929,13 @@ impl ConflictSession {
                 })
                 .map(Arc::<str>::from)
                 .unwrap_or_else(|| {
-                    Self::coarse_marker_projection(base_text, ours_text, theirs_text, options)
+                    Self::coarse_marker_projection(
+                        base_text,
+                        ours_text,
+                        theirs_text,
+                        options,
+                        marker_size,
+                    )
                 })
         };
         session.marker_projection = Some(Arc::clone(&marker_text));

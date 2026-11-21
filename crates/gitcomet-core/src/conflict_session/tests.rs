@@ -2878,3 +2878,87 @@ fn unresolved_block_row_span_matches_its_widest_side() {
         assert!(checked > 0, "{name}: fixture produced no unresolved block");
     }
 }
+
+// The resolver renders the merge plan as marker text and parses it back. File
+// content that looks like a marker must not be read as one.
+
+fn stage_session(base: &str, ours: &str, theirs: &str) -> ConflictSession {
+    ConflictSession::from_stage_inputs(
+        PathBuf::from("README.md"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+    )
+}
+
+#[test]
+fn stage_session_keeps_a_setext_underline_inside_its_side() {
+    let session = stage_session(
+        "Title\n\nintro\nline2\n\nbody\n",
+        "Title\n\nHeading\n=======\n\nbody\n",
+        "Title\n\nOther\n-------\n\nbody\n",
+    );
+    assert_eq!(session.regions.len(), 1);
+    let region = &session.regions[0];
+    assert_eq!(region.ours.as_str(), "Heading\n=======\n");
+    assert_eq!(
+        region.base.as_ref().map(|base| base.as_str()),
+        Some("intro\nline2\n")
+    );
+    assert_eq!(region.theirs.as_str(), "Other\n-------\n");
+}
+
+#[test]
+fn stage_session_does_not_swallow_context_that_looks_like_an_opener() {
+    let session = stage_session(
+        "doc\n<<<<<<< example\nkeep me\n\nintro\n\ntail\n",
+        "doc\n<<<<<<< example\nkeep me\n\nours change\n\ntail\n",
+        "doc\n<<<<<<< example\nkeep me\n\ntheirs change\n\ntail\n",
+    );
+    assert_eq!(session.regions.len(), 1);
+    assert_eq!(session.regions[0].ours.as_str(), "ours change\n");
+    assert_eq!(session.regions[0].theirs.as_str(), "theirs change\n");
+}
+
+/// A document about merge conflicts can hold a complete example block.
+#[test]
+fn stage_session_ignores_a_complete_example_conflict_in_unchanged_text() {
+    let example = "<<<<<<< HEAD\nmine\n=======\nyours\n>>>>>>> branch\n";
+    let session = stage_session(
+        &format!("intro\n{example}middle\nend\n"),
+        &format!("intro\n{example}ours middle\nend\n"),
+        &format!("intro\n{example}theirs middle\nend\n"),
+    );
+    assert_eq!(session.regions.len(), 1, "{:?}", session.regions);
+    assert_eq!(session.regions[0].ours.as_str(), "ours middle\n");
+    assert_eq!(session.regions[0].theirs.as_str(), "theirs middle\n");
+}
+
+/// `mergetool --auto --marker-size 5` must not report the conflict resolved
+/// just because its markers are shorter than the parser's default.
+#[test]
+fn plan_autosolve_with_a_short_marker_size_does_not_pass_markers_off_as_resolved() {
+    let options = MergeOptions {
+        marker_size: 5,
+        ..MergeOptions::default()
+    };
+    let plan = crate::merge::build_merge_plan("base\n", "ours\n", "theirs\n", &options);
+    assert_eq!(
+        try_autosolve_merge_plan(&plan, &options),
+        None,
+        "a real conflict was reported as auto-resolved"
+    );
+}
+
+/// Past the interactive plan budget (here: 3,000 lines with nothing shared)
+/// the session falls back to one coarse whole-file block.
+#[test]
+fn coarse_fallback_keeps_a_setext_underline_inside_its_side() {
+    let side = |prefix: &str| -> String { (0..1000).map(|n| format!("{prefix} {n}\n")).collect() };
+    let ours = format!("{}Heading\n=======\n", side("ours"));
+    let session = stage_session(&side("base"), &ours, &side("theirs"));
+    assert!(session.merge_plan.is_none(), "expected the coarse fallback");
+    assert_eq!(session.regions.len(), 1);
+    assert_eq!(session.regions[0].ours.as_str(), ours);
+}

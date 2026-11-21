@@ -44,8 +44,14 @@ fn optional_field(value: &str) -> Option<Arc<str>> {
     (!value.is_empty()).then(|| Arc::from(value))
 }
 
+/// Records of exactly the five requested fields, at most one per commit.
+///
+/// `%GS` and `%GG` repeat the verifier's text, which quotes the signer's key
+/// user id. Should a separator byte ever reach it, the record splits: an
+/// extra field, or a forged record for another commit. Git prints exactly one
+/// record per requested commit, so either sign voids what it touches.
 fn parse_verify_output(output: &[u8]) -> Vec<VerifyRecord> {
-    output
+    let mut records: Vec<VerifyRecord> = output
         .split_inclusive(|byte| *byte == RECORD_SEP)
         .filter_map(|record| {
             // A timeout may leave an incomplete final record. Never accept it.
@@ -53,31 +59,31 @@ fn parse_verify_output(output: &[u8]) -> Vec<VerifyRecord> {
             if record.is_empty() {
                 return None;
             }
-            let mut fields = record.split(|byte| *byte == FIELD_SEP);
-            let oid = gix::ObjectId::from_hex(fields.next()?.trim_ascii()).ok()?;
-            let status = fields
-                .next()
-                .and_then(|code| code.trim_ascii().first().copied())
+            let fields: Vec<&[u8]> = record.split(|byte| *byte == FIELD_SEP).collect();
+            let [oid, code, signer, key_id, output] = fields.as_slice() else {
+                return None;
+            };
+            let oid = gix::ObjectId::from_hex(oid.trim_ascii()).ok()?;
+            let status = code
+                .trim_ascii()
+                .first()
+                .copied()
                 .and_then(SignatureStatus::from_git_code);
-            let signer = fields
-                .next()
-                .and_then(|f| optional_field(&f.to_str_lossy()));
-            let key_id = fields
-                .next()
-                .and_then(|f| optional_field(&f.to_str_lossy()));
-            let output = fields
-                .next()
-                .map(|f| f.to_str_lossy().into_owned())
-                .unwrap_or_default();
             Some(VerifyRecord {
                 oid,
                 status,
-                signer,
-                key_id,
-                output,
+                signer: optional_field(&signer.to_str_lossy()),
+                key_id: optional_field(&key_id.to_str_lossy()),
+                output: output.to_str_lossy().into_owned(),
             })
         })
-        .collect()
+        .collect();
+    let mut seen = FxHashMap::<gix::ObjectId, usize>::default();
+    for record in &records {
+        *seen.entry(record.oid).or_default() += 1;
+    }
+    records.retain(|record| seen.get(&record.oid) == Some(&1));
+    records
 }
 
 impl GixRepo {
@@ -309,6 +315,47 @@ mod tests {
             records,
             vec![(first, None)],
             "the incomplete record must be retried, and E must count as completed"
+        );
+    }
+
+    /// `%GG` is the verifier's own text, which quotes the signer's key user
+    /// id. A record with more than the five requested fields means a
+    /// separator reached the output from there; none of it can be trusted.
+    #[test]
+    fn a_record_with_extra_fields_gets_no_verdict() {
+        let first = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap();
+        let formats = [(first, SignatureFormat::OpenPgp)].into_iter().collect();
+        let output = format!("{first}\x1fG\x1fSigner\x1fKey\x1fgpg: Good signature\x1fsurplus\x1e");
+        let records = signatures_from_output(&formats, output.as_bytes());
+        assert!(
+            records.iter().all(|(_, signature)| signature.is_none()),
+            "{records:?}"
+        );
+    }
+
+    /// A record separator smuggled into one commit's `%GG` could append a
+    /// forged record for another commit in the same batch. Git prints exactly
+    /// one record per requested commit, so a second one voids both.
+    #[test]
+    fn a_second_record_for_one_commit_cannot_override_its_verdict() {
+        let first = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap();
+        let second = gix::ObjectId::from_hex(b"2222222222222222222222222222222222222222").unwrap();
+        let formats = [
+            (first, SignatureFormat::OpenPgp),
+            (second, SignatureFormat::OpenPgp),
+        ]
+        .into_iter()
+        .collect();
+        let output = format!(
+            "{second}\x1fN\x1f\x1f\x1f\x1e\
+             {first}\x1fG\x1fAttacker\x1fK1\x1fgpg: Good signature from Attacker\x1e\
+             {second}\x1fG\x1fTrusted Maintainer\x1fK2\x1fforged\x1e"
+        );
+        let records = signatures_from_output(&formats, output.as_bytes());
+        assert!(
+            !records.iter().any(|(oid, signature)| *oid == second
+                && signature.as_ref().is_some_and(|s| s.status.is_verified())),
+            "a forged record marked the commit as verified: {records:?}"
         );
     }
 

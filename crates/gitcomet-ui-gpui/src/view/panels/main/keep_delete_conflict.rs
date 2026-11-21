@@ -122,9 +122,9 @@ impl DiffRenderer {
         let delete_path = path.clone();
         let mergetool_path = path.clone();
         let focused_mergetool = self.view_mode == GitCometViewMode::FocusedMergetool;
-        let keep_bytes = match spec.keep_side {
-            ConflictSide::Ours => conflict_side_output_bytes(file, ThreeWayColumn::Ours),
-            ConflictSide::Theirs => conflict_side_output_bytes(file, ThreeWayColumn::Theirs),
+        let keep_column = match spec.keep_side {
+            ConflictSide::Ours => ThreeWayColumn::Ours,
+            ConflictSide::Theirs => ThreeWayColumn::Theirs,
         };
 
         let title: SharedString =
@@ -147,11 +147,12 @@ impl DiffRenderer {
                 .disabled(!keep_available)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     if focused_mergetool {
-                        if let Some(bytes) = keep_bytes.as_deref() {
-                            this.focused_mergetool_write_side_and_exit(
-                                repo_id, &keep_path, bytes, cx,
-                            );
-                        }
+                        this.focused_mergetool_write_side_and_exit(
+                            repo_id,
+                            &keep_path,
+                            keep_column,
+                            cx,
+                        );
                         return;
                     }
                     this.store.dispatch(Msg::CheckoutConflictSide {

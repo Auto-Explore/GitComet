@@ -152,10 +152,21 @@ pub fn try_autosolve_merge_plan(plan: &MergePlan, options: &MergeOptions) -> Opt
 
     let rendered = render_merge_plan(&autosolved, options);
     if rendered.is_clean() {
-        Some(rendered.output)
-    } else {
-        try_autosolve_merged_text_with_whitespace(&rendered.output, false)
+        return Some(rendered.output);
     }
+    // Read the remaining blocks back from markers no line of the inputs can
+    // be mistaken for, whatever size the caller renders its own output with.
+    let mut readback = options.clone();
+    readback.marker_size = crate::merge::collision_free_marker_size(
+        [
+            plan.base.as_deref().unwrap_or_default(),
+            &plan.local,
+            &plan.remote,
+        ],
+        crate::merge::DEFAULT_MARKER_SIZE,
+    );
+    let rendered = render_merge_plan(&autosolved, &readback);
+    try_autosolve_merged_text_with_whitespace(&rendered.output, false)
 }
 
 /// Returns `true` if `a` and `b` differ only in whitespace.

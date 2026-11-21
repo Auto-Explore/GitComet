@@ -836,7 +836,7 @@ impl super::GixRepo {
                     "git annex sync",
                 )?;
                 let mut cmd = self.git_workdir_cmd();
-                cmd.args(["checkout", base.as_str()]);
+                cmd.args(["checkout", base.as_str(), "--"]);
                 let checked_out = run_git_with_output_until_done(cmd, "git checkout")?;
                 Ok(super::lfs::combine(
                     "git checkout",

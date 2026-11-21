@@ -1395,6 +1395,7 @@ impl GixRepo {
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
         validate_ref_like_arg(reference, "reference")?;
+        let reference_arg = crate::refs::local_branch_rev_arg(&self.repo(), reference)?;
 
         let command_str = format!("git merge --ff --no-edit {reference}");
         let mut cmd = self.git_workdir_cmd();
@@ -1404,7 +1405,7 @@ impl GixRepo {
             .arg("--ff")
             .arg("--no-edit")
             .arg("--")
-            .arg(reference);
+            .arg(reference_arg);
         self.run_integrating_git(cmd, &command_str)
     }
 
@@ -1507,6 +1508,7 @@ impl GixRepo {
 
     pub(super) fn squash_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
         validate_ref_like_arg(reference, "reference")?;
+        let reference_arg = crate::refs::local_branch_rev_arg(&self.repo(), reference)?;
 
         let command_str = format!("git merge --squash --no-commit {reference}");
         let mut cmd = self.git_workdir_cmd();
@@ -1516,7 +1518,7 @@ impl GixRepo {
             .arg("--squash")
             .arg("--no-commit")
             .arg("--")
-            .arg(reference);
+            .arg(reference_arg);
         run_git_with_output(cmd, &command_str)
     }
 
@@ -1667,11 +1669,14 @@ impl GixRepo {
 
         let label = format!("git push --delete {remote} {branch}");
         let mut cmd = self.git_workdir_cmd();
+        // Remote branch rows come from `refs/heads/` only. A short name would
+        // let Git match a same-named tag once the branch is gone, or delete
+        // the tag `v1.0` when the branch is literally named `refs/tags/v1.0`.
         cmd.arg("push")
             .arg("--delete")
             .arg("--")
             .arg(remote)
-            .arg(branch);
+            .arg(format!("refs/heads/{branch}"));
         let output = run_git_with_output(cmd, &label)?;
 
         let deleted = [branch.to_string()];
@@ -1707,7 +1712,8 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push").arg("--delete").arg("--").arg(remote);
         for branch in branches {
-            cmd.arg(branch);
+            // Fully qualified for the reason given in the single-branch delete.
+            cmd.arg(format!("refs/heads/{branch}"));
         }
 
         match run_git_with_output(cmd, &label) {
@@ -1804,7 +1810,7 @@ impl GixRepo {
         let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd
             .arg("for-each-ref")
-            .arg("--format=%(refname:short)")
+            .arg("--format=%(refname:lstrip=2)")
             .arg("--merged=HEAD")
             .arg("refs/heads");
         let merged_output =
@@ -1814,11 +1820,11 @@ impl GixRepo {
         let mut branches_cmd = self.git_workdir_cmd();
         branches_cmd
             .arg("for-each-ref")
-            .arg("--format=%(refname:short)\t%(upstream:short)")
+            .arg("--format=%(refname:lstrip=2)\t%(upstream:lstrip=2)")
             .arg("refs/heads");
         let branches_output = run_git_capture(
             branches_cmd,
-            "git for-each-ref --format=%(refname:short)\\t%(upstream:short) refs/heads",
+            "git for-each-ref --format=%(refname:lstrip=2)\\t%(upstream:lstrip=2) refs/heads",
         )?;
 
         let mut refs_cmd = self.git_workdir_cmd();

@@ -50,6 +50,34 @@ pub(crate) fn resolve_required<'r>(repo: &'r gix::Repository, spec: &str) -> Res
         .ok_or_else(|| failure(format!("revision {spec:?} not found")))
 }
 
+/// The argument that makes Git resolve `name`, a local branch listed by its
+/// short name, to that branch.
+///
+/// Git resolves a short name through `<name>`, `refs/<name>` and
+/// `refs/tags/<name>` before `refs/heads/<name>`, so a tag that shares a
+/// branch's name - and a remote can supply tags - would be used instead.
+/// When Git would resolve `name` to the branch anyway it is returned as is,
+/// which keeps Git's own wording ("Merge branch 'topic'"). Anything that is
+/// not a local branch, such as a commit id, passes through unchanged.
+pub(crate) fn local_branch_rev_arg(repo: &gix::Repository, name: &str) -> Result<String> {
+    let full = format!("refs/heads/{name}");
+    if name.starts_with("refs/") || gix::refs::FullName::try_from(full.as_str()).is_err() {
+        return Ok(name.to_owned());
+    }
+    let refs = view(repo)?;
+    if refs.find_exact(&full)?.is_none() {
+        return Ok(name.to_owned());
+    }
+    let resolves_to_branch = refs
+        .find(name)?
+        .is_some_and(|reference| reference.name().as_bstr() == full.as_bytes());
+    Ok(if resolves_to_branch {
+        name.to_owned()
+    } else {
+        full
+    })
+}
+
 impl RefsView<'_> {
     pub fn resolve(&self, spec: &str) -> Result<Option<gix::ObjectId>> {
         if self.common.is_none() && gix_parses_verbatim(self.repo, spec) {
