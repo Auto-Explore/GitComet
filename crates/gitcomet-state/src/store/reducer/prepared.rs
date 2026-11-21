@@ -417,9 +417,16 @@ impl PathRequests {
     }
 }
 
+/// The capture matches run only for a message whose class declares the fact,
+/// so reaching their fallback means a declared fact has no arm.
+fn missing_arm(message: &'static str) {
+    debug_assert!(false, "{message} declares prepared facts no arm captures");
+}
+
 fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
     let mut paths = PathRequests::default();
-    if super::msg_requires_available_git(message) && !state.git_runtime.is_available() {
+    let class = message.class();
+    if !class.facts.paths || (class.requires_git && !state.git_runtime.is_available()) {
         return paths;
     }
     match message {
@@ -456,12 +463,15 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
             }
         }
         Msg::Internal(message) => capture_internal_paths(message, state, &mut paths),
-        _ => {}
+        _ => missing_arm(message.into()),
     }
     paths
 }
 
 fn capture_internal_paths(message: &InternalMsg, state: &AppState, paths: &mut PathRequests) {
+    if !message.class().facts.paths {
+        return;
+    }
     match message {
         InternalMsg::GitOperationFinished { message, .. } => {
             capture_internal_paths(message, state, paths)
@@ -470,35 +480,43 @@ fn capture_internal_paths(message: &InternalMsg, state: &AppState, paths: &mut P
             repo_id,
             load_epoch,
             message,
-        } if state
-            .repos
-            .iter()
-            .any(|repo| repo.id == *repo_id && repo.load_epoch == *load_epoch) =>
-        {
-            capture_internal_paths(message, state, paths)
+        } => {
+            if state
+                .repos
+                .iter()
+                .any(|repo| repo.id == *repo_id && repo.load_epoch == *load_epoch)
+            {
+                capture_internal_paths(message, state, paths)
+            }
         }
         InternalMsg::RepoOpenedOk { repo_id, spec, .. }
-        | InternalMsg::RepoOpenedErr { repo_id, spec, .. }
-            if state.repos.iter().any(|repo| repo.id == *repo_id) =>
-        {
-            paths.repository(&spec.workdir)
+        | InternalMsg::RepoOpenedErr { repo_id, spec, .. } => {
+            if state.repos.iter().any(|repo| repo.id == *repo_id) {
+                paths.repository(&spec.workdir)
+            }
         }
         InternalMsg::RepoActionFinishedInWorktree {
             worktree_path,
             result,
             ..
-        } if result.is_ok() => paths.repository(worktree_path),
+        } => {
+            if result.is_ok() {
+                paths.repository(worktree_path)
+            }
+        }
         // Git ran in the workdir, so a relative path names a folder there.
         InternalMsg::RepoCommandFinished {
             repo_id,
             command,
-            result: Ok(_),
+            result,
         } => {
-            if let Some(path) = command.opens_worktree() {
+            if result.is_ok()
+                && let Some(path) = command.opens_worktree()
+            {
                 paths.in_workdir(state, *repo_id, path)
             }
         }
-        _ => {}
+        _ => missing_arm(message.into()),
     }
 }
 
@@ -528,7 +546,9 @@ fn normalize_paths(message: &mut Msg, normalized: &[(PathBuf, PathBuf)]) {
             }
         }
         Msg::Internal(message) => normalize_internal_paths(message, normalized),
-        _ => {}
+        // Its worktree path is returned beside the message.
+        Msg::SubmitAuthPrompt { .. } => {}
+        _ => missing_arm((&*message).into()),
     }
 }
 
@@ -545,17 +565,21 @@ fn normalize_internal_paths(message: &mut InternalMsg, normalized: &[(PathBuf, P
             worktree_path,
             result,
             ..
-        } if result.is_ok() => replace_path(worktree_path, normalized),
-        InternalMsg::RepoCommandFinished {
-            command,
-            result: Ok(_),
-            ..
         } => {
-            if let Some(path) = command.opens_worktree_mut() {
+            if result.is_ok() {
+                replace_path(worktree_path, normalized)
+            }
+        }
+        InternalMsg::RepoCommandFinished {
+            command, result, ..
+        } => {
+            if result.is_ok()
+                && let Some(path) = command.opens_worktree_mut()
+            {
                 replace_path(path, normalized)
             }
         }
-        _ => {}
+        _ => missing_arm((&*message).into()),
     }
 }
 
@@ -569,9 +593,18 @@ fn capture_message(
     repos: &RepositoryRuntimes,
     inputs: &mut InputQueries,
 ) {
-    if super::msg_requires_available_git(message) && !state.git_runtime.is_available() {
-        return;
+    let class = message.class();
+    if class.facts.queries && (!class.requires_git || state.git_runtime.is_available()) {
+        capture_queries(message, state, repos, inputs);
     }
+}
+
+fn capture_queries(
+    message: &Msg,
+    state: &AppState,
+    repos: &RepositoryRuntimes,
+    inputs: &mut InputQueries,
+) {
     match message {
         Msg::OpenRepo(path)
         | Msg::OpenRepoFromExternalDrop(path)
@@ -617,8 +650,10 @@ fn capture_message(
                 inputs.activation(state, repos, next);
             }
         }
-        Msg::SelectDiff { repo_id, target } if target.worktree().is_none() => {
-            inputs.selection(state, repos, *repo_id, target, false);
+        Msg::SelectDiff { repo_id, target } => {
+            if target.worktree().is_none() {
+                inputs.selection(state, repos, *repo_id, target, false);
+            }
         }
         Msg::OpenFileContent {
             repo_id,
@@ -708,7 +743,19 @@ fn capture_message(
         Msg::FilesystemPathsChanged(changes) => capture_filesystem(state, inputs, changes),
         Msg::FilesystemFinished(result) => capture_filesystem(state, inputs, &result.changes),
         Msg::Internal(message) => capture_internal(message, state, repos, inputs),
-        _ => {}
+        _ => missing_arm(message.into()),
+    }
+}
+
+/// A wrapper's completion, which may have no queries of its own.
+fn capture_wrapped(
+    message: &InternalMsg,
+    state: &AppState,
+    repos: &RepositoryRuntimes,
+    inputs: &mut InputQueries,
+) {
+    if message.class().facts.queries {
+        capture_internal(message, state, repos, inputs);
     }
 }
 
@@ -794,7 +841,7 @@ fn capture_internal(
             message,
             ..
         } => {
-            capture_internal(message, state, repos, inputs);
+            capture_wrapped(message, state, repos, inputs);
             if *outer_outcome == GitOperationOuterOutcome::Cancelled
                 && let CancelledSelectionRefresh::Required {
                     finished_maintenance,
@@ -819,7 +866,7 @@ fn capture_internal(
                 .iter()
                 .any(|repo| repo.id == *repo_id && repo.load_epoch == *load_epoch)
             {
-                capture_internal(message, state, repos, inputs);
+                capture_wrapped(message, state, repos, inputs);
             }
         }
         InternalMsg::RepoOpenedErr { repo_id, error, .. } => {
@@ -986,11 +1033,9 @@ fn capture_internal(
                 inputs.marker(repo, target);
             }
         }
-        InternalMsg::LargeFileSupportLoaded {
-            repo_id,
-            result: Ok(next),
-        } => {
-            if let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
+        InternalMsg::LargeFileSupportLoaded { repo_id, result } => {
+            if let Ok(next) = result
+                && let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
                 && super::effects::large_file_support_changes_content(repo, next)
                 && (repo.large_file_support_active() || next.is_active())
             {
@@ -1000,13 +1045,14 @@ fn capture_internal(
         InternalMsg::FileBrowserLoaded {
             repo_id,
             source,
-            result: Ok(entries),
+            result,
             cancellation,
-        } if !cancellation
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled()) =>
-        {
-            if let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
+        } => {
+            if let Ok(entries) = result
+                && !cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                && let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
                 && repo.file_browser.source == *source
                 && let Some(reopen) = &repo.file_browser.pending_reopen
                 && matches!(
@@ -1019,7 +1065,7 @@ fn capture_internal(
                 inputs.selection(state, repos, *repo_id, &target, true);
             }
         }
-        _ => {}
+        _ => missing_arm(message.into()),
     }
 }
 
@@ -1280,5 +1326,33 @@ mod tests {
             );
             assert!(super::super::maintenance::request_check(&inputs, state, repo_id).is_none());
         }
+    }
+
+    #[test]
+    fn a_finished_operation_captures_nothing_for_a_completion_without_queries() {
+        let state = AppState::test_default();
+        let message = Msg::Internal(InternalMsg::GitOperationFinished {
+            repo_id: RepoId(1),
+            operation_id: gitcomet_core::git_operation::GitOperationId(1),
+            outer_outcome: GitOperationOuterOutcome::Succeeded,
+            duration: std::time::Duration::ZERO,
+            message: Box::new(InternalMsg::TagsLoaded {
+                repo_id: RepoId(1),
+                result: Ok(Vec::new()),
+            }),
+        });
+
+        assert!(needs_preparation(&message));
+        assert!(capture_paths(&message, &state).0.is_empty());
+        let mut queries = InputQueries::default();
+        capture_message(
+            &message,
+            &state,
+            &RepositoryRuntimes::default(),
+            &mut queries,
+        );
+        assert!(queries.head.is_empty());
+        assert!(queries.markers.is_empty());
+        assert!(!queries.needs_preferences);
     }
 }
