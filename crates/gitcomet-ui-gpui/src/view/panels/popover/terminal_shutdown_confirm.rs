@@ -1,11 +1,11 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     prompt: TerminalShutdownPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let terminal_label = if prompt.summary.terminal_count == 1 {
         "terminal".to_string()
     } else {

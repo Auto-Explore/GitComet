@@ -81,7 +81,7 @@ pub(super) fn panel(
     path: std::path::PathBuf,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
     let patterns_scroll = this.gitignore_patterns_scroll.clone();
 

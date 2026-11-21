@@ -6,7 +6,7 @@ pub(super) fn panel(
     path: &std::path::Path,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let can_submit = this.can_submit_submodule_change_pointer(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 

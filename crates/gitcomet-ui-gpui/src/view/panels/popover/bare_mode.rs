@@ -54,7 +54,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let scale = crate::ui_scale::UiScale::current(cx);
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return div();

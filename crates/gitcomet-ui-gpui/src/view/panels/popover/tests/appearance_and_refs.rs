@@ -317,7 +317,7 @@ fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppC
                 (
                     host.context_menu_model(host.popover.as_ref().unwrap(), cx)
                         .unwrap(),
-                    host.theme,
+                    AppTheme::current(cx),
                 )
             })
         })

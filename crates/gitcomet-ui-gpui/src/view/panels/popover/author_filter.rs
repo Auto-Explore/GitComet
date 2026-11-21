@@ -269,7 +269,7 @@ pub(super) fn panel(
             },
         ));
     }
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);

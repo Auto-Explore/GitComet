@@ -79,7 +79,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/command_palette.rs::render_rows 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/diff_commands.rs::for_window 174 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_header 204 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 172 -
-fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 833 -
+fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 832 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_commands.rs::execute_builtin_command 637 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs::render 926 -
 fn-lines crates/gitcomet-ui-gpui/src/view/history_graph_walk.rs::transition 200 -
@@ -130,7 +130,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_re
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::history_row 170 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::operation_detail 408 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::panel 254 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::new 877 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::new 875 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::open_popover 723 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/keyboard_shortcuts.rs::panel 156 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/mod.rs::popover_width_spec 210 -
@@ -289,7 +289,7 @@ glob-super gitcomet-ui-terminal 3 -
 notify-fingerprint-fns gitcomet-ui-gpui 8 -
 real-time-waits gitcomet-state 224 -
 root-view-updates gitcomet-ui-gpui 70 -
-set-theme-fns gitcomet-ui-gpui 7 -
+set-theme-fns gitcomet-ui-gpui 6 -
 store-snapshot-syncs gitcomet-ui-gpui 145 -
 struct-fields gitcomet-ui-gpui::DiffRenderer 348 -
 struct-fields gitcomet-ui-gpui::GitCometView 173 -

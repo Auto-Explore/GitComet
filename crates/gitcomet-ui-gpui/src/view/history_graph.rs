@@ -143,7 +143,7 @@ pub(in crate::view) fn from_node_cols_of(lanes_next: &[LanePaint]) -> FromNodeCo
         .collect()
 }
 
-trait GraphCommitLike {
+pub(in crate::view) trait GraphCommitLike {
     fn id_str(&self) -> &str;
     fn parent_ids(&self) -> &[CommitId];
 }
@@ -270,9 +270,10 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
     Some(rows)
 }
 
-fn compute_graph_impl<'a, C, I>(
+/// The lanes and colour indices of `commits`. No theme changes them: a theme
+/// only gives the indices their colours when they paint.
+pub(in crate::view) fn compute_graph_lanes<'a, C, I>(
     commits: &[C],
-    _theme: AppTheme,
     branch_heads: I,
     active_head_target: Option<&str>,
 ) -> Vec<GraphRow>
@@ -380,28 +381,18 @@ mod oracle;
 mod walk;
 pub(in crate::view) use walk::{GraphCheckpoint, GraphTransition, GraphWalk};
 
+/// The whole-page graph as tests and benchmarks ask for it.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn compute_graph<'a, I>(
     commits: &[Commit],
-    theme: AppTheme,
+    _theme: AppTheme,
     branch_heads: I,
     active_head_target: Option<&str>,
 ) -> Vec<GraphRow>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    compute_graph_impl(commits, theme, branch_heads, active_head_target)
-}
-
-pub fn compute_graph_refs<'a, 'commit, I>(
-    commits: &[&'commit Commit],
-    theme: AppTheme,
-    branch_heads: I,
-    active_head_target: Option<&str>,
-) -> Vec<GraphRow>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    compute_graph_impl(commits, theme, branch_heads, active_head_target)
+    compute_graph_lanes(commits, branch_heads, active_head_target)
 }
 
 fn resolve_first_parent_ix<C: GraphCommitLike>(

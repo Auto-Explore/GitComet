@@ -8,7 +8,7 @@ pub(super) fn panel(
     commit_id: CommitId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let mainline = commit_mainline::mainline(this, repo_id, &commit_id);
     let mainline_choices = mainline.choices;
     let is_merge = mainline_choices.len() > 1;

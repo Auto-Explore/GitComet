@@ -3,11 +3,11 @@ use gitcomet_core::error::WorktreeRemovalBlocker;
 use gitcomet_state::model::ForceRemoveWorktreePrompt;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     prompt: ForceRemoveWorktreePrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ForceRemoveWorktreePrompt {
         repo_id,
         path,

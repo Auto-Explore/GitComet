@@ -4,14 +4,14 @@ use super::*;
 /// conflict markers. Staging is what tells git a conflict is settled, so going
 /// ahead here is how `<<<<<<<` ends up committed.
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     paths: Vec<std::path::PathBuf>,
     unresolved: Vec<std::path::PathBuf>,
     clear_selection: bool,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let listed = unresolved
         .iter()
         .take(5)

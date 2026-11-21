@@ -8,7 +8,7 @@ impl PopoverHost {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = popover_ui_scale(cx);
         let ui_scale_percent = ui_scale.percent();
         let scaled_px = crate::ui_scale::scaler(ui_scale);
@@ -619,7 +619,7 @@ impl PopoverHost {
                 original_action,
                 original_message: _,
             } => {
-                let theme = self.theme;
+                let theme = AppTheme::current(cx);
                 let submit_button_id = "reword_save";
                 let main_pane = self.main_pane.clone();
                 let submit = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {

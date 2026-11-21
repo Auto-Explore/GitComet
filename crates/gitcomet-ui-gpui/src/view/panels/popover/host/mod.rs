@@ -155,7 +155,6 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let PopoverHostInit {
-            theme,
             root_view,
             root_view_mode,
             tooltip_host,
@@ -814,7 +813,6 @@ impl PopoverHost {
             main_pane,
             extension_dialog: None,
             state,
-            theme,
             theme_mode,
             date_time_format,
             timezone,
@@ -1023,11 +1021,6 @@ impl PopoverHost {
             rebase_reword_description_input,
             rebase_reword_description_scroll,
         }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn is_kind_open(&self, kind: &PopoverKind) -> bool {

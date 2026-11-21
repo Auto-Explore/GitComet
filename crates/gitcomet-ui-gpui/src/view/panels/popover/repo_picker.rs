@@ -604,7 +604,7 @@ pub(super) fn apply_sort(
 
 /// The `Sort ▾` toggle that sits at the right edge of the query row.
 fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl IntoElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let menu_open = this.repo_picker_sort_menu_open;
@@ -650,7 +650,7 @@ fn sort_toggle_label(sort: RepoPickerSort) -> String {
 /// The sort options, rendered in place of the repository rows while the menu is
 /// open. Picking one collapses the menu back to the list.
 fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl IntoElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale_percent = super::popover_ui_scale(cx).percent();
     let current = this.repo_picker_sort;
     let selected_index = this.repo_picker_selected_index;
@@ -736,7 +736,7 @@ pub(super) fn forget(
 }
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);

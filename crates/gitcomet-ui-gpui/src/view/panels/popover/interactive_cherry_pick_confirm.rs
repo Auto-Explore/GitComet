@@ -8,7 +8,7 @@ pub(super) fn panel(
     entries: Vec<InteractiveRebaseEntry>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let actions_disabled = !merge_commit_repo_is_ready(repo);
     let picked = entries

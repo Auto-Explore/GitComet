@@ -80,7 +80,6 @@ fn multi_cherry_pick_plan(
         &remote_branches,
         stashes,
         &page.commits,
-        this.theme,
     );
     // Use reversed page order as the stable oldest-first baseline. Before the
     // editor becomes available, the repository-backed setup load follows the

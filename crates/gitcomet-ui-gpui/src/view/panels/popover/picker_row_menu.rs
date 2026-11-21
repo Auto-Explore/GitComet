@@ -339,7 +339,7 @@ pub(super) fn layer(
 ) -> Option<gpui::AnyElement> {
     let menu = this.picker_row_menu.clone()?;
     let model = menu.target.model(this, cx);
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let selected_index = this.open_picker_selected_index_value();

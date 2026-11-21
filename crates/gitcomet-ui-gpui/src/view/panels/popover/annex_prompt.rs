@@ -213,7 +213,7 @@ pub(super) fn panel(
     prompt: &AnnexPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
     let text = this
         .submodule_ref_input

@@ -336,7 +336,7 @@ impl PopoverHost {
         }
         let entries = self.pin_menu_entries.as_ref().unwrap().2.clone();
         let for_keys = entries.clone();
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scale = super::popover_ui_scale(cx);
         let row_height = components::control_height(scale);
         let height =
@@ -1345,7 +1345,7 @@ impl PopoverHost {
         kind: PopoverKind,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = super::popover_ui_scale(cx);
         let width = super::popover_width_spec(&kind).unwrap_or(super::DEFAULT_CONTEXT_MENU_WIDTH);
         let model = self

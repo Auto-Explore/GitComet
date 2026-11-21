@@ -921,7 +921,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 PopoverHostInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                     root_view_mode: view_mode,
                     tooltip_host: tooltip_host.downgrade(),
@@ -1428,8 +1427,6 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
         cx.notify();
     }
 

@@ -108,7 +108,7 @@ pub(super) fn panel(
     configure_only_for: Option<String>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let can_submit = this.can_submit_push_set_upstream(cx);
     let configure_only = configure_only_for.is_some();
     let remotes = this

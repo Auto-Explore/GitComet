@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     remote: String,
     branch: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let full = format!("{remote}/{branch}");
 
     ConfirmDialog::new("Delete remote branch?", DIALOG_420_WIDTH)

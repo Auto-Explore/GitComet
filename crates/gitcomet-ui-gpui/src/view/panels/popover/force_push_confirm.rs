@@ -5,7 +5,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let lease = this.force_push_lease.clone();
     let dialog = ConfirmDialog::new("Force push", DIALOG_420_WIDTH);
     let dialog = if let Some(lease) = lease.as_ref() {
