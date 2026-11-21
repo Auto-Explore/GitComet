@@ -560,6 +560,30 @@ fn a_range_read_reuses_the_repository_while_its_inputs_are_unchanged() {
     assert_eq!(count(Work::RepositoryReopen), 0, "an unshared range read");
 }
 
+#[test]
+fn history_reads_reuse_the_repository_and_still_see_moved_refs() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let all = HistoryMode::AllBranches;
+    let built = index(&*repo, all, None);
+    let _capture = capture();
+    assert!(Arc::ptr_eq(&built, &index(&*repo, all, None)));
+    assert_eq!(page_snapshot(&*repo), built.snapshot);
+    let authors = repo
+        .history_authors(&all.into(), &Default::default(), &CancellationToken::new())
+        .unwrap();
+    assert_eq!(&*authors[0], "You");
+    assert_eq!(
+        count(Work::RepositoryReopen),
+        0,
+        "an index, a page and the authors of an unchanged repository"
+    );
+    run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~100"]);
+    assert_eq!(index(&*repo, all, None).len(), 3996);
+    assert_ne!(page_snapshot(&*repo), built.snapshot);
+    assert_eq!(count(Work::RepositoryReopen), 0, "a moved branch");
+}
+
 /// The read after `change` must open a fresh handle, reject the index of the
 /// previous object interpretation and build one of `rows_after` rows.
 #[track_caller]

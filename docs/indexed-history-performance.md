@@ -543,3 +543,39 @@ growth, but do not establish that every process-wide cache or allocator page is
 returned after closing a window. The lifecycle diagnostics ran alongside
 compilation and are excluded from latency acceptance. Their raw captures are
 preserved separately from the 200 paired performance captures.
+
+## Reused repository handle and shared waits (2026-11-21)
+
+History reads used to reopen the repository for every request: a shared range
+block did it twice, and a page, an index build and the author list once each.
+Every reopen parsed all Git config, conditional includes included, and read the
+object store key again. The backend now keeps the handle of its last fresh open
+and reuses it while all of the following hold:
+
+- every config input keeps its stamp: the files a config load read or looked
+  for, and the branch its `onbranch` includes were tested against;
+- the store key read through the handle equals the attached store's: the
+  object directory's identity, the resolved alternates, the replacement refs
+  and the store options;
+- the store was neither rotated by pack-access recovery nor invalidated by
+  maintenance.
+
+Otherwise it reopens and attaches a store as before, so a config, alternates
+or replacement change is seen by the next read. Loose refs, `HEAD`, reftable
+stacks and the shallow file are still read from disk on every request. Packed
+refs are reloaded whenever their stamp changes, because gix by itself reloads
+them only for a newer modification time. The 64-block range reader rotation is
+unchanged and still opens its own store.
+
+`Work::RepositoryReopen` counts every reopen. A warm 256-row shared block read
+went from two to none
+(`a_range_read_reuses_the_repository_while_its_inputs_are_unchanged`), and an
+index build, a page and the author list from three to none. With only
+repository-local config the validation takes 32 µs against 149 µs for one
+reopen; 25 µs of it is the exact store key, which stat stamps could replace at
+the price of missing two changes inside one timestamp tick.
+
+Two waits no longer poll. Range decodes are single-flight per block, so
+different blocks decode in parallel while callers of one block share its
+decode. The date-order topology build is shared by the requests for its tips:
+each leaves on its own cancellation and the build stops when all have left.

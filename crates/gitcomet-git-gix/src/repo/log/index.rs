@@ -35,7 +35,7 @@ impl GixRepo {
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
         cancellation.check_cancelled()?;
-        let (store, shared) = self.fresh_history_store()?;
+        let (store, shared) = self.current_history_store()?;
         let query = self.resolve_history_query(
             &store.to_thread_local(),
             shared.id,
