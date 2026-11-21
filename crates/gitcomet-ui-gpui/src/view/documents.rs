@@ -60,7 +60,6 @@ fn update_recent(path: PathBuf, remove: bool, cx: &mut gpui::App) {
 }
 
 pub(crate) struct DocumentsView {
-    theme: AppTheme,
     root: WeakEntity<GitCometView>,
     ui_model: Entity<AppUiModel>,
     recents: Entity<RecentDocumentList>,
@@ -86,21 +85,7 @@ impl DocumentsView {
         self.owner.clone()
     }
 
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        for buffer in self.buffers.values() {
-            buffer.update(cx, |buffer, cx| {
-                buffer.theme = theme;
-                buffer.syntax_key = None;
-                buffer.refresh_syntax(cx);
-                cx.notify();
-            });
-        }
-        cx.notify();
-    }
-
     pub(super) fn new(
-        theme: AppTheme,
         root: WeakEntity<GitCometView>,
         ui_model: Entity<AppUiModel>,
         cx: &mut gpui::Context<Self>,
@@ -108,7 +93,6 @@ impl DocumentsView {
         let owner = ui_model.read(cx).documents.clone();
         owner.register_documents(cx.entity().downgrade());
         Self {
-            theme,
             root,
             ui_model,
             recents: shared_recents(cx),
@@ -126,9 +110,8 @@ impl DocumentsView {
         cx: &mut gpui::Context<Self>,
     ) -> BufferId {
         let root = self.root.clone();
-        let buffer = cx.new(|cx| {
-            StandaloneBuffer::new(path, self.theme, root, self.ui_model.clone(), initial, cx)
-        });
+        let buffer =
+            cx.new(|cx| StandaloneBuffer::new(path, root, self.ui_model.clone(), initial, cx));
         let subscription = cx.observe(&buffer, |this, _, cx| {
             this.prune_clean_buffers(cx);
             cx.notify();
@@ -319,7 +302,7 @@ impl Render for DocumentsView {
         if self.focus.is_focused(window) {
             self.focus_active(window, cx);
         }
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let content = self
             .active
             .as_ref()
@@ -376,7 +359,10 @@ struct StandaloneBuffer {
     image_timer: crate::view::image_preview::FrameTimer,
     document: DocumentBuffer,
     owner: DocumentOwner,
+    /// The theme the syntax highlights were built under: the window's, as of
+    /// the last draw. Highlighting also runs outside a draw.
     theme: AppTheme,
+    theme_generation: crate::theme::ThemeGeneration,
     root: WeakEntity<GitCometView>,
     input: Entity<TextInput>,
     scroll: gpui::ScrollHandle,
@@ -460,12 +446,12 @@ impl StandaloneBuffer {
 
     fn new(
         path: PathBuf,
-        theme: AppTheme,
         root: WeakEntity<GitCometView>,
         ui_model: Entity<AppUiModel>,
         initial: Option<DocumentBuffer>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let theme = AppTheme::current(cx);
         let scroll = gpui::ScrollHandle::new();
         let input = cx.new(|cx| {
             let mut input = TextInput::new_inert(
@@ -534,6 +520,7 @@ impl StandaloneBuffer {
                     .create(DocumentIdentity(path), None)
             }),
             theme,
+            theme_generation: AppTheme::current_generation(cx),
             root,
             input,
             scroll,
@@ -1444,6 +1431,11 @@ impl StandaloneBuffer {
 
 impl Render for StandaloneBuffer {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.theme_generation.changed(cx) {
+            self.theme = AppTheme::current(cx);
+            self.syntax_key = None;
+            self.refresh_syntax(cx);
+        }
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let _ = self.subscriptions.len();

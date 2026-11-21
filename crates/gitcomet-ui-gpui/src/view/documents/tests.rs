@@ -1126,14 +1126,8 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
     std::fs::write(&file, "saved").unwrap();
     cx.update(|_, app| {
         let docs = root.read(app).documents.clone();
-        let second = app.new(|cx| {
-            DocumentsView::new(
-                docs.read(cx).theme,
-                root.downgrade(),
-                docs.read(cx).ui_model.clone(),
-                cx,
-            )
-        });
+        let second =
+            app.new(|cx| DocumentsView::new(root.downgrade(), docs.read(cx).ui_model.clone(), cx));
         docs.update(app, |docs, cx| {
             update_recent(file.clone(), false, cx);
             adopt_edit(
@@ -1405,32 +1399,55 @@ fn standalone_caret_notifies_do_not_refingerprint_the_document(cx: &mut gpui::Te
 #[gpui::test]
 fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (root, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (root, cx) = cx.add_window_view({
+        let store = store.clone();
+        |window, cx| GitCometView::new(store, events, None, window, cx)
+    });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("restyle.rs");
     std::fs::write(&path, "fn main() {}\n").unwrap();
+    // On screen: a buffer takes its window's theme when it draws.
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        RepoId(1),
+        gitcomet_core::domain::RepoSpec {
+            workdir: directory.path().join("repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
+        repos: vec![repo],
+        active_repo: Some(RepoId(1)),
+        ..gitcomet_state::model::AppState::test_default()
+    }));
     let docs = cx.update(|_, app| root.read(app).documents.clone());
-    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+    cx.update(|_, app| {
+        root.update(app, |root, cx| {
+            root.documents
+                .update(cx, |docs, cx| docs.open(path.clone(), true, cx));
+            root.show_documents_canvas(cx);
+        })
+    });
     drain(&root, cx);
     let buffer = cx.update(|_, app| {
         let docs = docs.read(app);
         docs.buffers[&docs.active.unwrap()].clone()
     });
 
+    let (light, dark) = (AppTheme::gitcomet_light(), AppTheme::gitcomet_dark());
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
     cx.update(|_, app| {
         buffer.update(app, |b, cx| b.reload(cx));
-        docs.update(app, |docs, cx| {
-            docs.set_theme(crate::theme::AppTheme::gitcomet_light(), cx)
-        });
+        crate::theme::set_window_theme(app, window_id, light);
     });
     drain(&root, cx);
 
-    let assert_restyled = |cx: &mut gpui::VisualTestContext, case: &str| {
+    let assert_restyled = |cx: &mut gpui::VisualTestContext, theme: AppTheme, case: &str| {
         cx.update(|_, app| {
             let b = buffer.read(app);
             let snapshot = b.input.read(app).text_snapshot();
             assert_eq!(b.input.read(app).text(), "fn main() {}\n", "{case}");
+            assert_eq!(b.theme, theme, "{case}: styled for another theme");
             assert_eq!(
                 b.syntax_key,
                 Some((snapshot.model_id(), snapshot.revision())),
@@ -1438,19 +1455,17 @@ fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestApp
             );
         });
     };
-    assert_restyled(cx, "read the same text");
+    assert_restyled(cx, light, "read the same text");
 
     // A read that fails keeps the text on screen, which still needs restyling.
     cx.update(|_, app| {
         buffer.update(app, |b, cx| b.reload(cx));
-        docs.update(app, |docs, cx| {
-            docs.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
-        });
+        crate::theme::set_window_theme(app, window_id, dark);
     });
     std::fs::remove_file(&path).unwrap();
     drain(&root, cx);
     assert!(cx.update(|_, app| buffer.read(app).error().is_some()));
-    assert_restyled(cx, "read failed");
+    assert_restyled(cx, dark, "read failed");
 }
 
 /// A wheel over the line numbers scrolls the document, and only the document

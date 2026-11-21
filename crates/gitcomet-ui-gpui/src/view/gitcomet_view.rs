@@ -1161,14 +1161,8 @@ impl GitCometView {
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
         let documents_root = cx.weak_entity();
-        let documents = cx.new(|cx| {
-            documents::DocumentsView::new(
-                initial_theme,
-                documents_root.clone(),
-                ui_model.clone(),
-                cx,
-            )
-        });
+        let documents = cx
+            .new(|cx| documents::DocumentsView::new(documents_root.clone(), ui_model.clone(), cx));
         let document_picker = {
             let status_bar = bottom_status_bar.entity_id();
             cx.new(|cx| {
@@ -1416,8 +1410,6 @@ impl GitCometView {
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         let theme = theme.with_appearance(crate::appearance::current(cx));
         crate::theme::set_window_theme(cx, self.window_handle.window_id(), theme);
-        self.documents
-            .update(cx, |documents, cx| documents.set_theme(theme, cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {

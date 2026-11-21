@@ -15,16 +15,8 @@ fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
         let model = root_cx.update(|_, app| root.read(app).ui_model.clone());
         (root, model)
     };
-    let (buffer, cx) = cx.add_window_view(|_, cx| {
-        StandaloneBuffer::new(
-            path,
-            AppTheme::gitcomet_dark(),
-            root.downgrade(),
-            model,
-            None,
-            cx,
-        )
-    });
+    let (buffer, cx) =
+        cx.add_window_view(|_, cx| StandaloneBuffer::new(path, root.downgrade(), model, None, cx));
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         cx.update(|window, app| {
