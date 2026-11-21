@@ -280,7 +280,7 @@ impl Element for StatusSectionResizeTracker {
         _cx: &mut App,
     ) {
         let pane = self.view.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
             if phase != gpui::DispatchPhase::Capture {
                 return;
             }
@@ -294,20 +294,18 @@ impl Element for StatusSectionResizeTracker {
                 }
             });
             if active {
-                window.refresh();
                 cx.stop_propagation();
             }
         });
 
         let pane = self.view.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
             if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
                 return;
             }
 
             let finished = pane.update(cx, |this, cx| this.finish_status_section_resize(cx));
             if finished {
-                window.refresh();
                 cx.stop_propagation();
             }
         });

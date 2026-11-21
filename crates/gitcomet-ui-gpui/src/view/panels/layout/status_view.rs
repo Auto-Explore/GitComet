@@ -957,35 +957,32 @@ impl DetailsPaneView {
             ))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.listener(move |this, e: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
                     crate::text_selection_owner::preserve(cx);
                     this.start_status_section_resize(handle, e.position.y, cx);
-                    window.refresh();
                 }),
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(move |this, _e, window, cx| {
+                cx.listener(move |this, _e, _window, cx| {
                     if this
                         .status_section_resize
                         .is_some_and(|state| state.handle == handle)
                     {
                         this.finish_status_section_resize(cx);
-                        window.refresh();
                     }
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(move |this, _e, window, cx| {
+                cx.listener(move |this, _e, _window, cx| {
                     if this
                         .status_section_resize
                         .is_some_and(|state| state.handle == handle)
                     {
                         this.finish_status_section_resize(cx);
-                        window.refresh();
                     }
                 }),
             )
