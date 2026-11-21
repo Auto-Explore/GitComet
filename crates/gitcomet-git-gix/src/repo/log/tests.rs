@@ -595,6 +595,85 @@ fn rename_destination_at_commit_reads_names_that_are_not_utf8() {
 }
 
 #[test]
+fn rename_source_at_commit_names_only_a_file_that_commit_renamed() {
+    use gitcomet_core::services::GitRepository as _;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    commit_file(repo, "src/old.txt", "alpha\nbeta\ngamma\n", "base");
+    let base = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+    commit_file(repo, "kept.txt", "one\n", "add kept");
+    fs::create_dir_all(repo.join("lib")).expect("create lib dir");
+    git_success(repo, &["mv", "src/old.txt", "lib/new.txt"]);
+    write_file(repo, "kept.txt", "two\n");
+    git_success(repo, &["add", "-A"]);
+    git_success(repo, &["commit", "-m", "rename and edit another file"]);
+    let rename = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+
+    let opened = open_repo(repo);
+    let source = |path: &str, commit: &CommitId| {
+        opened
+            .rename_source_at_commit(Path::new(path), commit)
+            .expect("rename lookup should not error")
+    };
+    assert_eq!(
+        source("lib/new.txt", &rename),
+        Some(PathBuf::from("src/old.txt"))
+    );
+    assert_eq!(source("kept.txt", &rename), None);
+    assert_eq!(source("src/old.txt", &base), None);
+}
+
+#[test]
+fn rename_source_at_commit_finds_a_rename_onto_a_former_directory() {
+    use gitcomet_core::services::GitRepository as _;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    commit_file(repo, "docs/inner.txt", "inner\n", "add a directory");
+    commit_file(repo, "notes.txt", "alpha\nbeta\ngamma\n", "add notes");
+    git_success(repo, &["rm", "-r", "-q", "docs"]);
+    git_success(repo, &["mv", "notes.txt", "docs"]);
+    git_success(
+        repo,
+        &[
+            "commit",
+            "-m",
+            "replace the directory with the renamed file",
+        ],
+    );
+    let rename = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+
+    assert_eq!(
+        open_repo(repo)
+            .rename_source_at_commit(Path::new("docs"), &rename)
+            .expect("rename lookup should not error"),
+        Some(PathBuf::from("notes.txt"))
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn rename_source_at_commit_reads_quoted_names() {
+    use gitcomet_core::services::GitRepository as _;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let (old, new) = ("editing.rs", "*ÄÅ`öå||.rs");
+    commit_file(repo, old, "alpha\nbeta\n", "base");
+    git_success(repo, &["mv", "--", old, new]);
+    git_success(repo, &["commit", "-m", "rename"]);
+    let rename = CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into());
+
+    assert_eq!(
+        open_repo(repo)
+            .rename_source_at_commit(Path::new(new), &rename)
+            .expect("rename lookup should not error"),
+        Some(PathBuf::from(old))
+    );
+}
+
+#[test]
 fn recent_commit_message_limits_cap_large_requests_without_panicking() {
     assert_eq!(recent_commit_message_limits(0), None);
     assert_eq!(recent_commit_message_limits(1), Some((1, 5)));

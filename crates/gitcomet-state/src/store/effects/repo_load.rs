@@ -1387,9 +1387,14 @@ pub(super) fn schedule_open_file_at_commit(
                 path: resolved,
             }
         } else {
+            let renamed_from = repo
+                .rename_source_at_commit(&resolved, &commit_id)
+                .ok()
+                .flatten();
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::commit(commit_id, resolved),
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, resolved)
+                    .with_old_path(renamed_from),
             }
         };
         send_or_log(&msg_tx, message);

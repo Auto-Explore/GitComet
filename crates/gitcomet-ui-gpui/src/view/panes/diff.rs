@@ -37,7 +37,7 @@ pub(in crate::view) use text_format::TextEncodingMenuState;
 // pane itself reaches them through `impl DiffRenderer`.
 use crate::view::documents::disk::DiskIdentity;
 pub(in crate::view) use core_impl::{
-    DiffRendererInit, EngineNotice, LineNumberCells, device_snapped, list_row_pitch,
+    DiffRendererInit, EngineNotice, LineNumberCells, ZeroRowNotice, device_snapped, list_row_pitch,
 };
 #[cfg(test)]
 pub(in crate::view) use diff_text::take_opened_web_links_for_tests;

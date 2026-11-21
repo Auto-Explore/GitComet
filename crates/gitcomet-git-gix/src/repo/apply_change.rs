@@ -359,27 +359,11 @@ impl GixRepo {
         let Some(base) = source.base else {
             return Ok(renames);
         };
-        let mut cmd = self.git_workdir_cmd();
-        cmd.args(["diff-tree", "-r", "-M", "-z", "--name-status"])
-            .arg(base.to_string())
-            .arg(source.tip.to_string());
-        let listing = run_git_capture_bytes(cmd, "git diff-tree -M --name-status")?;
-        let mut fields = listing.split(|byte| *byte == 0);
-        while let Some(status) = fields.next() {
-            let Some(first) = fields.next() else {
-                break;
-            };
-            if status.first() == Some(&b'R') || status.first() == Some(&b'C') {
-                let Some(second) = fields.next() else {
-                    break;
-                };
-                if status.first() == Some(&b'R') {
-                    renames.insert(
-                        path_buf_from_git_bytes(second, "apply change rename destination")?,
-                        path_buf_from_git_bytes(first, "apply change rename source")?,
-                    );
-                }
-            }
+        for (old, new) in self.renames_between(&base.to_string(), &source.tip.to_string())? {
+            renames.insert(
+                path_buf_from_git_bytes(&new, "apply change rename destination")?,
+                path_buf_from_git_bytes(&old, "apply change rename source")?,
+            );
         }
         Ok(renames)
     }

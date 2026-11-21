@@ -1858,6 +1858,11 @@ impl GitRepository for GixRepo {
         self.resolve_file_path_at_commit_impl(path, commit)
     }
 
+    fn rename_source_at_commit(&self, path: &Path, commit: &CommitId) -> Result<Option<PathBuf>> {
+        let _operation = self.operation_lease()?;
+        self.rename_source_at_commit_impl(path, commit)
+    }
+
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
