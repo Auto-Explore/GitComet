@@ -127,11 +127,11 @@ fn commit_graph_is_behind(repo: &gix::Repository, threshold: usize) -> bool {
     {
         return false;
     }
-    let Ok(head) = repo.head_id() else {
+    let Ok(Some(head)) = crate::refs::head_oid(repo) else {
         return false;
     };
     let graph = repo.commit_graph_if_enabled().ok().flatten();
-    let mut pending = vec![head.detach()];
+    let mut pending = vec![head];
     let mut uncovered = FxHashSet::default();
     while let Some(id) = pending.pop() {
         let covered = graph
