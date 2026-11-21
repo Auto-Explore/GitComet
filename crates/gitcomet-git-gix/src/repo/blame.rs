@@ -83,7 +83,7 @@ fn staged_blob_for_blame(repo: &gix::Repository, path: &Path) -> Result<Vec<u8>>
 
 /// Build an all-"Not Committed Yet" blame for `contents`, used for a file with no
 /// committed history (newly added / untracked) where every line is local. The
-/// all-zero object id matches what `git blame --line-porcelain` emits for
+/// all-zero object id matches what `git blame --porcelain` emits for
 /// uncommitted lines, so the UI treats these rows the same way.
 fn synthesize_uncommitted_blame(contents: &[u8], null_id: gix::ObjectId) -> Vec<BlameLine> {
     const NOT_COMMITTED: &str = "Not Committed Yet";
@@ -257,113 +257,138 @@ fn is_hex_object_id(token: &str) -> bool {
     matches!(token.len(), 40 | 64) && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Parse `git blame --line-porcelain` output into per-line blame entries.
+/// What `git blame --porcelain` says about a commit, and the origin it last
+/// gave for that commit's lines.
+#[derive(Default)]
+struct PorcelainCommit {
+    id: Arc<str>,
+    author: Option<Arc<str>>,
+    author_time_unix: Option<i64>,
+    summary: Option<Arc<str>>,
+    origin: PorcelainOrigin,
+}
+
+/// Where a group of lines came from: the file's name at the commit, and the
+/// revision before it.
+#[derive(Default)]
+struct PorcelainOrigin {
+    prior_exists: bool,
+    prior_commit: Option<Arc<str>>,
+    /// Set only when the name differs from the blamed path.
+    source_path: Option<PathBuf>,
+}
+
+/// Parse `git blame --porcelain` output into per-line blame entries.
 ///
-/// With `--line-porcelain` the full commit header is repeated before every
-/// content line, so each `\t`-prefixed content line is emitted using the header
-/// fields accumulated since the preceding entry. The all-zero object id marks a
-/// line that is not yet committed; those are surfaced as "Not Committed Yet".
+/// Git describes a commit the first time it appears and names only its id
+/// afterwards, so each `\t`-prefixed content line takes its attribution from
+/// the record kept for the id in the header before it. `previous` and
+/// `filename` come again for a commit whose lines come from several paths, and
+/// replace the origin kept for it. `--line-porcelain` output, which repeats
+/// everything before every line, parses the same way. The all-zero object id
+/// marks a line that is not yet committed; those are surfaced as "Not Committed
+/// Yet".
 fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
-    const NOT_COMMITTED: &str = "Not Committed Yet";
+    let not_committed: Arc<str> = Arc::from("Not Committed Yet");
+    let empty: Arc<str> = Arc::from("");
 
     let mut lines: Vec<BlameLine> = Vec::new();
-    let mut commit_id: Option<String> = None;
-    let mut author: Option<String> = None;
-    let mut author_time_unix: Option<i64> = None;
-    let mut summary: Option<String> = None;
-    let mut prior_exists = false;
-    // For uncommitted lines, git emits `previous <sha> <path>` pointing at the
-    // base revision the working-tree change was made against. Captured so the UI
-    // can offer "view file at parent commit" on a not-yet-committed line.
-    let mut prior_commit: Option<String> = None;
-    // The file's name at the current commit (porcelain `filename` line). Kept as
-    // raw bytes so non-UTF-8 Unix paths survive; surfaced as `source_path` when
-    // it differs from the blamed path (i.e. the line came from before a rename).
-    let mut filename: Option<Vec<u8>> = None;
+    let mut commits: Vec<PorcelainCommit> = Vec::new();
+    let mut commit_by_id: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut current: Option<usize> = None;
+    // The first origin line after a header starts a new origin for its commit.
+    let mut origin_started = false;
 
     for raw_line in output.split(|b| *b == b'\n') {
         if raw_line.first() == Some(&b'\t') {
             let text = blame_line_text(&raw_line[1..]);
-            let sha = commit_id.clone().unwrap_or_default();
-            let uncommitted = is_uncommitted_commit_id(&sha);
-            let (author_text, summary_text, time, prior) = if uncommitted {
-                (
-                    NOT_COMMITTED.to_string(),
-                    NOT_COMMITTED.to_string(),
-                    None,
-                    false,
-                )
-            } else {
-                (
-                    author.clone().unwrap_or_default(),
-                    summary.clone().unwrap_or_default(),
-                    author_time_unix,
-                    prior_exists,
-                )
+            let Some(commit) = current.map(|ix| &commits[ix]) else {
+                lines.push(BlameLine {
+                    commit_id: empty.clone(),
+                    author: empty.clone(),
+                    author_time_unix: None,
+                    summary: empty.clone(),
+                    body: None,
+                    line: text,
+                    prior_exists: false,
+                    source_path: None,
+                    prior_commit: None,
+                });
+                continue;
             };
-            // The base revision to open for "view file at parent commit" applies
-            // only to uncommitted lines; committed lines resolve their parent
-            // from `commit_id` instead.
-            let prior_commit_id = if uncommitted {
-                prior_commit.as_deref().map(Arc::from)
+            // An uncommitted line has no history: its `previous` is the base
+            // revision to open for "view file at parent commit", and a
+            // `filename` that differs says nothing about a rename. A committed
+            // line resolves its parent from `commit_id`; a differing `filename`
+            // is the name to navigate with at that commit.
+            lines.push(if is_uncommitted_commit_id(&commit.id) {
+                BlameLine {
+                    commit_id: commit.id.clone(),
+                    author: not_committed.clone(),
+                    author_time_unix: None,
+                    summary: not_committed.clone(),
+                    body: None,
+                    line: text,
+                    prior_exists: false,
+                    source_path: None,
+                    prior_commit: commit.origin.prior_commit.clone(),
+                }
             } else {
-                None
-            };
-            // A `filename` differing from the blamed path means this line predates
-            // a rename; surface it as the historical path so navigation uses a name
-            // that exists at the line's commit. Uncommitted lines have no history.
-            let source_path = if uncommitted {
-                None
-            } else {
-                filename
-                    .as_deref()
-                    .and_then(|bytes| path_buf_from_git_bytes(bytes, "git blame filename").ok())
-                    .filter(|p| p.as_path() != blamed_path)
-            };
-            lines.push(BlameLine {
-                commit_id: Arc::from(sha.as_str()),
-                author: Arc::from(author_text.as_str()),
-                author_time_unix: time,
-                summary: Arc::from(summary_text.as_str()),
-                body: None,
-                line: text,
-                prior_exists: prior,
-                source_path,
-                prior_commit: prior_commit_id,
+                BlameLine {
+                    commit_id: commit.id.clone(),
+                    author: commit.author.clone().unwrap_or_else(|| empty.clone()),
+                    author_time_unix: commit.author_time_unix,
+                    summary: commit.summary.clone().unwrap_or_else(|| empty.clone()),
+                    body: None,
+                    line: text,
+                    prior_exists: commit.origin.prior_exists,
+                    source_path: commit.origin.source_path.clone(),
+                    prior_commit: None,
+                }
             });
-
-            commit_id = None;
-            author = None;
-            author_time_unix = None;
-            summary = None;
-            prior_exists = false;
-            prior_commit = None;
-            filename = None;
             continue;
         }
 
         // The two lines naming a path are read as bytes, before the UTF-8
         // decode below would drop one naming a non-UTF-8 path.
-        if let Some(rest) = raw_line.strip_prefix(b"filename ") {
-            // `core.quotePath=false` leaves bytes outside ASCII as they are; a
-            // name with a quote, a backslash or a control character is still
-            // C-quoted, and read raw it never equals the blamed path.
-            filename = Some(match gix::quote::ansi_c::undo(rest.into()) {
-                Ok((name, _)) => name.into_owned().into(),
-                Err(_) => rest.to_vec(),
+        let origin_line = raw_line
+            .strip_prefix(b"filename ")
+            .map(|rest| (true, rest))
+            .or_else(|| {
+                raw_line
+                    .strip_prefix(b"previous ")
+                    .map(|rest| (false, rest))
             });
-            continue;
-        }
-        if let Some(rest) = raw_line.strip_prefix(b"previous ") {
-            prior_exists = true;
-            // `previous <sha> <path>`: keep the sha so an uncommitted line
-            // can navigate to the revision it was edited from.
-            prior_commit = rest
-                .split(|byte| *byte == b' ')
-                .next()
-                .and_then(|sha| std::str::from_utf8(sha).ok())
-                .filter(|sha| is_hex_object_id(sha))
-                .map(str::to_owned);
+        if let Some((is_filename, rest)) = origin_line {
+            let Some(commit) = current.map(|ix| &mut commits[ix]) else {
+                continue;
+            };
+            if !origin_started {
+                commit.origin = PorcelainOrigin::default();
+                origin_started = true;
+            }
+            if is_filename {
+                // `core.quotePath=false` leaves bytes outside ASCII as they are; a
+                // name with a quote, a backslash or a control character is still
+                // C-quoted, and read raw it never equals the blamed path.
+                let name: Vec<u8> = match gix::quote::ansi_c::undo(rest.into()) {
+                    Ok((name, _)) => name.into_owned().into(),
+                    Err(_) => rest.to_vec(),
+                };
+                commit.origin.source_path = path_buf_from_git_bytes(&name, "git blame filename")
+                    .ok()
+                    .filter(|path| path.as_path() != blamed_path);
+            } else {
+                commit.origin.prior_exists = true;
+                // `previous <sha> <path>`: keep the sha so an uncommitted line
+                // can navigate to the revision it was edited from.
+                commit.origin.prior_commit = rest
+                    .split(|byte| *byte == b' ')
+                    .next()
+                    .and_then(|sha| std::str::from_utf8(sha).ok())
+                    .filter(|sha| is_hex_object_id(sha))
+                    .map(Arc::from);
+            }
             continue;
         }
 
@@ -374,11 +399,25 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             Some((key, rest)) => (key, rest),
             None => (line_str, ""),
         };
+        if is_hex_object_id(key) {
+            let ix = *commit_by_id.entry(key).or_insert_with(|| {
+                commits.push(PorcelainCommit {
+                    id: Arc::from(key),
+                    ..PorcelainCommit::default()
+                });
+                commits.len() - 1
+            });
+            current = Some(ix);
+            origin_started = false;
+            continue;
+        }
+        let Some(commit) = current.map(|ix| &mut commits[ix]) else {
+            continue;
+        };
         match key {
-            "author" => author = Some(rest.to_string()),
-            "author-time" => author_time_unix = rest.trim().parse::<i64>().ok(),
-            "summary" => summary = Some(rest.to_string()),
-            _ if is_hex_object_id(key) => commit_id = Some(key.to_string()),
+            "author" => commit.author = Some(Arc::from(rest)),
+            "author-time" => commit.author_time_unix = rest.trim().parse::<i64>().ok(),
+            "summary" => commit.summary = Some(Arc::from(rest)),
             _ => {}
         }
     }
@@ -474,7 +513,7 @@ impl GixRepo {
     }
 
     /// Blame the working-tree content shown on the new side of a staged/unstaged
-    /// diff via `git blame --line-porcelain`. Unstaged blames the worktree file
+    /// diff via `git blame --porcelain`. Unstaged blames the worktree file
     /// directly; staged feeds the index blob to `--contents -` so attribution
     /// matches the index content shown in the diff. Lines that do not (yet) exist
     /// in committed history come back as "Not Committed Yet" entries.
@@ -511,12 +550,12 @@ impl GixRepo {
         cmd.arg("-c")
             .arg("core.quotePath=false")
             .arg("blame")
-            .arg("--line-porcelain");
+            .arg("--porcelain");
 
         let output = match area {
             DiffArea::Unstaged => {
                 cmd.arg("--").arg(path);
-                run_git_capture_bytes(cmd, "git blame --line-porcelain")?
+                run_git_capture_bytes(cmd, "git blame --porcelain")?
             }
             DiffArea::Staged => {
                 let contents = staged_blob_for_blame(&repo, path)?;
@@ -913,6 +952,195 @@ mod tests {
                 .as_deref()
                 .map(|p| p.as_os_str().as_bytes()),
             Some(&b"docs/\xff-old.md"[..])
+        );
+    }
+
+    /// `--porcelain` describes a commit once. Later lines of that commit carry
+    /// only its id and still need its author, summary and origin.
+    #[test]
+    fn parse_blame_porcelain_reuses_what_a_commit_said_once() {
+        let first = "1111111111111111111111111111111111111111";
+        let second = "2222222222222222222222222222222222222222";
+        let output = format!(
+            "{first} 1 1 2\n\
+             author Ada Lovelace\n\
+             author-time 1700000000\n\
+             summary first\n\
+             filename old/lib.rs\n\
+             \tone\n\
+             {first} 2 2\n\
+             \ttwo\n\
+             {second} 3 3 1\n\
+             author Grace Hopper\n\
+             author-time 1700000100\n\
+             summary second\n\
+             previous {first} old/lib.rs\n\
+             filename src/lib.rs\n\
+             \tthree\n\
+             {first} 4 4 1\n\
+             \tfour\n"
+        );
+
+        let lines = parse_blame_porcelain(output.as_bytes(), Path::new("src/lib.rs"));
+
+        let summary = |line: &BlameLine| {
+            (
+                line.line.clone(),
+                line.commit_id.to_string(),
+                line.author.to_string(),
+                line.summary.to_string(),
+                line.author_time_unix,
+                line.prior_exists,
+                line.source_path.clone(),
+            )
+        };
+        let from_first = |text: &str| {
+            (
+                text.to_string(),
+                first.to_string(),
+                "Ada Lovelace".to_string(),
+                "first".to_string(),
+                Some(1700000000),
+                false,
+                Some(PathBuf::from("old/lib.rs")),
+            )
+        };
+        assert_eq!(
+            lines.iter().map(summary).collect::<Vec<_>>(),
+            vec![
+                from_first("one"),
+                from_first("two"),
+                (
+                    "three".to_string(),
+                    second.to_string(),
+                    "Grace Hopper".to_string(),
+                    "second".to_string(),
+                    Some(1700000100),
+                    true,
+                    None,
+                ),
+                from_first("four"),
+            ]
+        );
+        // One commit, one allocation of each shared field.
+        assert!(Arc::ptr_eq(&lines[0].author, &lines[3].author));
+        assert!(Arc::ptr_eq(&lines[0].commit_id, &lines[1].commit_id));
+    }
+
+    /// A commit whose lines come from two paths gets `previous` and `filename`
+    /// again with each group, and each group keeps its own.
+    #[test]
+    fn parse_blame_porcelain_keeps_the_origin_of_each_group() {
+        let commit = "1111111111111111111111111111111111111111";
+        let base = "3333333333333333333333333333333333333333";
+        let output = format!(
+            "{commit} 1 1 1\n\
+             author Ada Lovelace\n\
+             summary moved\n\
+             filename old.rs\n\
+             \ta\n\
+             {commit} 2 2 1\n\
+             previous {base} new.rs\n\
+             filename new.rs\n\
+             \tb\n\
+             {commit} 3 3 1\n\
+             filename old.rs\n\
+             \tc\n"
+        );
+
+        let lines = parse_blame_porcelain(output.as_bytes(), Path::new("new.rs"));
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (line.prior_exists, line.source_path.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (false, Some(Path::new("old.rs"))),
+                (true, None),
+                (false, Some(Path::new("old.rs"))),
+            ]
+        );
+    }
+
+    /// The compact format must decode to exactly what the per-line format gave,
+    /// for committed, renamed, staged and uncommitted lines.
+    #[test]
+    fn both_porcelain_formats_decode_to_the_same_rows() {
+        use crate::test_support::{git_output, init_test_repo, write_file};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_test_repo(repo);
+        let body = |tag: &str| {
+            (0..60)
+                .map(|line| format!("{tag} line {line}\n"))
+                .collect::<String>()
+        };
+        write_file(repo, "src/old name.txt", &body("base"));
+        git_success(repo, &["add", "-A"]);
+        git_success(repo, &["commit", "-m", "base"]);
+        std::fs::create_dir_all(repo.join("lib")).unwrap();
+        git_success(repo, &["mv", "src/old name.txt", "lib/new.txt"]);
+        git_success(repo, &["commit", "-m", "rename"]);
+        for (round, author) in ["Ada <ada@example.com>", "Grace <grace@example.com>"]
+            .into_iter()
+            .enumerate()
+        {
+            let text = std::fs::read_to_string(repo.join("lib/new.txt")).unwrap();
+            let edited = text
+                .lines()
+                .enumerate()
+                .map(|(line, text)| {
+                    if line % 7 == round {
+                        format!("round {round} edit {line}\n")
+                    } else {
+                        format!("{text}\n")
+                    }
+                })
+                .collect::<String>();
+            write_file(repo, "lib/new.txt", &edited);
+            git_success(
+                repo,
+                &["commit", "-am", "edit", "--author", author, "--no-verify"],
+            );
+        }
+        let committed = std::fs::read_to_string(repo.join("lib/new.txt")).unwrap();
+        write_file(
+            repo,
+            "lib/new.txt",
+            &committed.replacen("base line 5\n", "dirty\nbase line 5\n", 1),
+        );
+
+        let blame = |format: &str, extra: &[&str]| {
+            let mut args = vec!["-c", "core.quotePath=false", "blame", format];
+            args.extend_from_slice(extra);
+            args.extend_from_slice(&["--", "lib/new.txt"]);
+            let output = git_output(repo, &args);
+            assert!(output.status.success(), "{output:?}");
+            (
+                output.stdout.len(),
+                parse_blame_porcelain(&output.stdout, Path::new("lib/new.txt")),
+            )
+        };
+        for extra in [&[][..], &["HEAD~1"][..]] {
+            let (verbose_bytes, verbose) = blame("--line-porcelain", extra);
+            let (compact_bytes, compact) = blame("--porcelain", extra);
+            assert_eq!(compact, verbose);
+            assert!(compact.len() >= 60);
+            assert!(
+                compact_bytes * 2 < verbose_bytes,
+                "{compact_bytes} of {verbose_bytes} bytes"
+            );
+        }
+        let (_, worktree) = blame("--porcelain", &[]);
+        assert!(worktree.iter().any(|line| line.line == "dirty"
+            && line.author.as_ref() == "Not Committed Yet"
+            && line.prior_commit.is_some()));
+        assert!(
+            worktree
+                .iter()
+                .any(|line| line.source_path.as_deref() == Some(Path::new("src/old name.txt")))
         );
     }
 
