@@ -56,6 +56,20 @@ class ScorecardTests(unittest.TestCase):
         self.assertEqual(found[("set-theme-fns", "gitcomet-ui-gpui")], 1)
         self.assertEqual(found[("diff-renderer-refs", "gitcomet-ui-gpui")], 3)
 
+    def test_a_lower_layer_naming_a_higher_one_is_counted(self):
+        view = "crates/gitcomet-ui-gpui/src/view"
+        texts = {
+            f"{view}/rows/history.rs": "use crate::view::panes::Pane;\nfn f() { panels::open(); rows::draw(); }\n",
+            f"{view}/panes/diff.rs": "fn f() { rows::draw(); super::panels::open(); }\n",
+            f"{view}/panels/popover.rs": "fn f() { panes::main(); rows::draw(); }\n",
+        }
+        found = scorecard.measure(texts, texts)
+        self.assertEqual({key: value for key, value in found.items() if key[0] == "upward-refs"}, {
+            ("upward-refs", "gitcomet-ui-gpui::rows->panes"): 1,
+            ("upward-refs", "gitcomet-ui-gpui::rows->panels"): 1,
+            ("upward-refs", "gitcomet-ui-gpui::panes->panels"): 1,
+        })
+
     def test_long_functions_are_recorded_by_file_and_name(self):
         path = "crates/gitcomet-core/src/big.rs"
         texts = {path: long_function("small", 149) + long_function("big", 150)}

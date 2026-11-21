@@ -55,6 +55,11 @@ SHAPES = (
     ("struct-fields", UI, "struct", "DiffRenderer"),
     ("struct-fields", UI, "struct", "GitCometView"),
 )
+# (crate, folder, its sub-folders from the lowest layer to the highest). A
+# lower layer naming a higher one is counted; the other direction is free.
+LAYERS = (
+    (UI, "src/view", ("rows", "panes", "panels")),
+)
 
 
 def crate_of(path):
@@ -143,6 +148,14 @@ def measure(texts, production):
                  for size in [item_members(code, keyword, name)] if size is not None]
         if sizes:
             found[(metric, f"{crate}::{name}")] = max(sizes)
+    for crate, folder, layers in LAYERS:
+        for depth, lower in enumerate(layers):
+            prefix = f"crates/{crate}/{folder}/{lower}/"
+            codes = [code for path, code in production.items() if path.startswith(prefix)]
+            for higher in layers[depth + 1:]:
+                count = sum(len(re.findall(rf"\b{higher}::", code)) for code in codes)
+                if count:
+                    found[("upward-refs", f"{crate}::{lower}->{higher}")] = count
     return found
 
 
