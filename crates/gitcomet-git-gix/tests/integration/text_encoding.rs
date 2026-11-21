@@ -867,6 +867,117 @@ fn mixed_encoding_conflict_can_save_either_decoded_stage() {
     }
 }
 
+/// The resolver writes a side as the stage's text in the line endings and
+/// encoding of the working file Git wrote for the conflict. That is what Git
+/// checks the stage out as, whichever setting converts it, and also where
+/// Git converts nothing: a UTF-16 file it takes for binary, or stored CRLF.
+#[test]
+fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
+    use gitcomet_core::text_format::TextFormat;
+    test_git_env::ensure_initialized();
+    let utf16 = TextFormat {
+        encoding: TextEncoding::UTF_16LE,
+        bom: true,
+    };
+    // (core.autocrlf, attributes, working encoding, line ending, first line)
+    for (autocrlf, attributes, worktree, ending, first) in [
+        ("true", "", TextFormat::UTF_8, "\n", "café"),
+        // Binary to Git, which leaves the LF: no `working-tree-encoding`,
+        // and a control byte in a short file.
+        ("true", "", utf16, "\n", "café"),
+        ("true", "", TextFormat::UTF_8, "\n", "header\u{1}"),
+        // CRLF that Git stores as it is.
+        ("false", "", TextFormat::UTF_8, "\r\n", "café"),
+        (
+            "false",
+            "menu.txt text eol=crlf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "café",
+        ),
+        // Git's checkout leaves a lone CR, which is no line break, alone.
+        (
+            "false",
+            "menu.txt text eol=crlf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "x\ry",
+        ),
+        (
+            "false",
+            "menu.txt text eol=lf\n",
+            TextFormat::UTF_8,
+            "\n",
+            "café",
+        ),
+        (
+            "false",
+            "menu.txt text working-tree-encoding=UTF-16LE-BOM\n",
+            utf16,
+            "\n",
+            "café",
+        ),
+        (
+            "false",
+            "menu.txt text eol=crlf working-tree-encoding=UTF-16LE-BOM\n",
+            utf16,
+            "\n",
+            "café",
+        ),
+    ] {
+        let case =
+            format!("core.autocrlf={autocrlf} {attributes:?} {worktree:?} {ending:?} {first:?}");
+        let dir = init_repo();
+        let root = dir.path();
+        git(root, &["config", "core.autocrlf", autocrlf]);
+        fs::write(root.join(".gitattributes"), attributes).unwrap();
+        let write = |text: &str| {
+            let text = text.replace("café", first).replace('\n', ending);
+            let bytes = gitcomet_core::text_format::encode(&text, worktree).unwrap();
+            fs::write(root.join("menu.txt"), bytes).unwrap();
+        };
+        write("café\nbase\n");
+        commit_all(root, "base");
+        git(root, &["checkout", "-q", "-b", "theirs"]);
+        write("café\ntheirs\n");
+        commit_all(root, "theirs");
+        git(root, &["checkout", "-q", "-"]);
+        write("café\nours\n");
+        commit_all(root, "ours");
+        let merged = git_cmd(root)
+            .args(["merge", "-q", "theirs"])
+            .output()
+            .unwrap();
+        assert!(!merged.status.success(), "{case}: the merge must conflict");
+
+        let repo = open(root);
+        let path = Path::new("menu.txt");
+        let session = repo.conflict_session(path, None).unwrap().unwrap();
+        let working = session
+            .current
+            .as_ref()
+            .and_then(|current| current.as_text())
+            .expect("the working file as text");
+        let format = session
+            .output_format
+            .or(session.current_format)
+            .expect("the working file was read");
+        for (stage, side) in [
+            (":2:menu.txt", &session.ours),
+            (":3:menu.txt", &session.theirs),
+        ] {
+            let stored = side.as_text().expect("a text stage");
+            let text = gitcomet_core::text_format::with_crlf_of(stored.into(), working);
+            let written = gitcomet_core::text_format::encode(&text, format.format).unwrap();
+            assert_eq!(
+                written.as_ref(),
+                git(root, &["cat-file", "--filters", "--path=menu.txt", stage]),
+                "{case} {stage}"
+            );
+        }
+    }
+}
+
 #[test]
 fn textconv_patch_decodes_its_output_without_reading_original_file_text() {
     test_git_env::ensure_initialized();

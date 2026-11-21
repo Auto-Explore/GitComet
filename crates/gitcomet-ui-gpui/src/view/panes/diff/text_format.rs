@@ -186,6 +186,24 @@ impl DiffRenderer {
         }
     }
 
+    /// The resolved output, with CRLF where Git checked the conflicted file
+    /// at `path` out with CRLF.
+    pub(in crate::view) fn conflict_output_text_for_save(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        text: String,
+    ) -> String {
+        match self
+            .conflict_resolver
+            .cached_loaded_file_for_target(repo_id, path)
+            .and_then(|file| file.current.as_deref())
+        {
+            Some(current) => gitcomet_core::text_format::with_crlf_of(text, current),
+            None => text,
+        }
+    }
+
     /// The resolved output as bytes in the conflicted file's encoding, or
     /// `None` after telling the user why it cannot be written.
     pub(in crate::view) fn conflict_output_bytes_for_save(
