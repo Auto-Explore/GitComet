@@ -57,7 +57,7 @@ fn-lines crates/gitcomet-state/src/store/reducer/diff_session.rs::reduce_event 3
 fn-lines crates/gitcomet-state/src/store/reducer/external_and_history.rs::repo_externally_changed 172 -
 fn-lines crates/gitcomet-state/src/store/reducer/indexed_history.rs::reduce 328 -
 fn-lines crates/gitcomet-state/src/store/reducer/internal.rs::reduce 537 -
-fn-lines crates/gitcomet-state/src/store/reducer/prepared.rs::capture_internal 266 -
+fn-lines crates/gitcomet-state/src/store/reducer/prepared.rs::capture_internal 265 -
 fn-lines crates/gitcomet-state/src/store/reducer/repo_management.rs::fill_set_active_repo_inline_impl 218 -
 fn-lines crates/gitcomet-state/src/store/reducer/repo_management.rs::repo_opened_ok 208 -
 fn-lines crates/gitcomet-state/src/store/reducer/util.rs::summarize_command 490 -
@@ -126,12 +126,11 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/repo_picke
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/status_file.rs::model 369 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/create_branch_from_ref_prompt.rs::panel 152 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/error_details.rs::detail 170 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_repo_for_popover 337 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::notify_fingerprint 177 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_repo_for_popover 269 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::history_row 170 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::operation_detail 408 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::panel 254 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::new 900 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::new 877 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/host/mod.rs::open_popover 723 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/keyboard_shortcuts.rs::panel 156 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/mod.rs::popover_width_spec 210 -

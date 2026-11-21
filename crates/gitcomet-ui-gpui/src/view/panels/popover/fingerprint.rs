@@ -57,31 +57,6 @@ pub(super) fn notify_fingerprint(
         repo.repository_mode.hash(&mut hasher);
         std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
     }
-    if matches!(popover, PopoverKind::CommitMenu { .. }) {
-        state.git_log_settings.show_history_tags.hash(&mut hasher);
-    }
-    if matches!(popover, PopoverKind::PullPicker) {
-        state.remote_settings.auto_fetch.enabled.hash(&mut hasher);
-        if let Some(repo) = repo_for_popover(state, popover, binding) {
-            repo.auto_fetch.last_success_at.hash(&mut hasher);
-            repo.auto_fetch.retry_at.hash(&mut hasher);
-            repo.auto_fetch.paused_remotes.hash(&mut hasher);
-            std::mem::discriminant(&repo.auto_fetch.status).hash(&mut hasher);
-            match &repo.auto_fetch.status {
-                gitcomet_state::model::AutoFetchStatus::Failed { at, error } => {
-                    at.hash(&mut hasher);
-                    super::context_menu::pull::auto_fetch_failure_description(error)
-                        .hash(&mut hasher);
-                    super::context_menu::pull::auto_fetch_auth_recovery_hint(error)
-                        .hash(&mut hasher);
-                }
-                gitcomet_state::model::AutoFetchStatus::Succeeded { at } => at.hash(&mut hasher),
-                gitcomet_state::model::AutoFetchStatus::Idle
-                | gitcomet_state::model::AutoFetchStatus::Running => {}
-            }
-        }
-    }
-
     match popover {
         PopoverKind::CloneRepo => match &state.clone {
             None => 0u8.hash(&mut hasher),
@@ -116,36 +91,6 @@ pub(super) fn notify_fingerprint(
                 repo.id.hash(&mut hasher);
                 repo.spec.workdir.hash(&mut hasher);
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
-            }
-        }
-        PopoverKind::RepoTabMenu { .. } => {
-            state.active_repo.hash(&mut hasher);
-            state.repos.len().hash(&mut hasher);
-            for repo in &state.repos {
-                repo.id.hash(&mut hasher);
-            }
-        }
-        PopoverKind::DiffContentModeSettings
-        | PopoverKind::TextFormatMenu { .. }
-        | PopoverKind::CommitFileSortMenu { .. }
-        | PopoverKind::FileListLayoutMenu { .. }
-        | PopoverKind::WebLinkMenu { .. }
-        | PopoverKind::LocalFileLinkMenu { .. }
-        | PopoverKind::CommitShaLinkMenu { .. }
-        | PopoverKind::DiffActionMenu
-        | PopoverKind::MergetoolSettingsMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
-        | PopoverKind::AppMenu
-        | PopoverKind::AddRepoMenu => {
-            // Mostly local UI state; depend only on whether a repo is active/open.
-            state.active_repo.hash(&mut hasher);
-            if let Some(repo) = repo_for_popover(state, popover, binding) {
-                view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
-                // The app menu enables "Open remote in web browser" from them.
-                if matches!(popover, PopoverKind::AppMenu) {
-                    repo.remotes_rev.hash(&mut hasher);
-                }
             }
         }
         PopoverKind::Repo {
@@ -205,9 +150,6 @@ pub(super) fn notify_fingerprint(
                     .and_then(|binding| binding.diff(repo))
                     .unwrap_or(&repo.diff_state);
                 hash_repo_for_popover(repo, diff, popover, &mut hasher);
-                if matches!(popover, PopoverKind::PullPicker | PopoverKind::PushPicker) {
-                    hash_large_file_picker_entries(state, repo, &mut hasher);
-                }
             } else {
                 state.active_repo.hash(&mut hasher);
             }
@@ -215,19 +157,6 @@ pub(super) fn notify_fingerprint(
     }
 
     hasher.finish()
-}
-
-/// Pull and Push list LFS and git-annex entries built from the support
-/// summary, the installed tools, the settings and the running pull or push.
-fn hash_large_file_picker_entries(state: &AppState, repo: &RepoState, hasher: &mut FxHasher) {
-    let settings = &state.large_file_settings;
-    repo.annex_takes_over_pull_push(settings).hash(hasher);
-    settings.annex_sync_content.hash(hasher);
-    repo.large_file_support_rev.hash(hasher);
-    state.large_file_tools.git_lfs.is_not_found().hash(hasher);
-    state.large_file_tools.git_annex.is_not_found().hash(hasher);
-    (repo.push_in_flight > 0).hash(hasher);
-    (repo.worktree_pull_in_flight > 0).hash(hasher);
 }
 
 fn repo_for_popover<'a>(
@@ -362,14 +291,9 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::UpstreamPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
-        | PopoverKind::BranchMenu { .. }
-        | PopoverKind::BranchSectionMenu { .. }
-        // The group menu's branch count and the pinned menu's "Unpin all (N)"
-        // both read the live branch lists, so a refresh landing while the menu
-        // is up has to repaint it rather than leave a stale count.
-        | PopoverKind::BranchGroupMenu { .. }
+        // The pinned list's "Unpin all (N)" reads the live branch lists, so a
+        // refresh landing while it is up has to repaint it.
         | PopoverKind::SidebarPinnedOverflow { .. }
-        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -382,21 +306,11 @@ fn hash_repo_for_popover<H: Hasher>(
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
             repo.ref_metadata_rev.hash(hasher);
-            // A branch's menu offers its worktree once the worktree list knows it.
-            repo.worktrees_rev.hash(hasher);
-        }
-
-        // Its toggle label reads `expanded_dirs` and its disabled state reads
-        // `search_query`. "Locate file in explorer" is a global action that
-        // rewrites both without any click on the tree, so the menu has to
-        // repaint when it lands rather than keep a label that is now a lie.
-        PopoverKind::FileBrowserFolderMenu { .. } => {
-            repo.file_browser.file_browser_rev.hash(hasher);
         }
 
         // File counts come from the lists' files, and Apply follows the busy
         // state. Collapse state is view-local and only changes by closing it.
-        PopoverKind::FileListFolderMenu { .. } | PopoverKind::DiscardFolderChangesConfirm { .. } => {
+        PopoverKind::DiscardFolderChangesConfirm { .. } => {
             repo.history_rewrite_busy().hash(hasher);
             repo.history_state.commit_details_rev.hash(hasher);
             repo.history_state.range_files_rev.hash(hasher);
@@ -454,9 +368,7 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.stashes_rev.hash(hasher);
             repo.status_cache_rev().hash(hasher);
         }
-        PopoverKind::StashDropConfirm { .. }
-        | PopoverKind::StashMenu { .. }
-        | PopoverKind::StashPickerPrompt { .. } => {
+        PopoverKind::StashDropConfirm { .. } | PopoverKind::StashPickerPrompt { .. } => {
             repo.stashes_rev.hash(hasher);
         }
         PopoverKind::FileHistoryFilePicker { .. } => {
@@ -465,9 +377,7 @@ fn hash_repo_for_popover<H: Hasher>(
             diff.diff_target_rev.hash(hasher);
         }
 
-        PopoverKind::DiffHunkMenu { .. }
-        | PopoverKind::DiffEditorMenu { .. }
-        | PopoverKind::DiscardChangesConfirm { .. } => {
+        PopoverKind::DiscardChangesConfirm { .. } => {
             diff.diff_rev.hash(hasher);
             if let Some(t) = diff.diff_target.as_ref() {
                 view_fingerprint::hash_diff_target(t, hasher)
@@ -486,13 +396,6 @@ fn hash_repo_for_popover<H: Hasher>(
             }
         }
 
-        PopoverKind::HistoryBranchFilter { .. } => {
-            repo.history_state.history_scope.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-        }
-
         PopoverKind::HistoryAuthorFilter { .. } => {
             repo.history_state.history_author_filter.hash(hasher);
             repo.history_state.history_scope.hash(hasher);
@@ -502,31 +405,12 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.log_rev.hash(hasher);
         }
 
-        PopoverKind::PullPicker
-        | PopoverKind::PushPicker
-        | PopoverKind::PullReconcilePrompt { .. }
-        | PopoverKind::ForcePushConfirm { .. } => {
+        PopoverKind::PullReconcilePrompt { .. } | PopoverKind::ForcePushConfirm { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             hash_pending_force_push_lease(repo, hasher);
-        }
-
-        PopoverKind::PreviousCommitMessagesMenu { .. } => {
-            repo.recent_commit_messages_rev.hash(hasher);
-        }
-
-        PopoverKind::RepoTabMenu { .. } => {
-            repo.id.hash(hasher);
-        }
-
-        PopoverKind::CommitOptionsMenu { .. } => {
-            repo.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.merge_message_rev.hash(hasher);
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
         }
 
         // The squash prompt tracks the message preview plus everything that
@@ -537,35 +421,6 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.log_rev.hash(hasher);
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
-        }
-
-        PopoverKind::CommitMenu { .. } => {
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-            repo.remotes_rev.hash(hasher);
-            repo.remote_tags_rev.hash(hasher);
-            repo.status_rev.hash(hasher);
-            repo.history_state.selected_commit_rev.hash(hasher);
-            repo.history_state.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.worktrees_rev.hash(hasher);
-        }
-        PopoverKind::FileHistoryCommitMenu { .. } => {
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-            repo.history_state.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.history_rewrite_busy().hash(hasher);
-            repo.navigation.comparison_mark.hash(hasher);
-        }
-        PopoverKind::TagMenu { .. } => {
-            repo.tags_rev.hash(hasher);
-            repo.remotes_rev.hash(hasher);
-            repo.remote_tags_rev.hash(hasher);
         }
 
         PopoverKind::HookActivity { .. } => {
@@ -593,21 +448,6 @@ fn hash_repo_for_popover<H: Hasher>(
         // The buttons follow the repo's busy state.
         PopoverKind::ApplyFileChangeConfirm { .. }
         | PopoverKind::InteractiveCherryPickConfirm { .. } => {
-            repo.history_rewrite_busy().hash(hasher);
-        }
-
-        // "Apply change" follows the repo's busy state.
-        PopoverKind::CommitFileMenu { .. } => {
-            repo.history_rewrite_busy().hash(hasher);
-        }
-        // Foreign-file actions follow the selected checkout and scan membership.
-        PopoverKind::WorktreeFileMenu { .. } => {
-            repo.worktree_dirty_rev.hash(hasher);
-            repo.history_state.worktree_selection_rev.hash(hasher);
-        }
-        // The submodule flag of a row comes from the loaded file list.
-        PopoverKind::CommitRangeFileMenu { .. } => {
-            repo.history_state.range_files_rev.hash(hasher);
             repo.history_rewrite_busy().hash(hasher);
         }
 
@@ -666,9 +506,34 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. }
         // A menu repaints when its model changes, whatever state that read.
+        | PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu,
+            ..
+        }
+        | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchSectionMenu { .. }
+        | PopoverKind::BranchGroupMenu { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
+        | PopoverKind::FileBrowserFolderMenu { .. }
+        | PopoverKind::FileListFolderMenu { .. }
+        | PopoverKind::StashMenu { .. }
+        | PopoverKind::DiffHunkMenu { .. }
+        | PopoverKind::DiffEditorMenu { .. }
+        | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::PullPicker
+        | PopoverKind::PushPicker
+        | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
+        | PopoverKind::CommitOptionsMenu { .. }
+        | PopoverKind::CommitMenu { .. }
+        | PopoverKind::FileHistoryCommitMenu { .. }
+        | PopoverKind::TagMenu { .. }
+        | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::WorktreeFileMenu { .. }
+        | PopoverKind::CommitRangeFileMenu { .. }
         | PopoverKind::ExplorerSettingsMenu { .. } => {}
         PopoverKind::Repo {
-            kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
+            kind: RepoPopoverKind::DisableBareModeConfirm,
             ..
         } => {
             match &repo.bare_mode_conversion {
@@ -700,8 +565,7 @@ fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{Branch, CommitId, Upstream};
-    use std::sync::Arc;
+    use gitcomet_core::domain::CommitId;
 
     fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
         gitcomet_core::services::ForcePushLease {
@@ -737,10 +601,9 @@ mod tests {
         assert_eq!(resolved.id, repo_id);
     }
 
-    /// The branch menus add "Open worktree" once the worktree list names the
-    /// branch; the Add dialog refuses an existing name.
+    /// The Add dialog refuses a branch name that already exists.
     #[test]
-    fn worktree_aware_popovers_repaint_when_their_lists_change() {
+    fn the_worktree_add_prompt_repaints_when_branches_change() {
         let repo_id = RepoId(9);
         let mut state = AppState {
             active_repo: Some(repo_id),
@@ -752,247 +615,10 @@ mod tests {
                 workdir: std::env::temp_dir().join("gitcomet_worktree_menu_fingerprint"),
             },
         ));
-        let changes = |popover: PopoverKind, bump: fn(&mut RepoState)| {
-            let mut state = state.clone();
-            let before = notify_fingerprint(&state, &popover, None);
-            bump(&mut state.repos[0]);
-            before != notify_fingerprint(&state, &popover, None)
-        };
-        let bump_worktrees: fn(&mut RepoState) =
-            |repo| repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
-        let bump_branches: fn(&mut RepoState) =
-            |repo| repo.branches_rev = repo.branches_rev.wrapping_add(1);
-
-        assert!(changes(
-            PopoverKind::BranchMenu {
-                repo_id,
-                target: crate::view::BranchMenuTarget::Local {
-                    name: "main".to_string(),
-                },
-            },
-            bump_worktrees,
-        ));
-        assert!(changes(
-            PopoverKind::CommitMenu {
-                repo_id,
-                commit_id: CommitId("deadbeef".into()),
-                refs: CommitMenuRefs::All,
-            },
-            bump_worktrees,
-        ));
-        assert!(changes(
-            PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
-            bump_branches,
-        ));
-    }
-
-    #[test]
-    fn pull_picker_fingerprint_changes_when_branches_rev_changes() {
-        let repo_id = RepoId(9);
-        let mut repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_pull_picker_fingerprint"),
-            },
-        );
-        repo.head_branch = Loadable::Ready("main".to_string());
-        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
-            name: "main".to_string(),
-            target: CommitId("deadbeef".into()),
-            upstream: Some(Upstream {
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-            }),
-            divergence: None,
-        }]));
-
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        let popover = PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt);
+        let before = notify_fingerprint(&state, &popover, None);
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-
-        assert_ne!(before, after);
-    }
-
-    #[test]
-    fn pull_picker_fingerprint_changes_between_failed_snapshots_without_a_running_snapshot() {
-        use gitcomet_state::model::AutoFetchStatus;
-        let at = std::time::UNIX_EPOCH;
-        let failed = |at, message: &str| AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
-                message.into(),
-            )),
-        };
-        let repo_id = RepoId(9);
-        let mut repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_pull_picker_failed_fetch_fingerprint"),
-            },
-        );
-        repo.auto_fetch.last_success_at = Some(at);
-        repo.auto_fetch.status = failed(at, "network disconnected");
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            repos: vec![repo],
-            ..AppState::test_default()
-        };
-        state.remote_settings.auto_fetch.enabled = true;
-        let first = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        state.repos[0].auto_fetch.status = failed(at, "authentication required");
-        let second = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(first, second);
-        state.repos[0].auto_fetch.status = failed(
-            at + std::time::Duration::from_secs(60),
-            "authentication required",
-        );
-        assert_ne!(
-            second,
-            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
-        );
-        let failure = gitcomet_core::error::GitFailure::new(
-            "git fetch --all",
-            gitcomet_core::error::GitFailureId::CommandFailed,
-            Some(128),
-            Vec::new(),
-            Vec::new(),
-            Some("authentication required".into()),
-        );
-        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
-                failure.clone(),
-            )),
-        };
-        let without_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
-                failure.with_auth_outcome(gitcomet_core::auth::AuthOutcome::NeedsInput(
-                    gitcomet_core::auth::AuthChallenge::from_prompt(
-                        gitcomet_core::auth::GitAuthKind::UsernamePassword,
-                        "Password for test remote:",
-                    ),
-                )),
-            )),
-        };
-        let with_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(without_auth_hint, with_auth_hint);
-        state.repos[0].auto_fetch.retry_at = Some(at + std::time::Duration::from_secs(3600));
-        let retrying = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(with_auth_hint, retrying);
-        state.repos[0].auto_fetch.paused_remotes = vec!["origin".into()];
-        assert_ne!(
-            retrying,
-            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
-        );
-    }
-
-    #[test]
-    fn pull_and_push_picker_fingerprints_follow_annex_takeover() {
-        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
-            let repo_id = RepoId(9);
-            let mut repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: "/tmp/repo".into(),
-                },
-            );
-            repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
-            let mut state = AppState {
-                active_repo: Some(repo_id),
-                repos: vec![repo],
-                ..AppState::test_default()
-            };
-            let before = notify_fingerprint(&state, &popover, None);
-            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
-            support.annex.uuid = Some("u".into());
-            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
-            let detected = notify_fingerprint(&state, &popover, None);
-            assert_eq!(
-                before, detected,
-                "unknown support already protects the adjusted branch"
-            );
-            state.repos[0].large_file_support = Loadable::Ready(Arc::default());
-            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
-            state.repos[0].large_file_support = Loadable::Loading;
-            state.large_file_settings.annex_pull_push = false;
-            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
-        }
-    }
-
-    /// The LFS and git-annex entries under Pull and Push come from the support
-    /// summary, the installed tools and the running pull or push. An open
-    /// menu must repaint when any of them changes.
-    #[test]
-    fn pull_and_push_picker_fingerprints_follow_large_file_entries() {
-        use gitcomet_core::large_file_tools::ToolAvailability;
-        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
-            let repo_id = RepoId(9);
-            let repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: "/tmp/repo".into(),
-                },
-            );
-            let mut state = AppState {
-                active_repo: Some(repo_id),
-                repos: vec![repo],
-                ..AppState::test_default()
-            };
-            let mut previous = notify_fingerprint(&state, &popover, None);
-            let mut assert_changed = |state: &AppState, what: &str| {
-                let next = notify_fingerprint(state, &popover, None);
-                assert_ne!(previous, next, "{popover:?}: {what}");
-                previous = next;
-            };
-
-            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
-            support.annex.uuid = Some("u".into());
-            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
-            state.repos[0].large_file_support_rev += 1;
-            assert_changed(&state, "support loaded");
-            state.large_file_tools.git_annex = ToolAvailability::NotFound {
-                detail: String::new(),
-            };
-            assert_changed(&state, "git-annex missing");
-            state.large_file_tools.git_lfs = ToolAvailability::NotFound {
-                detail: String::new(),
-            };
-            assert_changed(&state, "git-lfs missing");
-            state.repos[0].push_in_flight = 1;
-            assert_changed(&state, "push started");
-            state.repos[0].worktree_pull_in_flight = 1;
-            assert_changed(&state, "pull started");
-        }
-    }
-
-    #[test]
-    fn app_menu_fingerprint_changes_when_the_active_repos_remotes_change() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_app_menu_remotes_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
-        state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
-
-        assert_ne!(before, after, "the Open remote row reads the remotes");
+        assert_ne!(before, notify_fingerprint(&state, &popover, None));
     }
 
     #[test]
@@ -1055,61 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn commit_options_fingerprint_changes_when_amend_availability_revisions_change() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_commit_options_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let popover = PopoverKind::CommitOptionsMenu { repo_id };
-        let before = notify_fingerprint(&state, &popover, None);
-
-        state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
-        let after_head_branch = notify_fingerprint(&state, &popover, None);
-        assert_ne!(before, after_head_branch);
-
-        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        assert_ne!(
-            after_head_branch,
-            notify_fingerprint(&state, &popover, None)
-        );
-    }
-
-    #[test]
-    fn commit_menu_fingerprint_changes_when_history_tag_visibility_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_commit_menu_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let popover = PopoverKind::CommitMenu {
-            repo_id,
-            commit_id: CommitId("deadbeef".into()),
-            refs: CommitMenuRefs::All,
-        };
-        let before = notify_fingerprint(&state, &popover, None);
-        state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;
-
-        assert_ne!(before, notify_fingerprint(&state, &popover, None));
-    }
-
-    #[test]
     fn force_push_confirm_fingerprint_changes_when_pending_lease_changes() {
         let repo_id = RepoId(9);
         let repo = RepoState::new_opening(
@@ -1127,28 +698,6 @@ mod tests {
         let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
         state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
         let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
-
-        assert_ne!(before, after);
-    }
-
-    #[test]
-    fn push_picker_fingerprint_changes_when_pending_lease_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_push_picker_lease_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
-        state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
-        let after = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
 
         assert_ne!(before, after);
     }

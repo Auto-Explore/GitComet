@@ -54,6 +54,7 @@ mod file_history_file_picker;
 mod focus;
 mod interaction;
 mod layout;
+mod menu_models;
 mod menu_placement;
 mod mergetool_settings;
 mod picker;
