@@ -26,21 +26,18 @@ impl HistoryView {
         Self::render_history_rows(this, range, None, cx)
     }
 
-    /// `placement` is the indexed viewport's (row height, sub-row offset): rows
-    /// then position themselves absolutely instead of each sitting in a wrapper
-    /// layout node of its own.
+    /// `placement` is the indexed viewport's snapped row height. Rows use
+    /// nonnegative local tops; their parent applies the shared sub-row offset.
     pub(in crate::view) fn render_history_rows(
         this: &mut Self,
         range: Range<usize>,
-        placement: Option<(f64, f64)>,
+        placement: Option<f64>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         this.sync_history_loading_rows(range.clone(), cx);
         let range_start = range.start;
         let row_top = move |list_ix: usize| {
-            placement.map(|(height, within)| {
-                px(((list_ix - range_start) as f64 * height - within) as f32)
-            })
+            placement.map(|height| px(((list_ix - range_start) as f64 * height) as f32))
         };
         this.clear_history_row_hover_if_scrolled(cx);
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
