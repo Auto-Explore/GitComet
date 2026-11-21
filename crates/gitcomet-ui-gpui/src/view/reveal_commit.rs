@@ -6,6 +6,7 @@
 //! the "list" below the input is at most a single row.
 
 use crate::kit::click::PointerClickExt as _;
+use crate::kit::focus_order::{TabScope, TabScopeExt as _};
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::theme::AppTheme;
 use crate::ui_scale;
@@ -100,6 +101,7 @@ fn reveal_row<'a>(query: &str, lookup: Option<&'a CommitLookup>) -> RevealRow<'a
 
 pub(crate) struct RevealCommitView {
     pub(crate) query_input: Entity<components::TextInput>,
+    tab_scope: TabScope,
     restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
@@ -141,6 +143,7 @@ impl RevealCommitView {
 
         Self {
             query_input,
+            tab_scope: TabScope::modal(cx),
             restore_focus: None,
             fallback_focus: None,
             root_view,
@@ -557,6 +560,7 @@ impl Render for RevealCommitView {
         let input_height = scaled_px(40.0);
 
         let body = components::modal_surface(theme)
+            .tab_scope(&self.tab_scope)
             .child(
                 div()
                     .debug_selector(|| "reveal_commit_title".to_string())

@@ -112,5 +112,5 @@ pub use truncated_text::{
 pub use crate::text_truncation::TextTruncationProfile;
 pub use crate::{
     MINIMAP_COLUMN_WIDTH_PX, MinimapColumn, Scrollbar, ScrollbarAxis, ScrollbarMarker,
-    ScrollbarMarkerKind, TextInput, TextInputOptions,
+    ScrollbarMarkerKind, TextInput, TextInputOptions, TextInputTab,
 };

@@ -1764,7 +1764,8 @@ impl Render for TerminalViewportView {
         let term_lock = self.term_lock.clone();
         div()
             .track_focus(&self.focus_handle)
-            .key_context("Terminal")
+            // The shell completes with Tab.
+            .key_context(gitcomet_ui_kit::focus_order::key_context("Terminal", true))
             .w_full()
             .h_full()
             .cursor(gpui::CursorStyle::IBeam)

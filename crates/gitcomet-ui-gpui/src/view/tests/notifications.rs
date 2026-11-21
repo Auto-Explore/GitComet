@@ -899,6 +899,97 @@ fn authentication_prompt_focuses_first_input_before_typing(cx: &mut gpui::TestAp
     }
 }
 
+/// Tab and Shift-Tab move between the prompt's fields and buttons and wrap
+/// round them, as in a browser's sign-in form, typing nothing.
+#[gpui::test]
+fn authentication_prompt_tabs_between_its_fields_and_buttons(cx: &mut gpui::TestAppContext) {
+    for kind in [AuthPromptKind::UsernamePassword, AuthPromptKind::Passphrase] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, app| {
+            crate::app::bind_text_input_keys_for_test(app);
+            window.activate();
+        });
+        cx.run_until_parked();
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+
+        let (username, secret) = cx.update(|_window, app| {
+            let view = view.read(app);
+            (
+                view.auth_prompt_username_input.read(app).focus_handle(),
+                view.auth_prompt_secret_input.read(app).focus_handle(),
+            )
+        });
+        let fields: Vec<_> = match kind {
+            AuthPromptKind::UsernamePassword => vec![username.clone(), secret.clone()],
+            _ => vec![secret.clone()],
+        };
+        let press = |cx: &mut gpui::VisualTestContext, key: &str| {
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            test_support::redraw(cx);
+        };
+        let on_a_button = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let scope = &view.read(app).auth_prompt_tab_scope;
+                scope.contains_focused(window, app)
+                    && !scope.container().is_focused(window)
+                    && !username.is_focused(window)
+                    && !secret.is_focused(window)
+            })
+        };
+
+        cx.update(|window, _| assert!(fields[0].is_focused(window), "{kind:?}: first field"));
+        for field in &fields[1..] {
+            press(cx, "tab");
+            cx.update(|window, _| assert!(field.is_focused(window), "{kind:?}: next field"));
+        }
+        // Confirm, then Cancel.
+        for _ in 0..2 {
+            press(cx, "tab");
+            assert!(on_a_button(cx), "{kind:?}: Tab moves on to the buttons");
+        }
+        press(cx, "tab");
+        cx.update(|window, _| {
+            assert!(
+                fields[0].is_focused(window),
+                "{kind:?}: Tab wraps to the first field"
+            )
+        });
+        press(cx, "shift-tab");
+        assert!(on_a_button(cx), "{kind:?}: Shift-Tab wraps back to Cancel");
+
+        cx.update(|_window, app| {
+            let view = view.read(app);
+            assert_eq!(view.auth_prompt_username_input.read(app).text(), "");
+            assert_eq!(view.auth_prompt_secret_input.read(app).text(), "");
+        });
+
+        // While the answer is checked Confirm is disabled: Tab passes over it,
+        // from the last field to Cancel and round to the first.
+        state.auth_prompt.as_mut().unwrap().status = AuthPromptStatus::Validating;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        cx.update(|window, app| window.focus(fields.last().unwrap(), app));
+        test_support::redraw(cx);
+        press(cx, "tab");
+        assert!(
+            on_a_button(cx),
+            "{kind:?}: Tab reaches Cancel while checking"
+        );
+        press(cx, "tab");
+        cx.update(|window, _| {
+            assert!(
+                fields[0].is_focused(window),
+                "{kind:?}: Cancel is the only button while checking"
+            )
+        });
+    }
+}
+
 #[gpui::test]
 fn authentication_prompt_preserves_user_focus_on_redraw_and_unrelated_snapshot(
     cx: &mut gpui::TestAppContext,

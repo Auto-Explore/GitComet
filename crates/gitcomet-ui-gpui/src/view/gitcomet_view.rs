@@ -1394,6 +1394,7 @@ impl GitCometView {
             recent_repos_session_stamp: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
+            auth_prompt_tab_scope: crate::kit::focus_order::TabScope::new(cx),
             auth_prompt_key: None,
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
