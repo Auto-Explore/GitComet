@@ -633,6 +633,101 @@ fn remote_web_url_serves_git_and_ssh_schemes_over_https() {
     }
 }
 
+/// GitHub, GitLab and Bitbucket also take SSH on a host that serves no web
+/// pages, and Bitbucket Cloud moves all SSH to `ssh.bitbucket.org`. A link
+/// built on that host, `https://ssh.bitbucket.org/team/repo`, leads nowhere.
+/// Port 443 is what most of those hosts are for; the scp-like form carries a
+/// port in brackets, around the host or around the user and the host.
+#[test]
+fn ssh_only_hosts_link_to_their_forge() {
+    let github = (
+        "https://github.com/org/repo/commit/abc123",
+        "https://github.com/org/repo/blob/main/a/b.txt",
+    );
+    let gitlab = (
+        "https://gitlab.com/org/repo/-/commit/abc123",
+        "https://gitlab.com/org/repo/-/blob/main/a/b.txt",
+    );
+    let bitbucket = (
+        "https://bitbucket.org/org/repo/commits/abc123",
+        "https://bitbucket.org/org/repo/src/main/a/b.txt",
+    );
+    for (url, (commit, file)) in [
+        ("git@ssh.bitbucket.org:org/repo.git", bitbucket),
+        ("git@SSH.Bitbucket.org:org/repo.git", bitbucket),
+        ("ssh://git@ssh.bitbucket.org/org/repo.git", bitbucket),
+        ("ssh://git@altssh.bitbucket.org:443/org/repo.git", bitbucket),
+        ("[git@altssh.bitbucket.org:443]:org/repo.git", bitbucket),
+        ("git@ssh.github.com:org/repo.git", github),
+        ("ssh://git@ssh.github.com:443/org/repo.git", github),
+        ("[git@ssh.github.com:443]:org/repo.git", github),
+        ("git@[ssh.github.com:443]:org/repo.git", github),
+        ("[ssh.github.com:443]:org/repo.git", github),
+        ("git@altssh.gitlab.com:org/repo.git", gitlab),
+        ("ssh://git@altssh.gitlab.com:443/org/repo.git", gitlab),
+        ("git@[altssh.gitlab.com:443]:org/repo.git", gitlab),
+    ] {
+        let remotes = [remote("origin", url)];
+        assert_eq!(
+            commit_permalink(&remotes, "abc123").as_deref(),
+            Some(commit),
+            "{url}"
+        );
+        assert_eq!(
+            file_permalink(&remotes, "main", "a/b.txt").as_deref(),
+            Some(file),
+            "{url}"
+        );
+    }
+}
+
+/// Only those hosts are mapped: a host that merely looks like one keeps its
+/// own name and the generic paths, and a bracketed port does not change the
+/// host of any other remote.
+#[test]
+fn other_hosts_keep_their_own_name() {
+    for (url, page) in [
+        (
+            "git@ssh.github.com.example.org:org/repo.git",
+            "https://ssh.github.com.example.org/org/repo",
+        ),
+        (
+            "git@ssh.example.com:org/repo.git",
+            "https://ssh.example.com/org/repo",
+        ),
+        (
+            "git@notssh.bitbucket.org:org/repo.git",
+            "https://notssh.bitbucket.org/org/repo",
+        ),
+        (
+            "[git@git.example.com:2222]:org/repo.git",
+            "https://git.example.com/org/repo",
+        ),
+    ] {
+        assert_eq!(remote_web_url(url).as_deref(), Some(page), "{url}");
+    }
+    // An address in brackets is not a host with a web page, even one with
+    // dots that cutting only a numeric port would leave looking like a host.
+    for url in [
+        "[::1]:org/repo.git",
+        "git@[2001:db8::1]:org/repo.git",
+        "git@[::ffff:192.0.2.1]:org/repo.git",
+    ] {
+        assert_eq!(remote_web_url(url), None, "{url}");
+    }
+}
+
+#[test]
+fn remote_web_pages_list_an_ssh_only_host_with_its_web_host_once() {
+    let remotes = [
+        remote("origin", "git@ssh.bitbucket.org:team/repo.git"),
+        remote("https", "https://bitbucket.org/team/repo.git"),
+    ];
+    let pages = remote_web_pages(&remotes);
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].url, "https://bitbucket.org/team/repo");
+}
+
 #[test]
 fn remote_web_url_accepts_scp_syntax_without_a_user() {
     assert_eq!(
