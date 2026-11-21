@@ -342,12 +342,28 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             continue;
         }
 
-        // Capture the historical filename from raw bytes before the UTF-8 decode
-        // below (which would otherwise drop a non-UTF-8 path). The
-        // `previous <sha> <path>` line is left to the `"previous"` arm, which only
-        // flags prior existence.
+        // The two lines naming a path are read as bytes, before the UTF-8
+        // decode below would drop one naming a non-UTF-8 path.
         if let Some(rest) = raw_line.strip_prefix(b"filename ") {
-            filename = Some(rest.to_vec());
+            // `core.quotePath=false` leaves bytes outside ASCII as they are; a
+            // name with a quote, a backslash or a control character is still
+            // C-quoted, and read raw it never equals the blamed path.
+            filename = Some(match gix::quote::ansi_c::undo(rest.into()) {
+                Ok((name, _)) => name.into_owned().into(),
+                Err(_) => rest.to_vec(),
+            });
+            continue;
+        }
+        if let Some(rest) = raw_line.strip_prefix(b"previous ") {
+            prior_exists = true;
+            // `previous <sha> <path>`: keep the sha so an uncommitted line
+            // can navigate to the revision it was edited from.
+            prior_commit = rest
+                .split(|byte| *byte == b' ')
+                .next()
+                .and_then(|sha| std::str::from_utf8(sha).ok())
+                .filter(|sha| is_hex_object_id(sha))
+                .map(str::to_owned);
             continue;
         }
 
@@ -362,12 +378,6 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             "author" => author = Some(rest.to_string()),
             "author-time" => author_time_unix = rest.trim().parse::<i64>().ok(),
             "summary" => summary = Some(rest.to_string()),
-            "previous" => {
-                prior_exists = true;
-                // `previous <sha> <path>`: keep the sha so an uncommitted line
-                // can navigate to the revision it was edited from.
-                prior_commit = rest.split_whitespace().next().map(str::to_string);
-            }
             _ if is_hex_object_id(key) => commit_id = Some(key.to_string()),
             _ => {}
         }
@@ -496,8 +506,8 @@ impl GixRepo {
         }
 
         let mut cmd = self.git_workdir_cmd();
-        // `core.quotePath=false` keeps the porcelain `filename` value raw so the
-        // historical path parsed into `source_path` is not C-quoted.
+        // `core.quotePath=false` leaves bytes outside ASCII raw in the porcelain
+        // paths; `parse_blame_porcelain` undoes the quoting Git still applies.
         cmd.arg("-c")
             .arg("core.quotePath=false")
             .arg("blame")
@@ -713,6 +723,63 @@ mod tests {
         assert_eq!(
             uncommitted.prior_commit.as_deref(),
             Some("1111111111111111111111111111111111111111")
+        );
+    }
+
+    /// Git C-quotes a `filename` holding a quote, a backslash or a control
+    /// character. Read raw, it differed from the blamed path, and every
+    /// committed line looked as if it came from a file renamed since.
+    #[test]
+    fn parse_blame_porcelain_unquotes_the_filename() {
+        let line = |filename: &str| {
+            format!(
+                "1111111111111111111111111111111111111111 1 1 1\n\
+                 author Ada Lovelace\n\
+                 summary initial commit\n\
+                 filename {filename}\n\
+                 \tcommitted line\n"
+            )
+        };
+        for (blamed, filename, source) in [
+            ("tab\ta \"b\".txt", r#""tab\ta \"b\".txt""#, None),
+            ("new.txt", r#""old\\name.txt""#, Some("old\\name.txt")),
+            ("new.txt", "old name.txt", Some("old name.txt")),
+            // Not a quoted name: kept as Git wrote it.
+            ("new.txt", r#""unterminated"#, Some("\"unterminated")),
+        ] {
+            let lines = parse_blame_porcelain(line(filename).as_bytes(), Path::new(blamed));
+            assert_eq!(
+                lines[0].source_path.as_deref(),
+                source.map(Path::new),
+                "{filename}"
+            );
+        }
+    }
+
+    /// With `core.quotePath=false` the `previous` path is raw; one that is not
+    /// UTF-8 still gives the line its prior revision.
+    #[test]
+    fn parse_blame_porcelain_reads_previous_whatever_its_path() {
+        let mut output = Vec::new();
+        for sha in [
+            "1111111111111111111111111111111111111111",
+            "0000000000000000000000000000000000000000",
+        ] {
+            output.extend_from_slice(format!("{sha} 1 1 1\nsummary edit\n").as_bytes());
+            output.extend_from_slice(
+                b"previous 2222222222222222222222222222222222222222 docs/\xff-old.md\n",
+            );
+            output.extend_from_slice(b"filename docs/new.md\n\tline\n");
+        }
+        let lines = parse_blame_porcelain(&output, Path::new("docs/new.md"));
+        assert!(
+            lines[0].prior_exists,
+            "the committed line has a prior revision"
+        );
+        assert_eq!(
+            lines[1].prior_commit.as_deref(),
+            Some("2222222222222222222222222222222222222222"),
+            "the uncommitted line's base"
         );
     }
 

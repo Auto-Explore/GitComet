@@ -1,4 +1,4 @@
-use crate::git_cli::{git_output, git_stdout, run_git};
+use crate::git_cli::{git_output, git_stdout, git_stdout_raw, run_git};
 use gitcomet_core::domain::{ApplyChangeTarget, CommitId, DiffTarget};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::{
@@ -347,6 +347,52 @@ fn glob_characters_in_the_path_are_literal() {
         "a*.txt"
     );
     assert_eq!(fs::read_to_string(repo.join("ab.txt")).unwrap(), "plain\n");
+}
+
+/// Applying one file's change from a commit that changed every unusual
+/// name commits that file alone: the paths reach Git in a pathspec file,
+/// where a line break or a quote in a name must stay part of the name.
+#[test]
+fn a_file_change_is_applied_alone_whatever_its_name() {
+    let names = crate::git_cli::unusual_file_names();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let write_all = |state: &str| {
+        for (index, name) in names.iter().enumerate() {
+            // `:/a.txt` is `a.txt` in a directory named `:`.
+            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+            write(&repo, name, &format!("{state} {index}\n"));
+        }
+        write(&repo, "a.txt", &format!("{state} sibling\n"));
+    };
+    write_all("base");
+    commit_all(&repo, "base");
+    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    write_all("changed");
+    let picked = commit_all(&repo, "all");
+    run_git(&repo, &["checkout", "-q", "main"]);
+    let backend = open_backend(&repo);
+
+    for (index, name) in names.iter().enumerate() {
+        backend
+            .apply_file_change_with_output(&commit_target(&picked, name), true)
+            .unwrap_or_else(|error| panic!("{name:?}: {error}"));
+        assert_eq!(
+            git_stdout_raw(&repo, &["show", "--name-only", "-z", "--format=", "HEAD"]),
+            format!("{name}\0"),
+            "{name:?}: what the commit changed"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.join(name)).unwrap(),
+            format!("changed {index}\n"),
+            "{name:?}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "base sibling\n"
+    );
 }
 
 #[test]
