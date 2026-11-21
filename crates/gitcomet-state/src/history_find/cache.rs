@@ -33,6 +33,9 @@ pub(crate) struct HistoryFindCache {
     previous: Option<Previous>,
     #[cfg(test)]
     comparisons: usize,
+    /// Records read back from the text file.
+    #[cfg(test)]
+    text_reads: usize,
     #[cfg(test)]
     remap_panic_after: Option<usize>,
 }
@@ -126,6 +129,8 @@ impl HistoryFindCache {
             None => Box::new((0..index.len()).map(|row| (row, false))),
         };
         let mut buffer = Vec::new();
+        // The block decoded last: its rows are matched from memory.
+        let mut decoded = None;
         let mut matches = Vec::new();
         let mut pending = Vec::new();
         let mut last_report = Instant::now();
@@ -133,7 +138,17 @@ impl HistoryFindCache {
             if visited.is_multiple_of(HISTORY_BLOCK_SIZE) {
                 cancellation.check_cancelled()?;
             }
-            if known || self.matches(index, query, listed, row, &mut buffer, &mut read)? {
+            if known
+                || self.matches(
+                    index,
+                    query,
+                    listed,
+                    row,
+                    &mut buffer,
+                    &mut decoded,
+                    &mut read,
+                )?
+            {
                 matches.push(row as u32);
                 pending.push(row as u32);
             }
@@ -151,6 +166,7 @@ impl HistoryFindCache {
     }
 
     /// Whether `row`'s text matches, reading its commits first if needed.
+    #[allow(clippy::too_many_arguments)]
     fn matches(
         &mut self,
         index: &HistoryIndexHandle,
@@ -158,6 +174,7 @@ impl HistoryFindCache {
         listed: &FxHashMap<&str, &str>,
         row: usize,
         buffer: &mut Vec<u8>,
+        decoded: &mut Option<HistoryRange>,
         read: &mut impl FnMut(Range<usize>) -> Result<HistoryRange>,
     ) -> Result<bool> {
         if self.offsets[row] == MISSING {
@@ -184,13 +201,30 @@ impl HistoryFindCache {
                 .append(&range.commits)
                 .map_err(io_error)?;
             self.offsets[row..end].copy_from_slice(&offsets);
+            *decoded = Some(range);
         }
-        let (id, summary, author) = self
-            .text
-            .as_mut()
-            .unwrap()
-            .read(self.offsets[row], buffer)
-            .map_err(io_error)?;
+        // Text just decoded is matched as it is; the file is for later queries.
+        let fresh = decoded
+            .as_ref()
+            .and_then(|range| range.commits.get(row.checked_sub(range.start)?));
+        let (id, summary, author) = match fresh {
+            Some(commit) => (
+                commit.id.as_ref(),
+                commit.summary.as_ref(),
+                commit.author.as_ref(),
+            ),
+            None => {
+                #[cfg(test)]
+                {
+                    self.text_reads += 1;
+                }
+                self.text
+                    .as_mut()
+                    .unwrap()
+                    .read(self.offsets[row], buffer)
+                    .map_err(io_error)?
+            }
+        };
         #[cfg(test)]
         {
             self.comparisons += 1;
@@ -714,6 +748,22 @@ mod tests {
             .collect();
         assert_eq!(matches, expected);
         reads
+    }
+
+    /// A first scan has every commit in memory as it decodes it. Reading each
+    /// one back from the file it was just written to is the same work twice.
+    #[test]
+    fn history_find_matches_fresh_commits_without_reading_them_back() {
+        let commits = commits(600);
+        let index = index(&commits);
+        let mut cache = HistoryFindCache::default();
+        assert_eq!(search(&mut cache, &index, &commits, &query("fix")), 600);
+        assert_eq!(cache.text_reads, 0);
+        assert_eq!(cache.comparisons, 600);
+
+        // The text was still written: an unrelated query reads it, not history.
+        assert_eq!(search(&mut cache, &index, &commits, &query("Bob")), 0);
+        assert_eq!(cache.text_reads, 600);
     }
 
     #[test]
