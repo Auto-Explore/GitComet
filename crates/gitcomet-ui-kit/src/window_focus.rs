@@ -1,6 +1,36 @@
 //! Shared focus policy for caret-bearing windows and controls.
 
 use gpui::{App, Context, FocusHandle, Subscription, Window};
+use std::cell::Cell;
+
+thread_local! {
+    /// One keyboard and one pointer serve every window.
+    static LAST_PRESS_WAS_KEY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True from a key press until the next pointer press: the span in which a
+/// focused control shows its focus ring. GPUI's own keyboard modality also
+/// ends when the pointer merely moves.
+pub fn keyboard_focus_shown() -> bool {
+    LAST_PRESS_WAS_KEY.with(Cell::get)
+}
+
+/// Starts [`keyboard_focus_shown`] at every key press.
+/// [`crate::focus_order::install`] installs this.
+pub(crate) fn observe_key_presses(cx: &mut App) -> Subscription {
+    // An interceptor, as observers miss the keys a control consumes. Nothing
+    // to redraw: GPUI shows the ring itself until the pointer moves, and
+    // redraws the window when it does.
+    cx.intercept_keystrokes(|_, _, _| LAST_PRESS_WAS_KEY.with(|key| key.set(true)))
+}
+
+/// Ends [`keyboard_focus_shown`]. Every control reports the presses in its
+/// window, so no window needs a hook of its own.
+pub(crate) fn pointer_pressed(window: &mut Window) {
+    if LAST_PRESS_WAS_KEY.with(|key| key.replace(false)) {
+        window.refresh();
+    }
+}
 
 pub fn is_active(focus: &FocusHandle, window: &Window) -> bool {
     window.is_window_active() && focus.is_focused(window)

@@ -60,16 +60,28 @@ impl InteractionState {
     }
 }
 
-/// The same ring is used for keyboard focus and light-theme selection, with
-/// different theme colors. An inset shadow preserves geometry and split edges.
-pub fn interaction_outline(color: Rgba) -> BoxShadow {
+/// Keyboard focus and light-theme selection share this ring, in different
+/// widths and theme colors. An inset shadow preserves geometry and split edges.
+pub fn inset_outline(color: Rgba, width: f32) -> BoxShadow {
     BoxShadow {
         color: color.into(),
         offset: point(px(0.0), px(0.0)),
         blur_radius: px(0.0),
-        spread_radius: px(1.0),
+        spread_radius: px(width),
         inset: true,
     }
+}
+
+pub fn interaction_outline(color: Rgba) -> BoxShadow {
+    inset_outline(color, 1.0)
+}
+
+/// A border paints over its element's inset shadows, so a ring only as wide
+/// as the border is invisible. Two pixels leaves one inside any border.
+pub const FOCUS_RING_WIDTH_PX: f32 = 2.0;
+
+pub fn focus_outline(color: Rgba) -> BoxShadow {
+    inset_outline(color, FOCUS_RING_WIDTH_PX)
 }
 
 pub fn control_open_background(theme: AppTheme) -> Rgba {
@@ -86,6 +98,8 @@ pub struct InteractionStyle {
     persistent: Rgba,
     hover: StyleRefinement,
     pressed: StyleRefinement,
+    focus: StyleRefinement,
+    focus_ring: BoxShadow,
     pointer_feedback: bool,
     hover_feedback: bool,
     selection_outline: bool,
@@ -100,6 +114,8 @@ impl InteractionStyle {
             persistent: theme.active_overlay(),
             hover: StyleRefinement::default().bg(theme.hover_overlay()),
             pressed: StyleRefinement::default().bg(theme.active_overlay()),
+            focus: StyleRefinement::default(),
+            focus_ring: focus_outline(theme.colors.interaction.focus_ring),
             pointer_feedback: true,
             hover_feedback: true,
             selection_outline: true,
@@ -122,10 +138,12 @@ impl InteractionStyle {
             .pressed(StyleRefinement::default().bg(theme.colors.interaction.pressed_background))
     }
 
+    /// Links are bare text, often unpadded: a wider ring would sit on the glyphs.
     pub fn link(theme: AppTheme) -> Self {
         Self::new(theme)
             .hover(StyleRefinement::default().text_color(theme.colors.accent.foreground))
             .pressed(StyleRefinement::default().text_color(theme.colors.accent.foreground))
+            .focus_ring(interaction_outline(theme.colors.interaction.focus_ring))
     }
 
     pub fn destructive(theme: AppTheme) -> Self {
@@ -194,7 +212,7 @@ impl InteractionStyle {
                 .map_or(surface, |fill| composite_over(surface, fill)),
         );
         self.persistent = composite_over(surface, self.persistent);
-        for style in [&mut self.hover, &mut self.pressed] {
+        for style in [&mut self.hover, &mut self.pressed, &mut self.focus] {
             if let Some(fill) = style
                 .background
                 .as_ref()
@@ -224,6 +242,19 @@ impl InteractionStyle {
 
     pub fn pressed(mut self, style: StyleRefinement) -> Self {
         self.pressed = style;
+        self
+    }
+
+    /// Extra style under keyboard focus, beneath the ring. A fill here yields
+    /// to a persistent state, as hover's does.
+    pub fn focus(mut self, style: StyleRefinement) -> Self {
+        self.focus = style;
+        self
+    }
+
+    /// For a solid fill, where the theme's ring would be the fill's own hue.
+    pub fn focus_ring(mut self, ring: BoxShadow) -> Self {
+        self.focus_ring = ring;
         self
     }
 
@@ -267,6 +298,15 @@ impl InteractionStyle {
             .or(self.resting.map(|fill| self.color(fill, state)))
     }
 
+    /// What keyboard focus adds to the control's resting style.
+    pub fn focus_refinement(&self, state: InteractionState) -> StyleRefinement {
+        let mut focus = self.focus.clone();
+        if self.persistent_fill(state).is_some() {
+            focus.background = None;
+        }
+        focus.shadow(vec![self.focus_ring.clone()])
+    }
+
     pub fn dims(&self, state: InteractionState) -> bool {
         state.disabled && self.dim_when_disabled
     }
@@ -300,8 +340,19 @@ impl InteractionStyle {
                 });
         }
 
-        let outline = interaction_outline(self.theme.colors.interaction.focus_ring);
-        control = control.focus_visible_style(move |style| style.shadow(vec![outline]));
+        let focus = self.focus_refinement(state);
+        // GPUI's focus-visible ends when the pointer moves; the kit's lasts
+        // until a press.
+        control = if crate::window_focus::keyboard_focus_shown() {
+            control.focus_style(move |_| focus)
+        } else {
+            control.focus_visible_style(move |_| focus)
+        };
+        control = control.on_mouse_down_all(|_, phase, _, window, _| {
+            if phase == gpui::DispatchPhase::Capture {
+                crate::window_focus::pointer_pressed(window);
+            }
+        });
         if !self.pointer_feedback {
             return control.cursor(CursorStyle::Arrow);
         }

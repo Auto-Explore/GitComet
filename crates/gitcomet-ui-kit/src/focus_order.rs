@@ -84,7 +84,8 @@ struct Installed;
 impl Global for Installed {}
 
 /// Installs the window-wide focus movement every window falls back on, and
-/// Tab from a window with nothing focused. Call once at launch, beside
+/// Tab from a window with nothing focused. A focus ring then also stays shown
+/// while the pointer moves, until its next press. Call once at launch, beside
 /// binding [`key_bindings`]; later calls do nothing.
 pub fn install(cx: &mut App) {
     if cx.has_global::<Installed>() {
@@ -94,6 +95,7 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &FocusNext, cx| move_focus_in_current_window(Direction::Next, cx));
     cx.on_action(|_: &FocusPrevious, cx| move_focus_in_current_window(Direction::Previous, cx));
     crate::window_focus::observe_tab_navigation(cx).detach();
+    crate::window_focus::observe_key_presses(cx).detach();
 }
 
 /// Moves focus one field through the whole window, wrapping at its ends.

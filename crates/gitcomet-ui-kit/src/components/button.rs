@@ -514,14 +514,23 @@ impl Button {
         let active_bg = hover_bg_override.unwrap_or(active_bg);
         let mut hover = StyleRefinement::default().bg(hover_bg);
         let mut pressed = StyleRefinement::default().bg(active_bg);
+        // Keyboard focus takes the hover fill under its ring. The theme's
+        // accent focus tint is too strong beneath a label: it costs the text
+        // its 4.5:1 contrast in most bundled themes.
+        let mut focus = StyleRefinement::default().bg(hover_bg);
         if !(suppress_hover_border || borderless) {
             hover = hover.border_color(hover_border);
             pressed = pressed.border_color(active_border);
+        }
+        if !borderless {
+            // The border would paint over the ring's outer pixel.
+            focus = focus.border_color(transparent);
         }
         let interaction = InteractionStyle::accent(theme)
             .persistent_background(selected_bg.unwrap_or(super::control_open_background(theme)))
             .hover(hover)
             .pressed(pressed)
+            .focus(focus)
             .dim_when_disabled(true);
         let state = InteractionState::default()
             .selected(
