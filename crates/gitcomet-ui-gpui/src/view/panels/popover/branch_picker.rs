@@ -457,6 +457,17 @@ pub(super) fn nav_targets(this: &PopoverHost, query: &str) -> Vec<BranchPickerNa
     cached(this, query).filtered_payloads()
 }
 
+/// Where a branch created from the picker starts: the current branch the
+/// row names ("Based off main"), fully qualified. The start point is resolved
+/// as a revision, which tries `refs/tags/<name>` before `refs/heads/<name>`.
+fn create_branch_start_point(repo: Option<&RepoState>) -> String {
+    match repo.map(|repo| &repo.head_branch) {
+        // `HEAD` is how a detached head is named here; there is no branch.
+        Some(Loadable::Ready(head)) if head != "HEAD" => format!("refs/heads/{head}"),
+        _ => "HEAD".to_string(),
+    }
+}
+
 /// Activates a checkout-picker row.
 pub(super) fn activate(
     this: &mut PopoverHost,
@@ -485,13 +496,7 @@ pub(super) fn activate(
             );
         }
         BranchPickerNavTarget::CreateBranch(name) => {
-            let target = this
-                .active_repo()
-                .and_then(|repo| match &repo.head_branch {
-                    Loadable::Ready(head) => Some(head.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "HEAD".to_string());
+            let target = create_branch_start_point(this.active_repo());
             this.store.dispatch(Msg::CreateBranchAndCheckout {
                 repo_id,
                 name,
@@ -768,6 +773,27 @@ mod tests {
                 BranchPickerNavTarget::RowAction(ix) => format!("#{ix}"),
             })
             .collect()
+    }
+
+    /// The start point is resolved later as a revision, and Git and gix try
+    /// `refs/tags/<name>` before `refs/heads/<name>`: a tag sharing the
+    /// current branch's name would become the new branch's base.
+    #[test]
+    fn create_branch_starts_at_the_current_branch_not_a_same_named_tag() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/create_branch_picker"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        assert_eq!(create_branch_start_point(Some(&repo)), "refs/heads/main");
+        // Detached: there is no branch to qualify.
+        repo.head_branch = Loadable::Ready("HEAD".to_string());
+        assert_eq!(create_branch_start_point(Some(&repo)), "HEAD");
+        repo.head_branch = Loadable::NotLoaded;
+        assert_eq!(create_branch_start_point(Some(&repo)), "HEAD");
+        assert_eq!(create_branch_start_point(None), "HEAD");
     }
 
     #[test]

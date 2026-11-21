@@ -70,7 +70,7 @@ jobs:
       cold-cache: ${{ inputs.cold-cache || false }}
       test-schedule: ${{ inputs.test-schedule || 'serial' }}
       fixture-timings: ${{ inputs.fixture-timings || false }}
-      execution-samples: ${{ inputs.execution-samples || 1 }}
+      execution-samples: ${{ fromJSON(inputs.execution-samples || '1') }}
       nextest-threads: ${{ inputs.nextest-threads || '' }}
       nextest-profile: ${{ inputs.nextest-profile || 'ci' }}
       pure-threads: ${{ inputs.pure-threads || '' }}

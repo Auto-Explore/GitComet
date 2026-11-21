@@ -865,3 +865,83 @@ fn log_only_empty_reflog_marker_and_signed_timezone() {
         );
     }
 }
+
+/// A one-block ref table: `first` as a literal name, then `extensions`
+/// records that each copy the whole previous name (prefix compression) and
+/// append one byte.
+fn prefix_compressed_table(hash: gix::hash::Kind, first: &[u8], extensions: usize) -> Vec<u8> {
+    let h = header(2, hash, 0);
+    let mut bytes = h.clone();
+    let first_record = bytes.len() + 4;
+    let mut block = vec![b'r', 0, 0, 0];
+    let record = |prefix: usize, suffix: &[u8], block: &mut Vec<u8>| {
+        varint(prefix as u64, block);
+        varint(((suffix.len() as u64) << 3) | 1, block);
+        block.extend_from_slice(suffix);
+        varint(0, block);
+        block.extend(vec![1; hash.len_in_bytes()]);
+    };
+    record(0, first, &mut block);
+    for ix in 0..extensions {
+        record(first.len() + ix, b"x", &mut block);
+    }
+    u24(first_record, &mut block);
+    block.extend_from_slice(&1u16.to_be_bytes());
+    let len = bytes.len() + block.len();
+    block[1..4].copy_from_slice(&(len as u32).to_be_bytes()[1..]);
+    bytes.extend(block);
+    footer(&h, &mut bytes);
+    bytes
+}
+
+#[test]
+fn prefix_compressed_fixture_parses() {
+    let hash = gix::hash::Kind::Sha1;
+    let bytes = prefix_compressed_table(hash, b"refs/heads/topic", 10);
+    let table = table::Table::parse(
+        "small".into(),
+        bytes.into(),
+        hash,
+        &CancellationToken::new(),
+    )
+    .expect("a small prefix-compressed table parses");
+    assert_eq!(table.refs.len(), 11);
+}
+
+/// No real ref name is this long, and every later record could copy it.
+#[test]
+fn an_absurdly_long_ref_name_is_rejected() {
+    let hash = gix::hash::Kind::Sha1;
+    let name = [b"refs/heads/".as_slice(), &vec![b'a'; 70_000]].concat();
+    let bytes = prefix_compressed_table(hash, &name, 0);
+    assert!(
+        table::Table::parse("long".into(), bytes.into(), hash, &CancellationToken::new()).is_err(),
+        "a 70 kB ref name was accepted"
+    );
+}
+
+/// Each record costs a few bytes on disk but re-materialises the whole
+/// previous name, so a table of tens of kilobytes decodes to tens of
+/// megabytes; a crafted one to far more. Decoding must stay proportional to
+/// the table's size.
+#[test]
+fn prefix_compression_cannot_amplify_a_small_table_into_gigabytes_of_names() {
+    let hash = gix::hash::Kind::Sha1;
+    let name = [b"refs/heads/".as_slice(), &vec![b'a'; 32 * 1024]].concat();
+    let bytes = prefix_compressed_table(hash, &name, 1000);
+    let table_len = bytes.len();
+    let parsed = table::Table::parse(
+        "amplified".into(),
+        bytes.into(),
+        hash,
+        &CancellationToken::new(),
+    );
+    let decoded: usize = parsed
+        .as_ref()
+        .map(|table| table.refs.keys().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert!(
+        parsed.is_err(),
+        "a {table_len}-byte table decoded to {decoded} bytes of ref names"
+    );
+}

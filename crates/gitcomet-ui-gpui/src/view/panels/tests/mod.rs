@@ -1,8 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-pub(super) use super::main::{
-    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_external_mergetool_actions,
-};
+pub(super) use super::main::{next_conflict_diff_split_ratio, show_external_mergetool_actions};
 pub(super) use super::*;
 pub(super) use crate::view::panes::diff::helpers::state::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
@@ -201,29 +199,6 @@ fn shows_diff_file_navigation_only_in_normal_mode() {
     assert!(!show_diff_file_navigation(
         GitCometViewMode::FocusedMergetool
     ));
-}
-
-#[test]
-fn conflict_side_output_bytes_prefers_original_bytes_and_falls_back_to_text() {
-    let file = gitcomet_state::model::ConflictFile {
-        base_bytes: Some(Arc::from(&b"base-bytes"[..])),
-        base: Some(Arc::from("ignored base text")),
-        ours: Some(Arc::from("ours text")),
-        ..gitcomet_state::model::ConflictFile::empty(std::path::PathBuf::from("conflict.txt"))
-    };
-
-    assert_eq!(
-        conflict_side_output_bytes(&file, ThreeWayColumn::Base).as_deref(),
-        Some(&b"base-bytes"[..])
-    );
-    assert_eq!(
-        conflict_side_output_bytes(&file, ThreeWayColumn::Ours).as_deref(),
-        Some(&b"ours text"[..])
-    );
-    assert_eq!(
-        conflict_side_output_bytes(&file, ThreeWayColumn::Theirs),
-        None
-    );
 }
 
 #[test]

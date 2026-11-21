@@ -30,6 +30,30 @@ pub(super) fn write_pathspec_file<'a>(
     write_patch_file(&bytes)
 }
 
+/// Writes `bytes` to `dest` through a temporary file beside it and a rename.
+///
+/// The destination's name is predictable (`commit-<sha8>.patch`), and a
+/// repository can track a symlink by that name. A rename replaces such a
+/// link; writing to the path would follow it and overwrite its target.
+fn write_replacing_destination(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = dest
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(gitcomet_core::path_utils::SAVE_STAGING_PREFIX);
+    // Created like `fs::write` would: 0o666 less the umask, not 0o600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut file = builder.tempfile_in(dir)?;
+    file.write_all(bytes)?;
+    file.persist(dest).map_err(|error| error.error)?;
+    Ok(())
+}
+
 impl GixRepo {
     pub(super) fn export_patch_with_output_impl(
         &self,
@@ -46,7 +70,7 @@ impl GixRepo {
         // The bytes as git wrote them: file content in any encoding must reach
         // the patch file unchanged, or `git am` cannot apply it.
         let patch = run_git_capture_bytes(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
-        std::fs::write(dest, patch)
+        write_replacing_destination(dest, &patch)
             .map_err(|error| Error::from(error).with_context("export patch", Some(dest)))?;
         Ok(CommandOutput {
             command: format!("Export patch {sha}"),

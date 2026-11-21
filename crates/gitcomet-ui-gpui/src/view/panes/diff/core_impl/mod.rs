@@ -295,7 +295,7 @@ impl DiffRenderer {
         &mut self,
         repo_id: RepoId,
         path: &std::path::Path,
-        bytes: &[u8],
+        side: ThreeWayColumn,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(workdir) = self
@@ -308,12 +308,24 @@ impl DiffRenderer {
             cx.quit();
             return;
         };
-        // Whole-side restoration uses the stage's original bytes. Its encoding
-        // can differ from the current file's, and the current file may be absent.
+        // The side as Git checks it out, not the stage's blob: the current file
+        // may be absent, and its encoding can differ from the side's.
+        let bytes = match checked_out_conflict_side(&workdir, path, side) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                eprintln!(
+                    "Failed to read the {side:?} side of {}: {err}",
+                    path.display()
+                );
+                self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+                cx.quit();
+                return;
+            }
+        };
         self.finish_focused_mergetool_output(
             &workdir,
             path,
-            FocusedMergetoolOutput::Write(bytes),
+            FocusedMergetoolOutput::Write(&bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
         );

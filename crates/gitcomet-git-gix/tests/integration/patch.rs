@@ -166,3 +166,76 @@ fn a_paused_patch_apply_is_continued_after_resolving() {
     assert!(!repo.join(".git/rebase-apply").exists(), "am finished");
     assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%s"]), "patched");
 }
+
+/// A tracked symlink can sit where Export Patch writes (`commit-<sha8>.patch`
+/// in the chosen folder). Writing through it would replace whatever it points
+/// at - a shell startup file, say - with the patch, commit message included.
+#[cfg(unix)]
+#[test]
+fn export_patch_replaces_a_symlink_at_the_destination_instead_of_writing_through_it() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo dir");
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("note.txt"), "one\n").expect("write file");
+    run_git(&repo, &["add", "note.txt"]);
+    run_git(&repo, &["commit", "-m", "echo pwned"]);
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let victim = dir.path().join("victim");
+    fs::write(&victim, "original contents\n").expect("write victim file");
+    let dest = dir.path().join(format!("commit-{}.patch", &head[..8]));
+    std::os::unix::fs::symlink(&victim, &dest).expect("create symlink at destination");
+
+    let opened = GixBackend.open(&repo).expect("open repository");
+    opened
+        .export_patch_with_output(&CommitId(head.into()), &dest)
+        .expect("export patch");
+
+    assert_eq!(
+        fs::read_to_string(&victim).expect("read victim file"),
+        "original contents\n",
+        "the export wrote through the symlink at its destination"
+    );
+    let metadata = fs::symlink_metadata(&dest).expect("stat destination");
+    assert!(
+        metadata.is_file(),
+        "the destination should now be a regular file"
+    );
+    assert!(
+        fs::read_to_string(&dest)
+            .expect("read exported patch")
+            .contains("Subject: [PATCH] echo pwned")
+    );
+}
+
+#[test]
+fn export_patch_overwrites_an_existing_patch_file() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo dir");
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("note.txt"), "one\n").expect("write file");
+    run_git(&repo, &["add", "note.txt"]);
+    run_git(&repo, &["commit", "-m", "base"]);
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let dest = dir.path().join("out.patch");
+    fs::write(&dest, "stale\n").expect("write stale patch");
+
+    let opened = GixBackend.open(&repo).expect("open repository");
+    opened
+        .export_patch_with_output(&CommitId(head.into()), &dest)
+        .expect("export patch");
+
+    assert!(
+        fs::read_to_string(&dest)
+            .expect("read exported patch")
+            .contains("Subject: [PATCH] base")
+    );
+}
