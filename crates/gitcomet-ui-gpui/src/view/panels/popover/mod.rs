@@ -211,7 +211,7 @@ pub(in super::super) struct PopoverHost {
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
     _prompt_input_subscriptions: Vec<gpui::Subscription>,
-    notify_fingerprint: u64,
+    notify_fingerprint: fingerprint::NotifyFingerprint,
     root_view: WeakEntity<GitCometView>,
     /// Mirror of the root view's mode, which is fixed for the window's lifetime.
     /// Held here because menu models are built while the root view's update

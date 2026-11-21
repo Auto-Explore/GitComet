@@ -125,9 +125,8 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/repo_picke
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/status_file.rs::model 369 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/create_branch_from_ref_prompt.rs::panel 152 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/error_details.rs::detail 170 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_popover_kind 554 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_repo_for_popover 337 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::notify_fingerprint 178 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::notify_fingerprint 177 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::history_row 170 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::operation_detail 408 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::panel 254 -

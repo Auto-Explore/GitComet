@@ -291,10 +291,10 @@ impl PopoverHost {
                 return;
             };
 
-            let next_fingerprint =
-                fingerprint::notify_fingerprint(&this.state, popover, this.store.binding);
-            if next_fingerprint != this.notify_fingerprint {
-                this.notify_fingerprint = next_fingerprint;
+            if this
+                .notify_fingerprint
+                .record(&this.state, popover, this.store.binding)
+            {
                 cx.notify();
             }
         });
@@ -865,7 +865,7 @@ impl PopoverHost {
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
             _prompt_input_subscriptions: prompt_input_subscriptions,
-            notify_fingerprint: 0,
+            notify_fingerprint: fingerprint::NotifyFingerprint::default(),
             root_view,
             root_view_mode,
             extension_editor_available: false,
@@ -1419,7 +1419,7 @@ impl PopoverHost {
         self.menu_invoker_focus = None;
         self.focus_return = None;
         self.markdown_image_approval = None;
-        self.notify_fingerprint = 0;
+        self.notify_fingerprint.clear();
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
         let root_view = self.root_view.clone();
@@ -2489,8 +2489,8 @@ impl PopoverHost {
             self.popover = Some(kind);
         }
         if let Some(popover) = self.popover.as_ref() {
-            self.notify_fingerprint =
-                fingerprint::notify_fingerprint(&self.state, popover, self.store.binding);
+            self.notify_fingerprint
+                .record(&self.state, popover, self.store.binding);
         }
         self.sync_titlebar_app_menu_state(cx);
         cx.notify();
