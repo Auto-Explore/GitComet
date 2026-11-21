@@ -781,38 +781,23 @@ impl GitCometView {
 
         let title_bar = cx.new(|cx| {
             TitleBarView::new(
-                initial_theme,
                 weak_view.clone(),
                 titlebar_repo_tab_actions_enabled(view_mode, !initial_state.repos.is_empty()),
                 cx,
             )
         });
-        let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
-        let history_refs_hover_host =
-            cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
+        let toast_host = cx.new(|_cx| ToastHost::new(weak_view.clone()));
+        let history_refs_hover_host = cx.new(|_cx| HistoryRefsHoverHost::new(weak_view.clone()));
         let commit_message_hover_host =
             cx.new(|_cx| CommitMessageHoverHost::new(Arc::clone(&store), ui_model.clone()));
         let repo_tabs_bar = cx.new(|cx| {
-            RepoTabsBarView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                cx,
-            )
+            RepoTabsBarView::new(Arc::clone(&store), ui_model.clone(), weak_view.clone(), cx)
         });
         let action_bar = cx.new(|cx| {
-            ActionBarView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                cx,
-            )
+            ActionBarView::new(Arc::clone(&store), ui_model.clone(), weak_view.clone(), cx)
         });
-        let bottom_status_bar = cx.new(|cx| {
-            BottomStatusBarView::new(initial_theme, ui_model.clone(), weak_view.clone(), cx)
-        });
+        let bottom_status_bar =
+            cx.new(|cx| BottomStatusBarView::new(ui_model.clone(), weak_view.clone(), cx));
         panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
         let file_history_pane = cx.new(|cx| {
@@ -968,7 +953,6 @@ impl GitCometView {
 
         let reveal_commit_dialog = cx.new(|cx| {
             reveal_commit::RevealCommitView::new(
-                initial_theme,
                 initial_state.active_repo,
                 weak_view.clone(),
                 Arc::clone(&store),
@@ -1460,8 +1444,6 @@ impl GitCometView {
                 });
             }
         }
-        self.title_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
@@ -1474,24 +1456,12 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.file_history_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.repo_tabs_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.action_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.bottom_status_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.tooltip_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.toast_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.history_refs_hover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.command_palette
             .update(cx, |palette, cx| palette.set_theme(theme, cx));
-        self.reveal_commit_dialog
-            .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         cx.notify();
     }
 

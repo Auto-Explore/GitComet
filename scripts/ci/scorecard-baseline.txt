@@ -79,7 +79,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/command_palette.rs::render_rows 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/diff_commands.rs::for_window 174 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_header 204 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 172 -
-fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 860 -
+fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 844 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_commands.rs::execute_builtin_command 637 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs::render 926 -
 fn-lines crates/gitcomet-ui-gpui/src/view/history_graph_walk.rs::transition 200 -
@@ -257,7 +257,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/splash.rs::center_content 341 -
 fn-lines crates/gitcomet-ui-gpui/src/view/state_apply.rs::apply_state_snapshot 370 -
 fn-lines crates/gitcomet-ui-gpui/src/view/state_apply.rs::consume_store_feedback 171 -
 fn-lines crates/gitcomet-ui-gpui/src/view/terminal_panel.rs::render_terminal_header 230 -
-fn-lines crates/gitcomet-ui-gpui/src/view/toast_host.rs::render 237 -
+fn-lines crates/gitcomet-ui-gpui/src/view/toast_host.rs::render 231 -
 fn-lines crates/gitcomet-ui-gpui/src/view/toast_host.rs::render_operation_progress_toast 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/ui_persistence.rs::schedule_ui_settings_persist 197 -
 fn-lines crates/gitcomet-ui-gpui/src/view/window_bootstrap.rs::from_session 226 -
@@ -289,7 +289,7 @@ glob-super gitcomet-ui-terminal 3 -
 notify-fingerprint-fns gitcomet-ui-gpui 8 -
 real-time-waits gitcomet-state 224 -
 root-view-updates gitcomet-ui-gpui 70 -
-set-theme-fns gitcomet-ui-gpui 21 -
+set-theme-fns gitcomet-ui-gpui 14 -
 store-snapshot-syncs gitcomet-ui-gpui 145 -
 struct-fields gitcomet-ui-gpui::DiffRenderer 348 -
 struct-fields gitcomet-ui-gpui::GitCometView 173 -

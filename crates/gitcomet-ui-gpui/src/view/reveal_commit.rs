@@ -107,7 +107,6 @@ pub(crate) struct RevealCommitView {
     /// issued from `sync_from_state`, which already runs inside the root's own
     /// update, and updating the root from there would be re-entrant.
     store: Arc<AppStore>,
-    theme: AppTheme,
     open: bool,
     repo_id: Option<RepoId>,
     query: SharedString,
@@ -117,7 +116,6 @@ pub(crate) struct RevealCommitView {
 
 impl RevealCommitView {
     pub(crate) fn new(
-        theme: AppTheme,
         repo_id: Option<RepoId>,
         root_view: WeakEntity<GitCometView>,
         store: Arc<AppStore>,
@@ -145,18 +143,12 @@ impl RevealCommitView {
             fallback_focus: None,
             root_view,
             store,
-            theme,
             open: false,
             repo_id,
             query: SharedString::default(),
             lookup: None,
             _input_subscription: input_subscription,
         }
-    }
-
-    pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     /// Push the active repository and its latest lookup in from the store.
@@ -343,7 +335,7 @@ impl RevealCommitView {
     }
 
     fn render_row(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
 
@@ -385,7 +377,7 @@ impl RevealCommitView {
 
     /// The empty state: what can be typed, and that it has to be exact.
     fn render_examples(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
 
@@ -453,7 +445,7 @@ impl RevealCommitView {
     }
 
     fn render_match(&self, commit: &Commit, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let sha = commit.id.as_ref();
@@ -547,7 +539,7 @@ impl Render for RevealCommitView {
             return div().into_any_element();
         }
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let dialog_width = scaled_px(620.0);

@@ -12,7 +12,6 @@ use std::rc::Rc;
 pub(in super::super) struct RepoTabsBarView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
-    theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     open_terminal_repo_ids: FxHashSet<RepoId>,
@@ -480,7 +479,6 @@ impl RepoTabsBarView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -518,7 +516,6 @@ impl RepoTabsBarView {
         let mut this = Self {
             store,
             state,
-            theme,
             _ui_model_subscription: subscription,
             root_view,
             open_terminal_repo_ids: FxHashSet::default(),
@@ -539,11 +536,6 @@ impl RepoTabsBarView {
         };
         this.update_repo_tab_spinner_delay(cx);
         this
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in super::super) fn set_external_folder_drag_active(
@@ -851,7 +843,7 @@ impl Render for RepoTabsBarView {
             self.repo_tab_drag_visual = None;
         }
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let drag_direction_reversal = px(REPO_TAB_DIRECTION_REVERSAL_PX);
         let active = self.active_repo_id();
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| {

@@ -85,7 +85,6 @@ fn status_bar_item_height(ui_scale_percent: u32, theme: AppTheme) -> Pixels {
 
 pub(in super::super) struct BottomStatusBarView {
     pub(super) relocated_items: RelocatedBarItems,
-    theme: AppTheme,
     state: Arc<AppState>,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
@@ -102,7 +101,6 @@ pub(in super::super) struct BottomStatusBarView {
 
 impl BottomStatusBarView {
     pub(in super::super) fn new(
-        theme: AppTheme,
         ui_model: Entity<AppUiModel>,
         root_view: WeakEntity<GitCometView>,
         cx: &mut gpui::Context<Self>,
@@ -122,7 +120,6 @@ impl BottomStatusBarView {
         });
         Self {
             relocated_items: Vec::new(),
-            theme,
             state,
             _ui_model_subscription: subscription,
             root_view,
@@ -208,11 +205,6 @@ impl BottomStatusBarView {
         }
     }
 
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     pub(in super::super) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,
@@ -259,7 +251,7 @@ impl BarItemOwner for BottomStatusBarView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> BarItems {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let filesystem_pending = self
             .root_view
             .upgrade()
@@ -721,7 +713,7 @@ impl Render for BottomStatusBarView {
             self.render_count += 1;
         }
         let mut items = self.bar_items(false, window, cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scale = crate::ui_scale::UiScale::current(cx);
         div()
             .id("bottom_status_bar")

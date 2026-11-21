@@ -48,7 +48,6 @@ pub(in crate::view) enum TitleBarMode {
 pub(super) struct TitleBarView {
     mode: TitleBarMode,
     brand: Option<gpui::AnyView>,
-    theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
@@ -209,13 +208,11 @@ pub(in crate::view) fn workspace_row_tint(
 
 impl TitleBarView {
     pub(super) fn new(
-        theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         repo_tab_actions_enabled: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
-            theme,
             root_view,
             mode: TitleBarMode::Standard,
             brand: None,
@@ -256,11 +253,6 @@ impl TitleBarView {
     #[cfg(test)]
     pub(in crate::view) fn title_drag_armed_for_test(&self) -> bool {
         self.title_drag_state.is_move_armed()
-    }
-
-    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(super) fn set_app_menu_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
@@ -324,7 +316,7 @@ impl TitleBarView {
 
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let is_macos = cfg!(target_os = "macos");
         let repo_tab_actions_enabled =
             self.mode == TitleBarMode::Standard && self.repo_tab_actions_enabled;

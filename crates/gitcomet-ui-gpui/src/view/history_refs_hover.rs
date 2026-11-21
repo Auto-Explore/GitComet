@@ -39,7 +39,6 @@ fn same_history_refs_hover_state(lhs: &HistoryRefsHoverState, rhs: &HistoryRefsH
 }
 
 pub(in crate::view) struct HistoryRefsHoverHost {
-    theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
     state: Option<HistoryRefsHoverState>,
     pending_show: Option<HistoryRefsHoverState>,
@@ -52,9 +51,8 @@ pub(in crate::view) struct HistoryRefsHoverHost {
 }
 
 impl HistoryRefsHoverHost {
-    pub(in crate::view) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
+    pub(in crate::view) fn new(root_view: WeakEntity<GitCometView>) -> Self {
         Self {
-            theme,
             root_view,
             state: None,
             pending_show: None,
@@ -65,11 +63,6 @@ impl HistoryRefsHoverHost {
             show_seq: 0,
             close_seq: 0,
         }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn show(
@@ -467,7 +460,7 @@ impl Render for HistoryRefsHoverHost {
             return div().into_any_element();
         };
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let panel_w = ui_scale.px(HISTORY_REFS_HOVER_WIDTH_PX);
         let max_panel_h = ui_scale.px(HISTORY_REFS_HOVER_MAX_HEIGHT_PX);
