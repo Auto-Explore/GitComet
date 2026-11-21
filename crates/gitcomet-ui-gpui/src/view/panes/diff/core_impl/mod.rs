@@ -15,6 +15,7 @@ mod init;
 pub(in crate::view) use diff_wrap::LineNumberCells;
 pub(in crate::view) use engine::EngineNotice;
 pub(in crate::view) use init::DiffRendererInit;
+pub(in crate::view) use zero_row_notice::ZeroRowNotice;
 
 /// Resolve the file path and blame source for a diff target, or `None` for
 /// targets that do not support blame annotation (e.g. whole-commit diffs with no
@@ -276,8 +277,8 @@ impl DiffRenderer {
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        // Written back in the encoding the file was read in.
-        let Some(output) = self.conflict_output_bytes_for_save(save_payload.output, cx) else {
+        let output = self.conflict_output_text_for_save(repo_id, &path, save_payload.output);
+        let Some(output) = self.conflict_output_bytes_for_save(output, cx) else {
             cx.notify();
             return;
         };
@@ -2594,6 +2595,7 @@ mod live_syntax;
 mod outline;
 mod rendered_target;
 mod scroll_sync;
+mod zero_row_notice;
 
 use diff_wrap::*;
 use outline::*;

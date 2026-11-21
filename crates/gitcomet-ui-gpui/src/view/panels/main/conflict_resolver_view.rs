@@ -512,6 +512,7 @@ impl DiffRenderer {
         };
         let text = self.current_conflict_resolved_output_text(cx);
         let text = self.conflict_resolver_save_contents_from_text(text);
+        let text = self.conflict_output_text_for_save(repo_id, &path, text);
         let saved_text: Arc<str> = Arc::from(text.as_str());
         let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
             return;

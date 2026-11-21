@@ -90,6 +90,13 @@ fn diff_syntax_edit_from_text_change(old: &str, new: &str) -> Option<rows::DiffS
 }
 
 impl DiffRenderer {
+    pub(in crate::view) fn file_diff_row_len(&self) -> usize {
+        match self.diff_view {
+            DiffViewMode::Inline => self.file_diff_inline_row_len(),
+            DiffViewMode::Split => self.file_diff_split_row_len(),
+        }
+    }
+
     pub(in crate::view) fn file_diff_split_row_len(&self) -> usize {
         self.file_diff_row_provider
             .as_ref()

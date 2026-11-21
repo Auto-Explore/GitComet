@@ -210,11 +210,9 @@ impl DiffRenderer {
                 .map(|provider| provider.change_blocks()),
         };
         let blocks = provider_blocks.unwrap_or_else(|| {
-            let len = match self.diff_view {
-                DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                DiffViewMode::Split => self.file_diff_split_row_len(),
-            };
-            diff_navigation::change_block_ranges(len, |row_ix| self.file_diff_row_is_change(row_ix))
+            diff_navigation::change_block_ranges(self.file_diff_row_len(), |row_ix| {
+                self.file_diff_row_is_change(row_ix)
+            })
         });
         blocks
             .into_iter()

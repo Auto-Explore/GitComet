@@ -4,16 +4,17 @@ impl DiffRenderer {
     pub(super) fn current_file_diff_line_to_row_maps(
         &self,
     ) -> (&[Option<usize>], &[Option<usize>], usize) {
+        let row_len = self.file_diff_row_len();
         match self.diff_view {
             DiffViewMode::Inline => (
                 self.file_diff_old_line_to_inline_row.as_ref(),
                 self.file_diff_new_line_to_inline_row.as_ref(),
-                self.file_diff_inline_row_len(),
+                row_len,
             ),
             DiffViewMode::Split => (
                 self.file_diff_old_line_to_row.as_ref(),
                 self.file_diff_new_line_to_row.as_ref(),
-                self.file_diff_split_row_len(),
+                row_len,
             ),
         }
     }
