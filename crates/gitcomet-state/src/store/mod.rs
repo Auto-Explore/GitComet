@@ -1289,7 +1289,8 @@ impl AppStore {
             .unwrap_or_else(|e| e.into_inner()) = resolver;
     }
 
-    pub fn dispatch(&self, msg: Msg) {
+    pub fn dispatch(&self, msg: impl Into<Msg>) {
+        let msg = msg.into();
         #[cfg(any(test, feature = "test-support"))]
         if matches!(
             &msg,
