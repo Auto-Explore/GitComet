@@ -79,7 +79,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/command_palette.rs::render_rows 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/diff_commands.rs::for_window 174 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_header 204 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 172 -
-fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 826 -
+fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 825 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_commands.rs::execute_builtin_command 637 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs::render 926 -
 fn-lines crates/gitcomet-ui-gpui/src/view/history_graph_walk.rs::transition 200 -
@@ -185,7 +185,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed_graph.rs::build_
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/main/interactive_rebase.rs::interactive_rebase_view 432 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/main/interactive_rebase.rs::render_irebase_row 418 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/reflog.rs::render_reflog_row 153 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panes/sidebar.rs::new 237 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panes/sidebar.rs::new 235 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/sidebar/explorer_operations.rs::explorer_key_down 166 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/sidebar/file_browser_view.rs::render_file_browser_content 166 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/sidebar/file_browser_view.rs::render_file_browser_rows 602 -
@@ -228,7 +228,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/rows/history_canvas.rs::history_commit
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/history_canvas.rs::layout_history_ref_chips 255 -
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/history_graph_paint.rs::paint_history_graph 283 -
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/markdown_document.rs::render_markdown_diff_split 207 -
-fn-lines crates/gitcomet-ui-gpui/src/view/rows/sidebar/branch_rows.rs::render_sidebar_rows 260 -
+fn-lines crates/gitcomet-ui-gpui/src/view/rows/sidebar/branch_rows.rs::render_sidebar_rows 258 -
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/sidebar/branch_rows/branch.rs::sidebar_branch_row 386 -
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/sidebar/branch_rows/headers.rs::sidebar_group_header_row 247 -
 fn-lines crates/gitcomet-ui-gpui/src/view/rows/sidebar/branch_rows/headers.rs::sidebar_remote_header_row 180 -
@@ -289,7 +289,7 @@ glob-super gitcomet-ui-terminal 3 -
 notify-fingerprint-fns gitcomet-ui-gpui 8 -
 real-time-waits gitcomet-state 224 -
 root-view-updates gitcomet-ui-gpui 70 -
-set-theme-fns gitcomet-ui-gpui 5 -
+set-theme-fns gitcomet-ui-gpui 4 -
 store-snapshot-syncs gitcomet-ui-gpui 145 -
 struct-fields gitcomet-ui-gpui::DiffRenderer 348 -
 struct-fields gitcomet-ui-gpui::GitCometView 173 -

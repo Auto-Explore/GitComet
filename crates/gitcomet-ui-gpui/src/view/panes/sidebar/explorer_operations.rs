@@ -799,9 +799,9 @@ impl SidebarPaneView {
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .bg(self.theme.colors.surface.raised)
+                .bg(AppTheme::current(cx).colors.surface.raised)
                 .shadow(vec![gpui::BoxShadow {
-                    color: self.theme.colors.accent.foreground.into(),
+                    color: AppTheme::current(cx).colors.accent.foreground.into(),
                     offset: gpui::Point::default(),
                     blur_radius: px(0.0),
                     spread_radius: px(1.0),
@@ -1023,7 +1023,7 @@ impl SidebarPaneView {
         // The rail popover renders the same list, so one geometry serves both.
         let (origin, height) = (
             scroll.bounds().origin,
-            ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme)),
+            ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(AppTheme::current(cx))),
         );
         if height <= px(0.0) {
             return None;

@@ -815,7 +815,6 @@ impl GitCometView {
             let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
                 ui_session.repo_sidebar_collapsed_items.clone(),
                 ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
@@ -1415,8 +1414,6 @@ impl GitCometView {
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_theme(theme, cx);
         }
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         cx.notify();

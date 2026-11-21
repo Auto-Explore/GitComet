@@ -354,7 +354,6 @@ pub(in super::super) struct SidebarPaneView {
     contributions: Option<contributions::SidebarContributions>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in crate::view) sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
     documents: crate::view::documents::buffers::DocumentOwner,
@@ -497,7 +496,6 @@ impl SidebarPaneView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
@@ -668,7 +666,6 @@ impl SidebarPaneView {
             contributions: contributions::SidebarContributions::new(cx),
             store,
             state,
-            theme,
             sidebar_focus: cx.focus_handle().tab_stop(true),
             _ui_model_subscription: subscription,
             documents,
@@ -730,11 +727,6 @@ impl SidebarPaneView {
         // Reflect any already-active repo's stored search query on first mount.
         this.sync_search_input_with_state(cx);
         this
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     /// Sync the section this pane should render as collapsed-rail popover content.
@@ -1466,7 +1458,7 @@ impl SidebarPaneView {
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         self.sync_contributed_rows(cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
 
         self.apply_pending_file_browser_reveal(cx);
         let tab_bar = self.render_tab_bar(theme, cx);
@@ -1518,7 +1510,7 @@ impl SidebarPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = ui_scale::current(cx).percent;
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = ui_scale::scaler(ui_scale_percent);
@@ -2227,7 +2219,8 @@ impl Render for SidebarPaneView {
             self.explorer_name_edit = None;
         }
         if self.explorer_name_edit.is_some() {
-            let height = ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme));
+            let height = ui_scale::UiScale::current(cx)
+                .px(sidebar_list_row_height_px(AppTheme::current(cx)));
             self.explorer_name_input.update(cx, |input, cx| {
                 input.set_line_height(Some(height - px(4.0)), cx)
             });
