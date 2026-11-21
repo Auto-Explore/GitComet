@@ -588,6 +588,23 @@ impl GixRepo {
         Ok(self.install_history_store(self.reopen_repo()?.into_sync()))
     }
 
+    /// [`Self::fresh_history_store`], reopening only when a config input, the
+    /// object store's key or its mappings changed since the last fresh open.
+    fn current_history_store(
+        &self,
+    ) -> Result<(gix::ThreadSafeRepository, Arc<shared::SharedStore>)> {
+        let shared = self.shared_store();
+        if let Some(repo) = self
+            .history_cache
+            .current_handle(&shared, self.private_store_scope)
+        {
+            return Ok((repo, shared));
+        }
+        let (fresh, shared) = self.fresh_history_store()?;
+        self.history_cache.keep_handle(&fresh, &shared);
+        Ok((fresh, shared))
+    }
+
     fn install_history_store(
         &self,
         mut fresh: gix::ThreadSafeRepository,
@@ -646,6 +663,7 @@ impl GixRepo {
     /// It reads only the sources the first open could.
     /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::RepositoryReopen);
         let permissions = self.repo().open_options().permissions;
         crate::open::open_worktree_repo_with(&self.spec.workdir, permissions)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo", &self.spec.workdir))

@@ -24,10 +24,11 @@ pub enum Work {
     LogWalkObjectRead,
     LogTopologyBuild,
     HistoryIndexBuild,
+    RepositoryReopen,
 }
 
 impl Work {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -46,6 +47,7 @@ impl Work {
         Self::LogWalkObjectRead,
         Self::LogTopologyBuild,
         Self::HistoryIndexBuild,
+        Self::RepositoryReopen,
     ];
 
     pub fn name(self) -> &'static str {
@@ -68,6 +70,7 @@ impl Work {
             Self::LogWalkObjectRead => "log_walk_object_read",
             Self::LogTopologyBuild => "log_topology_build",
             Self::HistoryIndexBuild => "history_index_build",
+            Self::RepositoryReopen => "repository_reopen",
         }
     }
 }

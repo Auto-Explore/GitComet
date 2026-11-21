@@ -531,3 +531,115 @@ fn alternate_source_changes_invalidate_the_object_interpretation() {
     assert!(!Arc::ptr_eq(&indexes[0], &indexes[1]));
     assert_eq!(indexes[0].len(), indexes[1].len());
 }
+
+/// An index whose first block is decoded, so the range reader is open.
+fn warm_index(repo: &dyn GitRepository) -> HistoryIndexHandle {
+    let index = index(repo, HistoryMode::FullReachable, None);
+    repo.read_history_range_shared(&index, 0..256, &CancellationToken::new())
+        .unwrap();
+    index
+}
+
+#[test]
+fn a_range_read_reuses_the_repository_while_its_inputs_are_unchanged() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let index = warm_index(&*repo);
+    let cancel = CancellationToken::new();
+    let _capture = capture();
+    let block = repo
+        .read_history_range_shared(&index, 256..512, &cancel)
+        .unwrap();
+    assert_eq!(block.commits.len(), 256);
+    assert_eq!(
+        count(Work::RepositoryReopen),
+        0,
+        "an undecoded block of an unchanged repository"
+    );
+    repo.read_history_range(&index, 512..768, &cancel).unwrap();
+    assert_eq!(count(Work::RepositoryReopen), 0, "an unshared range read");
+}
+
+/// The read after `change` must open a fresh handle, reject the index of the
+/// previous object interpretation and build one of `rows_after` rows.
+#[track_caller]
+fn assert_change_reopens(dir: &Path, change: impl FnOnce(), rows_after: usize) {
+    let repo = GixBackend.open(dir).unwrap();
+    let cancel = CancellationToken::new();
+    let before = warm_index(&*repo);
+    change();
+    let _capture = capture();
+    for reads in 1..=2 {
+        assert!(
+            repo.read_history_range_shared(&before, 256..512, &cancel)
+                .is_err(),
+            "the next read must observe the change"
+        );
+        assert_eq!(
+            count(Work::RepositoryReopen),
+            1,
+            "read {reads}: one fresh handle, reused in turn"
+        );
+    }
+    let after = index(&*repo, HistoryMode::FullReachable, None);
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert_eq!(after.len(), rows_after);
+    repo.read_history_range_shared(&after, 256..512, &cancel)
+        .unwrap();
+}
+
+#[test]
+fn a_config_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    run_git(dir.path(), &["replace", "HEAD", "HEAD~10"]);
+    let change = || run_git(dir.path(), &["config", "core.useReplaceRefs", "false"]);
+    assert_change_reopens(dir.path(), change, 4096);
+}
+
+#[test]
+fn an_alternates_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    let donor = tempfile::tempdir().unwrap();
+    run_git(donor.path(), &["init", "--bare", "-q"]);
+    let change = || {
+        std::fs::write(
+            dir.path().join(".git/objects/info/alternates"),
+            format!("{}\n", donor.path().join("objects").display()),
+        )
+        .unwrap();
+    };
+    assert_change_reopens(dir.path(), change, 4096);
+}
+
+#[test]
+fn a_replace_ref_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    let change = || run_git(dir.path(), &["replace", "HEAD", "HEAD~10"]);
+    assert_change_reopens(dir.path(), change, 4086);
+}
+
+#[test]
+fn a_reused_repository_reloads_packed_refs_rewritten_without_a_newer_mtime() {
+    let dir = fixture();
+    run_git(dir.path(), &["pack-refs", "--all"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let before = index(&*repo, HistoryMode::AllBranches, None);
+    // gix alone reloads packed refs only when their mtime moved forward.
+    let packed = dir.path().join(".git/packed-refs");
+    let modified = std::fs::metadata(&packed).unwrap().modified().unwrap();
+    let side = git_stdout(dir.path(), &["rev-parse", "HEAD~5"]);
+    let mut refs = std::fs::read_to_string(&packed).unwrap();
+    refs.push_str(&format!("{} refs/heads/side\n", side.trim()));
+    std::fs::write(&packed, refs).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&packed)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let after = index(&*repo, HistoryMode::AllBranches, None);
+    assert_ne!(
+        before.snapshot, after.snapshot,
+        "the new packed tip must reach the next history read"
+    );
+}

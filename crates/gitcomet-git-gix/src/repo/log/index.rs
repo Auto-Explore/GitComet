@@ -200,13 +200,25 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<HistoryRange> {
         cancellation.check_cancelled()?;
+        let (_, shared) = self.current_history_store()?;
+        self.validate_history_store(index, &shared)?;
+        self.decode_history_range(index, range, cancellation)
+    }
+
+    /// Reads `range` through the rotating range reader, for a caller that has
+    /// validated `index` against the current store.
+    pub(in super::super) fn decode_history_range(
+        &self,
+        index: &HistoryIndexHandle,
+        range: Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryRange> {
+        cancellation.check_cancelled()?;
         if range.start > range.end || range.end > index.len() {
             return Err(Error::new(ErrorKind::Backend(
                 "history range is outside its snapshot".into(),
             )));
         }
-        let (_, shared) = self.fresh_history_store()?;
-        self.validate_history_store(index, &shared)?;
         let repo = self.range_reader_repo()?;
         let mut decode = CommitDecodeState::default();
         let mut header_buf = Vec::new();

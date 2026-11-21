@@ -287,6 +287,8 @@ impl CommonRepository {
     pub fn invalidate(&self) {
         let mut stores = self.stores.lock().expect("shared object stores");
         for store in stores.iter().filter_map(Weak::upgrade) {
+            // A handle still holding this store must attach again.
+            store.reusable.store(false, Ordering::Release);
             let mut indexes = store.indexes.lock().expect("shared indexes");
             for entry in indexes.iter() {
                 if let Some(build) = entry.build.upgrade() {
@@ -407,6 +409,11 @@ fn queue(job: Job) -> Result<()> {
 }
 
 impl SharedStore {
+    /// Whether a fresh open of `repo` would attach this store again.
+    pub fn is_current(&self, repo: &gix::Repository, private_scope: u64) -> bool {
+        self.reusable.load(Ordering::Acquire) && StoreKey::read(repo, private_scope) == self.key
+    }
+
     pub fn snapshot(&self, query: &log::HistoryQuery) -> HistorySnapshot {
         let mut entries = self.indexes.lock().expect("shared indexes");
         IndexEntry::get(&mut entries, query).snapshot()

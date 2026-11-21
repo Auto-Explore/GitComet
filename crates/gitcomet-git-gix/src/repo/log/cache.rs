@@ -3,6 +3,8 @@ use super::decode::AuthorFilter;
 use super::topology::TopologyWalk;
 use super::walk::{CancellableLogWalkFind, FirstParentChains, LogWalkCancellation};
 use crate::repo::ShallowSnapshot;
+use crate::repo::config::{ConfigInputs, ConfigStamp};
+use crate::repo::shared::SharedStore;
 use gitcomet_core::domain::{Commit, CommitId, HistoryMode, LogPage};
 use gitcomet_core::services::Result;
 use std::path::PathBuf;
@@ -13,6 +15,7 @@ pub(in crate::repo) struct HistoryCache {
     pub(super) pages: Mutex<Vec<LogPageCacheEntry>>,
     pub(super) authors: Mutex<Option<HistoryAuthorsCache>>,
     pub(super) range_reader: Mutex<Option<RangeReader>>,
+    handle: Mutex<Option<HistoryHandle>>,
     pub(super) tips: Mutex<Option<AllBranchesTipsCacheEntry>>,
     pub(super) file_follow: Mutex<Vec<LogFileFollowCacheEntry>>,
     pub(super) walks: Mutex<LogPagedWalkCache>,
@@ -21,6 +24,7 @@ pub(in crate::repo) struct HistoryCache {
 impl HistoryCache {
     pub(in crate::repo) fn invalidate_store(&self) {
         *self.range_reader.lock().expect("range reader") = None;
+        *self.handle.lock().expect("history handle") = None;
         self.walks
             .lock()
             .expect("log paged walk cache")
@@ -29,6 +33,46 @@ impl HistoryCache {
         self.pages.lock().expect("log page cache").clear();
         *self.tips.lock().expect("all branches tips") = None;
         *self.authors.lock().expect("history authors") = None;
+    }
+
+    /// The handle of the last fresh open while a reopen would read the same
+    /// config and attach `installed` again. Packed refs are reloaded here on
+    /// any change of their stamp: gix alone only notices a newer mtime.
+    pub(in crate::repo) fn current_handle(
+        &self,
+        installed: &Arc<SharedStore>,
+        private_scope: u64,
+    ) -> Option<gix::ThreadSafeRepository> {
+        let mut slot = self.handle.lock().expect("history handle");
+        let handle = slot.as_mut()?;
+        if !Arc::ptr_eq(&handle.shared, installed) || !handle.config.is_current(&handle.repo) {
+            return None;
+        }
+        let repo = handle.repo.to_thread_local();
+        let packed_refs = ConfigStamp::read(&repo.refs.packed_refs_path()).ok();
+        if packed_refs != handle.packed_refs {
+            if packed_refs.is_some() {
+                repo.refs.force_refresh_packed_buffer().ok()?;
+            }
+            handle.packed_refs = packed_refs;
+        }
+        installed
+            .is_current(&repo, private_scope)
+            .then(|| handle.repo.clone())
+    }
+
+    pub(in crate::repo) fn keep_handle(
+        &self,
+        repo: &gix::ThreadSafeRepository,
+        shared: &Arc<SharedStore>,
+    ) {
+        let local = repo.to_thread_local();
+        *self.handle.lock().expect("history handle") = Some(HistoryHandle {
+            config: ConfigInputs::read(&local),
+            packed_refs: ConfigStamp::read(&local.refs.packed_refs_path()).ok(),
+            repo: repo.clone(),
+            shared: Arc::clone(shared),
+        });
     }
 
     /// The object store for indexed range reads, re-opened every
@@ -199,6 +243,14 @@ pub(super) const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 pub(super) const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 /// Date-order walks retain in-degree state for the reachable history.
 pub(super) const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;
+
+/// See [`HistoryCache::current_handle`].
+struct HistoryHandle {
+    repo: gix::ThreadSafeRepository,
+    shared: Arc<SharedStore>,
+    config: ConfigInputs,
+    packed_refs: Option<ConfigStamp>,
+}
 
 /// See [`HistoryCache::range_reader_repo`].
 pub(super) struct RangeReader {

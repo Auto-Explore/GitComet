@@ -246,7 +246,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<HistoryRange>> {
         self.read_shared_history_range_with(index, rows.clone(), cancellation, || {
-            self.read_history_range_impl(index, rows, cancellation)
+            self.decode_history_range(index, rows, cancellation)
         })
     }
 
@@ -258,7 +258,7 @@ impl GixRepo {
         decode: impl FnOnce() -> Result<HistoryRange>,
     ) -> Result<Arc<HistoryRange>> {
         cancellation.check_cancelled()?;
-        let (_, shared) = self.fresh_history_store()?;
+        let (_, shared) = self.current_history_store()?;
         self.validate_history_store(index, &shared)?;
         // Decode a block once for concurrent callers, without holding the
         // global cache lock, or any other, through I/O.
