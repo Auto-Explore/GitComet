@@ -17,7 +17,9 @@ pub use codec::{
     Decoded, TranscodeStats, Unmappable, decode, encode, round_trips, transcode_to_utf8,
 };
 pub use encoding::TextEncoding;
-pub use line_ending::{LineEnding, LineEndingCounter, LineEndingStats, convert_line_endings};
+pub use line_ending::{
+    LineEnding, LineEndingCounter, LineEndingStats, convert_line_endings, with_crlf_of,
+};
 pub use sniff::{ContentSniff, ContentSniffer};
 
 use std::borrow::Cow;
