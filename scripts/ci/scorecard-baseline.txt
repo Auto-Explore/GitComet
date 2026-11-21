@@ -178,7 +178,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panes/history.rs::new 200 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/cache_build.rs::build_history_decoration_cache 190 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/history_panel.rs::history_column_headers 517 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/history_panel.rs::history_select_by_rows 166 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/history_panel.rs::history_view_inner 273 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/history_panel.rs::history_view_inner 272 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::apply_indexed_history 239 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::ensure_indexed_history 222 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::prepare_window_for 427 -

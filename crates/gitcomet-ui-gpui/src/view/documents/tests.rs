@@ -1452,3 +1452,88 @@ fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestApp
     assert!(cx.update(|_, app| buffer.read(app).error().is_some()));
     assert_restyled(cx, "read failed");
 }
+
+/// A wheel over the line numbers scrolls the document, and only the document
+/// redraws.
+#[gpui::test]
+fn gutter_wheel_redraws_only_the_document(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) = cx.add_window_view({
+        let store = store.clone();
+        |window, cx| GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("long.rs");
+    std::fs::write(&path, "let line = 0;\n".repeat(400)).unwrap();
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        RepoId(1),
+        gitcomet_core::domain::RepoSpec {
+            workdir: directory.path().join("repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
+        repos: vec![repo],
+        active_repo: Some(RepoId(1)),
+        ..gitcomet_state::model::AppState::test_default()
+    }));
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+    cx.update(|_, app| {
+        root.update(app, |root, cx| {
+            root.documents
+                .update(cx, |docs, cx| docs.open(path.clone(), true, cx));
+            root.show_documents_canvas(cx);
+        })
+    });
+    drain(&root, cx);
+    crate::view::test_support::redraw(cx);
+    // Cached frames do not replay debug bounds, so read them first.
+    let gutter = cx.debug_bounds("document_gutter").expect("line numbers");
+    let buffer = cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    let probe = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let root = root.read(app);
+            let buffer = buffer.read(app);
+            (
+                (
+                    root.bottom_status_bar.read(app).render_count,
+                    root.sidebar_pane.read(app).render_count,
+                    root.details_pane.read(app).render_count,
+                ),
+                buffer.scroll.offset().y,
+                buffer.gutter_scroll.0.borrow().base_handle.offset().y,
+            )
+        })
+    };
+    let before = probe(cx);
+    for _ in 0..5 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gutter.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-40.0))),
+            ..Default::default()
+        });
+    }
+    cx.run_until_parked();
+    let after = probe(cx);
+
+    assert!(after.1 < before.1, "the wheel must scroll the document");
+    assert_eq!(
+        after.2, after.1,
+        "the redrawn document must carry its line numbers along"
+    );
+    assert_eq!(
+        after.0, before.0,
+        "a wheel over the line numbers must not re-render the status bar, sidebar or details"
+    );
+}

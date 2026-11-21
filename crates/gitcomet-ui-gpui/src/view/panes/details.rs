@@ -3057,7 +3057,6 @@ impl DetailsPaneView {
                     }) && pane.toggle_stage_shown_file(window, cx)
                     {
                         cx.notify();
-                        window.refresh();
                     }
                 });
             });

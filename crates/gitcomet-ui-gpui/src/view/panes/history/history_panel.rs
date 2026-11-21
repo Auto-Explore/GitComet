@@ -292,7 +292,6 @@ impl HistoryView {
                 if handled {
                     cx.stop_propagation();
                     cx.notify();
-                    window.refresh();
                 }
             }))
             .child(
