@@ -3,10 +3,25 @@
 //! decoding objects during the explore, in-degree and output walks.
 use super::*;
 use gitcomet_core::history_perf::{Work, record};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+
+/// How long a waiter sleeps between checks of its own cancellation.
+const WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 
 #[derive(Default)]
-pub(crate) struct TopologyCache(Mutex<Option<CachedTopology>>);
+pub(crate) struct TopologyCache {
+    state: Mutex<CacheState>,
+    /// Signalled whenever a build ends.
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct CacheState {
+    cached: Option<CachedTopology>,
+    /// At most one build per store, bootstrap pages included.
+    build: Option<Arc<Flight>>,
+}
 
 struct CachedTopology {
     generation: u64,
@@ -14,47 +29,157 @@ struct CachedTopology {
     topology: Arc<Topology>,
 }
 
-impl TopologyCache {
-    pub(in super::super) fn clear(&self) {
-        *self.0.lock().expect("log topology cache") = None;
+/// A build in progress, shared by every request for the same tips.
+struct Flight {
+    generation: u64,
+    tips: Vec<gix::ObjectId>,
+    /// Requests that still want the build; it is cancelled when none do.
+    subscribers: AtomicUsize,
+}
+
+impl Flight {
+    fn is_cancelled(&self) -> bool {
+        self.subscribers.load(Ordering::Acquire) == 0
     }
 
-    fn get_or_build(
+    /// `None` once cancelled: an abandoned build never gains a subscriber.
+    fn subscribe(self: &Arc<Self>) -> Option<Subscription> {
+        self.subscribers
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count != 0).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Subscription(Arc::clone(self)))
+    }
+}
+
+struct Subscription(Arc<Flight>);
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        self.0.subscribers.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Ends its flight and wakes the waiters, also when the build fails or panics.
+struct Builder<'a> {
+    cache: &'a TopologyCache,
+    flight: Arc<Flight>,
+    built: Option<Arc<Topology>>,
+}
+
+impl Drop for Builder<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.build = None;
+        // A failed or abandoned build cannot replace the last complete
+        // snapshot. Only one snapshot is retained; active walks pin their own
+        // immutable table across ref changes.
+        if let Some(topology) = self.built.take()
+            && !self.flight.is_cancelled()
+        {
+            state.cached = Some(CachedTopology {
+                generation: self.flight.generation,
+                tips: self.flight.tips.clone(),
+                topology,
+            });
+        }
+        drop(state);
+        self.cache.changed.notify_all();
+    }
+}
+
+impl TopologyCache {
+    pub(in super::super) fn clear(&self) {
+        let mut state = self.state.lock().expect("log topology cache");
+        // Wait out a build, which would otherwise publish after this.
+        while state.build.is_some() {
+            state = self.changed.wait(state).expect("log topology cache");
+        }
+        state.cached = None;
+    }
+
+    /// The cached topology, or the claim to build it. A request whose tips
+    /// are being built subscribes to that build; any other waits its turn.
+    /// Both leave as soon as their own request is cancelled.
+    fn join(
         &self,
-        repo: &gix::ThreadSafeRepository,
         tips: &[gix::ObjectId],
         cancellation: &LogWalkCancellation,
         generation: u64,
-    ) -> gix::Result<Arc<Topology>> {
-        // Serialize initial bootstrap builds too, before windows request their
-        // full index. Waiters can leave promptly when their request is cancelled.
-        let mut slot = loop {
-            check_cancelled(cancellation)?;
-            match self.0.try_lock() {
-                Ok(slot) => break slot,
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    std::thread::sleep(std::time::Duration::from_millis(5))
-                }
-                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+    ) -> gix::Result<std::result::Result<Arc<Topology>, Builder<'_>>> {
+        let mut state = self.state.lock().expect("log topology cache");
+        let mut joined: Option<Subscription> = None;
+        loop {
+            check_cancelled(cancellation.is_cancelled())?;
+            if let Some(cached) = state
+                .cached
+                .as_ref()
+                .filter(|cached| cached.generation == generation && cached.tips == tips)
+            {
+                return Ok(Ok(Arc::clone(&cached.topology)));
             }
-        };
-        if let Some(cached) = slot
-            .as_ref()
-            .filter(|cached| cached.generation == generation && cached.tips == tips)
-        {
-            return Ok(Arc::clone(&cached.topology));
+            let Some(flight) = &state.build else {
+                let flight = Arc::new(Flight {
+                    generation,
+                    tips: tips.to_vec(),
+                    subscribers: AtomicUsize::new(1),
+                });
+                state.build = Some(Arc::clone(&flight));
+                return Ok(Err(Builder {
+                    cache: self,
+                    flight,
+                    built: None,
+                }));
+            };
+            if joined
+                .as_ref()
+                .is_none_or(|joined| !Arc::ptr_eq(&joined.0, flight))
+            {
+                joined = (flight.generation == generation && flight.tips == tips)
+                    .then(|| flight.subscribe())
+                    .flatten();
+            }
+            state = self
+                .changed
+                .wait_timeout(state, WAIT)
+                .expect("log topology cache")
+                .0;
         }
-        // A cancelled or failed build cannot replace the last complete
-        // snapshot. Only one snapshot is retained;
-        // active walks pin their own immutable table across ref changes.
-        let topology = Arc::new(Topology::build(repo, tips, cancellation)?);
-        check_cancelled(cancellation)?;
-        *slot = Some(CachedTopology {
-            generation,
-            tips: tips.to_vec(),
-            topology: Arc::clone(&topology),
-        });
-        Ok(topology)
+    }
+
+    /// One build at a time, bootstrap pages included, shared by the requests
+    /// for its tips. It stops only when every subscriber has left.
+    fn get_or_build(
+        &self,
+        tips: &[gix::ObjectId],
+        cancellation: &LogWalkCancellation,
+        generation: u64,
+        build: impl FnOnce(&dyn Fn() -> bool) -> gix::Result<Topology>,
+    ) -> gix::Result<Arc<Topology>> {
+        let mut builder = match self.join(tips, cancellation, generation)? {
+            Ok(topology) => return Ok(topology),
+            Err(builder) => builder,
+        };
+        let flight = Arc::clone(&builder.flight);
+        // The flight's first subscriber is this request, until it is cancelled.
+        let lease = std::cell::Cell::new(Some(Subscription(Arc::clone(&flight))));
+        let cancelled = || {
+            if cancellation.is_cancelled() {
+                lease.take();
+            }
+            flight.is_cancelled()
+        };
+        let result = build(&cancelled).map(Arc::new);
+        cancelled();
+        builder.built = result.as_ref().ok().cloned();
+        drop(builder);
+        check_cancelled(cancellation.is_cancelled())?;
+        result
     }
 }
 
@@ -70,12 +195,16 @@ impl TopologyWalk {
         cancellation: &LogWalkCancellation,
         cache: Option<(&TopologyCache, u64)>,
     ) -> gix::Result<Self> {
-        check_cancelled(cancellation)?;
+        check_cancelled(cancellation.is_cancelled())?;
         let topology = match cache {
             Some((cache, generation)) => {
-                cache.get_or_build(repo, tips, cancellation, generation)?
+                cache.get_or_build(tips, cancellation, generation, |cancelled| {
+                    Topology::build(repo, tips, cancelled)
+                })?
             }
-            None => Arc::new(Topology::build(repo, tips, cancellation)?),
+            None => Arc::new(Topology::build(repo, tips, &|| {
+                cancellation.is_cancelled()
+            })?),
         };
         Ok(Self { topology, next: 0 })
     }
@@ -120,7 +249,7 @@ impl Topology {
     fn build(
         repo: &gix::ThreadSafeRepository,
         tips: &[gix::ObjectId],
-        cancellation: &LogWalkCancellation,
+        cancelled: &dyn Fn() -> bool,
     ) -> gix::Result<Self> {
         record(Work::LogTopologyBuild);
         let hash_len = repo.objects.object_hash().len_in_bytes();
@@ -141,7 +270,7 @@ impl Topology {
         let mut times = Vec::new();
         let mut row = 0;
         while row < degrees.len() {
-            check_cancelled(cancellation)?;
+            check_cancelled(cancelled())?;
             let id = gix::ObjectId::from_bytes_or_panic(&ids[row * hash_len..(row + 1) * hash_len]);
             record(Work::LogWalkObjectRead);
             let commit = objects.find_commit_iter(&id, &mut buffer)?;
@@ -184,7 +313,7 @@ impl Topology {
         }
         let mut order = Vec::with_capacity(times.len());
         while let Some(row) = ready.pop_value() {
-            check_cancelled(cancellation)?;
+            check_cancelled(cancelled())?;
             order.push(row);
             for &parent in
                 &parents[offsets[row as usize] as usize..offsets[row as usize + 1] as usize]
@@ -231,12 +360,177 @@ fn too_large() -> gix::Error {
     gix::error::corruption("History topology exceeds the supported row or edge count").into()
 }
 
-fn check_cancelled(cancellation: &LogWalkCancellation) -> gix::Result<()> {
-    if cancellation.is_cancelled() {
+fn check_cancelled(cancelled: bool) -> gix::Result<()> {
+    if cancelled {
         return Err(gix::Error::from_error(std::io::Error::new(
             std::io::ErrorKind::Interrupted,
             "log walk cancelled",
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::services::CancellationToken;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    type Build = Box<dyn FnOnce(&dyn Fn() -> bool) -> gix::Result<Topology> + Send>;
+
+    fn tips() -> Vec<gix::ObjectId> {
+        vec![gix::ObjectId::null(gix::hash::Kind::Sha1)]
+    }
+
+    /// Counts itself, then polls for cancellation as the row loop does until
+    /// `gate` opens.
+    fn build(
+        builds: &Arc<AtomicUsize>,
+        started: Option<mpsc::Sender<()>>,
+        gate: Option<mpsc::Receiver<()>>,
+    ) -> Build {
+        let builds = builds.clone();
+        Box::new(move |cancelled| {
+            builds.fetch_add(1, SeqCst);
+            if let Some(started) = started {
+                started.send(()).unwrap();
+            }
+            while let Some(gate) = &gate {
+                check_cancelled(cancelled())?;
+                if gate.recv_timeout(Duration::from_millis(1))
+                    != Err(mpsc::RecvTimeoutError::Timeout)
+                {
+                    break;
+                }
+            }
+            Ok(Topology {
+                hash_len: 20,
+                ids: [].into(),
+                offsets: [0].into(),
+                parents: [].into(),
+                times: [].into(),
+                order: [].into(),
+            })
+        })
+    }
+
+    fn wait_for_subscribers(cache: &TopologyCache, count: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !cache
+            .state
+            .lock()
+            .unwrap()
+            .build
+            .as_ref()
+            .is_some_and(|flight| flight.subscribers.load(SeqCst) == count)
+        {
+            assert!(std::time::Instant::now() < deadline, "no subscription");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    struct Shared {
+        builds: Arc<AtomicUsize>,
+        cache: Arc<TopologyCache>,
+        tokens: [CancellationToken; 2],
+        release: mpsc::Sender<()>,
+        builder: std::thread::JoinHandle<gix::Result<Arc<Topology>>>,
+        waiter: mpsc::Receiver<gix::Result<Arc<Topology>>>,
+    }
+
+    /// A gated builder with one subscribed waiter for the same tips.
+    fn flight() -> Shared {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let cache = Arc::new(TopologyCache::default());
+        let tokens = [CancellationToken::new(), CancellationToken::new()];
+        let (started_tx, started) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let (done_tx, waiter) = mpsc::channel();
+        let request = |token: &CancellationToken, build: Build| {
+            let (cache, token) = (cache.clone(), token.clone());
+            move || cache.get_or_build(&tips(), &LogWalkCancellation::new(Some(&token)), 1, build)
+        };
+        let builder = std::thread::spawn(request(
+            &tokens[0],
+            build(&builds, Some(started_tx), Some(gate)),
+        ));
+        started.recv().unwrap();
+        let wait = request(&tokens[1], build(&builds, None, None));
+        std::thread::spawn(move || done_tx.send(wait()));
+        wait_for_subscribers(&cache, 2);
+        Shared {
+            builds,
+            cache,
+            tokens,
+            release,
+            builder,
+            waiter,
+        }
+    }
+
+    fn is_cancelled(result: gix::Result<Arc<Topology>>) -> bool {
+        result.is_err_and(|error| error.to_string().contains("cancelled"))
+    }
+
+    #[test]
+    fn a_waiter_receives_the_single_build() {
+        let flight = flight();
+        flight.release.send(()).unwrap();
+        let built = flight.builder.join().unwrap().unwrap();
+        let waited = flight.waiter.recv().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&built, &waited));
+        assert_eq!(flight.builds.load(SeqCst), 1);
+    }
+
+    #[test]
+    fn a_cancelled_waiter_leaves_while_the_build_completes() {
+        let flight = flight();
+        flight.tokens[1].cancel();
+        let waited = flight
+            .waiter
+            .recv_timeout(Duration::from_secs(2))
+            .expect("a cancelled waiter must not wait for the build");
+        assert!(is_cancelled(waited));
+        flight.release.send(()).unwrap();
+        flight.builder.join().unwrap().unwrap();
+        assert_eq!(flight.builds.load(SeqCst), 1);
+    }
+
+    #[test]
+    fn a_cancelled_builder_finishes_for_the_remaining_subscriber() {
+        let flight = flight();
+        flight.tokens[0].cancel();
+        // The build is still polling for cancellation here and must not see it.
+        std::thread::sleep(Duration::from_millis(20));
+        let _ = flight.release.send(());
+        assert!(is_cancelled(flight.builder.join().unwrap()));
+        flight.waiter.recv().unwrap().unwrap();
+        assert_eq!(
+            flight.builds.load(SeqCst),
+            1,
+            "the subscriber must not restart the build"
+        );
+    }
+
+    #[test]
+    fn a_build_stops_with_its_last_subscriber() {
+        let flight = flight();
+        flight.tokens[1].cancel();
+        assert!(is_cancelled(flight.waiter.recv().unwrap()));
+        flight.tokens[0].cancel();
+        // The gate stays closed: only cancellation can end this build.
+        assert!(is_cancelled(flight.builder.join().unwrap()));
+        let later = build(&flight.builds, None, None);
+        flight
+            .cache
+            .get_or_build(&tips(), &LogWalkCancellation::default(), 1, later)
+            .unwrap();
+        assert_eq!(
+            flight.builds.load(SeqCst),
+            2,
+            "an abandoned build is not cached"
+        );
+    }
 }
