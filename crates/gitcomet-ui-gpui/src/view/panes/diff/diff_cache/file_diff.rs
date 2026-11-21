@@ -65,11 +65,18 @@ fn build_file_diff_plan_from_document_sources(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static INLINE_ROW_MAP_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn plan_line_to_inline_row_maps(
     plan: &gitcomet_core::file_diff::FileDiffPlan,
     old_line_count: usize,
     new_line_count: usize,
 ) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    #[cfg(test)]
+    INLINE_ROW_MAP_BUILDS.with(|builds| builds.set(builds.get() + 1));
     let mut old_line_to_inline_row = vec![None; old_line_count];
     let mut new_line_to_inline_row = vec![None; new_line_count];
     let mut inline_start = 0usize;
@@ -240,6 +247,10 @@ impl IndexedFileDiffSource {
             line_starts: Arc::default(),
             line_flags: Arc::default(),
         }
+    }
+
+    fn is_file_backed(&self) -> bool {
+        matches!(self.content, IndexedFileDiffContent::File(..))
     }
 
     fn from_shared(text: Option<&Arc<str>>) -> Self {
@@ -2139,7 +2150,7 @@ pub(in crate::view) fn build_file_diff_cache_with_engine(
         },
     );
     if let Some(diff) = structural.diff {
-        source.apply_structural(diff);
+        source.apply_structural(diff, &old_line_to_inline_row, &new_line_to_inline_row);
     }
     let source = Arc::new(source);
     let row_provider = Arc::new(PagedFileDiffRows::new(
