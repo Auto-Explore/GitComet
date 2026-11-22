@@ -1430,13 +1430,35 @@ fn apply_porcelain_v2_gitlink_status_record(
     Ok(())
 }
 
-fn supplement_gitlink_status_from_porcelain(
+/// Queries Git runs at once for gitlink status, and the paths one must have
+/// to be worth its process: each loads the whole index before it starts.
+const GITLINK_QUERIES_MAX: usize = 8;
+const GITLINK_QUERY_PATHS_MIN: usize = 8;
+
+/// Deals `paths` into the queries that `workers` threads run at once. Git
+/// looks into each checked-out submodule in turn, which for a few hundred of
+/// them takes seconds in one query. Paths are dealt in turn so that
+/// neighbours, often one vendor directory's large checkouts, are shared out.
+fn gitlink_queries(paths: Vec<PathBuf>, workers: usize) -> Vec<Vec<PathBuf>> {
+    let count = workers
+        .min(GITLINK_QUERIES_MAX)
+        .min(paths.len() / GITLINK_QUERY_PATHS_MIN)
+        .max(1);
+    let mut queries = vec![Vec::with_capacity(paths.len().div_ceil(count)); count];
+    for (path, query) in paths.into_iter().zip((0..count).cycle()) {
+        queries[query].push(path);
+    }
+    queries
+}
+
+/// The records of one `git status` restricted to `paths`, or of the whole
+/// repository. `None` when Git could not say: the supplement is best-effort
+/// parity glue on top of the primary gix status, which then stands as it is.
+fn gitlink_status_output(
     workdir: &Path,
-    repo: &gix::Repository,
-    staged: &mut Vec<FileStatus>,
-    unstaged: &mut Vec<FileStatus>,
+    paths: Option<Vec<PathBuf>>,
     cancellation: &CancellationToken,
-) -> Result<()> {
+) -> Result<Option<Vec<u8>>> {
     cancellation.check_cancelled()?;
     let mut command = git_workdir_cmd_for(workdir);
     command
@@ -1445,39 +1467,69 @@ fn supplement_gitlink_status_from_porcelain(
         .arg("--porcelain=v2")
         .arg("-z")
         .arg("--ignore-submodules=none");
-    if let Some(paths) = gitlink_status_paths(repo, staged) {
-        if paths.is_empty() {
-            return Ok(());
-        }
+    if let Some(paths) = paths {
         push_literal_paths(&mut command, paths);
     }
-    let output = match run_git_background_output(command, "git status --porcelain=v2", cancellation)
-    {
-        Ok(output) => output,
-        // Gitlink supplementation is best-effort parity glue on top of the primary
-        // gix status result. If the subprocess itself times out, keep the base status.
-        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => return Ok(()),
-        Err(err) => return Err(err),
+    match run_git_background_output(command, "git status --porcelain=v2", cancellation) {
+        Ok(output) => Ok(output.status.success().then_some(output.stdout)),
+        // Also when the subprocess itself times out.
+        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn supplement_gitlink_status_from_porcelain(
+    workdir: &Path,
+    repo: &gix::Repository,
+    staged: &mut Vec<FileStatus>,
+    unstaged: &mut Vec<FileStatus>,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let outputs = match gitlink_status_paths(repo, staged) {
+        Some(paths) if paths.is_empty() => return Ok(()),
+        Some(paths) => {
+            let workers = std::thread::available_parallelism().map_or(1, usize::from);
+            let mut queries = gitlink_queries(paths, workers).into_iter();
+            let first = queries.next();
+            std::thread::scope(|scope| {
+                let others: Vec<_> = queries
+                    .map(|paths| {
+                        scope.spawn(|| gitlink_status_output(workdir, Some(paths), cancellation))
+                    })
+                    .collect();
+                let mut outputs = vec![gitlink_status_output(workdir, first, cancellation)];
+                for other in others {
+                    outputs.push(
+                        other
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    );
+                }
+                outputs
+            })
+        }
+        None => vec![gitlink_status_output(workdir, None, cancellation)],
     };
 
-    if !output.status.success() {
-        return Ok(());
-    }
-
-    let mut records = output.stdout.split(|b| *b == 0).peekable();
-    while let Some(record) = records.next() {
-        if record.is_empty() {
+    for output in outputs {
+        let Some(output) = output? else {
             continue;
-        }
-        match record[0] {
-            b'1' => {
-                let _ = apply_porcelain_v2_gitlink_status_record(record, staged, unstaged);
+        };
+        let mut records = output.split(|b| *b == 0).peekable();
+        while let Some(record) = records.next() {
+            if record.is_empty() {
+                continue;
             }
-            b'2' => {
-                // Rename/copy records carry an additional NUL-separated path.
-                let _ = records.next();
+            match record[0] {
+                b'1' => {
+                    let _ = apply_porcelain_v2_gitlink_status_record(record, staged, unstaged);
+                }
+                b'2' => {
+                    // Rename/copy records carry an additional NUL-separated path.
+                    let _ = records.next();
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 

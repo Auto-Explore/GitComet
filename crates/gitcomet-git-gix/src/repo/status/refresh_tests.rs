@@ -44,7 +44,7 @@ fn selected_gitlinks(root: &Path, staged: &[FileStatus]) -> Option<Vec<std::path
 
 // Keep this independent Git oracle outside the per-file production-command audit.
 #[cfg(test)]
-fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
+fn gitlink_status_from_git(root: &Path, paths: &[&str]) -> (Vec<FileStatus>, Vec<FileStatus>) {
     let output = crate::util::git_workdir_cmd_for(root)
         .args([
             "--literal-pathspecs",
@@ -54,8 +54,8 @@ fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
             "-z",
             "--ignore-submodules=none",
             "--",
-            CHILD,
         ])
+        .args(paths)
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -74,7 +74,7 @@ fn assert_gitlink_lanes_match_git(
     repo: &super::super::GixRepo,
     needs_commands: (bool, bool),
 ) -> (Vec<FileStatus>, Vec<FileStatus>) {
-    let expected = gitlink_status_from_git(root);
+    let expected = gitlink_status_from_git(root, &[CHILD]);
     let token = CancellationToken::new();
     let (combined, commands) = crate::command_trace::capture(|| repo.status_impl().unwrap());
     assert_eq!(*combined.staged, expected.0);
@@ -558,4 +558,89 @@ fn cancels_gitlink_subprocess(orphan_with_exec: bool, pre_cancelled: bool) {
             std::fs::remove_file(&marker).unwrap();
         }
     }
+}
+
+#[test]
+fn gitlink_paths_are_dealt_into_queries_worth_a_process_each() {
+    let paths = |count: usize| -> Vec<std::path::PathBuf> {
+        (0..count).map(|path| format!("{path:03}").into()).collect()
+    };
+    // Too few to share out.
+    assert_eq!(super::gitlink_queries(paths(15), 8), [paths(15)]);
+    assert_eq!(super::gitlink_queries(paths(40), 1), [paths(40)]);
+    // Dealt in turn, so that neighbours (one vendor directory, often the
+    // large checkouts) land in different queries.
+    let queries = super::gitlink_queries(paths(20), 8);
+    assert_eq!(queries.len(), 2);
+    assert_eq!(
+        queries[0],
+        paths(20).into_iter().step_by(2).collect::<Vec<_>>()
+    );
+    assert_eq!(super::gitlink_queries(paths(152), 8).len(), 8);
+    assert_eq!(super::gitlink_queries(paths(152), 32).len(), 8);
+    let mut all: Vec<_> = super::gitlink_queries(paths(152), 8).concat();
+    all.sort();
+    assert_eq!(all, paths(152));
+}
+
+/// Git checks each checked-out submodule in turn. Asked in several queries at
+/// once, it must say what it says in one.
+#[test]
+fn many_checked_out_gitlinks_read_as_git_reads_them_in_one_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    let children: Vec<String> = (0..20)
+        .map(|child| format!("modules/c{child:02}"))
+        .collect();
+    for child in &children {
+        let path = root.join(child);
+        std::fs::create_dir_all(&path).unwrap();
+        init_test_repo(&path);
+        write_file(&path, "tracked.txt", "base\n");
+        git_success(&path, &["add", "."]);
+        git_success(&path, &["commit", "-qm", "child"]);
+        let oid = crate::refs::head_oid(&gix::open(&path).unwrap())
+            .unwrap()
+            .unwrap()
+            .to_string();
+        git_success(
+            root,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000",
+                &oid,
+                child,
+            ],
+        );
+    }
+    git_success(root, &["commit", "-qm", "gitlinks"]);
+    // One of each kind of change, in checkouts that different queries get.
+    write_file(&root.join(&children[3]), "untracked.txt", "new\n");
+    write_file(&root.join(&children[10]), "tracked.txt", "changed\n");
+    write_file(&root.join(&children[17]), "tracked.txt", "committed\n");
+    git_success(&root.join(&children[17]), &["commit", "-qam", "ahead"]);
+
+    let paths: Vec<&str> = children.iter().map(String::as_str).collect();
+    let (staged, expected) = gitlink_status_from_git(root, &paths);
+    assert_eq!(expected.len(), 3, "{expected:?}");
+
+    let repo = open_repo(root);
+    assert_eq!(
+        selected_gitlinks(root, &[]).map(|paths| paths.len()),
+        Some(20)
+    );
+    let status = repo.status_impl().unwrap();
+    assert_eq!(*status.unstaged, expected);
+    assert_eq!(*status.staged, staged);
+    assert_eq!(
+        repo.worktree_status_cancellable_impl(&CancellationToken::new())
+            .unwrap(),
+        expected
+    );
 }
