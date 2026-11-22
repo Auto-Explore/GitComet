@@ -196,11 +196,12 @@ impl SidebarRowContext {
     }
 
     /// The eye for a row that names one ref: toggles `target` in the focus.
+    /// `target` is only built when the eye is shown, not for every painted row.
     fn ref_focus_eye(
         &self,
         ix: usize,
         in_history_focus: bool,
-        target: gitcomet_core::domain::HistoryFocus,
+        target: impl FnOnce() -> gitcomet_core::domain::HistoryFocus,
         cx: &mut gpui::Context<SidebarPaneView>,
     ) -> Option<gpui::Stateful<gpui::Div>> {
         let repo_id = self.repo_id;
@@ -210,6 +211,7 @@ impl SidebarRowContext {
             FocusEyeState::Unfocused
         };
         self.focus_eye_slot(state).map(|eye| {
+            let target = target();
             eye.id(("sidebar_focus_eye", ix))
                 .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
                 .gitcomet_tooltip(

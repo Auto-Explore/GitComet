@@ -125,7 +125,7 @@ impl SidebarPaneView {
         let focus_eye = ctx.ref_focus_eye(
             ix,
             in_history_focus,
-            gitcomet_core::domain::HistoryFocus::tag(&name),
+            || gitcomet_core::domain::HistoryFocus::tag(&name),
             cx,
         );
 

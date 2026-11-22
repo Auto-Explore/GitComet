@@ -134,8 +134,12 @@ impl SidebarPaneView {
         } else {
             ctx.icon_primary
         };
-        let focus_eye =
-            ctx.ref_focus_eye(ix, in_history_focus, focus_target_for_branch(&target), cx);
+        let focus_eye = ctx.ref_focus_eye(
+            ix,
+            in_history_focus,
+            || focus_target_for_branch(&target),
+            cx,
+        );
         let badge_gap_px = ctx.px(BRANCH_BADGE_GAP_PX);
         let head_highlight = with_alpha(
             theme.colors.accent.foreground,
