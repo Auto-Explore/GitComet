@@ -39,6 +39,60 @@ pub(crate) fn reflog_lines_rev(
     Ok(lines)
 }
 
+/// Whether the packed-refs file behind `snapshot` records the peeled object
+/// of every annotated tag among the refs below `prefix`: of every ref when
+/// its header says `fully-peeled`, of tags when it says `peeled`. An entry
+/// without a peeled object is then no annotated tag, which is how Git reads
+/// the file.
+pub(super) fn packed_refs_record_peeled(
+    repo: &gix::Repository,
+    snapshot: Option<&gix::refs::file::packed::SharedBufferSnapshot>,
+    prefix: &[u8],
+) -> bool {
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    let mut header = [0u8; 128];
+    let read = File::open(repo.refs.packed_refs_path())
+        .and_then(|mut file| file.read(&mut header))
+        .unwrap_or(0);
+    let Some(traits) = header[..read]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .and_then(|line| line.strip_prefix(b"# pack-refs with:"))
+    else {
+        return false;
+    };
+    let says = |name: &[u8]| traits.split(|byte| *byte == b' ').any(|word| word == name);
+    if !(says(b"fully-peeled") || (says(b"peeled") && prefix.starts_with(b"refs/tags/"))) {
+        return false;
+    }
+    // The header was read after the snapshot was taken. It is the snapshot's
+    // own if the file has not changed since, by gix's test of that.
+    repo.refs
+        .cached_packed_buffer()
+        .ok()
+        .flatten()
+        .is_some_and(|current| std::sync::Arc::ptr_eq(&current, snapshot))
+}
+
+/// Whether `packed` has `reference` with the object it names now and no
+/// peeled object. A loose ref of another value has taken the entry's place.
+pub(super) fn packed_entry_is_no_tag(
+    packed: &gix::refs::packed::Buffer,
+    reference: &gix::refs::Reference,
+) -> bool {
+    let gix::refs::Target::Object(id) = &reference.target else {
+        return false;
+    };
+    reference.peeled.is_none()
+        && packed
+            .try_find(reference.name.as_ref())
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.object.is_none() && entry.target() == *id)
+}
+
 pub(crate) fn try_collect_loose_local_branches_fast(
     repo: &gix::Repository,
 ) -> Result<Option<Vec<Branch>>> {
