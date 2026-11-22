@@ -157,42 +157,43 @@ impl HistoryIndex {
     /// uses. Returns the sorted ID prefixes of a large index for the caller
     /// that has many lookups to make right away.
     fn sort_rows(&mut self) -> Option<Vec<(u64, u32)>> {
-        self.sorted_rows = (0..self.len() as u32).collect();
         let hash_len = self.hash_len;
         let ids = &self.ids;
         if self.len() >= 65_536 {
-            // Cache prefixes contiguously: comparisons usually avoid random reads
-            // into the much larger ID table. Full IDs resolve prefix collisions.
-            let mut keyed: Vec<_> = self
-                .sorted_rows
-                .iter()
-                .map(|&row| {
-                    let start = row as usize * hash_len;
-                    (
-                        u64::from_be_bytes(ids[start..start + 8].try_into().unwrap()),
-                        row,
-                    )
-                })
-                .collect();
-            keyed.sort_unstable_by(|a, b| {
-                a.0.cmp(&b.0).then_with(|| {
-                    let a = a.1 as usize * hash_len;
-                    let b = b.1 as usize * hash_len;
-                    ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
-                })
-            });
-            for (row, (_, rank)) in self.sorted_rows.iter_mut().zip(keyed.iter()) {
-                *row = *rank;
+            // Deal the rows into their two-byte prefixes, then sort within
+            // each: a prefix holds a few dozen rows, where one sort of the
+            // whole table moves every row a dozen times. Prefixes are cached
+            // contiguously, so comparisons usually avoid random reads into
+            // the much larger ID table; full IDs resolve prefix collisions.
+            let mut fanout = vec![0u32; 65_537];
+            for id in ids.chunks_exact(hash_len) {
+                fanout[u16::from_be_bytes([id[0], id[1]]) as usize + 1] += 1;
             }
-            self.fanout = vec![0; 65_537];
-            for (prefix, _) in &keyed {
-                self.fanout[(prefix >> 48) as usize + 1] += 1;
+            for prefix in 1..fanout.len() {
+                fanout[prefix] += fanout[prefix - 1];
             }
-            for prefix in 1..self.fanout.len() {
-                self.fanout[prefix] += self.fanout[prefix - 1];
+            let mut next = fanout[..65_536].to_vec();
+            let mut keyed = vec![(0u64, 0u32); self.len()];
+            for (row, id) in ids.chunks_exact(hash_len).enumerate() {
+                let prefix = u64::from_be_bytes(id[..8].try_into().unwrap());
+                let at = &mut next[(prefix >> 48) as usize];
+                keyed[*at as usize] = (prefix, row as u32);
+                *at += 1;
             }
+            for prefix in fanout.windows(2) {
+                keyed[prefix[0] as usize..prefix[1] as usize].sort_unstable_by(|a, b| {
+                    a.0.cmp(&b.0).then_with(|| {
+                        let a = a.1 as usize * hash_len;
+                        let b = b.1 as usize * hash_len;
+                        ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
+                    })
+                });
+            }
+            self.sorted_rows = keyed.iter().map(|&(_, row)| row).collect();
+            self.fanout = fanout;
             Some(keyed)
         } else {
+            self.sorted_rows = (0..self.len() as u32).collect();
             self.sorted_rows.sort_unstable_by(|&a, &b| {
                 let a = a as usize * hash_len;
                 let b = b as usize * hash_len;
@@ -1344,6 +1345,16 @@ mod lookup_regressions {
             )
             .unwrap();
             assert!(*given == *built, "{rows} rows");
+            let by_id: Vec<_> = given
+                .sorted_rows
+                .iter()
+                .map(|&row| given.id_bytes(row as usize).unwrap())
+                .collect();
+            assert!(by_id.is_sorted_by(|a, b| a < b), "{rows} rows");
+            for row in (0..rows as usize).step_by(97) {
+                let id = given.id_bytes(row).unwrap();
+                assert_eq!(given.position_bytes(id), Some(row));
+            }
         }
     }
 
