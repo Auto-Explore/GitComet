@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
@@ -246,7 +247,7 @@ pub(super) fn apply(
         }
     };
     this.store
-        .dispatch(Msg::SetHistoryAuthorFilter { repo_id, author });
+        .dispatch(HistoryFilterMsg::SetAuthorFilter { repo_id, author });
     this.close_popover(cx);
 }
 

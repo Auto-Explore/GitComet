@@ -1,6 +1,7 @@
 //! Context-menu shortcuts and the history author filter.
 
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 fn copied_path_ends_with(text: &str, suffix: &std::path::Path) -> bool {
     let normalize = |value: &str| value.replace('\\', "/");
@@ -330,42 +331,42 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
     assert_shortcut_action!(
         history_filter_model,
         "F",
-        ContextMenuAction::SetHistoryScope {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: rid,
             scope: gitcomet_core::domain::HistoryMode::FullReachable
-        } if *rid == repo_id
+        }) if *rid == repo_id
     );
     assert_shortcut_action!(
         history_filter_model,
         "P",
-        ContextMenuAction::SetHistoryScope {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: rid,
             scope: gitcomet_core::domain::HistoryMode::FirstParent
-        } if *rid == repo_id
+        }) if *rid == repo_id
     );
     assert_shortcut_action!(
         history_filter_model,
         "N",
-        ContextMenuAction::SetHistoryScope {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: rid,
             scope: gitcomet_core::domain::HistoryMode::NoMerges
-        } if *rid == repo_id
+        }) if *rid == repo_id
     );
     assert_shortcut_action!(
         history_filter_model,
         "M",
-        ContextMenuAction::SetHistoryScope {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: rid,
             scope: gitcomet_core::domain::HistoryMode::MergesOnly
-        } if *rid == repo_id
+        }) if *rid == repo_id
     );
     assert_shortcut_action!(
         history_filter_model,
         "A",
-        ContextMenuAction::SetHistoryScope {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: rid,
             scope: gitcomet_core::domain::LogScope::AllBranches
-        } if *rid == repo_id
+        }) if *rid == repo_id
     );
 
     cx.update(|_window, app| {

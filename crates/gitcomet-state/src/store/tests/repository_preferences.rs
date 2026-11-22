@@ -1,5 +1,6 @@
 use super::worktree_redirect::{open_repo_and_wait, repo_with_linked_worktree, wait_until};
 use super::*;
+use crate::history_filter::HistoryFilterMsg;
 use crate::model::{
     RepositoryFileSort, RepositoryKey, RepositoryListKind, RepositoryPreferenceUpdate,
     RepositoryPreferencesSnapshot, SharedRepositoryPreferences,
@@ -337,7 +338,7 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
             pinned: true,
         },
     );
-    first.dispatch(Msg::SetHistoryScope {
+    first.dispatch(HistoryFilterMsg::SetScope {
         repo_id: linked_id,
         scope: HistoryMode::FirstParent,
     });
@@ -453,7 +454,7 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
         matches!(&state.repos.iter().find(|repo| repo.id == main_id).unwrap().head_branch, Loadable::Ready(name) if name == "main")
             && matches!(&state.repos.iter().find(|repo| repo.id == linked_id).unwrap().head_branch, Loadable::Ready(name) if name == "feature")
     });
-    first.dispatch(Msg::SetHistoryAuthorFilter {
+    first.dispatch(HistoryFilterMsg::SetAuthorFilter {
         repo_id: linked_id,
         author: Some("local filter".into()),
     });
@@ -541,10 +542,10 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(1),
             scope: HistoryMode::FirstParent,
-        },
+        }),
     );
     let linked_log_rev = state.repos[1].log_rev;
     // Neither queued change has been published yet. The linked tab still
@@ -553,10 +554,10 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(2),
             scope: HistoryMode::FullReachable,
-        },
+        }),
     );
     assert!(matches!(
         second.as_slice(),

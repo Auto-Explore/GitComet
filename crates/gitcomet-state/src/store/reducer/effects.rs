@@ -2019,10 +2019,10 @@ pub(super) fn branches_loaded(
             }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::LocalBranches,
+        super::history_filter::FocusRefList::LocalBranches,
     ));
     effects
 }
@@ -2050,10 +2050,10 @@ pub(super) fn remotes_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::Remotes,
+        super::history_filter::FocusRefList::Remotes,
     ));
     effects
 }
@@ -2118,10 +2118,10 @@ pub(super) fn remote_branches_loaded(
             repo_state.set_remote_branches(branches);
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::RemoteBranches,
+        super::history_filter::FocusRefList::RemoteBranches,
     ));
     effects
 }

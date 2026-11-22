@@ -2,6 +2,7 @@
 //! stashes, worktrees, submodules) and the remote and group folders.
 
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 const REMOTE_HIDDEN_IN_HISTORY_TOOLTIP: &str =
     "Hidden from the history graph (right-click to show it again)";
@@ -470,7 +471,7 @@ impl SidebarPaneView {
                         false,
                         controls::ControlActivation::Nested,
                         cx.listener(move |this, _, _, _| {
-                            this.store.dispatch(Msg::ToggleHistoryFocus {
+                            this.store.dispatch(HistoryFilterMsg::ToggleFocus {
                                 repo_id,
                                 target: focus_target.clone(),
                             });
@@ -705,7 +706,7 @@ impl SidebarPaneView {
                                 &path,
                             );
                             if !targets.is_empty() {
-                                this.store.dispatch(Msg::FocusHistoryRefs {
+                                this.store.dispatch(HistoryFilterMsg::FocusRefs {
                                     repo_id,
                                     targets,
                                     focused: !state.all_focused(),

@@ -14,6 +14,7 @@ use super::super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use rustc_hash::{FxHashSet, FxHasher};
@@ -1908,7 +1909,7 @@ impl SidebarPaneView {
                             .borderless()
                             .style(components::ButtonStyle::Subtle)
                             .on_click(theme, cx, move |_this, _e, _w, _cx| {
-                                store.dispatch(Msg::SetHistoryFocus {
+                                store.dispatch(HistoryFilterMsg::SetFocus {
                                     repo_id,
                                     focus: gitcomet_core::domain::HistoryFocusSet::default(),
                                 });

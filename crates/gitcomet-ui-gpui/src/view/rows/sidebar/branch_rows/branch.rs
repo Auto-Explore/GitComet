@@ -2,6 +2,7 @@
 //! worktree badges.
 
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 impl SidebarPaneView {
     /// One local or remote branch, in the tree or among the pins.
@@ -157,7 +158,7 @@ impl SidebarPaneView {
                         false,
                         controls::ControlActivation::Nested,
                         cx.listener(move |this, _, _, _| {
-                            this.store.dispatch(Msg::ToggleHistoryFocus {
+                            this.store.dispatch(HistoryFilterMsg::ToggleFocus {
                                 repo_id,
                                 target: focus_target.clone(),
                             });

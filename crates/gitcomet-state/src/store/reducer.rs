@@ -24,6 +24,7 @@ mod filesystem;
 mod git_hook_activity;
 mod git_operations;
 mod history_authors;
+mod history_filter;
 mod history_find;
 #[cfg(test)]
 mod history_selection_ack_tests;
@@ -921,23 +922,7 @@ fn reduce_inner(
             repository_preferences::update(state, repo_id, update)
         }
         Msg::ApplyRepositoryPreferences(snapshot) => repository_preferences::apply(state, snapshot),
-        Msg::SetHistoryScope { repo_id, scope } => {
-            external_and_history::set_history_scope(state, repo_id, scope)
-        }
-        Msg::SetHistoryFocus { repo_id, focus } => {
-            external_and_history::set_history_focus(state, repo_id, focus)
-        }
-        Msg::ToggleHistoryFocus { repo_id, target } => {
-            external_and_history::toggle_history_focus(state, repo_id, target)
-        }
-        Msg::FocusHistoryRefs {
-            repo_id,
-            targets,
-            focused,
-        } => external_and_history::focus_history_refs(state, repo_id, &targets, focused),
-        Msg::SetHistoryAuthorFilter { repo_id, author } => {
-            external_and_history::set_history_author_filter(state, repo_id, author)
-        }
+        Msg::HistoryFilter(message) => history_filter::reduce(state, message),
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit {
             repo_id, commit_id, ..

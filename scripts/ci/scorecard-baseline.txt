@@ -9,7 +9,7 @@ clock-calls gitcomet-ui-gpui 71 -
 diff-renderer-refs gitcomet-ui-gpui 1662 -
 enum-variants gitcomet-state::Effect 74 -
 enum-variants gitcomet-state::InternalMsg 81 -
-enum-variants gitcomet-state::Msg 237 -
+enum-variants gitcomet-state::Msg 233 -
 fn-lines crates/gitcomet-conflict-resolver/src/projection.rs::from_segments 662 -
 fn-lines crates/gitcomet-conflict-resolver/src/split_row_index.rs::build_page 173 -
 fn-lines crates/gitcomet-conflict-resolver/src/word_highlight.rs::compute_three_way_word_highlights 187 -
@@ -31,10 +31,10 @@ fn-lines crates/gitcomet-git-gix/src/repo/mergetool.rs::launch_mergetool_impl 18
 fn-lines crates/gitcomet-git-gix/src/repo/mergetool_builtin.rs::builtin_merge_command 266 -
 fn-lines crates/gitcomet-markdown/src/flatten.rs::apply_html 193 -
 fn-lines crates/gitcomet-perf/src/bin/perf_budget_report/report.rs::build_report_markdown 166 -
-fn-lines crates/gitcomet-state/src/msg/class.rs::msg_class 254 one row per message variant
+fn-lines crates/gitcomet-state/src/msg/class.rs::msg_class 250 one row per message variant
 fn-lines crates/gitcomet-state/src/msg/message_debug.rs::fmt 718 -
 fn-lines crates/gitcomet-state/src/msg/repo_command.rs::failed 456 -
-fn-lines crates/gitcomet-state/src/msg/repository_requirement.rs::repository_requirement 304 -
+fn-lines crates/gitcomet-state/src/msg/repository_requirement.rs::repository_requirement 300 -
 fn-lines crates/gitcomet-state/src/session/mod.rs::load_from_path 169 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch.rs::sync 200 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch/worker.rs::finish 151 -
@@ -49,7 +49,7 @@ fn-lines crates/gitcomet-state/src/store/effects/repo_load.rs::schedule_load_wor
 fn-lines crates/gitcomet-state/src/store/effects/unavailable.rs::send_unavailable_git_effect_result 570 -
 fn-lines crates/gitcomet-state/src/store/mod.rs::handle_effects 176 -
 fn-lines crates/gitcomet-state/src/store/mod.rs::with_initial_state 471 -
-fn-lines crates/gitcomet-state/src/store/reducer.rs::reduce_inner 1580 -
+fn-lines crates/gitcomet-state/src/store/reducer.rs::reduce_inner 1564 -
 fn-lines crates/gitcomet-state/src/store/reducer/actions_emit_effects.rs::repo_command_finished 354 -
 fn-lines crates/gitcomet-state/src/store/reducer/auth.rs::retry_msg_for_repo_command 293 -
 fn-lines crates/gitcomet-state/src/store/reducer/diff_selection.rs::global_nav 165 -
@@ -111,7 +111,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/app_menu.rs::model_with
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/branch_picker.rs::panel 206 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu.rs::context_menu_model 368 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu.rs::context_menu_view 342 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/activate.rs::context_menu_activate_action 1513 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/activate.rs::context_menu_activate_action 1504 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/annex.rs::section_model 151 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/branch.rs::model 406 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/branch_group.rs::model 188 -
@@ -138,7 +138,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/picker_row_menu.rs::lay
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/prompt_actions.rs::popover_view 917 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/push_set_upstream_prompt.rs::panel 208 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/repo_picker.rs::panel 176 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/repository_requirements.rs::bare_action_reason 220 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/repository_requirements.rs::bare_action_reason 218 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/squash_prompt.rs::panel 151 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/submodule_trust_confirm.rs::panel 216 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/upstream_picker.rs::panel 175 -

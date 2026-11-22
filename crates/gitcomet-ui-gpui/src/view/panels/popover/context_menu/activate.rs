@@ -8,6 +8,7 @@ use super::{
 };
 use crate::view::WorktreePopoverKind;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 impl PopoverHost {
     pub(in crate::view) fn context_menu_activate_action(
@@ -272,7 +273,7 @@ impl PopoverHost {
                 let targets =
                     branch_group::focus_targets(self, repo_id, section, remote.as_deref(), &path);
                 if !targets.is_empty() {
-                    self.store.dispatch(Msg::FocusHistoryRefs {
+                    self.store.dispatch(HistoryFilterMsg::FocusRefs {
                         repo_id,
                         targets,
                         focused,
@@ -702,16 +703,7 @@ impl PopoverHost {
                     pane.toggle_pinned_branch(repo_id, section, &name, cx);
                 });
             }
-            ContextMenuAction::SetHistoryScope { repo_id, scope } => {
-                self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
-            }
-            ContextMenuAction::ToggleHistoryFocus { repo_id, target } => {
-                self.store
-                    .dispatch(Msg::ToggleHistoryFocus { repo_id, target });
-            }
-            ContextMenuAction::SetHistoryFocus { repo_id, focus } => {
-                self.store.dispatch(Msg::SetHistoryFocus { repo_id, focus });
-            }
+            ContextMenuAction::HistoryFilter(message) => self.store.dispatch(message),
             ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_file_list_sort(list, sort, cx);

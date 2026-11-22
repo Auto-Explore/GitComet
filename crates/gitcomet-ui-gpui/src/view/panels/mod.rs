@@ -411,20 +411,8 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         group_key: String,
     },
-    SetHistoryScope {
-        repo_id: RepoId,
-        scope: gitcomet_core::domain::LogScope,
-    },
-    /// Adds a ref to the history focus set, or removes it when already there.
-    ToggleHistoryFocus {
-        repo_id: RepoId,
-        target: gitcomet_core::domain::HistoryFocus,
-    },
-    /// Replaces the history focus set outright; an empty set clears the focus.
-    SetHistoryFocus {
-        repo_id: RepoId,
-        focus: gitcomet_core::domain::HistoryFocusSet,
-    },
+    /// The message itself: the store filters the history as asked.
+    HistoryFilter(gitcomet_state::history_filter::HistoryFilterMsg),
     SetCommitFileSort {
         list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,

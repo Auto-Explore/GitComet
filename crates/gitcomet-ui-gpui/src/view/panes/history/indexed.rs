@@ -7,6 +7,7 @@ use crate::view::caches::{
 use gitcomet_core::domain::WorktreeDirtySummary;
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HistoryIndexHandle};
 use gitcomet_core::services::CancellationToken;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use gitcomet_state::indexed_history::IndexedHistoryMsg as Event;
 use std::rc::Rc;
 
@@ -1640,7 +1641,7 @@ impl HistoryView {
             .fallback_scope
             .filter(|scope| *scope != shown.key.history_scope)
         {
-            self.store.dispatch(Msg::SetHistoryScope {
+            self.store.dispatch(HistoryFilterMsg::SetScope {
                 repo_id: pending.repo_id,
                 scope,
             });

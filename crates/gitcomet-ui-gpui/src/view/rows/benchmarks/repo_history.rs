@@ -5,6 +5,7 @@ use crate::view::caches::{
     branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
     branch_sidebar_cache_store,
 };
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use gitcomet_state::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
 use std::collections::BTreeSet;
 
@@ -2223,10 +2224,10 @@ impl HistoryScopeSwitchFixture {
 
         let effects = dispatch_sync(
             state,
-            Msg::SetHistoryScope {
+            Msg::HistoryFilter(HistoryFilterMsg::SetScope {
                 repo_id: self.repo_id,
                 scope: self.to_scope,
-            },
+            }),
         );
 
         let repo_state = state

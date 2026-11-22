@@ -9,6 +9,7 @@ use crate::view::caches::{
     history_worktree_chips_by_head, next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
@@ -1768,14 +1769,14 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         if decision.clear_focus {
-            self.store.dispatch(Msg::SetHistoryFocus {
+            self.store.dispatch(HistoryFilterMsg::SetFocus {
                 repo_id: pending.repo_id,
                 focus: Default::default(),
             });
             return;
         }
         if let Some(scope) = decision.set_scope {
-            self.store.dispatch(Msg::SetHistoryScope {
+            self.store.dispatch(HistoryFilterMsg::SetScope {
                 repo_id: pending.repo_id,
                 scope,
             });

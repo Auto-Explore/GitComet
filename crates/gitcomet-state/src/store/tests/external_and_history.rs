@@ -1,4 +1,5 @@
 use super::*;
+use crate::history_filter::HistoryFilterMsg;
 use crate::msg::{
     ControlEffect, PersistenceEffect, ReferenceEffect, StatusEffect, WorktreeSaveBaseline,
 };
@@ -2170,10 +2171,10 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::SetHistoryScope {
+            Msg::HistoryFilter(HistoryFilterMsg::SetScope {
                 repo_id: RepoId(1),
                 scope: target_scope,
-            },
+            }),
         );
 
         let repo_state = &state.repos[0];
@@ -2243,10 +2244,10 @@ fn set_history_scope_retains_ready_log_while_loading() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(1),
             scope: LogScope::AllBranches,
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
@@ -2301,10 +2302,10 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(1),
             scope: LogScope::AllBranches,
-        },
+        }),
     );
     assert!(
         effects.iter().any(|effect| matches!(
@@ -2322,10 +2323,10 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(1),
             scope: LogScope::NoMerges,
-        },
+        }),
     );
     assert!(
         effects.iter().any(|effect| matches!(
@@ -3221,10 +3222,10 @@ fn log_loaded_clears_retained_scope_switch_log() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id: RepoId(1),
             scope: LogScope::AllBranches,
-        },
+        }),
     );
 
     assert!(
@@ -3536,10 +3537,10 @@ fn set_history_scope_bumps_log_rev() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryScope {
+        Msg::HistoryFilter(HistoryFilterMsg::SetScope {
             repo_id,
             scope: LogScope::AllBranches,
-        },
+        }),
     );
 
     assert!(
@@ -3831,10 +3832,10 @@ fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryAuthorFilter {
+        Msg::HistoryFilter(HistoryFilterMsg::SetAuthorFilter {
             repo_id: RepoId(1),
             author: Some("alice".to_string()),
-        },
+        }),
     );
 
     assert!(

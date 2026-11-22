@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 /// The focus entry's label and the action it sends.
 fn focus_entry(model: &ContextMenuModel) -> (String, ContextMenuAction) {
@@ -8,7 +9,10 @@ fn focus_entry(model: &ContextMenuModel) -> (String, ContextMenuAction) {
         .iter()
         .find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. }
-                if matches!(**action, ContextMenuAction::ToggleHistoryFocus { .. }) =>
+                if matches!(
+                    **action,
+                    ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus { .. })
+                ) =>
             {
                 Some((label.to_string(), (**action).clone()))
             }
@@ -85,10 +89,10 @@ fn local_branch_menu_focuses_that_branch(cx: &mut gpui::TestAppContext) {
     assert_eq!(label, "Focus");
     assert!(matches!(
         action,
-        ContextMenuAction::ToggleHistoryFocus {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             repo_id: RepoId(7),
             target: HistoryFocus::LocalBranch { ref name },
-        } if name.as_ref() == "feature"
+        }) if name.as_ref() == "feature"
     ));
 }
 
@@ -106,10 +110,10 @@ fn the_focused_branchs_own_entry_stops_its_focus(cx: &mut gpui::TestAppContext) 
     assert_eq!(label, "Stop focus");
     assert!(matches!(
         action,
-        ContextMenuAction::ToggleHistoryFocus {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             repo_id: RepoId(7),
             target: HistoryFocus::LocalBranch { ref name },
-        } if name.as_ref() == "feature"
+        }) if name.as_ref() == "feature"
     ));
 }
 
@@ -126,10 +130,10 @@ fn another_branchs_entry_still_offers_focus(cx: &mut gpui::TestAppContext) {
     assert_eq!(label, "Focus");
     assert!(matches!(
         action,
-        ContextMenuAction::ToggleHistoryFocus {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             target: HistoryFocus::LocalBranch { ref name },
             ..
-        } if name.as_ref() == "main"
+        }) if name.as_ref() == "main"
     ));
 }
 
@@ -148,13 +152,13 @@ fn remote_branch_menu_focuses_the_remote_tracking_ref(cx: &mut gpui::TestAppCont
     assert_eq!(label, "Focus");
     assert!(matches!(
         action,
-        ContextMenuAction::ToggleHistoryFocus {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             target: HistoryFocus::RemoteBranch {
                 ref remote,
                 ref branch,
             },
             ..
-        } if remote.as_ref() == "origin" && branch.as_ref() == "feature/awesome"
+        }) if remote.as_ref() == "origin" && branch.as_ref() == "feature/awesome"
     ));
 }
 
@@ -175,10 +179,10 @@ fn remote_menu_focuses_the_whole_remote(cx: &mut gpui::TestAppContext) {
     assert_eq!(label, "Focus");
     assert!(matches!(
         action,
-        ContextMenuAction::ToggleHistoryFocus {
+        ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             target: HistoryFocus::Remote { ref name },
             ..
-        } if name.as_ref() == "origin"
+        }) if name.as_ref() == "origin"
     ));
 }
 
