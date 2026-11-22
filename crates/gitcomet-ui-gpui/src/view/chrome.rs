@@ -20,6 +20,7 @@ use crate::kit::window_chrome::{
     window_top_left_corner,
 };
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 
 use crate::theme::mix_rgba;
 use std::cell::Cell;
@@ -295,9 +296,9 @@ impl TitleBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     fn open_popover_for_bounds(
@@ -308,9 +309,11 @@ impl TitleBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
 use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 use rustc_hash::FxHasher;
@@ -565,9 +566,9 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     fn open_popover_for_bounds(
@@ -578,9 +579,11 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 }
 

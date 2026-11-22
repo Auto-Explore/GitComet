@@ -8,6 +8,7 @@ use crate::view::caches::{
     build_history_visible_indices, history_ref_items_from_displayed_refs,
     history_worktree_chips_by_head, next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
@@ -1609,9 +1610,8 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }
@@ -1657,9 +1657,11 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }

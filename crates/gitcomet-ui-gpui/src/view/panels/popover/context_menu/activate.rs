@@ -1181,7 +1181,7 @@ impl PopoverHost {
                     cx.defer(move |cx| {
                         let _ = wh.update(cx, |_, window, cx| {
                             let _ = root_view.request(
-                                RootRequest::OpenPopoverCentered(PopoverKind::RebaseReword {
+                                RootRequest::open_centered(PopoverKind::RebaseReword {
                                     ix,
                                     original_action,
                                     original_message: msg,

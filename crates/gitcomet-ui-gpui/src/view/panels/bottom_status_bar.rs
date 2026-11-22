@@ -2,6 +2,7 @@ use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, Relocated
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
@@ -226,9 +227,11 @@ impl BottomStatusBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 
     fn open_popover_centered(
@@ -237,10 +240,11 @@ impl BottomStatusBarView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_centered(kind, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverCentered(kind.into()),
+            Some(window),
+            cx,
+        );
     }
 }
 

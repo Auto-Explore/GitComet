@@ -1,11 +1,11 @@
-//! What popovers ask their window's root view to do. A popover sends a
-//! `RootRequest` value through its weak root handle instead of calling root
-//! methods, so the root's API toward popovers is this one enum.
+//! What popovers, panes and bars ask their window's root view to do. They send
+//! a `RootRequest` value through their weak root handle instead of calling
+//! root methods, so the requests they share are named once here.
 
 use super::{
-    ChangeTrackingView, ErrorReport, FilesystemUnsavedEditsChoice, GitCometView, PopoverKind,
-    RepoId, SharedString, TerminalShutdownAction, TerminalShutdownPrompt, ThemeMode,
-    UnsavedFileEditsAction, WeakEntity, Window, components,
+    Bounds, ChangeTrackingView, ErrorReport, FilesystemUnsavedEditsChoice, GitCometView, Msg,
+    Pixels, Point, PopoverRequest, RepoId, SharedString, TerminalShutdownAction,
+    TerminalShutdownPrompt, ThemeMode, UnsavedFileEditsAction, WeakEntity, Window, components,
 };
 use crate::view::date_time::{DateTimeFormat, Timezone};
 use gitcomet_core::domain::CommitId;
@@ -13,7 +13,7 @@ use gitcomet_core::filesystem::ConflictChoice;
 use gitcomet_core::git_operation::GitOperationId;
 use std::path::PathBuf;
 
-/// A request from a popover to the root view of its window.
+/// A request to the root view of a window from one of its popovers, panes or bars.
 pub(in crate::view) enum RootRequest {
     PromptOpenRepo,
     PromptInitRepo,
@@ -46,7 +46,11 @@ pub(in crate::view) enum RootRequest {
     SetCommitAmend(bool),
     SetCommitPushAfter(bool),
     SetCommitSkipHooks(bool),
-    OpenPopoverCentered(PopoverKind),
+    OpenPopoverCentered(PopoverRequest),
+    OpenPopoverAt(PopoverRequest, Point<Pixels>),
+    OpenPopoverForBounds(PopoverRequest, Bounds<Pixels>),
+    /// For a view that holds no store handle of its own.
+    Dispatch(Box<Msg>),
     OpenFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -103,6 +107,16 @@ pub(in crate::view) enum RootRequest {
         action: UnsavedFileEditsAction,
         save: bool,
     },
+}
+
+impl RootRequest {
+    pub(in crate::view) fn open_centered(popover: impl Into<PopoverRequest>) -> Self {
+        Self::OpenPopoverCentered(popover.into())
+    }
+
+    pub(in crate::view) fn dispatch(msg: Msg) -> Self {
+        Self::Dispatch(Box::new(msg))
+    }
 }
 
 /// Sends requests to a root view through a weak handle.
@@ -238,6 +252,7 @@ impl GitCometView {
                 self.install_linux_desktop_integration(cx)
             }
             RootRequest::Toast(kind, message) => self.push_toast(kind, message, cx),
+            RootRequest::Dispatch(msg) => self.store.dispatch(*msg),
             RootRequest::CopyCommitSha(commit_id) => self.copy_commit_sha(commit_id, cx),
             RootRequest::ClearPendingTerminalShutdownPrompt => {
                 self.clear_pending_terminal_shutdown_prompt(cx)
@@ -268,6 +283,12 @@ impl GitCometView {
                 self.perform_close_action(action, window, cx)
             }
             RootRequest::OpenPopoverCentered(kind) => self.open_popover_centered(kind, window, cx),
+            RootRequest::OpenPopoverAt(kind, anchor) => {
+                self.open_popover_at(kind, anchor, window, cx)
+            }
+            RootRequest::OpenPopoverForBounds(kind, bounds) => {
+                self.open_popover_for_bounds(kind, bounds, window, cx)
+            }
             RootRequest::OpenFileHistory { repo_id, path } => {
                 self.open_file_history(repo_id, path, window, cx)
             }

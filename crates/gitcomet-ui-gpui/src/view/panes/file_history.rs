@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::panels::popover::picker_nav::{
     PickerNavKeys, PickerNavOutcome, handle_picker_nav,
 };
@@ -614,9 +615,11 @@ impl FileHistoryPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverAt(kind.into(), anchor),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }

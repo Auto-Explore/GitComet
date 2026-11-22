@@ -2,6 +2,7 @@ use super::super::path_display;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::HeadTracking;
 use gitcomet_state::model::RepoIncomingState;
 use rustc_hash::FxHasher;
@@ -1250,7 +1251,7 @@ impl Render for RepoTabsBarView {
                     cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         let _ = this
                             .root_view
-                            .update(cx, |root, cx| root.show_repository_canvas(cx));
+                            .request(RootRequest::ShowRepositoryCanvas, None, cx);
                         if let Some(msg) =
                             Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                         {
@@ -1304,14 +1305,14 @@ impl Render for RepoTabsBarView {
                     .unscaled()
                     .on_click_with_bounds(theme, cx, move |_this, _e, bounds, window, cx| {
                         cx.stop_propagation();
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.open_popover_for_bounds(
-                                PopoverKind::AddRepoMenu,
+                        let _ = root_view.request(
+                            RootRequest::OpenPopoverForBounds(
+                                PopoverKind::AddRepoMenu.into(),
                                 bounds,
-                                window,
-                                cx,
-                            );
-                        });
+                            ),
+                            Some(window),
+                            cx,
+                        );
                     })
                     .debug_selector(|| "add_repo_menu".to_string())
                     .block_mouse_except_scroll()

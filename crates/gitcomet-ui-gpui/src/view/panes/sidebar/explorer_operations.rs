@@ -174,7 +174,7 @@ impl SidebarPaneView {
     pub(super) fn show_repository_canvas(&self, cx: &mut gpui::Context<Self>) {
         let _ = self
             .root_view
-            .update(cx, |root, cx| root.show_repository_canvas(cx));
+            .request(RootRequest::ShowRepositoryCanvas, None, cx);
     }
 
     fn explorer_visible_paths(&self, cx: &gpui::App) -> Vec<PathBuf> {

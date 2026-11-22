@@ -1,6 +1,7 @@
 use super::super::path_display;
 use super::super::*;
 use crate::kit::text_truncation::path_alignment_visible_signature;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::pending_commit::PendingCommit;
 use gitcomet_core::history_find::HistoryFindQuery;
 use rustc_hash::FxHasher;
@@ -853,7 +854,7 @@ impl DetailsPaneView {
         self.set_commit_amend_enabled(enabled, cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| root.set_commit_amend_enabled(enabled, cx));
+            let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
         });
     }
 
@@ -864,9 +865,7 @@ impl DetailsPaneView {
         self.set_commit_skip_hooks_enabled(enabled, cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_skip_hooks_enabled(enabled, cx)
-            });
+            let _ = root_view.request(RootRequest::SetCommitSkipHooks(enabled), None, cx);
         });
     }
 
@@ -877,7 +876,7 @@ impl DetailsPaneView {
     ) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| root.copy_commit_sha(commit_id, cx));
+            let _ = root_view.request(RootRequest::CopyCommitSha(commit_id), None, cx);
         });
     }
 
@@ -1029,9 +1028,7 @@ impl DetailsPaneView {
     fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_amend_enabled(enabled, cx);
-            });
+            let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
         });
     }
 
@@ -2975,9 +2972,8 @@ impl DetailsPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }
@@ -2994,9 +2990,11 @@ impl DetailsPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }

@@ -288,7 +288,7 @@ glob-super gitcomet-ui-media 8 -
 glob-super gitcomet-ui-terminal 3 -
 notify-fingerprint-fns gitcomet-ui-gpui 8 -
 real-time-waits gitcomet-state 224 -
-root-view-updates gitcomet-ui-gpui 70 -
+root-view-updates gitcomet-ui-gpui 41 -
 set-theme-fns gitcomet-ui-gpui 4 -
 store-snapshot-syncs gitcomet-ui-gpui 145 -
 struct-fields gitcomet-ui-gpui::DiffRenderer 348 -

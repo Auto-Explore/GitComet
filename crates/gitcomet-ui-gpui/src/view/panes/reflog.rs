@@ -3,6 +3,7 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::ReflogEntry;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -607,9 +608,8 @@ impl ReflogPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }

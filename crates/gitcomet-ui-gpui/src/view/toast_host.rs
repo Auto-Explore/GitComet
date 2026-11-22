@@ -2,6 +2,7 @@ use super::operation_progress::{
     MAINTENANCE_RECOMMENDATION_TEXT, MaintenanceRecommendation, OperationProgress,
 };
 use super::*;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_state::model::SubmoduleAddProgressState;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -329,13 +330,11 @@ impl ToastHost {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_centered(
-                        PopoverKind::ErrorDetails { toast_id: id },
-                        window,
-                        cx,
-                    );
-                });
+                let _ = root_view.request(
+                    RootRequest::open_centered(PopoverKind::ErrorDetails { toast_id: id }),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -720,16 +719,14 @@ impl ToastHost {
                 let window_handle = window.window_handle();
                 cx.defer(move |cx| {
                     let _ = window_handle.update(cx, |_, window, cx| {
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.open_popover_centered(
-                                PopoverKind::HookActivity {
-                                    repo_id,
-                                    operation_id: Some(operation_id),
-                                },
-                                window,
-                                cx,
-                            );
-                        });
+                        let _ = root_view.request(
+                            RootRequest::open_centered(PopoverKind::HookActivity {
+                                repo_id,
+                                operation_id: Some(operation_id),
+                            }),
+                            Some(window),
+                            cx,
+                        );
                     });
                 });
                 self.remove_toast(id, cx);
@@ -901,10 +898,11 @@ impl ToastHost {
             ));
         }
         let abort_button = abort_button.on_click(theme, cx, move |_this, _e, _w, cx| {
-            let _ = root_view.update(cx, |root, _cx| {
-                root.store
-                    .dispatch(Msg::AbortCloneRepo { dest: dest.clone() });
-            });
+            let _ = root_view.request(
+                RootRequest::dispatch(Msg::AbortCloneRepo { dest: dest.clone() }),
+                None,
+                cx,
+            );
         });
 
         let content = div()
@@ -1035,7 +1033,7 @@ impl ToastHost {
                   _e: &ClickEvent,
                   _w: &mut Window,
                   cx: &mut gpui::Context<Self>| {
-                let _ = root_view.update(cx, |root, _cx| root.store.dispatch(msg(repo_id)));
+                let _ = root_view.request(RootRequest::dispatch(msg(repo_id)), None, cx);
             }
         };
         let start = components::Button::new(format!("maintenance_start_{}", repo_id.0), "Start")
@@ -1124,16 +1122,14 @@ impl ToastHost {
             let window_handle = window.window_handle();
             cx.defer(move |cx| {
                 let _ = window_handle.update(cx, |_, window, cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.open_popover_centered(
-                            PopoverKind::HookActivity {
-                                repo_id,
-                                operation_id: Some(operation_id),
-                            },
-                            window,
-                            cx,
-                        );
-                    });
+                    let _ = root_view.request(
+                        RootRequest::open_centered(PopoverKind::HookActivity {
+                            repo_id,
+                            operation_id: Some(operation_id),
+                        }),
+                        Some(window),
+                        cx,
+                    );
                 });
             });
         })
@@ -1152,12 +1148,14 @@ impl ToastHost {
         .borderless()
         .disabled(progress.cancelling)
         .on_click(theme, cx, move |_this, _e, _w, cx| {
-            let _ = root_view.update(cx, |root, _cx| {
-                root.store.dispatch(Msg::CancelGitOperation {
+            let _ = root_view.request(
+                RootRequest::dispatch(Msg::CancelGitOperation {
                     repo_id,
                     operation_id,
-                });
-            });
+                }),
+                None,
+                cx,
+            );
         })
         .debug_selector(move || format!("operation_progress_stop_{}", operation_id.0));
 
@@ -1291,16 +1289,14 @@ impl ToastHost {
                     let window_handle = window.window_handle();
                     cx.defer(move |cx| {
                         let _ = window_handle.update(cx, |_, window, cx| {
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.open_popover_centered(
-                                    PopoverKind::HookActivity {
-                                        repo_id,
-                                        operation_id: Some(operation_id),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            });
+                            let _ = root_view.request(
+                                RootRequest::open_centered(PopoverKind::HookActivity {
+                                    repo_id,
+                                    operation_id: Some(operation_id),
+                                }),
+                                Some(window),
+                                cx,
+                            );
                         });
                     });
                 })

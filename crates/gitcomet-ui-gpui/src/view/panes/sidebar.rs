@@ -12,6 +12,7 @@ use super::super::sidebar_presentation::{
 };
 use super::super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
@@ -2130,9 +2131,9 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     pub(in super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2145,13 +2146,14 @@ impl SidebarPaneView {
     }
 
     pub(in crate::view) fn explain_working_tree_required(&self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.push_toast(
+        let _ = self.root_view.request(
+            RootRequest::Toast(
                 components::ToastKind::Warning,
                 gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_owned(),
-                cx,
-            );
-        });
+            ),
+            None,
+            cx,
+        );
     }
 
     /// Focus a worktree in the log: its uncommitted-changes row when it has
