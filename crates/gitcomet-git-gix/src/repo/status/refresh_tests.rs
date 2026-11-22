@@ -654,6 +654,37 @@ fn the_cached_root_tree_spares_the_staged_comparison_only_when_nothing_is_staged
     assert!(!cached_tree_says_nothing_is_staged(root));
 }
 
+/// Git does not check the index's trailing checksum when it reads it, only
+/// `git fsck` does. Hashing a large index costs more than decoding it.
+#[test]
+fn an_index_is_read_without_checking_its_checksum_as_git_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    write_file(root, "file.txt", "changed\n");
+    let before = open_repo(root).status_impl().unwrap();
+    assert_eq!(before.unstaged.len(), 1);
+
+    let index = root.join(".git/index");
+    let mut bytes = std::fs::read(&index).unwrap();
+    *bytes.last_mut().unwrap() ^= 0xff;
+    let bytes_end = bytes.last().copied();
+    std::fs::write(&index, bytes).unwrap();
+    // Without optional locks, or Git writes the index anew.
+    let status = ["--no-optional-locks", "status", "--porcelain"];
+    let porcelain = crate::test_support::git_stdout(root, &status);
+    assert_eq!(porcelain.trim(), "M file.txt");
+    assert_eq!(std::fs::read(&index).unwrap().last(), bytes_end.as_ref());
+    let after = open_repo(root).status_impl().unwrap();
+    assert_eq!(
+        (&after.staged, &after.unstaged),
+        (&before.staged, &before.unstaged)
+    );
+}
+
 /// Each side waits for a word from the other, which only arrives when both
 /// run at once.
 #[test]

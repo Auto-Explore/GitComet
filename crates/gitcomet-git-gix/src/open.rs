@@ -41,7 +41,21 @@ pub(crate) fn open_worktree_repo_with_options(
 ) -> gix::Result<gix::Repository> {
     let mut repo = gix::open_opts(git_dir_for_workdir(workdir), options)?;
     crate::refs::reload_conditional_includes(&mut repo)?;
+    read_index_without_its_checksum(&mut repo)?;
     Ok(repo)
+}
+
+/// Git checks an index's trailing checksum in `git fsck` alone. gix checks
+/// it on every read, unless configured as for an index written without one,
+/// and hashing a large index takes twice as long as decoding it. Nothing
+/// here writes an index through gix, which the setting would also change.
+fn read_index_without_its_checksum(repo: &mut gix::Repository) -> gix::Result<()> {
+    let mut config = repo.config_snapshot_mut();
+    config
+        .set_raw_value(gix::config::tree::Index::SKIP_HASH, "true")
+        .map_err(gix::Error::from_error)?;
+    config.commit()?;
+    Ok(())
 }
 
 /// Translate a failed [`open_worktree_repo_with`] into the crate's error type.
