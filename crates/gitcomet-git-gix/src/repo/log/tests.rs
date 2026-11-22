@@ -2643,3 +2643,39 @@ fn followed_names_keep_each_commits_first_status_line() {
     );
     assert_eq!(names.status_line("not an id"), None);
 }
+
+#[test]
+fn stash_shapes_rule_out_what_the_walk_shows_to_be_a_merge() {
+    let id = |byte: u8| gix::ObjectId::from_bytes_or_panic(&[byte; 20]);
+    let walk: &[(u8, &[u8])] = &[
+        // A stash with untracked files: its index on the base, a root.
+        (1, &[2, 3, 4]),
+        // A merge of a branch that has more than one commit.
+        (5, &[2, 6]),
+        // An octopus of two one-commit branches: the third is no root.
+        (7, &[2, 8, 9]),
+        // A merge whose second parent the walk never reaches.
+        (10, &[2, 11]),
+        // A stash without untracked files.
+        (12, &[2, 13]),
+        (13, &[2]),
+        (9, &[2]),
+        (8, &[2]),
+        (6, &[14]),
+        (4, &[]),
+        (3, &[2]),
+        (2, &[14]),
+        (14, &[]),
+    ];
+    let mut shapes = index::StashShapes::default();
+    for &(commit, parents) in walk {
+        let parents: Vec<_> = parents.iter().map(|&parent| id(parent)).collect();
+        shapes.visit(id(commit), &parents);
+    }
+    let ruled_out: Vec<u8> = walk
+        .iter()
+        .map(|&(commit, _)| commit)
+        .filter(|&commit| shapes.rules_out(&id(commit)))
+        .collect();
+    assert_eq!(ruled_out, [5, 7]);
+}

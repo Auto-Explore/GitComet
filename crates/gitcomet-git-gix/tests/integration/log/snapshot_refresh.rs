@@ -705,6 +705,7 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
         }
         let repo = GixBackend.open(dir.path()).unwrap();
         for author in [None, Some("Alice")] {
+            let _capture = gitcomet_core::history_perf::capture();
             let index = repo
                 .build_history_index(
                     &HistoryMode::AllBranches.into(),
@@ -715,12 +716,23 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
                 )
                 .unwrap()
                 .unwrap();
-            assert_eq!(
-                index.is_probable_stash(index.position(merge.trim()).unwrap()),
-                !graph,
+            // The walk passes the merged branch's tip, which is no commit on
+            // the first parent alone: no stash, whatever the message says.
+            assert!(
+                !index.is_probable_stash(index.position(merge.trim()).unwrap()),
                 "graph={graph} author={author:?}"
             );
             assert!(index.is_probable_stash(index.position(stash.trim()).unwrap()));
+            // Only the stash has a message worth reading.
+            if author.is_none() {
+                assert_eq!(
+                    gitcomet_core::history_perf::count(
+                        gitcomet_core::history_perf::Work::IndexObjectRead
+                    ),
+                    1,
+                    "graph={graph}"
+                );
+            }
         }
     }
 }

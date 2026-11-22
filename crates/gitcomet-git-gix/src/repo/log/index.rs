@@ -101,6 +101,7 @@ impl GixRepo {
             (topology_cache, query.generation),
         )?;
         let mut decode_buf = Vec::new();
+        let mut shapes = StashShapes::default();
         let mut scanned = 0u64;
         let mut last_progress = Instant::now();
         for info in &mut walk.walk {
@@ -108,6 +109,7 @@ impl GixRepo {
             let info = info.map_err(|error| {
                 crate::repo::object_store::gix_error("gix history index", error)
             })?;
+            shapes.visit(info.id, &info.parent_ids);
             scanned += 1;
             if scanned.is_multiple_of(1024) && last_progress.elapsed() >= Duration::from_millis(100)
             {
@@ -153,11 +155,11 @@ impl GixRepo {
             matched: builder.len() as u64,
         });
         // Release the traversal's maps or shared topology before stash
-        // classification opens a graph and reads candidate messages.
+        // classification reads candidate messages.
         drop(walk);
         drop(decode_buf);
 
-        retain_probable_stashes(&mut builder, &repo, author.is_some(), cancellation)?;
+        retain_probable_stashes(&mut builder, &repo, &shapes, author.is_some(), cancellation)?;
         builder.finish(cancellation)
     }
 
@@ -228,25 +230,63 @@ impl GixRepo {
     }
 }
 
+/// Rules stash candidates out by shape as a walk passes their parents. A
+/// stash's second parent is its index, one commit on the first parent alone,
+/// and a third holds the untracked files and has no parent. A merge is
+/// neither, and its message is then never read.
+#[derive(Default)]
+pub(super) struct StashShapes {
+    /// For a commit that candidates name as a parent: each candidate, and
+    /// the one parent the commit may have (or none) if that is a stash.
+    awaited: FxHashMap<gix::ObjectId, StashParents>,
+    ruled_out: FxHashSet<gix::ObjectId>,
+}
+
+type StashParents = smallvec::SmallVec<[(gix::ObjectId, Option<gix::ObjectId>); 1]>;
+
+impl StashShapes {
+    /// Takes the commits of a walk in its order, children before parents. A
+    /// parent the walk never passes rules nothing out.
+    pub(super) fn visit(&mut self, id: gix::ObjectId, parents: &[gix::ObjectId]) {
+        for (candidate, only_parent) in self.awaited.remove(&id).unwrap_or_default() {
+            if parents != only_parent.as_slice() {
+                self.ruled_out.insert(candidate);
+            }
+        }
+        let (base, index, untracked) = match parents {
+            [base, index] => (base, index, None),
+            [base, index, untracked] => (base, index, Some(untracked)),
+            _ => return,
+        };
+        self.awaited
+            .entry(*index)
+            .or_default()
+            .push((id, Some(*base)));
+        if let Some(untracked) = untracked {
+            self.awaited.entry(*untracked).or_default().push((id, None));
+        }
+    }
+
+    pub(super) fn rules_out(&self, candidate: &gix::oid) -> bool {
+        self.ruled_out.contains(candidate)
+    }
+}
+
 /// Keeps the stash candidates whose shape and summary are a stash's.
 /// `messages_checked` when an author filter has already read the messages.
 pub(super) fn retain_probable_stashes(
     builder: &mut HistoryIndexBuilder,
     repo: &gix::Repository,
+    shapes: &StashShapes,
     messages_checked: bool,
     cancellation: &CancellationToken,
 ) -> Result<()> {
     let mut decode_buf = Vec::new();
-    let topology = std::cell::OnceCell::new();
-    builder.retain_probable_stashes(|id, parents| {
+    builder.retain_probable_stashes(|id, _| {
         cancellation.check_cancelled()?;
-        if let Some(graph) = topology.get_or_init(|| repo.commit_graph_if_enabled().ok().flatten())
-        {
-            let parents: smallvec::SmallVec<[gix::ObjectId; 3]> =
-                parents.map(gix::ObjectId::from_bytes_or_panic).collect();
-            if stash_shape(graph, &parents) == Some(false) {
-                return Ok(false);
-            }
+        let id = gix::oid::from_bytes_unchecked(id);
+        if shapes.rules_out(id) {
+            return Ok(false);
         }
         if messages_checked {
             return Ok(true);
@@ -254,7 +294,7 @@ pub(super) fn retain_probable_stashes(
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
         let commit = repo
             .objects
-            .find_commit(gix::oid::from_bytes_unchecked(id), &mut decode_buf)
+            .find_commit(id, &mut decode_buf)
             .map_err(|error| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix history index object: {error}"
@@ -268,28 +308,4 @@ fn has_stash_summary(message: &[u8]) -> bool {
     let summary = message.lines().next().unwrap_or_default();
     (summary.starts_with(b"WIP on ") || summary.starts_with(b"On "))
         && summary.windows(2).any(|pair| pair == b": ")
-}
-
-/// Only reject when unfiltered commit-graph topology proves the shape impossible.
-/// Missing graph entries or malformed edges retain the message-check fallback.
-fn stash_shape(graph: &gix::commitgraph::Graph, parents: &[gix::ObjectId]) -> Option<bool> {
-    let base = graph.lookup(parents.first()?)?;
-    let index = graph.commit_by_id(parents.get(1)?)?;
-    let mut edges = index.iter_parents();
-    let parent = edges.next().transpose().ok()?;
-    if parent != Some(base) || edges.next().transpose().ok()?.is_some() {
-        return Some(false);
-    }
-    if let Some(untracked) = parents.get(2) {
-        return Some(
-            graph
-                .commit_by_id(untracked)?
-                .iter_parents()
-                .next()
-                .transpose()
-                .ok()?
-                .is_none(),
-        );
-    }
-    Some(true)
 }

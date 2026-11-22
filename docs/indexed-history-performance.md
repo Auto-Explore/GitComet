@@ -679,3 +679,16 @@ Release build, first page after opening (which is where the scan runs):
 
 Through the store, on a clone that borrows git.git's objects: first page 280 →
 60 ms, index in state 355 → 140 ms.
+
+## Stash candidates ruled out by shape (2026-11-22)
+
+A commit with two or three parents may be a stash, and without a commit-graph
+each one's message was read to tell: 59 of the 72 ms of git.git's index build,
+for its 20,000 merges. A stash's second parent is its index, one commit on the
+first parent alone, and a third holds the untracked files and has no parent.
+The walk passes those parents anyway, so `StashShapes` rules a merge out as it
+goes and only a commit of that shape has its message read. The commit-graph
+check this replaces did the same from the graph's tables.
+
+git.git's index build takes 17 ms. A merge whose message reads like a stash's
+is no longer taken for one where there is no commit-graph.

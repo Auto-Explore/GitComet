@@ -6,7 +6,7 @@
 //! the larger history reaches the older walk's starting state after them.
 //! Both the history index and the header topology grow this way.
 
-use super::index::{HistoryQuery, retain_probable_stashes};
+use super::index::{HistoryQuery, StashShapes, retain_probable_stashes};
 use super::walk::log_paged_walk_handle;
 use crate::repo::ShallowSnapshot;
 use gitcomet_core::domain::HistoryMode;
@@ -235,15 +235,18 @@ pub(in crate::repo) fn extend_history_index(
     let repo = store.to_thread_local();
     let mut builder =
         HistoryIndexBuilder::new(snapshot, query.mode, repo.object_hash().len_in_bytes())?;
+    let mut shapes = StashShapes::default();
     for row in order {
+        let id = added.ids[row as usize];
         let parents = &added.parents[row as usize];
+        shapes.visit(id, parents);
         builder.push(
-            added.ids[row as usize].as_bytes(),
+            id.as_bytes(),
             parents.iter().map(|id| id.as_bytes()),
             (2..=3).contains(&parents.len()),
         )?;
     }
-    retain_probable_stashes(&mut builder, &repo, false, cancellation)?;
+    retain_probable_stashes(&mut builder, &repo, &shapes, false, cancellation)?;
     let index = builder.finish_before(older, cancellation)?;
     record(Work::HistoryIndexExtend);
     Ok(Some(index))
