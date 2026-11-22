@@ -119,14 +119,21 @@ fn memoizable(stats: &LineStats) -> bool {
 }
 
 /// One scan's view of the memo: hits carry over into `next`, which replaces
-/// the memo, so it only ever holds the current changes.
-#[derive(Default)]
-struct MemoScan {
-    previous: LineStatsMemo,
+/// the memo, so it only ever holds the current changes. The previous memo is
+/// only read, so several threads can scan against it at once.
+struct MemoScan<'a> {
+    previous: &'a LineStatsMemo,
     next: LineStatsMemo,
 }
 
-impl MemoScan {
+impl<'a> MemoScan<'a> {
+    fn new(previous: &'a LineStatsMemo) -> Self {
+        Self {
+            previous,
+            next: LineStatsMemo::default(),
+        }
+    }
+
     fn counts(&mut self, key: LineStatsKey, diff: impl FnOnce() -> LineStats) -> LineStats {
         if let Some(&entry) = self
             .previous
@@ -171,11 +178,11 @@ impl MemoScan {
         identity: Option<ReadIdentity>,
     ) -> Option<LineStats> {
         let identity = identity?;
-        let (owned, entry) = self.previous.tracked.remove_entry(path)?;
+        let entry = *self.previous.tracked.get(path)?;
         if entry.index != index || entry.identity != identity {
             return None;
         }
-        self.next.tracked.insert(owned, entry);
+        self.next.tracked.insert(path.to_path_buf(), entry);
         Some(entry.stats)
     }
 
@@ -212,10 +219,10 @@ impl MemoScan {
         let Some(identity) = identity else {
             return count().stats();
         };
-        if let Some((owned, entry)) = self.previous.untracked.remove_entry(path)
+        if let Some(&entry) = self.previous.untracked.get(path)
             && entry.identity == identity
         {
-            self.next.untracked.insert(owned, entry);
+            self.next.untracked.insert(path.to_path_buf(), entry);
             return entry.stats;
         }
         let added = count();
@@ -289,17 +296,15 @@ impl super::GixRepo {
         cancellation.check_cancelled()?;
         let repo = self.status_repo();
         // Taken, not held: a concurrent scan starts cold instead of waiting.
-        let mut scan = MemoScan {
-            previous: std::mem::take(&mut *self.line_stats_memo()),
-            next: LineStatsMemo::default(),
-        };
+        let mut previous = std::mem::take(&mut *self.line_stats_memo());
+        let mut scan = MemoScan::new(&previous);
         let result =
             cached_staged_line_stats(self, &repo, &mut scan, cancellation).and_then(|staged| {
                 cancellation.check_cancelled()?;
                 let unstaged = unstaged_line_stats(self, &repo, entries, &mut scan, cancellation)?;
                 Ok(UncommittedLineStats { staged, unstaged })
             });
-        let MemoScan { mut previous, next } = scan;
+        let next = scan.next;
         // A cancelled scan saw only part of the changes; keep both.
         *self.line_stats_memo() = if result.is_ok() {
             next
@@ -369,7 +374,7 @@ impl super::GixRepo {
 fn cached_staged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
-    memo: &mut MemoScan,
+    memo: &mut MemoScan<'_>,
     cancellation: &CancellationToken,
 ) -> Result<FxHashMap<PathBuf, LineStats>> {
     let head_oid = super::history::gix_head_id_or_none(repo)?;
@@ -417,7 +422,7 @@ fn cached_staged_line_stats(
 /// object reads per changed pair the memo lacks and no worktree traversal.
 fn staged_line_stats(
     repo: &gix::Repository,
-    memo: &mut MemoScan,
+    memo: &mut MemoScan<'_>,
     cancellation: &CancellationToken,
 ) -> Result<Vec<StagedLineStatsRow>> {
     #[cfg(test)]
@@ -482,11 +487,45 @@ fn staged_line_stats(
 /// Index blob vs worktree file, the latter run through the worktree->git
 /// filter pipeline so CRLF and clean filters apply before counting. An
 /// untracked file has no blob, so all of it is added.
+/// Threads counting unstaged lines, and the files each must have to be
+/// worth one: a thread builds an attribute stack and filters of its own.
+const LINE_COUNTERS_MAX: usize = 8;
+const LINE_COUNTER_FILES_MIN: usize = 32;
+
+#[cfg(test)]
+thread_local! {
+    /// The threads to count with, whatever the files and filters.
+    static LINE_COUNTERS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The threads to count `files` on. A filter program converts on the thread
+/// that reads a file, and one thread keeps to one process of each; the LFS
+/// filter is never run for counts.
+fn line_counters(repo: &gix::Repository, files: usize) -> usize {
+    #[cfg(test)]
+    if let Some(counters) = LINE_COUNTERS.get() {
+        return counters;
+    }
+    let converts = gix::filter::Pipeline::options(repo).map_or(true, |options| {
+        options.drivers.iter().any(|driver| {
+            (driver.clean.is_some() || driver.process.is_some())
+                && driver.name != super::large_files::LFS_FILTER_DRIVER
+        })
+    });
+    if converts {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(LINE_COUNTERS_MAX)
+        .min(files / LINE_COUNTER_FILES_MIN)
+}
+
 fn unstaged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
     entries: &[FileStatus],
-    memo: &mut MemoScan,
+    memo: &mut MemoScan<'_>,
     cancellation: &CancellationToken,
 ) -> Result<FxHashMap<PathBuf, LineStats>> {
     let mut out = FxHashMap::default();
@@ -497,12 +536,80 @@ fn unstaged_line_stats(
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let workdir = gix_repo.spec.workdir.as_path();
+    let counters = line_counters(repo, entries.len());
+    if counters < 2 {
+        count_unstaged_lines(repo, workdir, &index, entries, memo, cancellation, &mut out)?;
+        return Ok(out);
+    }
+
+    // Each file is read, hashed and compared by itself. Every thread reads
+    // the previous scan's memo and keeps what it counts, to be put together.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let previous = memo.previous;
+    #[cfg(test)]
+    let test_clock = super::RacyClockSkew::carry();
+    let count = |repo: gix::Repository| {
+        #[cfg(test)]
+        let _clock = test_clock();
+        let mut memo = MemoScan::new(previous);
+        let mut out = FxHashMap::default();
+        let claimed = std::iter::from_fn(|| {
+            entries.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        });
+        count_unstaged_lines(
+            &repo,
+            workdir,
+            &index,
+            claimed,
+            &mut memo,
+            cancellation,
+            &mut out,
+        )
+        .map(|()| (memo.next, out))
+    };
+    let counted = std::thread::scope(|scope| {
+        let helpers: Vec<_> = (1..counters)
+            .map(|_| {
+                let repo = repo.clone();
+                scope.spawn(|| count(repo))
+            })
+            .collect();
+        let mut counted = vec![count(repo.clone())];
+        for helper in helpers {
+            counted.push(
+                helper
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            );
+        }
+        counted
+    });
+    for counted in counted {
+        let (kept, counts) = counted?;
+        memo.next.extend(kept);
+        out.extend(counts);
+    }
+    Ok(out)
+}
+
+/// Counts `entries` into `out`, reading with one attribute stack and one set
+/// of filters.
+fn count_unstaged_lines<'e>(
+    repo: &gix::Repository,
+    workdir: &std::path::Path,
+    index: &gix::index::File,
+    entries: impl IntoIterator<Item = &'e FileStatus>,
+    memo: &mut MemoScan<'_>,
+    cancellation: &CancellationToken,
+    out: &mut FxHashMap<PathBuf, LineStats>,
+) -> Result<()> {
     // Only the old side is a blob, so `CommitStatsScratch` does not fit.
     let mut index_blob = Vec::new();
     let mut worktree = Vec::new();
-    let mut reader = WorktreeReader::new(repo, &gix_repo.spec.workdir);
+    let mut reader = WorktreeReader::new(repo, workdir);
 
-    for entry in entries.iter() {
+    for entry in entries {
         // Conflicted has no single before.
         if entry.kind == FileStatusKind::Conflicted {
             continue;
@@ -511,7 +618,7 @@ fn unstaged_line_stats(
         cancellation.check_cancelled()?;
         let stats = unstaged_entry_line_stats(
             repo,
-            &index,
+            index,
             entry,
             &mut index_blob,
             &mut worktree,
@@ -521,7 +628,7 @@ fn unstaged_line_stats(
         out.insert(entry.path.clone(), stats);
     }
 
-    Ok(out)
+    Ok(())
 }
 
 fn unstaged_entry_line_stats(
@@ -531,7 +638,7 @@ fn unstaged_entry_line_stats(
     index_blob: &mut Vec<u8>,
     worktree: &mut Vec<u8>,
     reader: &mut WorktreeReader<'_>,
-    memo: &mut MemoScan,
+    memo: &mut MemoScan<'_>,
 ) -> LineStats {
     let Ok(rel) = gix::path::into_bstr(entry.path.as_path()) else {
         return LineStats::UNKNOWN;

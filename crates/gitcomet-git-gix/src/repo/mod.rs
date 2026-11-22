@@ -324,7 +324,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct TestRacyClock {
     now: Option<std::time::SystemTime>,
     skew: std::time::Duration,
@@ -368,6 +368,12 @@ impl RacyClockSkew {
 
     fn install(clock: TestRacyClock) -> Self {
         Self(RACY_CLOCK.with(|cell| cell.replace(clock)))
+    }
+
+    /// This thread's clock, to be set on the threads that work for it.
+    pub(crate) fn carry() -> impl Fn() -> Self + Sync {
+        let clock = RACY_CLOCK.with(|cell| cell.borrow().clone());
+        move || Self::install(clock.clone())
     }
 }
 

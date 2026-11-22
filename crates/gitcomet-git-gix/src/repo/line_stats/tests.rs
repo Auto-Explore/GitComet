@@ -919,6 +919,63 @@ fn unchanged_modified_files_are_not_read_again() {
     assert_eq!(take_worktree_reads_for_tests(), kept + 1);
 }
 
+/// Enough changed files to share out: counted on several threads they come
+/// out as on one, and what the threads keep serves the next scan.
+#[test]
+fn lines_counted_on_several_threads_come_out_as_on_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    init_test_repo(dir);
+    for file in 0..90 {
+        write_file(
+            dir,
+            &format!("d{}/f{file}.txt", file % 7),
+            &lines("base", 1 + file % 5),
+        );
+    }
+    git_success(dir, &["add", "."]);
+    git_success(dir, &["commit", "-qm", "seed"]);
+    for file in 0..90 {
+        let path = format!("d{}/f{file}.txt", file % 7);
+        match file % 3 {
+            0 => write_file(dir, &path, &lines("changed", 2 + file % 4)),
+            1 if file % 2 == 0 => std::fs::remove_file(dir.join(&path)).unwrap(),
+            _ => {}
+        }
+        if file % 4 == 0 {
+            write_file(
+                dir,
+                &format!("d{}/new{file}.txt", file % 7),
+                &lines("new", 1 + file % 3),
+            );
+        }
+    }
+    std::fs::write(dir.join("d0/new.bin"), b"\0binary").unwrap();
+    let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+    let token = CancellationToken::new();
+    let scan = |repo: &crate::repo::GixRepo, counters: usize| {
+        LINE_COUNTERS.set(Some(counters));
+        let stats = repo.uncommitted_line_stats_impl(&token).unwrap();
+        LINE_COUNTERS.set(None);
+        stats
+    };
+
+    let alone = scan(&open_repo(dir), 1);
+    assert_eq!(alone.unstaged.len(), 30 + 15 + 23 + 1);
+    for counters in [2, 8] {
+        assert_eq!(scan(&open_repo(dir), counters), alone, "{counters} threads");
+    }
+
+    let repo = open_repo(dir);
+    let first = scan(&repo, 4);
+    take_worktree_reads_for_tests();
+    assert_eq!(scan(&repo, 1), first);
+    // Off Unix a stamp has no inode or ctime, so it is never trusted.
+    if cfg!(unix) {
+        assert_eq!(take_worktree_reads_for_tests(), 0);
+    }
+}
+
 /// A binary untracked file is sniffed once; later refreshes reuse its
 /// unknown while it keeps its stamp.
 #[test]
@@ -1388,13 +1445,21 @@ fn staged_walk_preserves_cancellation() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let repo = open_repo(tmp.path()).repo();
-    let err = staged_line_stats(&repo, &mut MemoScan::default(), &cancellation)
-        .expect_err("cancelled staged walk");
+    let err = staged_line_stats(
+        &repo,
+        &mut MemoScan::new(&LineStatsMemo::default()),
+        &cancellation,
+    )
+    .expect_err("cancelled staged walk");
     assert!(matches!(err.kind(), ErrorKind::Cancelled), "{err:?}");
     assert_eq!(
-        staged_line_stats(&repo, &mut MemoScan::default(), &CancellationToken::new())
-            .expect("uncancelled staged walk")
-            .len(),
+        staged_line_stats(
+            &repo,
+            &mut MemoScan::new(&LineStatsMemo::default()),
+            &CancellationToken::new()
+        )
+        .expect("uncancelled staged walk")
+        .len(),
         1
     );
 }
