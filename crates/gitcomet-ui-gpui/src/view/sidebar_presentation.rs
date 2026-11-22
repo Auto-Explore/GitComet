@@ -66,6 +66,7 @@ pub(in crate::view) struct SidebarPresentation {
 #[derive(Default)]
 pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
+    tag_rows: branch_sidebar::SortedTagRows,
     worktree_badges: Option<WorktreeBadgeCache>,
     search: Option<Rc<SidebarSearch>>,
     // Pin/collapse mutations explicitly invalidate this view-owned cache.
@@ -279,7 +280,12 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
     } else {
         &empty
     };
-    let tree = branch_sidebar_rows_cached(&mut cache.branch_rows, repo, collapsed_items);
+    let tree = branch_sidebar_rows_cached(
+        &mut cache.branch_rows,
+        &mut cache.tag_rows,
+        repo,
+        collapsed_items,
+    );
     // The base tree already tracks content, including identical repo refreshes.
     // Its identity also tells us whether the unfiltered pinned rows can be reused.
     let raw_pins = cache
@@ -409,6 +415,7 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
 
 fn branch_sidebar_rows_cached(
     cache: &mut Option<BranchSidebarCache>,
+    tag_rows: &mut branch_sidebar::SortedTagRows,
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
 ) -> Rc<[BranchSidebarRow]> {
@@ -440,7 +447,7 @@ fn branch_sidebar_rows_cached(
     }
 
     let rows: Rc<[BranchSidebarRow]> =
-        branch_sidebar::expanded_sidebar_rows(repo, collapsed_items, "").into();
+        branch_sidebar::expanded_sidebar_rows(repo, collapsed_items, "", tag_rows).into();
 
     branch_sidebar_cache_store(
         cache,

@@ -968,6 +968,34 @@ fn cmp_tag_names_newest_first(a: &str, b: &str) -> Ordering {
     ordering.reverse()
 }
 
+/// Tag rows in display order, kept for as long as the tag list is the same
+/// allocation. Every rebuild lists every tag, and ordering 20k names takes
+/// longer than a frame.
+#[derive(Default)]
+pub(super) struct SortedTagRows(Option<(Arc<Vec<Tag>>, Vec<BranchSidebarRow>)>);
+
+impl SortedTagRows {
+    fn rows(&mut self, tags: &Arc<Vec<Tag>>) -> &[BranchSidebarRow] {
+        // Holding the list keeps its address from being reused by another one.
+        let (_, rows) = match self.0.take() {
+            Some(kept) if Arc::ptr_eq(&kept.0, tags) => self.0.insert(kept),
+            _ => {
+                let mut sorted: Vec<_> = tags.iter().collect();
+                sorted.sort_by(|a, b| cmp_tag_names_newest_first(&a.name, &b.name));
+                let rows = sorted
+                    .into_iter()
+                    .map(|tag| BranchSidebarRow::TagItem {
+                        name: tag.name.clone().into(),
+                        target: tag.target.clone(),
+                    })
+                    .collect();
+                self.0.insert((Arc::clone(tags), rows))
+            }
+        };
+        rows
+    }
+}
+
 fn cmp_ascii_case_insensitive(left: &[u8], right: &[u8]) -> Ordering {
     for (&left, &right) in left.iter().zip(right.iter()) {
         let ordering = left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
@@ -1116,7 +1144,13 @@ pub(super) fn branch_sidebar_rows(
         &branch_filter.trim().to_ascii_lowercase(),
         Some(collapsed_items),
     );
-    rows.extend(sidebar_rows(repo, collapsed_items, branch_filter, false));
+    rows.extend(sidebar_rows(
+        repo,
+        collapsed_items,
+        branch_filter,
+        false,
+        &mut SortedTagRows::default(),
+    ));
     rows
 }
 
@@ -1126,8 +1160,9 @@ pub(super) fn expanded_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
     branch_filter: &str,
+    tag_rows: &mut SortedTagRows,
 ) -> Vec<BranchSidebarRow> {
-    sidebar_rows(repo, collapsed_items, branch_filter, true)
+    sidebar_rows(repo, collapsed_items, branch_filter, true, tag_rows)
 }
 
 pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
@@ -1152,6 +1187,7 @@ fn sidebar_rows(
     collapsed_items: &BTreeSet<String>,
     branch_filter: &str,
     always_expanded: bool,
+    tag_rows: &mut SortedTagRows,
 ) -> Vec<BranchSidebarRow> {
     let head = match &repo.head_branch {
         Loadable::Ready(head) => Some(head.as_str()),
@@ -1527,16 +1563,7 @@ fn sidebar_rows(
                     message: "No tags".into(),
                 });
             }
-            Loadable::Ready(tags) => {
-                let mut sorted: Vec<_> = tags.iter().collect();
-                sorted.sort_by(|a, b| cmp_tag_names_newest_first(&a.name, &b.name));
-                for tag in sorted {
-                    rows.push(BranchSidebarRow::TagItem {
-                        name: tag.name.clone().into(),
-                        target: tag.target.clone(),
-                    });
-                }
-            }
+            Loadable::Ready(tags) => rows.extend_from_slice(tag_rows.rows(tags)),
             Loadable::Loading | Loadable::NotLoaded => {
                 rows.push(BranchSidebarRow::TagPlaceholder {
                     message: "Loading".into(),

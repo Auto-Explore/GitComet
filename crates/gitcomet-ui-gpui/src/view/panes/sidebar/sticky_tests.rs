@@ -863,7 +863,8 @@ fn sticky_sidebar_paths_include_both_targets_and_ignore_closed_or_filtered_paths
     let state = fixture(4);
     let repo = &state.repos[0];
     let selected = BranchMenuTarget::remote("origin", "shared/topic-000001");
-    let rows = branch_sidebar::expanded_sidebar_rows(repo, &BTreeSet::new(), "");
+    let rows =
+        branch_sidebar::expanded_sidebar_rows(repo, &BTreeSet::new(), "", &mut Default::default());
     let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
     assert_eq!(
         structure
@@ -895,7 +896,7 @@ fn sticky_sidebar_paths_include_both_targets_and_ignore_closed_or_filtered_paths
             .is_empty()
     );
     let collapsed = BTreeSet::from([branch_sidebar::remote_group_storage_key("origin", "shared")]);
-    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "");
+    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "", &mut Default::default());
     let structure = crate::view::sidebar_sticky::SidebarStructure::new(&rows);
     assert!(
         structure
@@ -1663,7 +1664,7 @@ fn sticky_sidebar_ignores_legacy_top_level_collapse_and_requests_visible_data() 
         branch_sidebar::local_section_storage_key().to_string(),
         branch_sidebar::remote_section_storage_key().to_string(),
     ]);
-    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "");
+    let rows = branch_sidebar::expanded_sidebar_rows(repo, &collapsed, "", &mut Default::default());
     assert_eq!(
         rows.iter()
             .filter(|row| matches!(row, BranchSidebarRow::Branch { .. }))

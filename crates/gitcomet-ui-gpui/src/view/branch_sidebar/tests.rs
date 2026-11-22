@@ -575,7 +575,7 @@ fn pinned_branches_keep_their_tree_copies_without_extra_headers() {
     ]);
     let pins = expanded_pinned_rows(&repo, &pinned, &BTreeSet::new());
     assert_eq!(pins.len(), 2);
-    let tree = expanded_sidebar_rows(&repo, &BTreeSet::new(), "");
+    let tree = expanded_sidebar_rows(&repo, &BTreeSet::new(), "", &mut Default::default());
     for pin in pins {
         let BranchSidebarRow::Branch { target, .. } = pin else {
             panic!("expected a branch pin")
@@ -927,7 +927,7 @@ fn tag_names(rows: &[BranchSidebarRow]) -> Vec<String> {
 fn tag_rows_for(tags: Loadable<Arc<Vec<gitcomet_core::domain::Tag>>>) -> Vec<BranchSidebarRow> {
     let mut repo = populated_repo();
     repo.tags = tags;
-    expanded_sidebar_rows(&repo, &BTreeSet::new(), "")
+    expanded_sidebar_rows(&repo, &BTreeSet::new(), "", &mut Default::default())
 }
 
 fn tag(name: &str) -> gitcomet_core::domain::Tag {
