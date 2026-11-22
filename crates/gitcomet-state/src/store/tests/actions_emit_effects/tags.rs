@@ -75,6 +75,18 @@ fn create_and_delete_tag_emit_effects() {
     ));
 }
 
+/// The sidebar lists these tags. Resetting the list for the length of a reload
+/// empties that section and drops its scroll position, so the loaded list
+/// stays until the fresh one lands.
+fn assert_tags_kept(repo: &RepoState, tags_rev: u64) {
+    assert!(
+        matches!(&repo.tags, Loadable::Ready(tags) if tags.len() == 1 && tags[0].name == "v1.0.0"),
+        "the loaded tags were reset: {:?}",
+        repo.tags
+    );
+    assert_eq!(repo.tags_rev, tags_rev);
+}
+
 #[test]
 fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
     let mut repos: RepositoryRuntimes = Default::default();
@@ -94,6 +106,7 @@ fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
         target: CommitId("abc123".into()),
     }]));
     let remote_branches_rev = repo_state.remote_branches_rev;
+    let tags_rev = repo_state.tags_rev;
     state.repos.push(repo_state);
 
     let effects = reduce(
@@ -115,7 +128,7 @@ fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
                 && branches[0].name == "deleted"
     ));
     assert_eq!(state.repos[0].remote_branches_rev, remote_branches_rev);
-    assert!(matches!(state.repos[0].tags, Loadable::Loading));
+    assert_tags_kept(&state.repos[0], tags_rev);
     assert!(matches!(state.repos[0].remote_tags, Loadable::Loading));
     assert!(effects.iter().any(
         |effect| matches!(effect, Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: id }) if *id == repo_id)
@@ -139,6 +152,7 @@ fn create_tag_command_finished_reloads_tags() {
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(repo_state_with_tags_loaded(repo_id));
+    let tags_rev = state.repos[0].tags_rev;
 
     let effects = reduce(
         &mut repos,
@@ -158,10 +172,7 @@ fn create_tag_command_finished_reloads_tags() {
         }),
     );
 
-    assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded after CreateTag"
-    );
+    assert_tags_kept(&state.repos[0], tags_rev);
     assert!(
         effects
             .iter()
@@ -177,6 +188,7 @@ fn delete_tag_command_finished_reloads_tags() {
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(repo_state_with_tags_loaded(repo_id));
+    let tags_rev = state.repos[0].tags_rev;
 
     let effects = reduce(
         &mut repos,
@@ -191,10 +203,7 @@ fn delete_tag_command_finished_reloads_tags() {
         }),
     );
 
-    assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded after DeleteTag"
-    );
+    assert_tags_kept(&state.repos[0], tags_rev);
     assert!(
         effects
             .iter()
@@ -212,6 +221,7 @@ fn prune_local_tags_command_finished_reloads_tags() {
     state.repos.push(repo_state_with_tags_loaded(repo_id));
     state.repos[0].local_actions_in_flight = 0;
     state.repos[0].pull_in_flight = 1;
+    let tags_rev = state.repos[0].tags_rev;
 
     let effects = reduce(
         &mut repos,
@@ -224,10 +234,7 @@ fn prune_local_tags_command_finished_reloads_tags() {
         }),
     );
 
-    assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded after PruneLocalTags"
-    );
+    assert_tags_kept(&state.repos[0], tags_rev);
     assert!(
         effects
             .iter()
@@ -244,7 +251,7 @@ fn create_tag_failed_does_not_reload_tags() {
     let repo_id = RepoId(1);
     state.repos.push(repo_state_with_tags_loaded(repo_id));
 
-    reduce(
+    let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
@@ -263,8 +270,10 @@ fn create_tag_failed_does_not_reload_tags() {
     );
 
     assert!(
-        !matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should not be reset when CreateTag fails"
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { .. }))),
+        "a failed CreateTag changed no tags, so nothing reloads: {effects:?}"
     );
 }
 
