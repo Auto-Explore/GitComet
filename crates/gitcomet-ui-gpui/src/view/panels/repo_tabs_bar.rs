@@ -471,9 +471,14 @@ impl RepoTabsBarView {
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
         self.pressed_repo_tab = None;
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.request_close_repos(vec![repo_id], None, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::CloseRepos {
+                repo_ids: vec![repo_id],
+                activate_after: None,
+            },
+            None,
+            cx,
+        );
         cx.notify();
     }
 
@@ -1233,14 +1238,14 @@ impl Render for RepoTabsBarView {
                         this.hovered_repo_tab = Some(repo_id);
                         let invoker = context_menu_invoker_for_right_click.clone();
                         let anchor = e.position;
-                        let _ = this.root_view.update(cx, move |root, cx| {
-                            root.open_popover_at(
+                        let _ = this.root_view.request(
+                            RootRequest::OpenPopoverAt(
                                 (PopoverKind::RepoTabMenu { repo_id }).invoked_by(invoker),
                                 anchor,
-                                window,
-                                cx,
-                            );
-                        });
+                            ),
+                            Some(window),
+                            cx,
+                        );
                         cx.notify();
                     }),
                 )

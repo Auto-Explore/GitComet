@@ -791,9 +791,7 @@ impl BarItemOwner for ActionBarView {
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_back)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this
-                    .root_view
-                    .update(cx, |root, cx| root.dispatch_global_nav(false, cx));
+                let _ = this.root_view.request(RootRequest::NavigateBack, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -817,7 +815,7 @@ impl BarItemOwner for ActionBarView {
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let _ = this
                     .root_view
-                    .update(cx, |root, cx| root.dispatch_global_nav(true, cx));
+                    .request(RootRequest::NavigateForward, None, cx);
             })
             .gitcomet_tooltip(
                 theme,

@@ -525,9 +525,9 @@ impl SidebarPaneView {
                     crate::clipboard::cancel_cut(cx);
                     crate::view::native_transfers::cancel_preparing(cx);
                     window.cancel_drag(cx);
-                    let _ = self
-                        .root_view
-                        .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                    let _ =
+                        self.root_view
+                            .request(RootRequest::CancelFilesystemOperations, None, cx);
                     self.clear_explorer_drag_state(cx);
                     cx.stop_propagation();
                     cx.notify();

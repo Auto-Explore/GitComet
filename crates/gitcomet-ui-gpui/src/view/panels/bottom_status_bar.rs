@@ -327,9 +327,7 @@ impl BarItemOwner for BottomStatusBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.set_sidebar_collapsed(!root.sidebar_collapsed, cx);
-                });
+                let _ = this.root_view.request(RootRequest::ToggleSidebar, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -348,9 +346,7 @@ impl BarItemOwner for BottomStatusBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.set_details_collapsed(!root.details_collapsed, cx);
-                });
+                let _ = this.root_view.request(RootRequest::ToggleDetails, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -617,9 +613,9 @@ impl BarItemOwner for BottomStatusBarView {
                 .borderless()
                 .style(components::ButtonStyle::Subtle)
                 .on_click(theme, cx, |this, _, _, cx| {
-                    let _ = this
-                        .root_view
-                        .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                    let _ =
+                        this.root_view
+                            .request(RootRequest::CancelFilesystemOperations, None, cx);
                 }),
             );
         }
@@ -646,9 +642,11 @@ impl BarItemOwner for BottomStatusBarView {
                 .style(components::ButtonStyle::Subtle)
                 .borderless()
                 .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.toggle_document_picker(bounds, window, cx)
-                    });
+                    let _ = this.root_view.request(
+                        RootRequest::ToggleDocumentPicker(bounds),
+                        Some(window),
+                        cx,
+                    );
                 })
                 .gitcomet_tooltip(theme, "Open a file…".into())
                 .debug_selector(|| "bottom_documents".into())
@@ -665,9 +663,9 @@ impl BarItemOwner for BottomStatusBarView {
                 .style(components::ButtonStyle::Subtle)
                 .borderless()
                 .on_click(theme, cx, |this, _, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.toggle_shortcut_help(window, cx);
-                    });
+                    let _ =
+                        this.root_view
+                            .request(RootRequest::ToggleShortcutHelp, Some(window), cx);
                 })
                 .gitcomet_tooltip(theme, "Keyboard shortcuts".into())
                 .debug_selector(|| "bottom_keyboard_shortcuts".into()),

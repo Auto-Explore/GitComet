@@ -3080,10 +3080,9 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            let handle = root.diff_renderer.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&handle, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::FocusDiffPanel, Some(window), cx);
     }
 
     pub(in super::super) fn focus_history_panel(
@@ -3091,11 +3090,9 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            let history = root.main_pane.read(cx).history_view.clone();
-            let handle = history.read(cx).history_panel_focus_handle.clone();
-            window.focus(&handle, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::FocusHistoryPanel, Some(window), cx);
     }
 }
 

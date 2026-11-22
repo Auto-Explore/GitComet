@@ -1631,16 +1631,16 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.popover_host
-                        .update(cx, |host, _| host.set_hosted_menu(id, items));
-                    root.open_popover_at(
-                        PopoverKind::Hosted { id, menu: true }.invoked_by(invoker),
+                let _ = root_view.request(
+                    RootRequest::OpenHostedMenu {
+                        id,
+                        items,
+                        invoker,
                         anchor,
-                        window,
-                        cx,
-                    );
-                });
+                    },
+                    Some(window),
+                    cx,
+                );
             });
         });
     }

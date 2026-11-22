@@ -87,8 +87,8 @@ fn-lines crates/gitcomet-ui-gpui/src/view/history_refs_hover.rs::render 156 -
 fn-lines crates/gitcomet-ui-gpui/src/view/home.rs::home_screen 188 -
 fn-lines crates/gitcomet-ui-gpui/src/view/hosted/diff_pane.rs::render 153 -
 fn-lines crates/gitcomet-ui-gpui/src/view/pane_store.rs::dispatch 174 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/action_bar.rs::bar_items 897 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/bottom_status_bar.rs::bar_items 459 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/action_bar.rs::bar_items 895 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/bottom_status_bar.rs::bar_items 457 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/layout/commit_card.rs::commit_details_card 162 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/layout/commit_details.rs::single_commit_details_view 178 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/layout/commit_form.rs::commit_box 255 -
@@ -288,7 +288,7 @@ glob-super gitcomet-ui-media 8 -
 glob-super gitcomet-ui-terminal 3 -
 notify-fingerprint-fns gitcomet-ui-gpui 8 -
 real-time-waits gitcomet-state 224 -
-root-view-updates gitcomet-ui-gpui 41 -
+root-view-updates gitcomet-ui-gpui 21 -
 set-theme-fns gitcomet-ui-gpui 4 -
 store-snapshot-syncs gitcomet-ui-gpui 145 -
 struct-fields gitcomet-ui-gpui::DiffRenderer 348 -

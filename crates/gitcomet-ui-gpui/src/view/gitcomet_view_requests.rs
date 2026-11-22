@@ -3,14 +3,16 @@
 //! root methods, so the requests they share are named once here.
 
 use super::{
-    Bounds, ChangeTrackingView, ErrorReport, FilesystemUnsavedEditsChoice, GitCometView, Msg,
-    Pixels, Point, PopoverRequest, RepoId, SharedString, TerminalShutdownAction,
-    TerminalShutdownPrompt, ThemeMode, UnsavedFileEditsAction, WeakEntity, Window, components,
+    Bounds, BranchMenuTarget, ChangeTrackingView, ErrorReport, FilesystemUnsavedEditsChoice,
+    GitCometView, Msg, Pixels, Point, PopoverKind, PopoverRequest, RepoId, SharedString,
+    TerminalShutdownAction, TerminalShutdownPrompt, ThemeMode, UnsavedFileEditsAction, WeakEntity,
+    Window, components,
 };
 use crate::view::date_time::{DateTimeFormat, Timezone};
-use gitcomet_core::domain::CommitId;
+use gitcomet_core::domain::{CommitId, LogScope};
 use gitcomet_core::filesystem::ConflictChoice;
 use gitcomet_core::git_operation::GitOperationId;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// A request to the root view of a window from one of its popovers, panes or bars.
@@ -51,6 +53,45 @@ pub(in crate::view) enum RootRequest {
     OpenPopoverForBounds(PopoverRequest, Bounds<Pixels>),
     /// For a view that holds no store handle of its own.
     Dispatch(Box<Msg>),
+    ToggleSidebar,
+    ToggleDetails,
+    ToggleDocumentPicker(Bounds<Pixels>),
+    ToggleShortcutHelp,
+    NavigateBack,
+    NavigateForward,
+    CancelFilesystemOperations,
+    FocusDiffPanel,
+    FocusHistoryPanel,
+    RebuildDiffCache,
+    DiscardFileEdits {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    RevealWorktreeInHistory {
+        repo_id: RepoId,
+        path: PathBuf,
+        is_current: bool,
+        head: Option<CommitId>,
+    },
+    RevealBranchCommitInHistory {
+        repo_id: RepoId,
+        target: BranchMenuTarget,
+        commit_id: CommitId,
+        fallback_scope: Option<LogScope>,
+    },
+    /// What the sidebar shows, for the menus that act on it.
+    MirrorBranchFilter {
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+    },
+    MirrorCollapsedItems(BTreeMap<PathBuf, BTreeSet<String>>),
+    MirrorPinnedBranches(BTreeMap<PathBuf, BTreeSet<String>>),
+    OpenHostedMenu {
+        id: u64,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        invoker: SharedString,
+        anchor: Point<Pixels>,
+    },
     OpenFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -150,6 +191,9 @@ impl GitCometView {
         window: Option<&mut Window>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let Some(request) = self.handle_pane_request(request, cx) else {
+            return;
+        };
         match request {
             RootRequest::LocateOpenFileInExplorer => self.locate_open_file_in_explorer(cx),
             RootRequest::OpenInExternalEditor(path) => {
@@ -270,6 +314,58 @@ impl GitCometView {
         }
     }
 
+    /// What panes and bars ask of the root's layout and of their sibling
+    /// panes. Returns any other request.
+    fn handle_pane_request(
+        &mut self,
+        request: RootRequest,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<RootRequest> {
+        match request {
+            RootRequest::ToggleSidebar => self.set_sidebar_collapsed(!self.sidebar_collapsed, cx),
+            RootRequest::ToggleDetails => self.set_details_collapsed(!self.details_collapsed, cx),
+            RootRequest::NavigateBack => self.dispatch_global_nav(false, cx),
+            RootRequest::NavigateForward => self.dispatch_global_nav(true, cx),
+            RootRequest::CancelFilesystemOperations => self.cancel_filesystem_operations(cx),
+            RootRequest::RebuildDiffCache => self.diff_renderer.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                cx.notify();
+            }),
+            RootRequest::DiscardFileEdits { repo_id, path } => {
+                self.diff_renderer.update(cx, |pane, cx| {
+                    pane.discard_file_edits_for(repo_id, &path, cx)
+                })
+            }
+            RootRequest::RevealWorktreeInHistory {
+                repo_id,
+                path,
+                is_current,
+                head,
+            } => self.main_pane.update(cx, |pane, cx| {
+                pane.reveal_history_worktree(repo_id, path, is_current, head, cx)
+            }),
+            RootRequest::RevealBranchCommitInHistory {
+                repo_id,
+                target,
+                commit_id,
+                fallback_scope,
+            } => self.main_pane.update(cx, |pane, cx| {
+                pane.reveal_history_branch_commit(repo_id, target, commit_id, fallback_scope, cx)
+            }),
+            RootRequest::MirrorBranchFilter { query, options } => self
+                .popover_host
+                .update(cx, |host, cx| host.set_branch_search(query, options, cx)),
+            RootRequest::MirrorCollapsedItems(collapsed) => self
+                .popover_host
+                .update(cx, |host, cx| host.set_collapsed_items(collapsed, cx)),
+            RootRequest::MirrorPinnedBranches(pinned) => self
+                .popover_host
+                .update(cx, |host, cx| host.set_pinned_branches(pinned, cx)),
+            other => return Some(other),
+        }
+        None
+    }
+
     fn handle_windowed_root_request(
         &mut self,
         request: RootRequest,
@@ -288,6 +384,30 @@ impl GitCometView {
             }
             RootRequest::OpenPopoverForBounds(kind, bounds) => {
                 self.open_popover_for_bounds(kind, bounds, window, cx)
+            }
+            RootRequest::OpenHostedMenu {
+                id,
+                items,
+                invoker,
+                anchor,
+            } => {
+                self.popover_host
+                    .update(cx, |host, _| host.set_hosted_menu(id, items));
+                let menu = PopoverKind::Hosted { id, menu: true }.invoked_by(invoker);
+                self.open_popover_at(menu, anchor, window, cx);
+            }
+            RootRequest::ToggleDocumentPicker(bounds) => {
+                self.toggle_document_picker(bounds, window, cx)
+            }
+            RootRequest::ToggleShortcutHelp => self.toggle_shortcut_help(window, cx),
+            RootRequest::FocusDiffPanel => {
+                let handle = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&handle, cx);
+            }
+            RootRequest::FocusHistoryPanel => {
+                let history = self.main_pane.read(cx).history_view.clone();
+                let handle = history.read(cx).history_panel_focus_handle.clone();
+                window.focus(&handle, cx);
             }
             RootRequest::OpenFileHistory { repo_id, path } => {
                 self.open_file_history(repo_id, path, window, cx)

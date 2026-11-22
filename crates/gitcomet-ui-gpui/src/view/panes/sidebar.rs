@@ -1108,11 +1108,7 @@ impl SidebarPaneView {
         let options = self.branch_search_options;
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_branch_search(query, options, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorBranchFilter { query, options }, None, cx);
         });
     }
 
@@ -1123,11 +1119,7 @@ impl SidebarPaneView {
         let collapsed = self.sidebar_collapsed_items_by_repo.clone();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_collapsed_items(collapsed, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorCollapsedItems(collapsed), None, cx);
         });
     }
 
@@ -1139,11 +1131,7 @@ impl SidebarPaneView {
         let pinned = self.sidebar_pinned_branches_by_repo.clone();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_pinned_branches(pinned, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorPinnedBranches(pinned), None, cx);
         });
     }
 
@@ -2137,12 +2125,9 @@ impl SidebarPaneView {
     }
 
     pub(in super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.diff_renderer.update(cx, |pane, cx| {
-                pane.rebuild_diff_cache(cx);
-                cx.notify();
-            });
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::RebuildDiffCache, None, cx);
     }
 
     pub(in crate::view) fn explain_working_tree_required(&self, cx: &mut gpui::Context<Self>) {
@@ -2178,11 +2163,16 @@ impl SidebarPaneView {
         });
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.main_pane.update(cx, |pane, cx| {
-                    pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
-                });
-            });
+            let _ = root_view.request(
+                RootRequest::RevealWorktreeInHistory {
+                    repo_id,
+                    path,
+                    is_current,
+                    head,
+                },
+                None,
+                cx,
+            );
         });
     }
 
@@ -2196,17 +2186,16 @@ impl SidebarPaneView {
     ) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.main_pane.update(cx, |pane, cx| {
-                    pane.reveal_history_branch_commit(
-                        repo_id,
-                        target,
-                        commit_id,
-                        fallback_scope,
-                        cx,
-                    );
-                });
-            });
+            let _ = root_view.request(
+                RootRequest::RevealBranchCommitInHistory {
+                    repo_id,
+                    target,
+                    commit_id,
+                    fallback_scope,
+                },
+                None,
+                cx,
+            );
         });
     }
 }
@@ -2430,11 +2419,12 @@ fn unsaved_file_row(
                     let path = Arc::clone(&path);
                     move |this, _e, _window, cx| {
                         let path = Arc::clone(&path);
-                        let _ = this.root_view.update(cx, move |root, cx| {
-                            root.diff_renderer.update(cx, |pane, cx| {
-                                pane.discard_file_edits_for(repo_id, path.as_path(), cx);
-                            });
-                        });
+                        let path = path.to_path_buf();
+                        let _ = this.root_view.request(
+                            RootRequest::DiscardFileEdits { repo_id, path },
+                            None,
+                            cx,
+                        );
                     }
                 })
                 .w(icon_slot_px)
