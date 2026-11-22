@@ -16,6 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 mod cancellation;
+mod scan;
 mod worker_limit;
 
 #[cfg(test)]
@@ -1018,11 +1019,10 @@ where
     drop(timing);
     #[cfg(feature = "benchmarks")]
     let timing = crate::status_trace::StageTimer::new("native-walk");
-    let outcome = gix::status::plumbing::index_as_worktree_with_renames(
+    let outcome = scan::index_as_worktree_with_untracked(
         index,
         workdir,
         &mut collector,
-        gix::status::plumbing::index_as_worktree::traits::FastEq,
         submodule,
         repo.objects
             .clone()
@@ -1039,20 +1039,15 @@ where
                 ignore_case_index_lookup: accelerate_lookup.as_ref(),
             },
         },
-        gix::status::plumbing::index_as_worktree_with_renames::Options {
-            sorting: None,
+        gix::status::plumbing::index_as_worktree::Options {
+            fs: fs_caps,
+            thread_limit,
             fscache,
-            tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
-                fs: fs_caps,
-                thread_limit,
-                fscache,
-                stat: repo.stat_options().map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
-                })?,
-            },
-            dirwalk: Some(dirwalk_options.into()),
-            rewrites: None,
+            stat: repo.stat_options().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
+            })?,
         },
+        dirwalk_options.into(),
     )
     .map_err(|e| {
         if cancellation.is_cancelled() {
