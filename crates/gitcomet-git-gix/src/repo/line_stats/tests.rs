@@ -876,6 +876,49 @@ fn unchanged_untracked_files_are_not_read_again() {
     );
 }
 
+/// A modified tracked file is read and hashed once; later refreshes reuse
+/// its counts while it keeps its stamp and the index keeps its blob.
+#[test]
+fn unchanged_modified_files_are_not_read_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    init_test_repo(dir);
+    write_file(dir, "a.txt", &lines("a", 3));
+    write_file(dir, "nested/b.txt", &lines("b", 2));
+    git_success(dir, &["add", "."]);
+    git_success(dir, &["commit", "-m", "seed"]);
+    write_file(dir, "a.txt", &lines("changed", 5));
+    write_file(dir, "nested/b.txt", &lines("changed", 1));
+    let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+    let repo = open_repo(dir);
+    let token = CancellationToken::new();
+    let a = std::path::Path::new("a.txt");
+    take_worktree_reads_for_tests();
+
+    let first = repo.uncommitted_line_stats_impl(&token).unwrap();
+    assert_eq!(counts(first.unstaged.get(a)), Some((Some(5), Some(3))));
+    assert_eq!(take_worktree_reads_for_tests(), 2);
+    let second = repo.uncommitted_line_stats_impl(&token).unwrap();
+    assert_eq!(second, first);
+    // Off Unix a stamp has no inode or ctime, so it is never trusted.
+    let kept = if cfg!(unix) { 0 } else { 2 };
+    assert_eq!(take_worktree_reads_for_tests(), kept);
+
+    // Another blob in the index for the same file: counted against it.
+    let blob = crate::test_support::git_stdout(dir, &["rev-parse", "HEAD:nested/b.txt"]);
+    let entry = format!("100644,{},a.txt", blob.trim());
+    git_success(dir, &["update-index", "--cacheinfo", &entry]);
+    let third = repo.uncommitted_line_stats_impl(&token).unwrap();
+    assert_eq!(counts(third.unstaged.get(a)), Some((Some(5), Some(2))));
+    assert_eq!(take_worktree_reads_for_tests(), kept + 1);
+
+    // And the file itself changed: read again.
+    write_file(dir, "a.txt", &lines("again", 4));
+    let fourth = repo.uncommitted_line_stats_impl(&token).unwrap();
+    assert_eq!(counts(fourth.unstaged.get(a)), Some((Some(4), Some(2))));
+    assert_eq!(take_worktree_reads_for_tests(), kept + 1);
+}
+
 /// A binary untracked file is sniffed once; later refreshes reuse its
 /// unknown while it keeps its stamp.
 #[test]

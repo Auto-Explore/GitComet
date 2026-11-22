@@ -25,6 +25,9 @@ pub(super) struct LineStatsMemo {
     pointer_index_blobs: FxHashMap<gix::ObjectId, IndexPointer>,
     /// Untracked files have no blob id, so the read identity keys them.
     untracked: FxHashMap<PathBuf, UntrackedCounts>,
+    /// Unstaged counts by path, kept while the file keeps its read identity
+    /// and the index its blob: neither the file nor the blob is read again.
+    tracked: FxHashMap<PathBuf, TrackedCounts>,
 }
 
 impl LineStatsMemo {
@@ -34,15 +37,24 @@ impl LineStatsMemo {
             counts,
             pointer_index_blobs,
             untracked,
+            tracked,
         } = other;
         self.counts.extend(counts);
         self.pointer_index_blobs.extend(pointer_index_blobs);
         self.untracked.extend(untracked);
+        self.tracked.extend(tracked);
     }
 }
 
 #[derive(Clone, Copy)]
 struct UntrackedCounts {
+    identity: ReadIdentity,
+    stats: LineStats,
+}
+
+#[derive(Clone, Copy)]
+struct TrackedCounts {
+    index: gix::ObjectId,
     identity: ReadIdentity,
     stats: LineStats,
 }
@@ -148,6 +160,43 @@ impl MemoScan {
             .or_else(read)?;
         self.next.pointer_index_blobs.insert(id, pointer);
         Some(pointer)
+    }
+
+    /// A tracked file's unstaged counts from the last scan, if the file has
+    /// the read identity and the index the blob they were counted for.
+    fn tracked(
+        &mut self,
+        path: &std::path::Path,
+        index: gix::ObjectId,
+        identity: Option<ReadIdentity>,
+    ) -> Option<LineStats> {
+        let identity = identity?;
+        let (owned, entry) = self.previous.tracked.remove_entry(path)?;
+        if entry.index != index || entry.identity != identity {
+            return None;
+        }
+        self.next.tracked.insert(owned, entry);
+        Some(entry.stats)
+    }
+
+    /// Keeps counts for [`Self::tracked`]. Unknown counts are found again,
+    /// as [`memoizable`] has it, and a file with no stamp to trust is read
+    /// every time.
+    fn keep_tracked(
+        &mut self,
+        path: &std::path::Path,
+        index: gix::ObjectId,
+        identity: Option<ReadIdentity>,
+        stats: LineStats,
+    ) {
+        if let Some(identity) = identity.filter(|_| memoizable(&stats)) {
+            let counts = TrackedCounts {
+                index,
+                identity,
+                stats,
+            };
+            self.next.tracked.insert(path.to_path_buf(), counts);
+        }
     }
 
     /// An untracked file's counts, counted again only when its read identity
@@ -528,10 +577,21 @@ fn unstaged_entry_line_stats(
     }
 
     worktree.clear();
-    // Binary or unread on this side means no counts, whatever the index
-    // holds: skip the hash, the index read and the memo.
-    if entry.kind != FileStatusKind::Deleted && !reader.read(&entry.path, worktree) {
-        return LineStats::UNKNOWN;
+    let mut identity = None;
+    if entry.kind != FileStatusKind::Deleted {
+        // Binary or unread on this side means no counts, whatever the index
+        // holds: skip the hash, the index read and the memo.
+        let Some(found) = reader.find(&entry.path) else {
+            return LineStats::UNKNOWN;
+        };
+        identity = found.identity();
+        // The same file against the same blob: counted on an earlier scan.
+        if let Some(stats) = memo.tracked(&entry.path, index_id, identity) {
+            return stats;
+        }
+        if found.read(worktree) != ReadOutcome::Text {
+            return LineStats::UNKNOWN;
+        }
     }
 
     let mut diff = || {
@@ -541,13 +601,15 @@ fn unstaged_entry_line_stats(
         line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice())
     };
     // Hashing costs a fraction of the diff an unchanged file then skips.
-    match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
+    let stats = match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
         Ok(worktree_id) => memo.counts(
             (DiffArea::Unstaged, Some(index_id), Some(worktree_id)),
             diff,
         ),
         Err(_) => diff(),
-    }
+    };
+    memo.keep_tracked(&entry.path, index_id, identity, stats);
+    stats
 }
 
 /// Reads worktree files as git would store them, keeping attribute caches
