@@ -219,10 +219,11 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
             }) if finished_dest == dest => {
                 assert!(abort_sent, "clone finished before abort could be sent");
                 let err = result.expect_err("aborted clone should not succeed");
-                let err_text = err.to_string();
+                // A plain abort, unless removing the partial clone failed.
                 assert!(
-                    err_text.contains("clone aborted"),
-                    "unexpected abort error: {err_text}"
+                    matches!(err.kind(), ErrorKind::Cancelled)
+                        || err.to_string().contains("clone aborted"),
+                    "unexpected abort error: {err}"
                 );
                 saw_finished_err = true;
                 break;

@@ -340,7 +340,7 @@ fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
         Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
             url: "file:///tmp/example.git".to_string(),
             dest,
-            result: Err(Error::new(ErrorKind::Backend("clone aborted".to_string()))),
+            result: Err(Error::new(ErrorKind::Cancelled)),
         }),
     );
 

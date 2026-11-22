@@ -188,6 +188,26 @@ fn take_clone_progress_fragments(pending: &mut Vec<u8>, eof: bool) -> Vec<String
     fragments
 }
 
+/// Removes what a failed, aborted clone left behind. A failure to do so
+/// replaces a plain abort, since it already says the clone was aborted.
+fn clean_up_aborted_clone(
+    result: Result<CommandOutput, Error>,
+    dest: &Path,
+    dest_preexisted: bool,
+) -> Result<CommandOutput, Error> {
+    let error = match result {
+        Ok(output) => return Ok(output),
+        Err(error) => error,
+    };
+    Err(
+        match cleanup_aborted_clone_destination(dest, dest_preexisted) {
+            Ok(()) => error,
+            Err(cleanup) if matches!(error.kind(), ErrorKind::Cancelled) => cleanup,
+            Err(cleanup) => CloneCleanupError::combine(error, cleanup, dest),
+        },
+    )
+}
+
 fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Result<(), Error> {
     if dest_preexisted {
         return Ok(());
@@ -459,7 +479,7 @@ pub(super) fn schedule_clone_repo(
                         timeout.as_secs()
                     ))))
                 } else if active_clone.cancel_requested() && !status.success() {
-                    Err(Error::new(ErrorKind::Backend("clone aborted".to_string())))
+                    Err(Error::new(ErrorKind::Cancelled))
                 } else {
                     let out = CommandOutput {
                         command: command_str,
@@ -488,13 +508,9 @@ pub(super) fn schedule_clone_repo(
             Err(e) => Err(Error::from(e).with_context("wait for git clone", Some(&dest))),
         };
 
-        if result.is_err() && active_clone.cancel_requested()
-            && let Err(cleanup_err) = cleanup_aborted_clone_destination(&dest, dest_preexisted) {
-                result = Err(match result {
-                    Ok(_) => cleanup_err,
-                    Err(err) => CloneCleanupError::combine(err, cleanup_err, &dest),
-                });
-            }
+        if active_clone.cancel_requested() {
+            result = clean_up_aborted_clone(result, &dest, dest_preexisted);
+        }
 
         let ok = result.is_ok();
         send_or_log(
@@ -744,6 +760,35 @@ mod tests {
         let fragments = take_clone_progress_fragments(&mut pending, true);
         assert_eq!(fragments, vec!["Updating files: 100% (4/4), done."]);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_failed_cleanup_replaces_a_plain_abort_and_joins_any_other_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file = temp.path().join("file");
+        std::fs::write(&file, "x").expect("write file");
+        // A path under a file cannot be inspected, so its cleanup fails.
+        let dest = file.join("clone");
+
+        let aborted = clean_up_aborted_clone(Err(Error::new(ErrorKind::Cancelled)), &dest, false)
+            .expect_err("cleanup fails");
+        let message = |error: &Error| match error.kind() {
+            ErrorKind::Backend(message) => message.clone(),
+            kind => panic!("unexpected {kind:?}"),
+        };
+        assert!(message(&aborted).starts_with("clone aborted, but failed"));
+
+        let failed = Error::new(ErrorKind::Backend("clone failed".into()));
+        let joined = clean_up_aborted_clone(Err(failed), &dest, false).expect_err("cleanup fails");
+        let joined = message(&joined);
+        assert!(
+            joined.starts_with("clone failed; ") && joined.contains("clone aborted, but failed"),
+            "{joined}"
+        );
+
+        let kept = clean_up_aborted_clone(Err(Error::new(ErrorKind::Cancelled)), &dest, true)
+            .expect_err("still aborted");
+        assert!(matches!(kept.kind(), ErrorKind::Cancelled));
     }
 
     #[test]

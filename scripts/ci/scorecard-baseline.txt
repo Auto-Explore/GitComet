@@ -39,7 +39,7 @@ fn-lines crates/gitcomet-state/src/session/mod.rs::load_from_path 169 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch.rs::sync 200 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch/worker.rs::finish 151 -
 fn-lines crates/gitcomet-state/src/store/effects.rs::schedule_effect 939 -
-fn-lines crates/gitcomet-state/src/store/effects/clone.rs::schedule_clone_repo 247 -
+fn-lines crates/gitcomet-state/src/store/effects/clone.rs::schedule_clone_repo 243 -
 fn-lines crates/gitcomet-state/src/store/effects/conflict_load.rs::schedule_load_conflict_file 171 -
 fn-lines crates/gitcomet-state/src/store/effects/diff_session.rs::schedule 163 -
 fn-lines crates/gitcomet-state/src/store/effects/repo_commands.rs::repo_command_context 176 -

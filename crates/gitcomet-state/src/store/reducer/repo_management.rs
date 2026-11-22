@@ -84,10 +84,6 @@ fn is_missing_repo_error(error: &Error) -> bool {
     )
 }
 
-fn is_plain_clone_abort_error(error: &Error) -> bool {
-    matches!(error.kind(), ErrorKind::Backend(message) if message == "clone aborted")
-}
-
 fn persist_session_effect(
     _state: &AppState,
     repo_id: Option<RepoId>,
@@ -1502,7 +1498,7 @@ pub(super) fn clone_repo_finished(
             Ok(_) => CloneOpStatus::FinishedOk,
             Err(ref error)
                 if matches!(op.status, CloneOpStatus::Cancelling)
-                    && (handled_by_auth_prompt || is_plain_clone_abort_error(error)) =>
+                    && (handled_by_auth_prompt || matches!(error.kind(), ErrorKind::Cancelled)) =>
             {
                 CloneOpStatus::Cancelled
             }
