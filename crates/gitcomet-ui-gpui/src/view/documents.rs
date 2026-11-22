@@ -1310,12 +1310,11 @@ impl StandaloneBuffer {
             .on_children_prepainted({
                 let editor_scroll = editor_scroll.clone();
                 let gutter_scroll = gutter_scroll.clone();
-                move |_bounds, window, _cx| {
+                move |_bounds, _window, _cx| {
                     let target_y = editor_scroll.offset().y;
                     let base = gutter_scroll.0.borrow().base_handle.clone();
                     if base.offset().y != target_y {
                         base.set_offset(point(px(0.0), target_y));
-                        window.refresh();
                     }
                 }
             })

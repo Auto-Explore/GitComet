@@ -374,12 +374,11 @@ impl DetailsPaneView {
             .border_t_1()
             .border_color(theme.colors.stroke.default)
             .pt_2()
-            .on_children_prepainted(move |children_bounds, window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, _app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = section_bounds.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
-                    window.refresh();
                 }
             })
             .child(visible_bounds_probe())

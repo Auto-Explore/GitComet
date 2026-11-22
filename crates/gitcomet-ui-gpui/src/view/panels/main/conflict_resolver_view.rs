@@ -2071,16 +2071,14 @@ impl DiffRenderer {
                                                         // virtualized gutter during prepaint, after the
                                                         // normal gutter/editor synchronizer has already
                                                         // run for this frame. Mirror that newly-applied
-                                                        // offset immediately and request the follow-up
-                                                        // paint, so conflict navigation updates the
-                                                        // editable output without waiting for incidental
-                                                        // input (for example, mouse movement).
+                                                        // offset here. No refresh: gpui ignores one
+                                                        // requested while a frame is drawn.
                                                         .when(
                                                             !streamed
                                                                 && mirror_deferred_output_scroll,
                                                             move |d| {
                                                             d.on_children_prepainted(
-                                                                move |_bounds, window, _cx| {
+                                                                move |_bounds, _window, _cx| {
                                                                     let gutter_y =
                                                                         output_gutter_scroll
                                                                             .0
@@ -2104,7 +2102,6 @@ impl DiffRenderer {
                                                                                 target_y,
                                                                             ),
                                                                         );
-                                                                        window.refresh();
                                                                     }
                                                                 },
                                                             )

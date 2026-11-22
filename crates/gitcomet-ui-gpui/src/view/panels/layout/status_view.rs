@@ -1015,12 +1015,11 @@ impl DetailsPaneView {
                 resize_handle_h,
             ))
             .overflow_hidden()
-            .on_children_prepainted(move |children_bounds, window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, _app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = change_tracking_stack_bounds_for_prepaint.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
-                    window.refresh();
                 }
             });
         let untracked_top_height = untracked_heights.map(|(top_height, _)| top_height);
@@ -1110,12 +1109,11 @@ impl DetailsPaneView {
             .h_full()
             .min_h(px(0.0))
             .overflow_hidden()
-            .on_children_prepainted(move |children_bounds, window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, _app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = status_sections_bounds_for_prepaint.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
-                    window.refresh();
                 }
             });
         status_sections_container
