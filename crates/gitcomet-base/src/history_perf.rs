@@ -24,11 +24,13 @@ pub enum Work {
     LogWalkObjectRead,
     LogTopologyBuild,
     HistoryIndexBuild,
+    /// An index made from an existing one and the commits added on top.
+    HistoryIndexExtend,
     RepositoryReopen,
 }
 
 impl Work {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -47,6 +49,7 @@ impl Work {
         Self::LogWalkObjectRead,
         Self::LogTopologyBuild,
         Self::HistoryIndexBuild,
+        Self::HistoryIndexExtend,
         Self::RepositoryReopen,
     ];
 
@@ -70,6 +73,7 @@ impl Work {
             Self::LogWalkObjectRead => "log_walk_object_read",
             Self::LogTopologyBuild => "log_topology_build",
             Self::HistoryIndexBuild => "history_index_build",
+            Self::HistoryIndexExtend => "history_index_extend",
             Self::RepositoryReopen => "repository_reopen",
         }
     }

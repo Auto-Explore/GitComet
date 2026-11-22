@@ -158,38 +158,7 @@ impl GixRepo {
         drop(walk);
         drop(decode_buf);
 
-        // Author-filtered walks have already checked their messages and no
-        // longer need the potentially large author-decoding scratch buffer.
-        let mut decode_buf = Vec::new();
-        let topology = std::cell::OnceCell::new();
-        builder.retain_probable_stashes(|id, parents| {
-            cancellation.check_cancelled()?;
-            if let Some(graph) =
-                topology.get_or_init(|| repo.commit_graph_if_enabled().ok().flatten())
-            {
-                let parents: smallvec::SmallVec<[gix::ObjectId; 3]> =
-                    parents.map(gix::ObjectId::from_bytes_or_panic).collect();
-                if stash_shape(graph, &parents) == Some(false) {
-                    return Ok(false);
-                }
-            }
-            if author.is_some() {
-                // Author filtering already decoded and checked this message.
-                return Ok(true);
-            }
-            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
-            let commit = repo
-                .objects
-                .find_commit(gix::oid::from_bytes_unchecked(id), &mut decode_buf)
-                .map_err(|error| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "gix history index object: {error}"
-                    )))
-                })?;
-            Ok(has_stash_summary(commit.message))
-        })?;
-        drop(topology);
-        drop(decode_buf);
+        retain_probable_stashes(&mut builder, &repo, author.is_some(), cancellation)?;
         builder.finish(cancellation)
     }
 
@@ -258,6 +227,42 @@ impl GixRepo {
             commits,
         })
     }
+}
+
+/// Keeps the stash candidates whose shape and summary are a stash's.
+/// `messages_checked` when an author filter has already read the messages.
+pub(super) fn retain_probable_stashes(
+    builder: &mut HistoryIndexBuilder,
+    repo: &gix::Repository,
+    messages_checked: bool,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let mut decode_buf = Vec::new();
+    let topology = std::cell::OnceCell::new();
+    builder.retain_probable_stashes(|id, parents| {
+        cancellation.check_cancelled()?;
+        if let Some(graph) = topology.get_or_init(|| repo.commit_graph_if_enabled().ok().flatten())
+        {
+            let parents: smallvec::SmallVec<[gix::ObjectId; 3]> =
+                parents.map(gix::ObjectId::from_bytes_or_panic).collect();
+            if stash_shape(graph, &parents) == Some(false) {
+                return Ok(false);
+            }
+        }
+        if messages_checked {
+            return Ok(true);
+        }
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
+        let commit = repo
+            .objects
+            .find_commit(gix::oid::from_bytes_unchecked(id), &mut decode_buf)
+            .map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix history index object: {error}"
+                )))
+            })?;
+        Ok(has_stash_summary(commit.message))
+    })
 }
 
 fn has_stash_summary(message: &[u8]) -> bool {

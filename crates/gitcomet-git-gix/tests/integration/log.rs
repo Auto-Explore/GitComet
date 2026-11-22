@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 mod authors;
 mod focus;
+mod incremental;
 mod ref_filter;
 mod sharing;
 mod snapshot_refresh;

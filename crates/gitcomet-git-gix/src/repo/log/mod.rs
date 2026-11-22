@@ -30,6 +30,7 @@ mod authors;
 pub(in crate::repo) mod cache;
 mod commit_stats;
 mod decode;
+mod extend;
 mod index;
 mod reflog;
 mod repo_impl;
@@ -39,6 +40,7 @@ mod walk;
 
 pub(super) use commit_stats::*;
 pub(super) use decode::*;
+pub(super) use extend::extend_history_index;
 pub(super) use index::HistoryQuery;
 pub(super) use reflog::*;
 pub(super) use topology::TopologyCache;

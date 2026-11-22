@@ -579,3 +579,38 @@ Two waits no longer poll. Range decodes are single-flight per block, so
 different blocks decode in parallel while callers of one block share its
 decode. The date-order topology build is shared by the requests for its tips:
 each leaves on its own cancellation and the build stops when all have left.
+
+## Index grown from the previous one (2026-11-22)
+
+An index is keyed by the exact tips of its walk, so any new commit used to
+rebuild it from the root. When the store still holds a finished index for the
+same unfiltered walk, the build now checks whether the new tips only add
+commits on top of it:
+
+- the added commits are found by walking from the new tips until rows of the
+  held index are reached, at most 20,000 of them;
+- every commit of the held index must still be reached: a tip it was walked
+  from may be gone only if another of its rows has that tip as a parent;
+- every added commit must be at least as new as the held index's first row.
+
+Then date order puts all added commits before that first row and leaves the
+older rows as they are, so the new index is the added rows followed by a
+shifted copy of the held one (`HistoryIndexBuilder::finish_before`). Anything
+else rebuilds as before: a rewritten or deleted tip that takes commits with
+it, a commit dated before the newest row (a fetch of older work), first-parent,
+author-filtered, merge-filtered and shallow walks.
+
+Rows that are in both indexes keep their relative order. Among equal committer
+times a rebuild may order rows differently; both are valid date orders.
+
+Release build, index requested again after one commit on top of `HEAD`:
+
+| Repository | Rebuild | Grown |
+| --- | ---: | ---: |
+| Generated history, 2,040,001 commits | 5.0–6.7 s | 44–76 ms |
+| Chromium, 1,792,921 commits, 39,250 refs | 6.6–11.5 s | 19–66 ms |
+
+`Work::HistoryIndexExtend` counts grown indexes and `Work::HistoryIndexBuild`
+rebuilds. The tests in `tests/integration/log/incremental.rs` compare a held
+index against `git log --all --date-order` across random changes, and check
+date order itself where committer times tie.
