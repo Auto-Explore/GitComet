@@ -18,6 +18,7 @@ pub(in crate::repo) struct HistoryCache {
     handle: Mutex<Option<HistoryHandle>>,
     pub(super) tips: Mutex<Option<AllBranchesTipsCacheEntry>>,
     pub(super) file_follow: Mutex<Vec<LogFileFollowCacheEntry>>,
+    pub(super) followed_names: Mutex<Vec<(LogFileFollowCacheKey, Arc<FollowedNames>)>>,
     pub(super) walks: Mutex<LogPagedWalkCache>,
 }
 
@@ -145,6 +146,48 @@ pub(super) struct LogFileFollowCacheEntry {
     pub(super) commits: Arc<Vec<Commit>>,
 }
 
+/// What `git log --follow --name-status` printed for a file: each commit's
+/// status line, from which the file's name in that commit is read.
+#[derive(Debug, Default)]
+pub(super) struct FollowedNames {
+    /// Distinct status lines; a file keeps a name for long runs of commits.
+    lines: Vec<Box<str>>,
+    by_commit: rustc_hash::FxHashMap<gix::ObjectId, u32>,
+}
+
+impl FollowedNames {
+    /// From records of `<0x1e><hash>` followed by name-status lines. The
+    /// pathspec limits those to the followed file, so the first one is its.
+    pub(super) fn parse(output: &str) -> Self {
+        let mut names = Self::default();
+        let mut line_ids = rustc_hash::FxHashMap::<&str, u32>::default();
+        for record in output.split('\u{1e}') {
+            let mut lines = record.lines().filter(|line| !line.is_empty());
+            let (Some(hash), Some(status)) = (lines.next(), lines.next()) else {
+                continue;
+            };
+            let Ok(id) = gix::ObjectId::from_hex(hash.as_bytes()) else {
+                continue;
+            };
+            let line = *line_ids.entry(status).or_insert_with(|| {
+                names.lines.push(status.into());
+                (names.lines.len() - 1) as u32
+            });
+            names.by_commit.entry(id).or_insert(line);
+        }
+        names
+    }
+
+    pub(super) fn status_line(&self, commit: &str) -> Option<&str> {
+        let id = gix::ObjectId::from_hex(commit.as_bytes()).ok()?;
+        Some(&self.lines[*self.by_commit.get(&id)? as usize])
+    }
+
+    pub(super) fn commits(&self) -> usize {
+        self.by_commit.len()
+    }
+}
+
 /// The paged walk's commit filter. Boxed rather than a plain `fn` because a
 /// shallow repository needs one that carries state — the grafted parents still
 /// to be skipped — and the walk it belongs to is parked in [`LogPagedWalkCache`],
@@ -240,6 +283,9 @@ pub(super) struct AllBranchesTipsCacheEntry {
 pub(super) const LOG_PAGE_CACHE_LIMIT: usize = 32;
 pub(super) const LOG_PAGE_CACHE_ROW_LIMIT: usize = 10_000;
 pub(super) const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
+pub(super) const FOLLOWED_NAMES_CACHE_LIMIT: usize = 8;
+/// Commits across all cached name walks, about 40 bytes each.
+pub(super) const FOLLOWED_NAMES_CACHE_COMMIT_LIMIT: usize = 1_000_000;
 pub(super) const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 /// Date-order walks retain in-degree state for the reachable history.
 pub(super) const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;

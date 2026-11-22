@@ -1,8 +1,9 @@
 use self::cache::{
-    AllBranchesTipsCacheEntry, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT,
-    LOG_PAGE_CACHE_ROW_LIMIT, LOG_PAGED_TOPO_WALK_CACHE_LIMIT, LOG_PAGED_WALK_CACHE_LIMIT,
-    LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry, LogPageCacheKey,
-    LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter, LogPagedWalkState,
+    AllBranchesTipsCacheEntry, FOLLOWED_NAMES_CACHE_COMMIT_LIMIT, FOLLOWED_NAMES_CACHE_LIMIT,
+    FollowedNames, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT, LOG_PAGE_CACHE_ROW_LIMIT,
+    LOG_PAGED_TOPO_WALK_CACHE_LIMIT, LOG_PAGED_WALK_CACHE_LIMIT, LogFileFollowCacheEntry,
+    LogFileFollowCacheKey, LogPageCacheEntry, LogPageCacheKey, LogPageSeed, LogPagedWalk,
+    LogPagedWalkCacheEntry, LogPagedWalkFilter, LogPagedWalkState,
 };
 use super::history::gix_head_id_or_none;
 use super::{GixRepo, ShallowSnapshot, bstr_to_arc_str, object_id_from_commit_id, oid_to_arc_str};
