@@ -17,7 +17,7 @@ fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAp
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.log = Loadable::Ready(
+            repo.history_state.log = Loadable::Ready(
                 gitcomet_core::domain::LogPage {
                     commits: vec![gitcomet_core::domain::Commit {
                         id: commit_id.clone(),

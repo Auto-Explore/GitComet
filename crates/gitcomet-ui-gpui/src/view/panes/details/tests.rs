@@ -58,7 +58,7 @@ fn indexed_regression_details_fingerprint_tracks_comparison_metadata() {
         state.repos[0].history_state.indexed.rev += 1;
         let after_index = DetailsPaneView::notify_fingerprint(&state);
         assert_ne!(before, after_index, "multi={multi}");
-        state.repos[0].log_rev += 1;
+        state.repos[0].history_state.log_rev += 1;
         assert_ne!(
             after_index,
             DetailsPaneView::notify_fingerprint(&state),
@@ -108,7 +108,7 @@ fn details_fingerprint_ignores_history_it_does_not_show() {
         .into_iter()
         .collect(),
     );
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log_rev += 1;
     assert_eq!(DetailsPaneView::notify_fingerprint(&state), before);
 
     state.repos[0].history_state.commit_signatures_rev += 1;

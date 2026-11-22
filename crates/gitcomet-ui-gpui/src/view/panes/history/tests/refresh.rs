@@ -24,9 +24,9 @@ pub(in super::super) fn mount(
     repo.open = Loadable::Ready(());
     repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
-    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     repo.history_state.log = Loadable::Ready(page);
-    repo.log_rev = 1;
+    repo.history_state.log_rev = 1;
     let state = AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
@@ -166,8 +166,8 @@ fn deep_refresh_keeps_the_displayed_page_and_respects_scrolling_during_the_build
         .map(|i| commit(&format!("new{i}"), &[], "new"))
         .chain(page.commits.iter().cloned())
         .collect();
-    state.repos[0].log = Loadable::Ready(Arc::new(log_page(updated, None)));
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(log_page(updated, None)));
+    state.repos[0].history_state.log_rev += 1;
     hold_rebuild(cx, &view, &state);
     assert_eq!(
         top(cx, &view),
@@ -194,8 +194,8 @@ fn interior_reorder_updates_the_graph_and_clicks_use_the_displayed_source(
     let before = top(cx, &view);
     let mut reordered = page.commits.clone();
     reordered.swap(300, 450); // Same length and the same first/last three IDs.
-    state.repos[0].log = Loadable::Ready(Arc::new(log_page(reordered, None)));
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(log_page(reordered, None)));
+    state.repos[0].history_state.log_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     hold_rebuild(cx, &view, &state);
     let bounds = cx.debug_bounds("history_row_450").unwrap();
@@ -230,8 +230,9 @@ fn dirty(path: &str, head: &str) -> WorktreeDirtySummary {
 fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui::TestAppContext) {
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits(600), None)));
     scroll(cx, &view, None);
-    state.repos[0].log = Loadable::Ready(Arc::new(log_page(commits(1_000), Some("c999"))));
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log =
+        Loadable::Ready(Arc::new(log_page(commits(1_000), Some("c999"))));
+    state.repos[0].history_state.log_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     let before = state.repos[0].loads_in_flight.clone();
     hold_rebuild(cx, &view, &state);
@@ -282,8 +283,8 @@ fn synthetic_rows_and_deleted_anchors_preserve_the_nearest_surviving_commit(
     assert_eq!(top(cx, &view), before);
     let mut removed = page.commits.clone();
     removed.remove(450);
-    state.repos[0].log = Loadable::Ready(Arc::new(log_page(removed, None)));
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(log_page(removed, None)));
+    state.repos[0].history_state.log_rev += 1;
     hold_rebuild(cx, &view, &state);
     release_rebuild(cx, &view);
     // c451 keeps its prior screen coordinate; c449 becomes the partial top row.
@@ -416,7 +417,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     for _ in 0..3 {
         activate_and_check(cx, &view, &store, &expected);
         assert!(
-            matches!(&store.snapshot().repos[0].log, Loadable::Ready(current) if Arc::ptr_eq(current, &page))
+            matches!(&store.snapshot().repos[0].history_state.log, Loadable::Ready(current) if Arc::ptr_eq(current, &page))
         );
     }
 }
@@ -1493,9 +1494,8 @@ fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
             next_cursor: None,
         }),
     );
-    state.repos[0].log = Loadable::Loading;
     state.repos[0].history_state.log = Loadable::Loading;
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
     assert!(cx.debug_bounds("history_skeleton_0").is_none());
@@ -1514,7 +1514,7 @@ fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
         );
     });
     state.repos[0].history_state.history_author_filter = Some("another author".to_owned());
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
     assert!(
@@ -1530,9 +1530,9 @@ fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
         commits: Vec::new(),
         next_cursor: None,
     });
-    state.repos[0].log = Loadable::Ready(page.clone());
+    state.repos[0].history_state.log = Loadable::Ready(page.clone());
     state.repos[0].history_state.log = Loadable::Ready(page);
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state));
     cx.executor().advance_clock(Duration::from_secs(2));

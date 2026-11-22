@@ -423,7 +423,7 @@ fn author_filter_repo_with_many_authors(repo_id: RepoId, count: usize) -> RepoSt
         }
         .into(),
     );
-    repo.log = log_page.clone();
+    repo.history_state.log = log_page.clone();
     repo.history_state.log = log_page;
     repo
 }

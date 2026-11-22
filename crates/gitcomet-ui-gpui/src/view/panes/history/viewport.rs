@@ -37,7 +37,7 @@ impl HistoryView {
             return;
         };
         let height = crate::view::rows::history_row_height(self.ui_scale());
-        let ready = matches!(repo.log, Loadable::Ready(_));
+        let ready = matches!(repo.history_state.log, Loadable::Ready(_));
         if self.presented_history.as_ref().is_some_and(|old| {
             old.request == cache.base.request
                 && old.plan.fingerprint() == plan.fingerprint()

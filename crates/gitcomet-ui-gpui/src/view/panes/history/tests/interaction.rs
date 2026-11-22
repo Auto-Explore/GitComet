@@ -15,8 +15,8 @@ fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestApp
         },
     );
     repo.history_state.history_scope = LogScope::AllBranches;
-    repo.log = Loadable::Ready(Arc::new(log_page(commits.clone(), None)));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::new(log_page(commits.clone(), None)));
+    repo.history_state.log_rev = 1;
     let mut state = AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
@@ -51,8 +51,8 @@ fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestApp
         .into_iter()
         .chain(commits.clone())
         .collect();
-    state.repos[0].log = Loadable::Ready(Arc::new(log_page(updated, None)));
-    state.repos[0].log_rev += 1;
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(log_page(updated, None)));
+    state.repos[0].history_state.log_rev += 1;
     ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
     wait_until(cx, "refreshed history cache", |cx| {
         cx.update(|_, app| {
@@ -97,8 +97,8 @@ fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestApp
             });
         }
         let count = rows.len();
-        state.repos[0].log = Loadable::Ready(Arc::new(log_page(rows, None)));
-        state.repos[0].log_rev += 1;
+        state.repos[0].history_state.log = Loadable::Ready(Arc::new(log_page(rows, None)));
+        state.repos[0].history_state.log_rev += 1;
         ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
         wait_until(cx, "next refreshed history cache", |cx| {
             cx.update(|_, app| {
@@ -229,8 +229,8 @@ fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(cx: &mut gpui::
     repo.head_branch_rev = 1;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
     repo.branches_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
@@ -338,8 +338,8 @@ fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
     repo.head_branch_rev = 1;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
     repo.branches_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     // Selected, but with no row: the scan that would list it has not landed,
@@ -432,8 +432,8 @@ fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext
         repo.head_branch_rev = 1;
         repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "wip")]));
         repo.branches_rev = 1;
-        repo.log = Loadable::Ready(Arc::clone(&page));
-        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
         repo.history_state.log = Loadable::Ready(Arc::clone(&page));
         repo.history_state.log_rev = 1;
         repo.stashes = Loadable::Ready(Arc::new(stashes));
@@ -578,8 +578,8 @@ fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
         repo.head_branch_rev = 1;
         repo.branches = Loadable::Ready(Arc::new(branches));
         repo.branches_rev = branches_rev;
-        repo.log = Loadable::Ready(Arc::clone(&page));
-        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
         repo.history_state.log = Loadable::Ready(Arc::clone(&page));
         repo.history_state.log_rev = 1;
         repo.history_state.selected_commit = Some(CommitId("other".into()));
@@ -693,8 +693,8 @@ fn switching_same_graph_workspaces_highlights_the_new_heads_lane(cx: &mut gpui::
         repo.branches_rev = 1;
         repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
         repo.remote_branches_rev = 1;
-        repo.log = Loadable::Ready(Arc::clone(&page));
-        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
         repo.history_state.log = Loadable::Ready(Arc::clone(&page));
         repo.history_state.log_rev = 1;
         repo
@@ -788,8 +788,8 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
     repo.head_branch_rev = 1;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
     repo.branches_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -987,8 +987,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
         },
     ]));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -1569,8 +1569,8 @@ fn history_row_click_and_drag(cx: &mut gpui::TestAppContext, cached: bool) {
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
     repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -1700,8 +1700,8 @@ fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: boo
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
     repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -1814,8 +1814,8 @@ fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -1913,8 +1913,8 @@ fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestApp
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -2015,8 +2015,8 @@ fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_mov
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -2127,8 +2127,8 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -2266,8 +2266,8 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
     initial_repo.remote_branches_rev = 1;
     initial_repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     initial_repo.tags_rev = 1;
-    initial_repo.log = Loadable::Ready(Arc::clone(&initial_page));
-    initial_repo.log_rev = 1;
+    initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
+    initial_repo.history_state.log_rev = 1;
     initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
     initial_repo.history_state.log_rev = 1;
 
@@ -2282,8 +2282,8 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
     switched_repo.history_state.history_scope = LogScope::CurrentBranch;
     switched_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "main-tip")]));
     switched_repo.branches_rev = 2;
-    switched_repo.log = Loadable::Ready(Arc::clone(&switched_page));
-    switched_repo.log_rev = 2;
+    switched_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
+    switched_repo.history_state.log_rev = 2;
     switched_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
     switched_repo.history_state.log_rev = 2;
 
@@ -2480,8 +2480,8 @@ fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -2585,8 +2585,8 @@ fn history_refs_hover_survives_index_build_progress(cx: &mut gpui::TestAppContex
     repo.remote_branches_rev = 1;
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     repo.history_state.indexed.loading = true;
@@ -2683,8 +2683,8 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
     initial_repo.remote_branches =
         Loadable::Ready(Arc::new(vec![remote_branch("origin", "main", "tip")]));
     initial_repo.remote_branches_rev = 1;
-    initial_repo.log = Loadable::Ready(Arc::clone(&page));
-    initial_repo.log_rev = 1;
+    initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    initial_repo.history_state.log_rev = 1;
     initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     initial_repo.history_state.log_rev = 1;
 
@@ -2837,8 +2837,8 @@ fn hiding_a_remote_drops_its_branch_labels_from_the_graph(cx: &mut gpui::TestApp
         remote_branch("upstream", "main", "tip"),
     ]));
     shown_repo.remote_branches_rev = 1;
-    shown_repo.log = Loadable::Ready(Arc::clone(&page));
-    shown_repo.log_rev = 1;
+    shown_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    shown_repo.history_state.log_rev = 1;
     shown_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     shown_repo.history_state.log_rev = 1;
     let mut hidden_repo = shown_repo.clone();
@@ -2911,8 +2911,8 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
     initial_repo.branches_rev = 1;
     initial_repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
     initial_repo.remote_branches_rev = 1;
-    initial_repo.log = Loadable::Ready(Arc::clone(&page));
-    initial_repo.log_rev = 1;
+    initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    initial_repo.history_state.log_rev = 1;
     initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     initial_repo.history_state.log_rev = 1;
 
@@ -3064,8 +3064,8 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
     initial_repo.branches_rev = 1;
     initial_repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
     initial_repo.remote_branches_rev = 1;
-    initial_repo.log = Loadable::Ready(Arc::clone(&page));
-    initial_repo.log_rev = 1;
+    initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    initial_repo.history_state.log_rev = 1;
     initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     initial_repo.history_state.log_rev = 1;
 
@@ -3262,8 +3262,8 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
 
     let mut initial_repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
     initial_repo.history_state.history_scope = initial_scope;
-    initial_repo.log = Loadable::Ready(Arc::clone(&initial_page));
-    initial_repo.log_rev = 1;
+    initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
+    initial_repo.history_state.log_rev = 1;
     initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
     initial_repo.history_state.log_rev = 1;
 
@@ -3275,8 +3275,8 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
 
     let mut loading_repo = initial_repo.clone();
     loading_repo.history_state.history_scope = switched_scope;
-    loading_repo.log = Loadable::Loading;
-    loading_repo.log_rev = 2;
+    loading_repo.history_state.log = Loadable::Loading;
+    loading_repo.history_state.log_rev = 2;
     loading_repo.history_state.log = Loadable::Loading;
     loading_repo.history_state.log_rev = 2;
     loading_repo.history_state.retained_log_while_loading = Some(Arc::clone(&initial_page));
@@ -3288,8 +3288,8 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
     });
 
     let mut loaded_repo = loading_repo;
-    loaded_repo.log = Loadable::Ready(Arc::clone(&switched_page));
-    loaded_repo.log_rev = 3;
+    loaded_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
+    loaded_repo.history_state.log_rev = 3;
     loaded_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
     loaded_repo.history_state.log_rev = 3;
     loaded_repo.history_state.retained_log_while_loading = None;
@@ -3329,7 +3329,7 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
             let history = history_view.read(app);
             history.active_repo().is_some_and(|repo| {
                 repo.history_state.history_scope == switched_scope
-                    && matches!(repo.log, Loadable::Loading)
+                    && matches!(repo.history_state.log, Loadable::Loading)
                     && repo
                         .history_state
                         .retained_log_while_loading
@@ -3404,8 +3404,8 @@ fn filtered_modes_do_not_infer_detached_head_target_from_first_visible_row(
         repo.history_state.history_scope = scope;
         repo.head_branch = Loadable::Ready("HEAD".to_string());
         repo.head_branch_rev = 1;
-        repo.log = Loadable::Ready(Arc::clone(&page));
-        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
         repo.history_state.log = Loadable::Ready(page);
         repo.history_state.log_rev = 1;
 
@@ -3474,8 +3474,8 @@ fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui
     repo.history_state.retained_log_while_loading = Some(Arc::clone(&page));
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.head_branch_rev = 1;
-    repo.log = Loadable::Loading;
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Loading;
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Loading;
     repo.history_state.log_rev = 1;
 
@@ -3494,7 +3494,7 @@ fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui
             let history = history_view.read(app);
             history.active_repo().is_some_and(|repo| {
                 repo.history_state.history_scope == LogScope::AllBranches
-                    && matches!(repo.log, Loadable::Loading)
+                    && matches!(repo.history_state.log, Loadable::Loading)
                     && repo.history_state.retained_log_while_loading.is_some()
                     && repo.history_state.selected_commit.as_ref() == Some(&first)
             }) && history.history_cache.as_ref().is_some_and(|cache| {
@@ -3551,8 +3551,8 @@ fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
     );
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.head_branch_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
 
@@ -3656,8 +3656,8 @@ fn history_bounds_belong_to_the_active_repository(cx: &mut gpui::TestAppContext)
         repo.branches_rev = 1;
         repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
         repo.remote_branches_rev = 1;
-        repo.log = Loadable::Ready(Arc::clone(&page));
-        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
         repo.history_state.log = Loadable::Ready(Arc::clone(&page));
         repo.history_state.log_rev = 1;
         repo

@@ -507,7 +507,7 @@ fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists(cx: &mut gpui
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "abc123")]));
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: Vec::new(),
         next_cursor: None,
     }));
@@ -523,7 +523,7 @@ fn amend_not_allowed_on_unborn_head_branch(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: Vec::new(),
         next_cursor: None,
     }));
@@ -538,7 +538,7 @@ fn amend_not_allowed_on_unborn_head_branch(cx: &mut gpui::TestAppContext) {
 fn amend_allowed_on_detached_head_without_visible_log_entry(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("HEAD".to_string());
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: Vec::new(),
         next_cursor: None,
     }));

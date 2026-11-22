@@ -547,7 +547,7 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
             scope: HistoryMode::FirstParent,
         }),
     );
-    let linked_log_rev = state.repos[1].log_rev;
+    let linked_log_rev = state.repos[1].history_state.log_rev;
     // Neither queued change has been published yet. The linked tab still
     // displays FullReachable, and explicitly choosing it must win last.
     let second = reduce(
@@ -569,8 +569,11 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
             }
         )]
     ));
-    assert_eq!(state.repos[1].log_rev, linked_log_rev);
-    assert!(matches!(state.repos[1].log, Loadable::Ready(_)));
+    assert_eq!(state.repos[1].history_state.log_rev, linked_log_rev);
+    assert!(matches!(
+        state.repos[1].history_state.log,
+        Loadable::Ready(_)
+    ));
     for effect in first.iter().chain(&second) {
         if let Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
             key,
@@ -700,7 +703,10 @@ fn history_update_retires_inactive_walks_until_activation() {
     );
     assert!(effects.is_empty(), "inactive history reload is deferred");
     assert!(!state.repos[0].loads_in_flight.is_active_log_reply(seq));
-    assert!(matches!(state.repos[0].log, Loadable::NotLoaded));
+    assert!(matches!(
+        state.repos[0].history_state.log,
+        Loadable::NotLoaded
+    ));
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -714,7 +720,10 @@ fn history_update_retires_inactive_walks_until_activation() {
         }),
     );
     assert!(effects.is_empty());
-    assert!(matches!(state.repos[0].log, Loadable::NotLoaded));
+    assert!(matches!(
+        state.repos[0].history_state.log,
+        Loadable::NotLoaded
+    ));
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -838,7 +847,10 @@ fn hiding_a_remote_restarts_every_all_branches_reader_without_its_refs() {
     assert_eq!(walk, expected);
     assert_ne!(seq, running, "a new walk replaces the running one");
     assert!(!state.repos[0].loads_in_flight.is_active_log_reply(running));
-    assert!(matches!(state.repos[0].log, Loadable::Loading));
+    assert!(matches!(
+        state.repos[0].history_state.log,
+        Loadable::Loading
+    ));
     assert_eq!(
         state.repos[0].history_hidden_remotes(),
         &BTreeSet::from(["origin".to_string()])
@@ -900,7 +912,7 @@ fn hiding_a_remote_restarts_every_all_branches_reader_without_its_refs() {
 #[test]
 fn hiding_a_remote_from_a_head_walk_changes_only_the_labels() {
     let (mut state, key) = hidden_remotes_state(HistoryMode::FirstParent);
-    let log_rev = state.repos[0].log_rev;
+    let log_rev = state.repos[0].history_state.log_rev;
 
     let effects = reduce(
         &mut RepositoryRuntimes::default(),
@@ -910,8 +922,11 @@ fn hiding_a_remote_from_a_head_walk_changes_only_the_labels() {
     );
 
     assert!(load_log_walk(&effects).is_none(), "{effects:?}");
-    assert!(matches!(state.repos[0].log, Loadable::Ready(_)));
-    assert_eq!(state.repos[0].log_rev, log_rev);
+    assert!(matches!(
+        state.repos[0].history_state.log,
+        Loadable::Ready(_)
+    ));
+    assert_eq!(state.repos[0].history_state.log_rev, log_rev);
     assert_eq!(
         state.repos[0].history_hidden_remotes(),
         &BTreeSet::from(["origin".to_string()])

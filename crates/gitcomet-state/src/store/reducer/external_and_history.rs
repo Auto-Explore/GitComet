@@ -404,7 +404,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     }
 
-    let Loadable::Ready(page) = &repo_state.log else {
+    let Loadable::Ready(page) = &repo_state.history_state.log else {
         return Vec::new();
     };
     let Some(cursor) = page.next_cursor.clone() else {
@@ -605,7 +605,7 @@ pub(super) fn log_chunk_loaded(
     };
     if !repo_state.loads_in_flight.is_active_log_reply(seq)
         || repo_state.loads_in_flight.active_log_is_load_more()
-        || !repo_state.log.is_loading()
+        || !repo_state.history_state.log.is_loading()
     {
         return Vec::new();
     }
@@ -677,11 +677,9 @@ pub(super) fn log_loaded(
                 return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
-                if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
-                    // Drop the history_state copy first so the Arc's refcount
-                    // goes to 1 and make_mut can mutate in-place instead of
-                    // deep-cloning the entire commit list.
-                    repo_state.history_state.log = Loadable::NotLoaded;
+                if is_load_more && let Loadable::Ready(existing) = &mut repo_state.history_state.log
+                {
+                    // In place, unless a published snapshot still shares the page.
                     let existing = Arc::make_mut(existing);
                     // A page the backend still holds in its cache is copied
                     // once here; a freshly walked page is moved.
@@ -689,9 +687,7 @@ pub(super) fn log_loaded(
                     reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
-                    // Re-share the updated Arc with history_state.
-                    repo_state.history_state.log = repo_state.log.clone();
-                    repo_state.bump_log_revs();
+                    repo_state.bump_log_rev();
                 } else if !is_load_more {
                     // Slack for later appends only when the page is ours alone;
                     // a cache-shared page would have to be copied to get it.
@@ -710,7 +706,7 @@ pub(super) fn log_loaded(
                     return finish_log_load(repo_state, seq);
                 }
                 let failed = error_loadable(inputs, repo_state, &e);
-                if !matches!(repo_state.log, Loadable::Ready(_)) {
+                if !matches!(repo_state.history_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(failed);
                 }
                 return finish_log_load(repo_state, seq);
@@ -730,7 +726,7 @@ pub(super) fn log_loaded(
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
             && repo_state.history_state.indexed.index.is_none()
-            && let Loadable::Ready(page) = &repo_state.log
+            && let Loadable::Ready(page) = &repo_state.history_state.log
         {
             // One set over the page: the selection can hold thousands of ids
             // and the page tens of thousands of commits, so a scan per id was
@@ -765,7 +761,7 @@ pub(super) fn log_loaded(
 fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, scope: LogScope) {
     if repo_state.history_state.history_focus.head_is_first(scope)
         && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
-        && let Loadable::Ready(page) = &repo_state.log
+        && let Loadable::Ready(page) = &repo_state.history_state.log
     {
         repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
     }

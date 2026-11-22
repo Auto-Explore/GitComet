@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(repo.remotes, cached.remotes);
         assert_eq!(repo.tags, cached.tags);
         assert_eq!(repo.upstream_divergence, cached.upstream_divergence);
-        assert_eq!(repo.log, cached.log);
+        assert_eq!(repo.history_state.log, cached.history_state.log);
         assert!(repo.feedback.diagnostics.is_empty());
         assert!(state.notifications.is_empty());
         assert!(matches!(

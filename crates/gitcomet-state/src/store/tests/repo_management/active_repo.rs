@@ -194,7 +194,7 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
     assert!(matches!(repo1_state.open, Loadable::Ready(())));
     assert!(matches!(repo1_state.branches, Loadable::NotLoaded));
     assert!(matches!(repo1_state.status, Loadable::NotLoaded));
-    assert!(matches!(repo1_state.log, Loadable::NotLoaded));
+    assert!(matches!(repo1_state.history_state.log, Loadable::NotLoaded));
     assert!(!repo1_state.loads_in_flight.any_in_flight());
 
     let effects = reduce(

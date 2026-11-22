@@ -119,7 +119,11 @@ impl Fixture {
         let repo = &mut self.state.repos[0];
         let scope = repo.history_state.history_scope;
         let snapshot = gitcomet_core::services::HistorySnapshot(
-            format!("empty-{}-{}", repo.log_rev, repo.history_state.indexed.rev).into(),
+            format!(
+                "empty-{}-{}",
+                repo.history_state.log_rev, repo.history_state.indexed.rev
+            )
+            .into(),
         );
         if indexed {
             repo.history_state.log_snapshot = Some(snapshot.clone());
@@ -495,7 +499,7 @@ fn reword_success_supersedes_a_paused_rebase_log_refresh_before_reselection() {
 
     // The first read captured history before the rewrite, but returns after
     // the successful continuation selected the replacement commit.
-    let log_rev = fixture.state.repos[0].log_rev;
+    let log_rev = fixture.state.repos[0].history_state.log_rev;
     assert!(
         fixture
             .send(Msg::Internal(InternalMsg::LogLoaded {
@@ -510,7 +514,7 @@ fn reword_success_supersedes_a_paused_rebase_log_refresh_before_reselection() {
             }))
             .is_empty()
     );
-    assert_eq!(fixture.state.repos[0].log_rev, log_rev);
+    assert_eq!(fixture.state.repos[0].history_state.log_rev, log_rev);
     assert_eq!(
         fixture.state.repos[0].history_state.selected_commit,
         Some(rewritten())

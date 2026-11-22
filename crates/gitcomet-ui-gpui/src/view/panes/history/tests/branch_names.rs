@@ -104,8 +104,8 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
             workdir: PathBuf::from("/tmp/history-author-deterministic"),
         },
     );
-    repo.log = Loadable::Ready(page.clone());
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page.clone());
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     let mut state = AppState {
@@ -168,8 +168,8 @@ fn history_repeated_author_dot_animates_with_cached_selection_frames(
             workdir: PathBuf::from("/tmp/history-author-animation"),
         },
     );
-    repo.log = Loadable::Ready(page.clone());
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page.clone());
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     let state = Arc::new(AppState {
@@ -338,8 +338,8 @@ fn history_branch_names_repositions_headers_and_separates_hover_regions(
             .collect(),
     ));
     repo.tags_rev = 1;
-    repo.log = Loadable::Ready(page.clone());
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page.clone());
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     ensure_history_cache_for_tests(

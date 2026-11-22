@@ -226,7 +226,7 @@ fn repo_activated_is_reducer_noop_by_itself() {
 
     assert!(effects.is_empty());
     assert!(!state.repos[0].status.is_loading());
-    assert!(!state.repos[0].log.is_loading());
+    assert!(!state.repos[0].history_state.log.is_loading());
 }
 
 #[test]
@@ -1350,7 +1350,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.status.is_loading());
     assert!(repo_state.worktree_status_is_loading());
     assert!(repo_state.staged_status_is_loading());
-    assert!(repo_state.log.is_loading());
+    assert!(repo_state.history_state.log.is_loading());
     assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
     assert!(repo_state.submodules.is_loading());
@@ -1683,7 +1683,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
 
     let repo_state = &mut state.repos[0];
     repo_state.history_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(Arc::new(LogPage {
+    repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
             parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -1792,7 +1792,7 @@ fn answer_log(state: &mut AppState, effects: &[Effect], history: &[Commit]) -> V
             next_cursor,
         }))
     };
-    let page = match (&cursor, &state.repos[0].log) {
+    let page = match (&cursor, &state.repos[0].history_state.log) {
         (None, Loadable::Ready(previous)) => {
             gitcomet_core::services::refresh_history_page(previous, &CancellationToken::new(), read)
                 .unwrap()
@@ -1881,7 +1881,7 @@ fn refresh_depth_preserves_direct_and_promoted_loads() {
             ));
             answer_log(&mut state, &effects, &history);
             assert!(
-                matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..retained])
+                matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits == history[..retained])
             );
         }
     }
@@ -1915,7 +1915,9 @@ fn load_more_during_refresh_does_not_queue_a_stale_cursor_or_drop_later_refresh(
         Some(cursor_after(&history[..600]))
     );
     answer_log(&mut state, &pagination, &history);
-    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..800]));
+    assert!(
+        matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits == history[..800])
+    );
 }
 
 #[test]
@@ -1931,10 +1933,10 @@ fn reload_supersedes_refresh_and_pagination_and_restarts_at_first_page() {
         let reload = history_message(&mut state, Msg::ReloadRepo { repo_id: RepoId(1) });
         assert_eq!(log_effect(&reload).1, 200);
         assert!(answer_log(&mut state, &old, &history).is_empty());
-        assert!(state.repos[0].log.is_loading());
+        assert!(state.repos[0].history_state.log.is_loading());
         answer_log(&mut state, &reload, &history);
         assert!(
-            matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..200])
+            matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits == history[..200])
         );
     }
 }
@@ -1959,7 +1961,9 @@ fn cancelled_operation_keeps_ready_history_and_selection() {
             }),
         }),
     );
-    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history));
+    assert!(
+        matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits == history)
+    );
     assert_eq!(
         state.repos[0].history_state.selected_commit.as_ref(),
         Some(&selected)
@@ -2015,7 +2019,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
 
     let repo_state = &state.repos[0];
     assert!(
-        matches!(&repo_state.log, Loadable::Ready(page) if page.commits.len() == 600),
+        matches!(&repo_state.history_state.log, Loadable::Ready(page) if page.commits.len() == 600),
         "the reloaded page must hold every row that was on screen"
     );
     assert_eq!(
@@ -2116,7 +2120,9 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
             .into()),
         }),
     );
-    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits.len() == 600));
+    assert!(
+        matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits.len() == 600)
+    );
     assert!(
         matches!(
             effects.as_slice(),
@@ -2179,7 +2185,7 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
 
         let repo_state = &state.repos[0];
         assert_eq!(repo_state.history_state.history_scope, target_scope);
-        assert!(repo_state.log.is_loading());
+        assert!(repo_state.history_state.log.is_loading());
         assert!(
             repo_state
                 .history_state
@@ -2251,7 +2257,7 @@ fn set_history_scope_retains_ready_log_while_loading() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.log.is_loading());
+    assert!(repo_state.history_state.log.is_loading());
     let retained = repo_state
         .history_state
         .retained_log_while_loading
@@ -2343,7 +2349,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         state.repos[0].history_state.history_scope,
         LogScope::NoMerges
     );
-    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].history_state.log.is_loading());
 
     // The first walk finally answers. It is superseded, so it must neither land
     // in the log nor disturb the walk that replaced it.
@@ -2364,7 +2370,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         }),
     );
 
-    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].history_state.log.is_loading());
     assert!(!state.repos[0].history_state.log_loading_more);
     assert!(
         effects.is_empty(),
@@ -2390,7 +2396,7 @@ fn load_more_history_noops_when_no_next_cursor() {
     state.active_repo = Some(RepoId(1));
 
     let repo_state = &mut state.repos[0];
-    repo_state.log = Loadable::Ready(Arc::new(LogPage {
+    repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
             parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2428,7 +2434,7 @@ fn log_loaded_appends_when_loading_more() {
 
     let repo_state = &mut state.repos[0];
     repo_state.history_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(Arc::new(LogPage {
+    repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
             parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2443,7 +2449,7 @@ fn log_loaded_appends_when_loading_more() {
         }),
     }));
     repo_state.history_state.log_loading_more = true;
-    let log_before = (repo_state.log_rev, repo_state.history_state.log_rev);
+    let log_before = repo_state.history_state.log_rev;
 
     let seq = expect_log_reply(
         &mut state.repos[0],
@@ -2485,9 +2491,8 @@ fn log_loaded_appends_when_loading_more() {
 
     let repo_state = &state.repos[0];
     assert!(!repo_state.history_state.log_loading_more);
-    assert!(repo_state.log_rev > log_before.0);
-    assert!(repo_state.history_state.log_rev > log_before.1);
-    let Loadable::Ready(page) = &repo_state.log else {
+    assert!(repo_state.history_state.log_rev > log_before);
+    let Loadable::Ready(page) = &repo_state.history_state.log else {
         panic!("expected log ready");
     };
     assert_eq!(page.commits.len(), 2);
@@ -3173,7 +3178,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
     );
 
     let repo_state = &state.repos[0];
-    let Loadable::Ready(repo_log) = &repo_state.log else {
+    let Loadable::Ready(repo_log) = &repo_state.history_state.log else {
         panic!("expected repo log ready");
     };
     let Loadable::Ready(history_log) = &repo_state.history_state.log else {
@@ -3260,7 +3265,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(matches!(repo_state.log, Loadable::Ready(_)));
+    assert!(matches!(repo_state.history_state.log, Loadable::Ready(_)));
     assert!(
         repo_state
             .history_state
@@ -3316,7 +3321,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         }),
     );
 
-    let Loadable::Ready(page) = &state.repos[0].log else {
+    let Loadable::Ready(page) = &state.repos[0].history_state.log else {
         panic!("expected log ready");
     };
     assert!(page.commits.capacity() >= page.commits.len() + 512);
@@ -3339,7 +3344,7 @@ fn log_loaded_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = (state.repos[0].log_rev, state.repos[0].history_state.log_rev);
+    let log_before = state.repos[0].history_state.log_rev;
     let history_scope = state.repos[0].history_state.history_scope;
     let seq = expect_log_reply(&mut state.repos[0], history_scope, None, None);
 
@@ -3367,11 +3372,11 @@ fn log_loaded_bumps_log_rev() {
     );
 
     assert!(
-        state.repos[0].log_rev > log_before.0,
+        state.repos[0].history_state.log_rev > log_before,
         "repo log_rev should bump after LogLoaded"
     );
     assert!(
-        state.repos[0].history_state.log_rev > log_before.1,
+        state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after LogLoaded"
     );
 }
@@ -3531,7 +3536,7 @@ fn set_history_scope_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = (state.repos[0].log_rev, state.repos[0].history_state.log_rev);
+    let log_before = state.repos[0].history_state.log_rev;
 
     reduce(
         &mut repos,
@@ -3544,11 +3549,11 @@ fn set_history_scope_bumps_log_rev() {
     );
 
     assert!(
-        state.repos[0].log_rev > log_before.0,
+        state.repos[0].history_state.log_rev > log_before,
         "repo log_rev should bump after SetHistoryScope"
     );
     assert!(
-        state.repos[0].history_state.log_rev > log_before.1,
+        state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after SetHistoryScope"
     );
 }
@@ -3894,7 +3899,7 @@ fn cancelled_log_reply_is_not_reported_as_an_error() {
         state.repos[0].feedback.diagnostics
     );
     assert!(
-        !matches!(state.repos[0].log, Loadable::Error(_)),
+        !matches!(state.repos[0].history_state.log, Loadable::Error(_)),
         "a cancelled walk must not blank the history out"
     );
     assert!(effects.is_empty(), "nothing to schedule, got {effects:?}");
@@ -3953,12 +3958,12 @@ fn log_chunks_replace_the_page_progressively() {
 
     // Nothing found yet: only the progress readout moves.
     chunk(Vec::new(), 50_000, &mut state);
-    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].history_state.log.is_loading());
     assert!(partial(&state).is_none());
     assert_eq!(state.repos[0].history_state.log_scan_progress, Some(50_000));
 
     chunk(vec![commit("c1")], 90_000, &mut state);
-    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].history_state.log.is_loading());
     assert_eq!(
         partial(&state)
             .expect("the first chunk shows its commits")
@@ -3998,7 +4003,7 @@ fn log_chunks_replace_the_page_progressively() {
             .into()),
         }),
     );
-    let Loadable::Ready(page) = &state.repos[0].log else {
+    let Loadable::Ready(page) = &state.repos[0].history_state.log else {
         panic!("expected the finished page");
     };
     assert_eq!(page.commits.len(), 3);
@@ -4054,7 +4059,7 @@ fn superseded_log_chunks_are_ignored() {
     );
 
     assert!(
-        state.repos[0].log.is_loading(),
+        state.repos[0].history_state.log.is_loading(),
         "a superseded chunk must not paint rows"
     );
     assert!(

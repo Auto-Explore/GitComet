@@ -112,7 +112,7 @@ impl HistoryView {
                 )
                 .into_any_element()
         } else if count == 0 {
-            match repo.map(|r| &r.log) {
+            match repo.map(|r| &r.history_state.log) {
                 None => {
                     components::empty_state(theme, "History", "No repository.").into_any_element()
                 }
@@ -152,11 +152,11 @@ impl HistoryView {
 
                 state.last_item_size.is_some()
                     && repo.is_some_and(|repo| {
-                        !repo.log_loading_more
+                        !repo.history_state.log_loading_more
                             && !repo.history_state.indexed.loading
                             && repo.history_state.indexed.index.is_none()
                             && matches!(
-                                &repo.log,
+                                &repo.history_state.log,
                                 Loadable::Ready(page) if page.next_cursor.is_some()
                                     && self.history_cache.as_ref().is_some_and(|cache| Arc::ptr_eq(&cache.page, page))
                             )

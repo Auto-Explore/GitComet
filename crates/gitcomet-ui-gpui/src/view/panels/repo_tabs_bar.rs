@@ -363,10 +363,10 @@ impl RepoTabsBarView {
         // values with Loading; pagination has its own explicit pending flag.
         let primary_view_ready = matches!(repo.head_branch, Loadable::Ready(_))
             && matches!(repo.status, Loadable::Ready(_))
-            && matches!(repo.log, Loadable::Ready(_));
+            && matches!(repo.history_state.log, Loadable::Ready(_));
         matches!(repo.open, Loadable::Loading)
             || (repo.loads_in_flight.any_foreground_in_flight()
-                && (!primary_view_ready || repo.log_loading_more))
+                && (!primary_view_ready || repo.history_state.log_loading_more))
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -1601,10 +1601,11 @@ mod tests {
             staged: Default::default(),
             unstaged: Default::default(),
         }));
-        repo.log = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }));
+        repo.history_state.log =
+            Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }));
         repo.loads_in_flight.request(LoadKind::WorktreeStatus);
         repo.loads_in_flight.request(LoadKind::Tags);
         assert!(!RepoTabsBarView::is_repo_busy(&repo));
@@ -1613,10 +1614,10 @@ mod tests {
         reload.status = Loadable::Loading;
         assert!(RepoTabsBarView::is_repo_busy(&reload));
         let mut history_filter = repo.clone();
-        history_filter.log = Loadable::Loading;
+        history_filter.history_state.log = Loadable::Loading;
         assert!(RepoTabsBarView::is_repo_busy(&history_filter));
         let mut pagination = repo.clone();
-        pagination.log_loading_more = true;
+        pagination.history_state.log_loading_more = true;
         assert!(RepoTabsBarView::is_repo_busy(&pagination));
         repo.local_actions_in_flight = 1;
         assert!(RepoTabsBarView::is_repo_busy(&repo));

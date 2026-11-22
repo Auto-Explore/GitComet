@@ -338,13 +338,13 @@ impl DetailsPaneView {
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
             if Self::shows_comparison(repo) {
-                repo.log_rev.hash(&mut hasher);
+                repo.history_state.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
             }
             // An older commit's place in that history, and HEAD's, decide
             // whether its message can be edited and whether it is published.
             if history.selected_commit.is_some() {
-                repo.log_rev.hash(&mut hasher);
+                repo.history_state.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
                 repo.detached_head_commit.hash(&mut hasher);
                 repo.upstream_divergence_rev.hash(&mut hasher);

@@ -123,11 +123,11 @@ fn draw_details<'a>(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: (0..commit_count).map(log_commit).collect(),
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.multi_selection = CommitMultiSelection {
                 commits: selected
                     .iter()
@@ -422,11 +422,12 @@ mod worktree_uncommitted {
                 repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-                repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
-                    commits: (0..2).map(log_commit).collect(),
-                    next_cursor: None,
-                }));
-                repo.log_rev = 1;
+                repo.history_state.log =
+                    Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                        commits: (0..2).map(log_commit).collect(),
+                        next_cursor: None,
+                    }));
+                repo.history_state.log_rev = 1;
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 if selected {
                     repo.history_state.worktree_selection = Some(worktree_path.clone());

@@ -402,7 +402,6 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.authors.rev.hash(hasher);
             repo.load_epoch.hash(hasher);
             repo.history_state.log_rev.hash(hasher);
-            repo.log_rev.hash(hasher);
         }
 
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::ForcePushConfirm { .. } => {

@@ -167,7 +167,7 @@ mod tests {
         let mut repo = repo_state();
         repo.head_branch = Loadable::Ready("main".to_string());
         repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "abc123")]));
-        repo.log = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
         }));
@@ -182,7 +182,7 @@ mod tests {
         let mut repo = repo_state();
         repo.head_branch = Loadable::Ready("main".to_string());
         repo.branches = Loadable::Ready(Arc::new(Vec::new()));
-        repo.log = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
         }));

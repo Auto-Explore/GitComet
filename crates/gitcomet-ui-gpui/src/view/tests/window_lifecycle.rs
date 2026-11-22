@@ -1509,7 +1509,7 @@ fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui
         staged: Default::default(),
         unstaged: Default::default(),
     }));
-    cached.repos[0].log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+    cached.repos[0].history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
         commits: Vec::new(),
         next_cursor: None,
     }));

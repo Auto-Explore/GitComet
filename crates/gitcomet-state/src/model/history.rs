@@ -559,13 +559,12 @@ pub struct SquashPreview {
 
 impl RepoState {
     #[inline]
-    pub(crate) fn bump_log_revs(&mut self) {
-        self.log_rev = self.log_rev.wrapping_add(1);
+    pub(crate) fn bump_log_rev(&mut self) {
         self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {
-        if self.history_state.log == log && self.log == log {
+        if self.history_state.log == log {
             return;
         }
         if !matches!(log, Loadable::Loading) {
@@ -574,9 +573,8 @@ impl RepoState {
         // A caller accepting a backend result installs its snapshot after this
         // write. Reload and filter transitions must never reuse the old token.
         self.history_state.log_snapshot = None;
-        self.history_state.log = log.clone();
-        self.log = log;
-        self.bump_log_revs();
+        self.history_state.log = log;
+        self.bump_log_rev();
     }
 
     pub(crate) fn retain_log_while_loading(&mut self) {
@@ -584,7 +582,7 @@ impl RepoState {
             return;
         }
 
-        if let Loadable::Ready(page) = &self.log {
+        if let Loadable::Ready(page) = &self.history_state.log {
             self.history_state.retained_log_while_loading = Some(Arc::clone(page));
         }
     }
@@ -599,11 +597,11 @@ impl RepoState {
     /// complete history with nothing more to load. Only meaningful while the log
     /// is `Loading`; `set_log` drops the retained page once the walk finishes.
     pub(crate) fn set_partial_log_while_loading(&mut self, page: Shared<LogPage>) {
-        if !matches!(self.log, Loadable::Loading) {
+        if !matches!(self.history_state.log, Loadable::Loading) {
             return;
         }
         self.history_state.retained_log_while_loading = Some(page);
-        self.bump_log_revs();
+        self.bump_log_rev();
     }
 
     /// Hold on to the currently loaded annotations so the blame column keeps
@@ -625,12 +623,11 @@ impl RepoState {
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {
-        if self.history_state.log_loading_more == v && self.log_loading_more == v {
+        if self.history_state.log_loading_more == v {
             return;
         }
         self.history_state.log_loading_more = v;
-        self.log_loading_more = v;
-        self.bump_log_revs();
+        self.bump_log_rev();
     }
 
     /// Records how far a running walk has scanned, or clears it when the page
@@ -693,7 +690,7 @@ impl RepoState {
     pub(crate) fn reset_history_readers(&mut self) {
         self.history_state.indexed.reset_query();
         self.history_state.authors.cancellation.cancel();
-        self.bump_log_revs();
+        self.bump_log_rev();
     }
 
     pub(crate) fn set_history_author_filter(&mut self, author: Option<String>) {
@@ -702,7 +699,7 @@ impl RepoState {
         }
         self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
-        self.bump_log_revs();
+        self.bump_log_rev();
     }
 
     pub(crate) fn set_history_focus(&mut self, focus: HistoryFocusSet) {
@@ -712,7 +709,7 @@ impl RepoState {
         self.history_state.indexed.reset_query();
         self.history_state.history_focus = focus;
         self.history_state.authors.cancellation.cancel();
-        self.bump_log_revs();
+        self.bump_log_rev();
     }
 
     pub(crate) fn set_reveal_target(&mut self, v: Option<CommitId>) {
@@ -896,7 +893,7 @@ impl RepoState {
     fn history_squash_key(&self) -> (usize, u64, u64, u64, Option<CommitId>, usize) {
         (
             Arc::as_ptr(&self.history_state.multi_selection.commits) as usize,
-            self.log_rev,
+            self.history_state.log_rev,
             self.head_branch_rev,
             self.branches_rev,
             self.detached_head_commit.clone(),
@@ -957,7 +954,7 @@ impl RepoState {
                 &head,
             );
         }
-        let Loadable::Ready(page) = &self.log else {
+        let Loadable::Ready(page) = &self.history_state.log else {
             return None;
         };
         gitcomet_core::squash::squash_eligibility(
@@ -971,9 +968,9 @@ impl RepoState {
         Some(CommitRewordPositionKey {
             target: self.history_state.selected_commit.clone()?,
             head: self.head_commit_id(),
-            log_rev: self.log_rev,
+            log_rev: self.history_state.log_rev,
             snapshot: self.history_state.log_snapshot.clone(),
-            page: match &self.log {
+            page: match &self.history_state.log {
                 Loadable::Ready(page) => Arc::as_ptr(page) as usize,
                 _ => 0,
             },
@@ -1005,7 +1002,7 @@ impl RepoState {
         let position = self.compute_commit_reword_position(&key.target, key.head.as_ref());
         self.history_state.reword_position_cache = Some(Arc::new(CommitRewordPositionCache {
             key,
-            _page: match &self.log {
+            _page: match &self.history_state.log {
                 Loadable::Ready(page) => Some(page.clone()),
                 _ => None,
             },
@@ -1061,7 +1058,7 @@ impl RepoState {
         {
             return gitcomet_core::squash::first_parent_position_indexed(index, head, commit_id);
         }
-        let Loadable::Ready(page) = &self.log else {
+        let Loadable::Ready(page) = &self.history_state.log else {
             return FirstParentPosition::NotFound;
         };
         gitcomet_core::squash::first_parent_position(&page.commits, head, commit_id)

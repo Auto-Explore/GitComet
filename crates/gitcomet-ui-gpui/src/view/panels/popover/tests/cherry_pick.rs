@@ -226,7 +226,7 @@ fn cherry_pick_colours(
                     .into_iter()
                     .collect(),
             ));
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: commits
                     .iter()
                     .map(|(id, parents, summary)| gitcomet_core::domain::Commit {

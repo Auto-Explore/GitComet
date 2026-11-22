@@ -594,7 +594,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
             },
         };
         if case == "stale context" {
-            repo.log_rev += 1;
+            repo.history_state.log_rev += 1;
         }
         let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
         store.disable_repo_monitors_for_test();

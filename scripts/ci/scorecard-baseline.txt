@@ -78,7 +78,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/chrome.rs::render 353 -
 fn-lines crates/gitcomet-ui-gpui/src/view/command_palette.rs::render_rows 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/diff_commands.rs::for_window 174 -
 fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_header 204 -
-fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 172 -
+fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 171 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 825 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_commands.rs::execute_builtin_command 637 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs::render 926 -
@@ -98,7 +98,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/layout/worktree_uncommitted.rs:
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/binary_conflict.rs::render_binary_conflict_resolver 397 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/conflict_resolver_view.rs::conflict_toolbar_full_controls 237 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/conflict_resolver_view.rs::render_conflict_markdown_preview_column 152 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/conflict_resolver_view.rs::render_conflict_resolver_pane 1657 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/conflict_resolver_view.rs::render_conflict_resolver_pane 1654 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/decision_conflict.rs::render_decision_conflict_resolver 221 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/diff.rs::render_markdown_diff_preview 204 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/main/diff.rs::render_selected_file_diff 347 -
@@ -126,7 +126,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/repo_picke
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/status_file.rs::model 369 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/create_branch_from_ref_prompt.rs::panel 152 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/error_details.rs::detail 170 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_repo_for_popover 269 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/fingerprint.rs::hash_repo_for_popover 268 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::history_row 170 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::operation_detail 408 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panels/popover/hook_activity.rs::panel 254 -
@@ -166,7 +166,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/diff_text.rs::diff_text_lin
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/diff_text.rs::selected_diff_text_string 156 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/diff_text/editor_context_menu.rs::open_diff_editor_context_menu 183 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/file_editor.rs::rebind_file_editor_highlight_provider 153 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/file_editor.rs::render_file_editor 267 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/file_editor.rs::render_file_editor 266 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/helpers/conflict_provenance.rs::apply_conflict_choice_provenance_hints_for_ranges 205 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/helpers/conflict_segments.rs::split_target_conflict_block_into_subchunks 175 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/hosted_binding.rs::render_projected 266 -

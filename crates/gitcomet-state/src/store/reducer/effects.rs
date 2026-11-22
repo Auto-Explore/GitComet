@@ -2470,7 +2470,7 @@ pub(super) fn head_branch_loaded(
                             .history_state
                             .history_focus
                             .head_is_first(repo_state.history_state.history_scope)
-                        && let Loadable::Ready(page) = &repo_state.log
+                        && let Loadable::Ready(page) = &repo_state.history_state.log
                     {
                         repo_state
                             .set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));

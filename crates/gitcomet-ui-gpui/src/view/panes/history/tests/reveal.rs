@@ -746,7 +746,6 @@ fn display_log_page_uses_retained_page_while_loading() {
         },
     );
     let page = Arc::new(log_page(vec![commit("a", &[], "a")], None));
-    repo.log = Loadable::Loading;
     repo.history_state.log = Loadable::Loading;
     repo.history_state.retained_log_while_loading = Some(Arc::clone(&page));
 

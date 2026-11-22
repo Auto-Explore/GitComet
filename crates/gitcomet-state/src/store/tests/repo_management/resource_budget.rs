@@ -1167,7 +1167,7 @@ fn a_resumed_history_walk_streams_into_a_loading_log() {
             _ => None,
         })
         .expect("the resume walks history");
-    assert!(state.repos[0].log.is_loading());
+    assert!(state.repos[0].history_state.log.is_loading());
     assert!(state.repos[0].status.is_loading());
     reduce(
         &mut repos,

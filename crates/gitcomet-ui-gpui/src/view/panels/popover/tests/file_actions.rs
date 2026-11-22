@@ -38,7 +38,7 @@ fn commit_menu_test_repo(repo_id: RepoId, commit_id: &CommitId) -> RepoState {
         std::process::id()
     ));
     let mut repo = RepoState::new_opening(repo_id, gitcomet_core::domain::RepoSpec { workdir });
-    repo.log = Loadable::Ready(
+    repo.history_state.log = Loadable::Ready(
         gitcomet_core::domain::LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: commit_id.clone(),

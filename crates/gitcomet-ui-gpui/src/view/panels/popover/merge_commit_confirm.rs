@@ -30,7 +30,7 @@ pub(super) fn panel(
     let short: SharedString = commit_id.short().into();
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let summary = repo
-        .and_then(|repo| match &repo.log {
+        .and_then(|repo| match &repo.history_state.log {
             Loadable::Ready(page) => page
                 .commits
                 .iter()

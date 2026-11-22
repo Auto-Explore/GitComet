@@ -1140,7 +1140,6 @@ pub(crate) fn reset_repo_switch_bench_state(state: &mut AppState, baseline: &App
 
     for (repo_state, baseline_repo) in state.repos.iter_mut().zip(baseline.repos.iter()) {
         repo_state.loads_in_flight = baseline_repo.loads_in_flight.clone();
-        repo_state.log_loading_more = baseline_repo.log_loading_more;
         repo_state.history_state.log_loading_more = baseline_repo.history_state.log_loading_more;
     }
 }
@@ -1493,7 +1492,6 @@ fn repo_switch_repo_is_hydrated(repo: &RepoState) -> bool {
     matches!(repo.open, Loadable::Ready(()))
         && repo.worktree_status_entries().is_some()
         && repo.staged_status_entries().is_some()
-        && matches!(repo.log, Loadable::Ready(_))
         && matches!(repo.history_state.log, Loadable::Ready(_))
         && matches!(repo.branches, Loadable::Ready(_))
         && matches!(repo.remote_tags, Loadable::Ready(_))
@@ -2048,7 +2046,6 @@ impl HistoryLoadMoreAppendFixture {
             .find(|repo| repo.id == self.repo_id)
             .expect("history load-more fixture should keep its repo");
         repo_state.history_state.log_loading_more = true;
-        repo_state.log_loading_more = true;
         state
     }
 
@@ -2104,7 +2101,7 @@ impl HistoryLoadMoreAppendFixture {
             .iter()
             .find(|repo| repo.id == self.repo_id)
             .expect("history load-more fixture should keep its repo");
-        let Loadable::Ready(page) = &repo_state.log else {
+        let Loadable::Ready(page) = &repo_state.history_state.log else {
             panic!("history load-more fixture expected ready log after append");
         };
 
@@ -2201,7 +2198,7 @@ impl HistoryScopeSwitchFixture {
         );
         repo_state.history_state.history_scope = self.from_scope;
         repo_state.history_state.log_loading_more = false;
-        repo_state.log = Loadable::Ready(Arc::new(LogPage {
+        repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: self.existing_commits.clone(),
             next_cursor: self.existing_commits.last().map(|c| LogCursor {
                 last_seen: c.id.clone(),
@@ -2241,7 +2238,8 @@ impl HistoryScopeSwitchFixture {
             .log_rev
             .saturating_sub(log_rev_before);
         let scope_changed = u64::from(repo_state.history_state.history_scope == self.to_scope);
-        let log_set_to_loading = u64::from(matches!(repo_state.log, Loadable::Loading));
+        let log_set_to_loading =
+            u64::from(matches!(repo_state.history_state.log, Loadable::Loading));
         let load_log_effect_count = effects
             .iter()
             .filter(|e| matches!(e, Effect::LoadLog { .. }))

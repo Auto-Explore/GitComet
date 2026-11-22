@@ -362,7 +362,7 @@ fn refresh_effects_request_expected_loads_and_reset_log_loading_more() {
     primary.set_log_loading_more(true);
     let primary_effects = refresh_primary_effects(&mut primary);
     assert_eq!(primary_effects.len(), 5);
-    assert!(!primary.log_loading_more);
+    assert!(!primary.history_state.log_loading_more);
     assert!(matches!(
         primary_effects[0],
         Effect::References(ReferenceEffect::LoadHeadBranch { .. })
@@ -407,7 +407,7 @@ fn refresh_effects_request_expected_loads_and_reset_log_loading_more() {
     full.set_log_loading_more(true);
     let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
     assert_eq!(full_effects.len(), 8);
-    assert!(!full.log_loading_more);
+    assert!(!full.history_state.log_loading_more);
     assert!(
         full_effects
             .iter()

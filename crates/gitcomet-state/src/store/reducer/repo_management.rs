@@ -189,7 +189,7 @@ fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     if repo_state.status.is_loading() {
         repo_state.set_status(Loadable::NotLoaded);
     }
-    if repo_state.log.is_loading() {
+    if repo_state.history_state.log.is_loading() {
         repo_state.set_log(Loadable::NotLoaded);
     }
     repo_state.set_log_loading_more(false);
@@ -329,7 +329,7 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
         repo.history_state.indexed.clone(),
         repo.history_state.find.clone(),
         repo.history_state.commit_signatures.clone(),
-        repo.log.clone(),
+        repo.history_state.log.clone(),
         repo.history_state.retained_log_while_loading.clone(),
         repo.history_state.file_history.clone(),
         repo.history_state.commit_details.clone(),
@@ -399,7 +399,7 @@ pub(in crate::store) fn park_repository(repo: &mut RepoState, repos: &mut Reposi
 /// The resumed refresh reloads what parking released. A streamed log is
 /// accepted only while the log is loading.
 fn mark_parked_reads_loading(repo: &mut RepoState) {
-    if matches!(repo.log, Loadable::NotLoaded) {
+    if matches!(repo.history_state.log, Loadable::NotLoaded) {
         repo.set_log(Loadable::Loading);
     }
     if matches!(repo.status, Loadable::NotLoaded) {
@@ -1069,7 +1069,7 @@ fn repo_switch_state_complete(repo_state: &RepoState, git_log_settings: GitLogSe
         && matches!(repo_state.head_branch, Loadable::Ready(_))
         && matches!(repo_state.upstream_divergence, Loadable::Ready(_))
         && matches!(repo_state.status, Loadable::Ready(_))
-        && matches!(repo_state.log, Loadable::Ready(_))
+        && matches!(repo_state.history_state.log, Loadable::Ready(_))
         && matches!(repo_state.worktrees, Loadable::Ready(_))
         && !repo_state.loads_in_flight.any_in_flight()
 }

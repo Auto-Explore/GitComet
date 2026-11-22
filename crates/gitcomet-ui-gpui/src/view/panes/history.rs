@@ -771,7 +771,6 @@ impl HistoryView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.repository_mode.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
@@ -1086,7 +1085,7 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn display_log_page_for_repo(repo: &RepoState) -> Option<Arc<LogPage>> {
-        match &repo.log {
+        match &repo.history_state.log {
             Loadable::Ready(page) => Some(Arc::clone(page)),
             Loadable::Loading => repo
                 .history_state
@@ -1098,7 +1097,7 @@ impl HistoryView {
     }
 
     fn live_log_page_has_more_for_repo(repo: &RepoState) -> Option<bool> {
-        match &repo.log {
+        match &repo.history_state.log {
             Loadable::Ready(page) => Some(page.next_cursor.is_some()),
             Loadable::Loading | Loadable::NotLoaded | Loadable::Error(_) => None,
         }
@@ -1707,7 +1706,7 @@ impl HistoryView {
             };
 
             let current_scope = repo.history_state.history_scope;
-            let log_rev = repo.log_rev;
+            let log_rev = repo.history_state.log_rev;
             let stashes_rev = repo.stashes_rev;
             let log_loading_more = repo.history_state.log_loading_more;
             let display_page = Self::display_log_page_for_repo(repo);
