@@ -729,15 +729,15 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
         return false;
     }
 
-    let stash_rev = repo.stashes_rev;
-    cached.stash_rev == stash_rev
-        || cached.stash_reuse_identity == fingerprint::loadable_arc_identity(&repo.stashes)
     if cached.tags_rev != repo.tags_rev
         && cached.tags_reuse_identity != fingerprint::loadable_arc_identity(&repo.tags)
     {
         return false;
     }
 
+    let stash_rev = repo.stashes_rev;
+    cached.stash_rev == stash_rev
+        || cached.stash_reuse_identity == fingerprint::loadable_arc_identity(&repo.stashes)
 }
 
 fn hash_branch_sidebar_local_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
