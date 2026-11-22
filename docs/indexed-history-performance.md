@@ -650,3 +650,32 @@ Release build, first index after opening:
 | --- | ---: | ---: |
 | Chromium, `HEAD`, 1,792,921 commits | 2.83 s | 0.65 s |
 | Chromium, all branches, 1,820,508 commits | 3.43 s | 0.64 s |
+
+## Commit headers read ahead from the packs (2026-11-22)
+
+Without a commit-graph the header scan learns of a commit from its child, one
+object at a time, which left every other core idle. A pack written by Git
+starts with its commits, so `PackedCommits` (`repo/log/read_ahead.rs`) takes
+the IDs of each pack's leading run of commits from the pack index and reads
+their headers on the decode threads before the scan starts; the scan then
+finds a row by table position, as it does with a commit-graph, and reads only
+what the table lacks (loose objects, small packs, a commit whose parent is
+outside the table). The order does not change.
+
+Where a pack's commits end is found from a sample of 2,048 index entries,
+looked at from the front of the pack. A pack that does not start with a run of
+commits, as one written by `git fast-import` does not, is left to the scan, as
+is any pack or run under 8,192 objects. Every commit in the run is read, also
+those the tips do not reach.
+
+Release build, first page after opening (which is where the scan runs):
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| git.git, 79,849 commits | 315–342 ms | 62–68 ms |
+| bun, 17,581 of 72,882 packed commits reached | 86–90 ms | 63–67 ms |
+| Chromium with its commit-graph ignored, 1,792,921 commits | 7.3–9.3 s | 1.48 s |
+| Generated history from `git fast-import`, 102,001 commits | 218–237 ms | 210–218 ms |
+
+Through the store, on a clone that borrows git.git's objects: first page 280 →
+60 ms, index in state 355 → 140 ms.

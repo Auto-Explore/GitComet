@@ -1,6 +1,7 @@
 //! Date-order topology for repositories without a commit-graph. Read each
 //! reachable header once, then sort compact row numbers instead of repeatedly
 //! decoding objects during the explore, in-degree and output walks.
+use super::read_ahead::PackedCommits;
 use super::*;
 use gitcomet_core::history_perf::{Work, record};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -378,7 +379,18 @@ impl Topology {
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        let mut rows = Rows::new(graph.as_ref());
+        // Without a graph, the packs' commits are read on several threads
+        // before the scan below asks for them one at a time.
+        let packed = match graph {
+            Some(_) => None,
+            None => PackedCommits::read(repo, cancelled),
+        };
+        let table = match (&graph, &packed) {
+            (Some(graph), _) => Table::Graph(graph),
+            (None, Some(packed)) => Table::Packed(packed),
+            (None, None) => Table::None,
+        };
+        let mut rows = Rows::new(table);
         let mut tip_rows = Vec::new();
         for &tip in tips {
             let known = rows.len();
@@ -396,17 +408,32 @@ impl Topology {
         while row < rows.len() {
             check_cancelled(cancelled())?;
             let mut time = 0;
-            if let (Some(graph), Some(position)) = (rows.graph, rows.position(row)) {
-                // The graph's own tables: no object to find or inflate.
-                let commit = graph.commit_at(position);
-                time = commit.committer_timestamp() as i64;
-                for parent in commit.iter_parents() {
-                    let parent = parent.map_err(|_| {
-                        gix::Error::from(gix::error::corruption("Commit-graph parent edge"))
-                    })?;
-                    parents.push(rows.child_of_position(parent)?);
+            // A table holds the header: no object to find or inflate.
+            let held = match (table, rows.position(row)) {
+                (Table::Graph(graph), Some(position)) => {
+                    let commit = graph.commit_at(gix::commitgraph::Position(position));
+                    time = commit.committer_timestamp() as i64;
+                    for parent in commit.iter_parents() {
+                        let parent = parent.map_err(|_| {
+                            gix::Error::from(gix::error::corruption("Commit-graph parent edge"))
+                        })?;
+                        parents.push(rows.child_of_position(parent.0)?);
+                    }
+                    true
                 }
-            } else {
+                (Table::Packed(packed), Some(position)) => match packed.commit(position) {
+                    Some((at, held)) => {
+                        time = at;
+                        for parent in held {
+                            parents.push(rows.child_of_position(parent)?);
+                        }
+                        true
+                    }
+                    None => false,
+                },
+                _ => false,
+            };
+            if !held {
                 let id = gix::ObjectId::from_bytes_or_panic(
                     &rows.ids[row * hash_len..(row + 1) * hash_len],
                 );
@@ -431,9 +458,10 @@ impl Topology {
         let Rows {
             ids, mut degrees, ..
         } = rows;
-        // The lookup tables went with `rows`. Release the object store too
-        // before sorting; neither belongs in a parked page cursor or a cached
-        // topology snapshot.
+        // The lookup tables went with `rows`. Release the read-ahead and the
+        // object store too before sorting; none belongs in a parked page
+        // cursor or a cached topology snapshot.
+        drop(packed);
         drop(objects);
         drop(buffer);
 
@@ -473,25 +501,60 @@ impl Topology {
     }
 }
 
+/// Commit headers held in a table and addressed by their position in it,
+/// which makes finding a commit's row an array read.
+#[derive(Clone, Copy)]
+enum Table<'a> {
+    None,
+    Graph(&'a gix::commitgraph::Graph),
+    Packed(&'a PackedCommits),
+}
+
+impl<'a> Table<'a> {
+    fn len(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Graph(graph) => graph.num_commits() as usize,
+            Self::Packed(packed) => packed.len(),
+        }
+    }
+
+    fn lookup(self, id: &gix::oid) -> Option<u32> {
+        match self {
+            Self::None => None,
+            Self::Graph(graph) => graph.lookup(id).map(|position| position.0),
+            Self::Packed(packed) => packed.lookup(id),
+        }
+    }
+
+    fn id_at(self, position: u32) -> &'a gix::oid {
+        match self {
+            Self::None => unreachable!("no table gave a position"),
+            Self::Graph(graph) => graph.id_at(gix::commitgraph::Position(position)),
+            Self::Packed(packed) => packed.id_at(position),
+        }
+    }
+}
+
 /// Row numbers for the commits a scan meets, in the order it meets them: by
-/// commit-graph position where the graph holds the commit, by ID otherwise.
+/// table position where a table holds the commit, by ID otherwise.
 struct Rows<'a> {
-    graph: Option<&'a gix::commitgraph::Graph>,
-    /// Indexed by commit-graph position; `u32::MAX` until the commit is met.
+    table: Table<'a>,
+    /// Indexed by table position; `u32::MAX` until the commit is met.
     by_position: Vec<u32>,
     by_id: FxHashMap<gix::ObjectId, u32>,
     ids: Vec<u8>,
-    /// Each row's commit-graph position, or `u32::MAX` outside the graph.
+    /// Each row's table position, or `u32::MAX` outside the table.
     positions: Vec<u32>,
     /// How many rows met so far have the row as a parent.
     degrees: Vec<u32>,
 }
 
 impl<'a> Rows<'a> {
-    fn new(graph: Option<&'a gix::commitgraph::Graph>) -> Self {
+    fn new(table: Table<'a>) -> Self {
         Self {
-            graph,
-            by_position: vec![u32::MAX; graph.map_or(0, |graph| graph.num_commits() as usize)],
+            table,
+            by_position: vec![u32::MAX; table.len()],
             by_id: FxHashMap::default(),
             ids: Vec::new(),
             positions: Vec::new(),
@@ -503,10 +566,8 @@ impl<'a> Rows<'a> {
         self.degrees.len()
     }
 
-    fn position(&self, row: usize) -> Option<gix::commitgraph::Position> {
-        Some(self.positions[row])
-            .filter(|&position| position != u32::MAX)
-            .map(gix::commitgraph::Position)
+    fn position(&self, row: usize) -> Option<u32> {
+        Some(self.positions[row]).filter(|&position| position != u32::MAX)
     }
 
     fn push(&mut self, id: &gix::oid, position: u32) -> gix::Result<u32> {
@@ -517,19 +578,18 @@ impl<'a> Rows<'a> {
         Ok(row)
     }
 
-    fn of_position(&mut self, position: gix::commitgraph::Position) -> gix::Result<u32> {
-        let known = self.by_position[position.0 as usize];
+    fn of_position(&mut self, position: u32) -> gix::Result<u32> {
+        let known = self.by_position[position as usize];
         if known != u32::MAX {
             return Ok(known);
         }
-        let graph = self.graph.expect("a position comes from the graph");
-        let row = self.push(graph.id_at(position), position.0)?;
-        self.by_position[position.0 as usize] = row;
+        let row = self.push(self.table.id_at(position), position)?;
+        self.by_position[position as usize] = row;
         Ok(row)
     }
 
     fn of_id(&mut self, id: gix::ObjectId) -> gix::Result<u32> {
-        if let Some(position) = self.graph.and_then(|graph| graph.lookup(id)) {
+        if let Some(position) = self.table.lookup(&id) {
             return self.of_position(position);
         }
         if let Some(&row) = self.by_id.get(&id) {
@@ -546,8 +606,8 @@ impl<'a> Rows<'a> {
         Ok(parent)
     }
 
-    /// The row of a parent named by commit-graph position, counted as one.
-    fn child_of_position(&mut self, parent: gix::commitgraph::Position) -> gix::Result<u32> {
+    /// The row of a parent named by table position, counted as one.
+    fn child_of_position(&mut self, parent: u32) -> gix::Result<u32> {
         let parent = self.of_position(parent)?;
         self.child_of(parent)
     }

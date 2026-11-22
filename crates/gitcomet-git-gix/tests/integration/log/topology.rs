@@ -211,6 +211,171 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
     }
 }
 
+/// A pack written by Git starts with its commits, so their headers can be
+/// read on several threads before the scan asks for them one by one.
+#[test]
+fn packed_commit_headers_are_read_ahead_and_give_the_same_order() {
+    use std::io::Write as _;
+    const COMMITS: usize = 9_000;
+    for format in ["sha1", "sha256"] {
+        let dir = tempfile::tempdir().unwrap();
+        run_git(
+            dir.path(),
+            &["init", "-q", &format!("--object-format={format}")],
+        );
+        let mut stream = String::new();
+        for row in 0..COMMITS {
+            let mark = row + 1;
+            let time = 1_600_000_000 + (row * 17 % 11); // ties and dates before parents
+            let contents = format!("{row}\n");
+            stream.push_str(&format!(
+                "commit refs/heads/b{}\nmark :{mark}\ncommitter You <you@example.com> {time} +0000\ndata 4\nnode\n",
+                row % 13,
+            ));
+            if row % 371 != 0 {
+                stream.push_str(&format!("from :{row}\n"));
+                if row > 2 && row % 3 == 0 {
+                    stream.push_str(&format!("merge :{}\n", 1 + row / 2));
+                }
+                if row > 4 && row % 5 == 0 {
+                    stream.push_str("merge :1\n");
+                }
+            }
+            stream.push_str(&format!(
+                "M 100644 inline file-{}.txt\ndata {}\n{contents}\n",
+                row % 7,
+                contents.len(),
+            ));
+        }
+        let mut child = git_cmd(dir.path())
+            .args(["fast-import", "--quiet"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stream.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        run_git(dir.path(), &["symbolic-ref", "HEAD", "refs/heads/b0"]);
+        let commit_on = |branch: &str, parents: &[&str], time: i64| {
+            let mut args: Vec<String> = [
+                "-c",
+                "user.name=You",
+                "-c",
+                "user.email=you@example.com",
+                "commit-tree",
+                "HEAD^{tree}",
+            ]
+            .map(str::to_owned)
+            .into();
+            for parent in parents {
+                args.extend(["-p".to_owned(), (*parent).to_owned()]);
+            }
+            args.extend(["-m".to_owned(), "later".to_owned()]);
+            let output = git_cmd(dir.path())
+                .args(&args)
+                .env("GIT_COMMITTER_DATE", format!("{time} +0000"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let id = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+            run_git(
+                dir.path(),
+                &["update-ref", &format!("refs/heads/{branch}"), &id],
+            );
+            id
+        };
+        let packs = || -> Vec<std::path::PathBuf> {
+            std::fs::read_dir(dir.path().join(".git/objects/pack"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "pack")
+                })
+                .collect()
+        };
+        // One commit is kept in a pack of its own, out of the big pack that
+        // holds its child: a header naming it cannot be read ahead.
+        let imported = packs();
+        let kept = commit_on("b6", &["refs/heads/b6"], 1_600_000_004);
+        run_git(dir.path(), &["repack", "-dq"]);
+        for pack in packs() {
+            if !imported.contains(&pack) {
+                std::fs::write(pack.with_extension("keep"), "").unwrap();
+            }
+        }
+        commit_on("b6", &[&kept, "refs/heads/b7"], 1_600_000_002);
+        // Commits first, then trees and blobs: the layout of a clone. Commits
+        // no branch reaches are left out of the pack.
+        run_git(dir.path(), &["repack", "-adq"]);
+        let packed = git_stdout(dir.path(), &["rev-list", "--count", "--all"])
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+            - 1;
+        assert!(packed > 8_192, "{packed}");
+
+        // Commits outside that pack are the scan's own to read: two in a
+        // pack too small to be worth threads, three loose.
+        let first = commit_on("b1", &["refs/heads/b1"], 1_600_000_003);
+        commit_on("b2", &["refs/heads/b2", &first], 1_600_000_003);
+        run_git(dir.path(), &["repack", "-dq"]);
+        let third = commit_on("b3", &["refs/heads/b3", "refs/heads/b4"], 1_600_000_001);
+        let fourth = commit_on("b3", &[&third], 1_600_000_020);
+        commit_on("b5", &["refs/heads/b5", &fourth, &first], 1_600_000_000);
+
+        let repo = gix::open(dir.path()).unwrap();
+        let mut tips: Vec<_> = git_stdout(dir.path(), &["for-each-ref", "--format=%(objectname)"])
+            .lines()
+            .map(|id| gix::ObjectId::from_hex(id.as_bytes()).unwrap())
+            .collect();
+        tips.sort_unstable();
+        let expected: Vec<_> = gix::traverse::commit::topo::Builder::new(&repo.objects)
+            .with_tips(tips)
+            .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
+            .build()
+            .unwrap()
+            .map(|info| info.unwrap())
+            .collect();
+        let repo = GixBackend.open(dir.path()).unwrap();
+        let _capture = capture();
+        let cancel = CancellationToken::new();
+        let index = repo
+            .build_history_index(
+                &HistoryMode::AllBranches.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap()
+            .unwrap();
+        // The scan reads the kept commit, its child and the five later ones.
+        assert_eq!(count(Work::LogHeaderReadAhead), packed - 1, "{format}");
+        assert_eq!(count(Work::LogWalkObjectRead), 7, "{format}");
+        assert_eq!(index.len(), expected.len());
+        for (row, info) in expected.iter().enumerate() {
+            assert_eq!(
+                index.id_bytes(row),
+                Some(info.id.as_bytes()),
+                "{format} row={row}"
+            );
+            assert_eq!(index.parents(row).len(), info.parent_ids.len());
+            for (parent, id) in info.parent_ids.iter().enumerate() {
+                assert_eq!(index.parent_id_bytes(row, parent), Some(id.as_bytes()));
+            }
+        }
+    }
+}
+
 #[test]
 fn indexed_history_uses_existing_commit_graph_without_eager_object_scan() {
     let dir = tempfile::tempdir().unwrap();

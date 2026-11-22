@@ -32,6 +32,7 @@ mod commit_stats;
 mod decode;
 mod extend;
 mod index;
+mod read_ahead;
 mod reflog;
 mod repo_impl;
 mod snapshot;

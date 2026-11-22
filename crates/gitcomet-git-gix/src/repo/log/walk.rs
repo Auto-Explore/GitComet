@@ -620,6 +620,13 @@ impl DecodeThreadBudget {
     }
 }
 
+impl DecodeThreadBudget {
+    /// Threads the claimant may start beside its own.
+    pub(crate) fn helpers(&self) -> usize {
+        self.0
+    }
+}
+
 impl Drop for DecodeThreadBudget {
     fn drop(&mut self) {
         DECODE_THREADS_IN_USE.fetch_sub(self.0, std::sync::atomic::Ordering::Relaxed);

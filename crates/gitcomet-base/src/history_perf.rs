@@ -22,6 +22,8 @@ pub enum Work {
     PickerModelBuild,
     PickerFilterItem,
     LogWalkObjectRead,
+    /// A commit header read ahead of the scan, from a pack's run of commits.
+    LogHeaderReadAhead,
     LogTopologyBuild,
     /// A topology made from the cached one and the commits added on top.
     LogTopologyExtend,
@@ -32,7 +34,7 @@ pub enum Work {
 }
 
 impl Work {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -49,6 +51,7 @@ impl Work {
         Self::PickerModelBuild,
         Self::PickerFilterItem,
         Self::LogWalkObjectRead,
+        Self::LogHeaderReadAhead,
         Self::LogTopologyBuild,
         Self::LogTopologyExtend,
         Self::HistoryIndexBuild,
@@ -74,6 +77,7 @@ impl Work {
             Self::PickerModelBuild => "picker_model_build",
             Self::PickerFilterItem => "picker_filter_item",
             Self::LogWalkObjectRead => "log_walk_object_read",
+            Self::LogHeaderReadAhead => "log_header_read_ahead",
             Self::LogTopologyBuild => "log_topology_build",
             Self::LogTopologyExtend => "log_topology_extend",
             Self::HistoryIndexBuild => "history_index_build",
