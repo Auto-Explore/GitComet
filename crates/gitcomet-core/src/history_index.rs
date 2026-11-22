@@ -534,6 +534,135 @@ impl HistoryIndexBuilder {
         self.index.probable_stashes.shrink_to_fit();
         Ok(Arc::new(self.index))
     }
+
+    /// The index of the rows pushed so far followed by every row of `older`:
+    /// what one builder given all of them would finish. `older`'s tables are
+    /// copied and shifted rather than sorted and resolved again, so this costs
+    /// a pass over them instead of a rebuild.
+    pub fn finish_before(
+        mut self,
+        older: &HistoryIndex,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryIndexHandle> {
+        cancellation.check_cancelled()?;
+        let hash_len = self.index.hash_len;
+        if older.hash_len != hash_len {
+            return Err(invalid_index("mismatched object ID length"));
+        }
+        let added = self.len();
+        let added_edges = self.parent_ids.len() / hash_len;
+        let (Some(row_shift), Some(edge_shift)) = (
+            u32::try_from(added).ok().filter(|added| {
+                added
+                    .checked_add(older.len() as u32)
+                    .is_some_and(|rows| rows < MISSING_PARENT)
+            }),
+            u32::try_from(added_edges)
+                .ok()
+                .filter(|edges| edges.checked_add(older.parents.len() as u32).is_some()),
+        ) else {
+            return Err(invalid_index("invalid or oversized history"));
+        };
+
+        let added_ids = std::mem::take(&mut self.index.ids);
+        let added_id = |row: u32| &added_ids[row as usize * hash_len..][..hash_len];
+        let mut added_sorted: Vec<u32> = (0..row_shift).collect();
+        added_sorted.sort_unstable_by(|&a, &b| added_id(a).cmp(added_id(b)));
+        let find_added = |id: &[u8]| {
+            added_sorted
+                .binary_search_by(|&row| added_id(row).cmp(id))
+                .ok()
+                .map(|at| added_sorted[at])
+        };
+
+        // By ID: the added rows merged into the older order.
+        let mut sorted_rows = Vec::with_capacity(added + older.len());
+        let mut pending = added_sorted.iter().copied().peekable();
+        for &row in &older.sorted_rows {
+            let id = older.id_bytes(row as usize).expect("indexed row");
+            while let Some(&next) = pending.peek() {
+                match added_id(next).cmp(id) {
+                    std::cmp::Ordering::Less => sorted_rows.push(pending.next().expect("peeked")),
+                    std::cmp::Ordering::Equal => {
+                        return Err(invalid_index("a row is added twice"));
+                    }
+                    std::cmp::Ordering::Greater => break,
+                }
+            }
+            sorted_rows.push(row + row_shift);
+        }
+        sorted_rows.extend(pending);
+        cancellation.check_cancelled()?;
+
+        let mut parents = Vec::with_capacity(added_edges + older.parents.len());
+        let mut external_edges = Vec::new();
+        let mut external_ids = Vec::new();
+        for (edge, parent) in self.parent_ids.chunks_exact(hash_len).enumerate() {
+            let row = find_added(parent).or_else(|| {
+                older
+                    .position_bytes(parent)
+                    .map(|row| row as u32 + row_shift)
+            });
+            if row.is_none() {
+                external_edges.push(edge as u32);
+                external_ids.extend_from_slice(parent);
+            }
+            parents.push(row.unwrap_or(MISSING_PARENT));
+        }
+        // An older row's parent outside its index may be one of the added rows.
+        let mut older_external = older.external_ids.chunks_exact(hash_len);
+        for (edge, &parent) in older.parents.iter().enumerate() {
+            if parent != MISSING_PARENT {
+                parents.push(parent + row_shift);
+                continue;
+            }
+            let id = older_external.next().expect("an external edge has its ID");
+            let row = find_added(id);
+            if row.is_none() {
+                external_edges.push(edge as u32 + edge_shift);
+                external_ids.extend_from_slice(id);
+            }
+            parents.push(row.unwrap_or(MISSING_PARENT));
+        }
+        cancellation.check_cancelled()?;
+
+        let mut ids = added_ids;
+        ids.reserve_exact(older.ids.len());
+        ids.extend_from_slice(&older.ids);
+        let mut parent_offsets = std::mem::take(&mut self.index.parent_offsets);
+        parent_offsets.reserve_exact(older.len());
+        parent_offsets.extend(older.parent_offsets[1..].iter().map(|end| end + edge_shift));
+        let mut probable_stashes = std::mem::take(&mut self.index.probable_stashes);
+        probable_stashes.reserve_exact(older.probable_stashes.len());
+        probable_stashes.extend(older.probable_stashes.iter().map(|row| row + row_shift));
+        let fanout = if sorted_rows.len() >= 65_536 {
+            let mut fanout = vec![0u32; 65_537];
+            for id in ids.chunks_exact(hash_len) {
+                fanout[u16::from_be_bytes([id[0], id[1]]) as usize + 1] += 1;
+            }
+            for prefix in 1..fanout.len() {
+                fanout[prefix] += fanout[prefix - 1];
+            }
+            fanout
+        } else {
+            Vec::new()
+        };
+        external_edges.shrink_to_fit();
+        external_ids.shrink_to_fit();
+        Ok(Arc::new(HistoryIndex {
+            snapshot: self.index.snapshot,
+            mode: self.index.mode,
+            hash_len,
+            ids,
+            sorted_rows,
+            parent_offsets,
+            parents,
+            external_edges,
+            external_ids,
+            fanout,
+            probable_stashes,
+        }))
+    }
 }
 
 fn invalid_index(message: &str) -> Error {
@@ -1151,5 +1280,98 @@ mod lookup_regressions {
         let index = builder.finish(&CancellationToken::new()).unwrap();
         assert_eq!(index.id_bytes(0), Some([4; 20].as_slice()));
         assert!(index.parents(0).is_empty());
+    }
+
+    /// A row's ID, its parents' IDs and whether it is a stash candidate.
+    type Row = (Vec<u8>, Vec<Vec<u8>>, bool);
+
+    /// Rows for a random history: each row's parents are later rows, a row
+    /// outside the table, or (rarely) an earlier row.
+    fn random_rows(rows: usize, hash_len: usize, seed: u64) -> Vec<Row> {
+        let mut state = seed;
+        let mut next = move || {
+            // SplitMix64.
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let id = |row: usize| -> Vec<u8> {
+            // Spread, but with many shared two-byte prefixes.
+            let mixed = (row as u64 ^ seed).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut id = vec![0u8; hash_len];
+            id[..8].copy_from_slice(&mixed.to_be_bytes());
+            id[1] &= 0x03;
+            id[8..16].copy_from_slice(&(row as u64).to_be_bytes());
+            id
+        };
+        (0..rows)
+            .map(|row| {
+                let parents = (0..next() % 3)
+                    .map(|_| match next() % 16 {
+                        0 => vec![0xEE; hash_len],
+                        1 if row > 0 => id(next() as usize % row),
+                        _ if row + 1 < rows => id(row + 1 + next() as usize % (rows - row - 1)),
+                        _ => vec![0xDD; hash_len],
+                    })
+                    .collect();
+                (id(row), parents, next() % 9 == 0)
+            })
+            .collect()
+    }
+
+    fn built(rows: &[Row], hash_len: usize) -> HistoryIndexBuilder {
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("fixture".into()),
+            HistoryMode::FullReachable,
+            hash_len,
+        )
+        .unwrap();
+        for (id, parents, stash) in rows {
+            builder
+                .push(id, parents.iter().map(Vec::as_slice), *stash)
+                .unwrap();
+        }
+        builder
+    }
+
+    #[test]
+    fn rows_added_before_an_index_equal_one_build_of_them_all() {
+        let cancel = CancellationToken::new();
+        // Below, across and above the fanout threshold, and both ID lengths.
+        for (rows, added, hash_len) in [
+            (40, 0, 20),
+            (40, 1, 20),
+            (40, 40, 32),
+            (900, 37, 20),
+            (65_600, 100, 20),
+            (66_000, 600, 32),
+            (70_000, 65_990, 20),
+        ] {
+            let all = random_rows(rows, hash_len, rows as u64 * 31 + added as u64);
+            let whole = built(&all, hash_len).finish(&cancel).unwrap();
+            let older = built(&all[added..], hash_len).finish(&cancel).unwrap();
+            let grown = built(&all[..added], hash_len)
+                .finish_before(&older, &cancel)
+                .unwrap();
+            assert!(
+                grown == whole,
+                "rows={rows} added={added} hash_len={hash_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn rows_added_before_an_index_must_be_new_and_of_its_id_length() {
+        let cancel = CancellationToken::new();
+        let all = random_rows(8, 20, 7);
+        let older = built(&all[2..], 20).finish(&cancel).unwrap();
+        assert!(
+            built(&all[2..3], 20)
+                .finish_before(&older, &cancel)
+                .is_err()
+        );
+        assert!(built(&[], 32).finish_before(&older, &cancel).is_err());
     }
 }
