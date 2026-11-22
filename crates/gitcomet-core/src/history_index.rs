@@ -153,6 +153,106 @@ impl HistoryIndex {
         self.id_bytes(row)
             .is_some_and(|bytes| crate::hex::matches(bytes, id))
     }
+    /// Fills the rows-by-ID table and its fanout, which every lookup by ID
+    /// uses. Returns the sorted ID prefixes of a large index for the caller
+    /// that has many lookups to make right away.
+    fn sort_rows(&mut self) -> Option<Vec<(u64, u32)>> {
+        self.sorted_rows = (0..self.len() as u32).collect();
+        let hash_len = self.hash_len;
+        let ids = &self.ids;
+        if self.len() >= 65_536 {
+            // Cache prefixes contiguously: comparisons usually avoid random reads
+            // into the much larger ID table. Full IDs resolve prefix collisions.
+            let mut keyed: Vec<_> = self
+                .sorted_rows
+                .iter()
+                .map(|&row| {
+                    let start = row as usize * hash_len;
+                    (
+                        u64::from_be_bytes(ids[start..start + 8].try_into().unwrap()),
+                        row,
+                    )
+                })
+                .collect();
+            keyed.sort_unstable_by(|a, b| {
+                a.0.cmp(&b.0).then_with(|| {
+                    let a = a.1 as usize * hash_len;
+                    let b = b.1 as usize * hash_len;
+                    ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
+                })
+            });
+            for (row, (_, rank)) in self.sorted_rows.iter_mut().zip(keyed.iter()) {
+                *row = *rank;
+            }
+            self.fanout = vec![0; 65_537];
+            for (prefix, _) in &keyed {
+                self.fanout[(prefix >> 48) as usize + 1] += 1;
+            }
+            for prefix in 1..self.fanout.len() {
+                self.fanout[prefix] += self.fanout[prefix - 1];
+            }
+            Some(keyed)
+        } else {
+            self.sorted_rows.sort_unstable_by(|&a, &b| {
+                let a = a as usize * hash_len;
+                let b = b as usize * hash_len;
+                ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
+            });
+            None
+        }
+    }
+
+    /// The index of rows whose parents are already known as rows, which is
+    /// what a builder finishes when given the same rows with their parents'
+    /// IDs, without its lookup of every parent. `ids` holds one ID per row,
+    /// `parents[parent_offsets[row]..parent_offsets[row + 1]]` a row's
+    /// parents, each a row of this index, and `probable_stashes` rises.
+    pub fn from_rows(
+        snapshot: HistorySnapshot,
+        mode: HistoryMode,
+        hash_len: usize,
+        ids: Vec<u8>,
+        parent_offsets: Vec<u32>,
+        parents: Vec<u32>,
+        probable_stashes: Vec<u32>,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryIndexHandle> {
+        cancellation.check_cancelled()?;
+        let rows = ids.len() / hash_len.max(1);
+        let well_formed = matches!(hash_len, 20 | 32)
+            && ids.len() == rows * hash_len
+            && rows < MISSING_PARENT as usize
+            && parent_offsets.len() == rows + 1
+            && parent_offsets.first() == Some(&0)
+            && parent_offsets.last().copied() == u32::try_from(parents.len()).ok()
+            && parent_offsets.is_sorted()
+            && parents.iter().all(|&parent| (parent as usize) < rows)
+            && probable_stashes.is_sorted_by(|a, b| a < b)
+            && probable_stashes
+                .last()
+                .is_none_or(|&row| (row as usize) < rows);
+        if !well_formed {
+            return Err(invalid_index("inconsistent history rows"));
+        }
+        let mut index = Self {
+            snapshot,
+            mode,
+            hash_len,
+            ids,
+            sorted_rows: Vec::new(),
+            parent_offsets,
+            parents,
+            external_edges: Vec::new(),
+            external_ids: Vec::new(),
+            fanout: Vec::new(),
+            probable_stashes,
+        };
+        cancellation.check_cancelled()?;
+        index.sort_rows();
+        cancellation.check_cancelled()?;
+        Ok(Arc::new(index))
+    }
+
     pub fn is_probable_stash(&self, row: usize) -> bool {
         u32::try_from(row)
             .ok()
@@ -458,50 +558,8 @@ impl HistoryIndexBuilder {
 
     pub fn finish(mut self, cancellation: &CancellationToken) -> Result<HistoryIndexHandle> {
         cancellation.check_cancelled()?;
-        self.index.sorted_rows = (0..self.index.len() as u32).collect();
         let hash_len = self.index.hash_len;
-        let ids = &self.index.ids;
-        let keyed = if self.index.len() >= 65_536 {
-            // Cache prefixes contiguously: comparisons usually avoid random reads
-            // into the much larger ID table. Full IDs resolve prefix collisions.
-            let mut keyed: Vec<_> = self
-                .index
-                .sorted_rows
-                .iter()
-                .map(|&row| {
-                    let start = row as usize * hash_len;
-                    (
-                        u64::from_be_bytes(ids[start..start + 8].try_into().unwrap()),
-                        row,
-                    )
-                })
-                .collect();
-            keyed.sort_unstable_by(|a, b| {
-                a.0.cmp(&b.0).then_with(|| {
-                    let a = a.1 as usize * hash_len;
-                    let b = b.1 as usize * hash_len;
-                    ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
-                })
-            });
-            for (row, (_, rank)) in self.index.sorted_rows.iter_mut().zip(keyed.iter()) {
-                *row = *rank;
-            }
-            self.index.fanout = vec![0; 65_537];
-            for (prefix, _) in &keyed {
-                self.index.fanout[(prefix >> 48) as usize + 1] += 1;
-            }
-            for prefix in 1..self.index.fanout.len() {
-                self.index.fanout[prefix] += self.index.fanout[prefix - 1];
-            }
-            Some(keyed)
-        } else {
-            self.index.sorted_rows.sort_unstable_by(|&a, &b| {
-                let a = a as usize * hash_len;
-                let b = b as usize * hash_len;
-                ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
-            });
-            None
-        };
+        let keyed = self.index.sort_rows();
         cancellation.check_cancelled()?;
         self.index.parents.reserve(self.parent_ids.len() / hash_len);
         for (ix, parent) in self.parent_ids.chunks_exact(hash_len).enumerate() {
@@ -1220,6 +1278,106 @@ mod lookup_regressions {
             started.elapsed().as_secs_f64(),
             index.estimated_bytes() as f64 / 1048576.0
         );
+    }
+
+    /// A history of `rows` commits with up to three parents each, every
+    /// parent a later row, as the tables `from_rows` takes.
+    fn scattered_rows(rows: u32, seed: u64) -> (Vec<u8>, Vec<u32>, Vec<u32>, Vec<u32>) {
+        let mut state = seed;
+        let mut below = |limit: u32| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 33) % u64::from(limit)) as u32
+        };
+        let (mut ids, mut offsets, mut parents, mut stashes) =
+            (Vec::new(), vec![0], Vec::new(), Vec::new());
+        for row in 0..rows {
+            // IDs in no order, each its own.
+            let mut id = [0u8; 20];
+            id[..4].copy_from_slice(&row.wrapping_mul(2_654_435_761).to_be_bytes());
+            id[4..8].copy_from_slice(&row.to_be_bytes());
+            ids.extend_from_slice(&id);
+            let later = rows - row - 1;
+            for _ in 0..below(4).min(later) {
+                parents.push(row + 1 + below(later));
+            }
+            offsets.push(parents.len() as u32);
+            if below(50) == 0 {
+                stashes.push(row);
+            }
+        }
+        (ids, offsets, parents, stashes)
+    }
+
+    #[test]
+    fn rows_given_with_their_parents_as_rows_finish_as_the_builder_does() {
+        let cancellation = CancellationToken::new();
+        // Below and above the size at which IDs are sorted by a cached prefix.
+        for rows in [1, 400, 70_000] {
+            let (ids, offsets, parents, stashes) = scattered_rows(rows, u64::from(rows));
+            let mut builder = HistoryIndexBuilder::new(
+                HistorySnapshot("rows".into()),
+                HistoryMode::AllBranches,
+                20,
+            )
+            .unwrap();
+            for row in 0..rows as usize {
+                let parents = parents[offsets[row] as usize..offsets[row + 1] as usize]
+                    .iter()
+                    .map(|&parent| &ids[parent as usize * 20..][..20]);
+                let stash = stashes.binary_search(&(row as u32)).is_ok();
+                builder
+                    .push(&ids[row * 20..][..20], parents, stash)
+                    .unwrap();
+            }
+            let built = builder.finish(&cancellation).unwrap();
+            let given = HistoryIndex::from_rows(
+                HistorySnapshot("rows".into()),
+                HistoryMode::AllBranches,
+                20,
+                ids,
+                offsets,
+                parents,
+                stashes,
+                &cancellation,
+            )
+            .unwrap();
+            assert!(*given == *built, "{rows} rows");
+        }
+    }
+
+    #[test]
+    fn rows_that_do_not_fit_together_are_refused() {
+        let from_rows = |ids: Vec<u8>, offsets: Vec<u32>, parents: Vec<u32>, stashes: Vec<u32>| {
+            HistoryIndex::from_rows(
+                HistorySnapshot("rows".into()),
+                HistoryMode::AllBranches,
+                20,
+                ids,
+                offsets,
+                parents,
+                stashes,
+                &CancellationToken::new(),
+            )
+            .is_ok()
+        };
+        let ids = || [[1u8; 20], [2u8; 20]].concat();
+        assert!(from_rows(ids(), vec![0, 1, 1], vec![1], vec![0]));
+        // A parent outside the index, offsets that end early, run backwards
+        // or miss a row, a stash that is no row, and half an ID.
+        assert!(!from_rows(ids(), vec![0, 1, 1], vec![2], vec![]));
+        assert!(!from_rows(ids(), vec![0, 0, 0], vec![1], vec![]));
+        assert!(!from_rows(ids(), vec![0, 1, 0], vec![1], vec![]));
+        assert!(!from_rows(ids(), vec![0, 1], vec![1], vec![]));
+        assert!(!from_rows(ids(), vec![0, 1, 1], vec![1], vec![2]));
+        assert!(!from_rows(ids(), vec![0, 1, 1], vec![1], vec![1, 0]));
+        assert!(!from_rows(
+            ids()[..30].to_vec(),
+            vec![0, 1],
+            vec![0],
+            vec![]
+        ));
     }
 
     #[test]

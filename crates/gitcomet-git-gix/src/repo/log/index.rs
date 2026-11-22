@@ -1,6 +1,6 @@
 use super::*;
 use gitcomet_core::history_index::{
-    HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
+    HistoryIndex, HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
 };
 use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 use std::ops::Range;
@@ -90,8 +90,7 @@ impl GixRepo {
         let repo = store.to_thread_local();
         let mode = query.mode;
         let author = &query.author;
-        let mut builder =
-            HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
+        let hash_len = repo.object_hash().len_in_bytes();
         let mut walk = new_whole_history_walk(
             store,
             &query.tips,
@@ -100,6 +99,45 @@ impl GixRepo {
             cancellation,
             (topology_cache, query.generation),
         )?;
+        // A whole history in date order is held as rows already.
+        if author.is_none()
+            && matches!(mode, HistoryMode::FullReachable | HistoryMode::AllBranches)
+            && let super::LogPagedWalk::CachedDateOrder(topology) = &walk.walk
+        {
+            let tables = topology
+                .index_tables(&|| cancellation.is_cancelled())
+                .map_err(|error| crate::repo::object_store::gix_error("gix history index", error))
+                .and_then(|tables| {
+                    cancellation.check_cancelled()?;
+                    Ok(tables)
+                })?;
+            drop(walk);
+            let rows = (tables.ids.len() / hash_len) as u64;
+            on_progress(HistoryIndexProgress {
+                scanned: rows,
+                matched: rows,
+            });
+            let mut decode_buf = Vec::new();
+            let mut stashes = Vec::new();
+            for row in tables.stash_shaped {
+                cancellation.check_cancelled()?;
+                let id = &tables.ids[row as usize * hash_len..][..hash_len];
+                if is_stash_message(&repo, gix::oid::from_bytes_unchecked(id), &mut decode_buf)? {
+                    stashes.push(row);
+                }
+            }
+            return HistoryIndex::from_rows(
+                snapshot,
+                mode,
+                hash_len,
+                tables.ids,
+                tables.parent_offsets,
+                tables.parents,
+                stashes,
+                cancellation,
+            );
+        }
+        let mut builder = HistoryIndexBuilder::new(snapshot, mode, hash_len)?;
         let mut decode_buf = Vec::new();
         let mut shapes = StashShapes::default();
         let mut scanned = 0u64;
@@ -291,17 +329,19 @@ pub(super) fn retain_probable_stashes(
         if messages_checked {
             return Ok(true);
         }
-        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
-        let commit = repo
-            .objects
-            .find_commit(id, &mut decode_buf)
-            .map_err(|error| {
-                Error::new(ErrorKind::Backend(format!(
-                    "gix history index object: {error}"
-                )))
-            })?;
-        Ok(has_stash_summary(commit.message))
+        is_stash_message(repo, id, &mut decode_buf)
     })
+}
+
+/// Reads a stash candidate's message for the summary Git gives a stash.
+fn is_stash_message(repo: &gix::Repository, id: &gix::oid, buffer: &mut Vec<u8>) -> Result<bool> {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
+    let commit = repo.objects.find_commit(id, buffer).map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix history index object: {error}"
+        )))
+    })?;
+    Ok(has_stash_summary(commit.message))
 }
 
 fn has_stash_summary(message: &[u8]) -> bool {

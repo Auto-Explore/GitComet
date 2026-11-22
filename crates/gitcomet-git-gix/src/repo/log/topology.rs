@@ -227,6 +227,65 @@ impl TopologyWalk {
     }
 }
 
+/// A whole walk as the tables of a history index: see
+/// `HistoryIndex::from_rows`.
+pub(super) struct IndexTables {
+    pub(super) ids: Vec<u8>,
+    pub(super) parent_offsets: Vec<u32>,
+    pub(super) parents: Vec<u32>,
+    /// Rows with the parents of a stash: a second parent whose only parent
+    /// is the first, and a third, if any, without parents.
+    pub(super) stash_shaped: Vec<u32>,
+}
+
+impl TopologyWalk {
+    /// Every commit of the walk in its order, each parent as its place in
+    /// that order. The topology holds parents as rows already, so nothing is
+    /// looked up by ID, which an index built from the walk's IDs has to do
+    /// for every parent.
+    pub(super) fn index_tables(&self, cancelled: &dyn Fn() -> bool) -> gix::Result<IndexTables> {
+        let topology = &*self.topology;
+        let parents_of = |row: u32| {
+            &topology.parents[topology.offsets[row as usize] as usize
+                ..topology.offsets[row as usize + 1] as usize]
+        };
+        let mut place = vec![0u32; topology.order.len()];
+        for (at, &row) in topology.order.iter().enumerate() {
+            place[row as usize] = at as u32;
+        }
+        check_cancelled(cancelled())?;
+        let mut tables = IndexTables {
+            ids: Vec::with_capacity(topology.ids.len()),
+            parent_offsets: Vec::with_capacity(topology.offsets.len()),
+            parents: Vec::with_capacity(topology.parents.len()),
+            stash_shaped: Vec::new(),
+        };
+        tables.parent_offsets.push(0);
+        for (at, &row) in topology.order.iter().enumerate() {
+            if at % 65_536 == 0 {
+                check_cancelled(cancelled())?;
+            }
+            let parents = parents_of(row);
+            let stash_shaped = match *parents {
+                [base, index] => parents_of(index) == [base],
+                [base, index, untracked] => {
+                    parents_of(index) == [base] && parents_of(untracked).is_empty()
+                }
+                _ => false,
+            };
+            if stash_shaped {
+                tables.stash_shaped.push(at as u32);
+            }
+            tables.ids.extend_from_slice(topology.id_bytes(row));
+            tables
+                .parents
+                .extend(parents.iter().map(|&parent| place[parent as usize]));
+            tables.parent_offsets.push(tables.parents.len() as u32);
+        }
+        Ok(tables)
+    }
+}
+
 impl Iterator for TopologyWalk {
     type Item = gix::traverse::commit::Info;
 
