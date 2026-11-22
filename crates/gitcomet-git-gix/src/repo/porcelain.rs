@@ -967,9 +967,7 @@ impl GixRepo {
         if directories.is_empty() {
             return Ok(directories);
         }
-        let index = self.repo().index_or_empty().map_err(|error| {
-            Error::new(ErrorKind::Backend(format!("reading the index: {error}")))
-        })?;
+        let index = super::status::current_index(&self.repo())?;
         let mut replaced = Vec::new();
         for path in directories {
             let key = gix::path::into_bstr(path).map_err(|error| {
