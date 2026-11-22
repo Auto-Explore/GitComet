@@ -4159,11 +4159,13 @@ fn repo_history_focus_round_trips_and_clears() {
         HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
         HistoryFocusSet::from_iter([HistoryFocus::remote_branch("origin", "feature")]),
         HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]),
+        HistoryFocusSet::from_iter([HistoryFocus::tag("v1.0")]),
         // A whole set round-trips, not just its first entry.
         HistoryFocusSet::from_iter([
             HistoryFocus::local_branch("feature"),
             HistoryFocus::local_branch("main"),
             HistoryFocus::remote("origin"),
+            HistoryFocus::tag("v1.0"),
         ]),
     ] {
         persist_repo_history_focus_to_path(&repo, &focus, &session_file)
@@ -4206,6 +4208,7 @@ fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
                 "/tmp/legacy": {"kind": "local_branch", "name": "feature"},
                 // A list, as written now.
                 "/tmp/current": [{"kind": "remote", "name": "origin"}],
+                "/tmp/tagged": [{"kind": "tag", "name": "v1.0"}],
                 // Neither: this entry is dropped, the file is not.
                 "/tmp/garbage": 7,
             },
@@ -4227,6 +4230,10 @@ fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
         Some(&HistoryFocusSet::from_iter([HistoryFocus::remote(
             "origin"
         )]))
+    );
+    assert_eq!(
+        loaded.repo_history_focus.get("/tmp/tagged"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::tag("v1.0")]))
     );
     assert!(!loaded.repo_history_focus.contains_key("/tmp/garbage"));
 

@@ -4,7 +4,7 @@ use gitcomet_state::model::RepoState;
 /// How much of a repository's branch list the history focus keeps in view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HistoryFocusCount {
-    /// Branch refs the focus covers.
+    /// Refs the focus covers.
     pub focused: usize,
     /// Every branch ref that could be focused: local and remote alike.
     pub total: usize,
@@ -35,7 +35,7 @@ fn count(
     let focused = focus
         .iter()
         .map(|target| match target {
-            HistoryFocus::LocalBranch { .. } => 1,
+            HistoryFocus::LocalBranch { .. } | HistoryFocus::Tag { .. } => 1,
             HistoryFocus::RemoteBranch { remote, .. } => {
                 usize::from(!focus.contains(&HistoryFocus::Remote {
                     name: remote.clone(),
