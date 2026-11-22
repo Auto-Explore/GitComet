@@ -2632,6 +2632,11 @@ pub(super) fn tags_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::Tags,
+    ));
     effects
 }
 
