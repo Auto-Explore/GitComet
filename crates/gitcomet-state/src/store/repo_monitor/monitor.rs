@@ -84,6 +84,9 @@ impl Drop for SetupPhase {
 pub(super) struct MonitorConfig {
     pub debounce: Duration,
     pub max_delay: Duration,
+    /// The wait for a lone working-tree change, in place of `debounce`, and
+    /// how long nothing may have changed before one.
+    pub lone_change: (Duration, Duration),
     pub idle_tick: Duration,
     pub recovery_interval: Duration,
     pub setup_passes: usize,
@@ -113,6 +116,7 @@ impl Default for MonitorConfig {
         Self {
             debounce: Duration::from_millis(250),
             max_delay: Duration::from_secs(2),
+            lone_change: (Duration::from_millis(50), Duration::from_secs(1)),
             idle_tick: Duration::from_secs(30),
             recovery_interval: DEGRADED_WATCH_RECHECK_INTERVAL,
             setup_passes: 3,
@@ -701,7 +705,7 @@ pub(super) fn repo_monitor_thread(
     // reported, so a tab left before this point must not count as unchanged.
     change_generation.fetch_add(1, Ordering::SeqCst);
     let mut last_recovery = degraded.then(Instant::now);
-    let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
+    let mut debouncer = DebouncedChange::for_monitor(&config);
     #[cfg(test)]
     let mut drains = Vec::new();
     let mut policy_dirty = false;

@@ -495,6 +495,58 @@ fn debouncer_flushes_on_debounce_or_max_delay() {
     assert!(!d.is_pending());
 }
 
+/// A file saved in an editor is one or two events with nothing before them,
+/// and waiting a quarter second for more only delays the status.
+#[test]
+fn a_lone_worktree_change_after_a_quiet_spell_flushes_early() {
+    let ms = Duration::from_millis;
+    let base = Instant::now();
+    let mut d = DebouncedChange::new(ms(250), ms(2_000)).with_lone_change(ms(50), ms(1_000));
+
+    // A save: two events at once, the first the monitor has seen.
+    assert_eq!(d.push(RepoExternalChange::Worktree, base), None);
+    assert_eq!(d.push(RepoExternalChange::Worktree, base + ms(5)), None);
+    assert_eq!(d.take_if_due(base + ms(54)), None);
+    assert_eq!(
+        d.take_if_due(base + ms(55)),
+        Some(RepoExternalChange::Worktree)
+    );
+
+    // More changes soon after are a tool at work: the usual wait.
+    assert_eq!(d.push(RepoExternalChange::Worktree, base + ms(300)), None);
+    assert_eq!(d.next_timeout(base + ms(300)), Some(ms(250)));
+    assert_eq!(d.take_if_due(base + ms(549)), None);
+    assert!(d.take_if_due(base + ms(550)).is_some());
+
+    // Git writes its own files in steps, so those are never flushed early,
+    // however quiet it was before.
+    let later = base + ms(5_000);
+    assert_eq!(d.push(RepoExternalChange::GitState, later), None);
+    assert_eq!(d.take_if_due(later + ms(249)), None);
+    assert!(d.take_if_due(later + ms(250)).is_some());
+    let later = base + ms(10_000);
+    assert_eq!(d.push(RepoExternalChange::Worktree, later), None);
+    assert_eq!(d.push(RepoExternalChange::Index, later + ms(10)), None);
+    assert_eq!(d.take_if_due(later + ms(259)), None);
+    assert!(d.take_if_due(later + ms(260)).is_some());
+
+    // Events that keep arriving are no lone change either.
+    let later = base + ms(15_000);
+    for step in 0..4 {
+        assert_eq!(
+            d.push(RepoExternalChange::Worktree, later + ms(40 * step)),
+            None
+        );
+    }
+    assert_eq!(d.take_if_due(later + ms(120 + 249)), None);
+    assert!(d.take_if_due(later + ms(120 + 250)).is_some());
+
+    // Without the setting, the first change waits like any other.
+    let mut d = DebouncedChange::new(ms(250), ms(2_000));
+    assert_eq!(d.push(RepoExternalChange::Worktree, base), None);
+    assert_eq!(d.take_if_due(base + ms(249)), None);
+}
+
 #[test]
 fn access_events_do_not_trigger_refresh_loops() {
     let dir = unique_temp_dir("gitcomet-monitor-test");

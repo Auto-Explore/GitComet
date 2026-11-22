@@ -100,6 +100,9 @@ fn drain_waits_for_debounce_and_publishes_before_all_acknowledgements() {
         &root,
         MonitorConfig {
             debounce,
+            // The first change would wait less; what matters here is that a
+            // Drain does not cut the wait short.
+            lone_change: (debounce, Duration::ZERO),
             ..Default::default()
         },
     );
