@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::permalink;
 
 /// One row per remote with a web page, `origin` first, so the user picks which
 /// to open. Digits pick directly; the first row is preselected for Enter.
@@ -9,7 +10,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.remotes.ready())
-        .map(|remotes| crate::view::permalink::remote_web_pages(remotes))
+        .map(|remotes| permalink::remote_web_pages(remotes))
         .unwrap_or_default();
 
     let mut items = vec![

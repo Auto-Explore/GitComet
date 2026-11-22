@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::permalink;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
@@ -383,7 +384,7 @@ fn model_with_header(
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| match &repo.remotes {
-            Loadable::Ready(remotes) => crate::view::permalink::commit_permalink(remotes, &sha),
+            Loadable::Ready(remotes) => permalink::commit_permalink(remotes, &sha),
             _ => None,
         })
     {

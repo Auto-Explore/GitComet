@@ -314,7 +314,6 @@ mod patch_split;
 mod path_prompt;
 mod pending_commit;
 mod perf;
-mod permalink;
 pub(super) mod platform_open;
 mod poller;
 mod pop_out;

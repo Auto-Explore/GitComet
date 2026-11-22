@@ -1,6 +1,7 @@
 use super::explorer_operations::push_group;
 use super::*;
 use gitcomet_core::domain::FileSource;
+use gitcomet_core::permalink;
 
 /// Context menu for a file row in the sidebar file browser. The browsed source
 /// (working directory / commit) is read from state so the menu offers the right
@@ -48,7 +49,7 @@ pub(super) fn model(
             // source, so don't offer the action in that case.
             if is_branch
                 && let Loadable::Ready(remote_branches) = &repo.remote_branches
-                && !crate::view::permalink::branch_exists_on_permalink_remote(
+                && !permalink::branch_exists_on_permalink_remote(
                     remotes,
                     remote_branches,
                     &reference,
@@ -56,7 +57,7 @@ pub(super) fn model(
             {
                 return None;
             }
-            crate::view::permalink::file_permalink(remotes, &reference, &path.display().to_string())
+            permalink::file_permalink(remotes, &reference, &path.display().to_string())
         });
     let ops = super::explorer_operations::ExplorerOps::new(this, repo_id, path, &source);
     let mut items = Vec::new();
