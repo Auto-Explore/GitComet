@@ -583,6 +583,28 @@ fn gitlink_paths_are_dealt_into_queries_worth_a_process_each() {
     assert_eq!(all, paths(152));
 }
 
+/// Each side waits for a word from the other, which only arrives when both
+/// run at once.
+#[test]
+fn the_gitlink_query_and_the_walk_run_at_once() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+    let wait = Duration::from_secs(30);
+    let (to_walk, from_ask) = channel();
+    let (to_ask, from_walk) = channel();
+    let (walked, asked) = super::beside(
+        move || {
+            to_walk.send("asking").unwrap();
+            from_walk.recv_timeout(wait)
+        },
+        move || {
+            to_ask.send("walking").unwrap();
+            from_ask.recv_timeout(wait)
+        },
+    );
+    assert_eq!((walked, asked), (Ok("asking"), Ok("walking")));
+}
+
 /// Git checks each checked-out submodule in turn. Asked in several queries at
 /// once, it must say what it says in one.
 #[test]

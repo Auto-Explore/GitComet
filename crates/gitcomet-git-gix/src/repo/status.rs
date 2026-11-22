@@ -141,12 +141,17 @@ impl GixRepo {
         // This walk retains clean-file stats in memory immediately instead
         // of hashing touched-but-unchanged files again on the second scan.
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(
-            &repo,
-            &self.stat_refreshed_index,
-            &mut unstaged,
-            cancellation,
-        )?;
+        let query = gitlink_query(&repo, may_have_gitlinks, &staged);
+        let (direct, gitlinks) =
+            walk_beside_gitlink_query(&self.spec.workdir, query, cancellation, || {
+                collect_index_worktree_status_direct(
+                    &repo,
+                    &self.stat_refreshed_index,
+                    &mut unstaged,
+                    cancellation,
+                )
+            });
+        let direct = direct?;
         cancellation.check_cancelled()?;
 
         #[cfg(feature = "benchmarks")]
@@ -164,13 +169,11 @@ impl GixRepo {
 
         cancellation.check_cancelled()?;
         finalize_status(
-            &self.spec.workdir,
             &repo,
-            may_have_gitlinks,
+            gitlinks,
             staged,
             unstaged,
             direct.has_conflicted_unstaged,
-            cancellation,
         )
     }
 
@@ -186,12 +189,17 @@ impl GixRepo {
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(
-            &repo,
-            &self.stat_refreshed_index,
-            &mut unstaged,
-            cancellation,
-        )?;
+        let query = gitlink_query(&repo, may_have_gitlinks, &[]);
+        let (direct, gitlinks) =
+            walk_beside_gitlink_query(&self.spec.workdir, query, cancellation, || {
+                collect_index_worktree_status_direct(
+                    &repo,
+                    &self.stat_refreshed_index,
+                    &mut unstaged,
+                    cancellation,
+                )
+            });
+        let direct = direct?;
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
@@ -202,16 +210,8 @@ impl GixRepo {
             cancellation.check_cancelled()?;
         }
 
-        if may_have_gitlinks {
-            supplement_gitlink_status_from_porcelain(
-                &self.spec.workdir,
-                &repo,
-                &mut Vec::new(),
-                &mut unstaged,
-                cancellation,
-            )?;
-            cancellation.check_cancelled()?;
-        }
+        apply_gitlink_outputs(gitlinks, &mut Vec::new(), &mut unstaged)?;
+        cancellation.check_cancelled()?;
 
         sort_and_dedup_status_entries(&mut unstaged);
         Ok(unstaged)
@@ -245,16 +245,14 @@ impl GixRepo {
         let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
         let mut staged = collect_staged_status_from_tree_index(&repo, &head_tree_id)?;
         cancellation.check_cancelled()?;
-        if self.may_have_gitlink_status_supplement(&repo, &index_stamp) {
-            supplement_gitlink_status_from_porcelain(
-                &self.spec.workdir,
-                &repo,
-                &mut staged,
-                &mut Vec::new(),
-                cancellation,
-            )?;
-            cancellation.check_cancelled()?;
-        }
+        let query = gitlink_query(
+            &repo,
+            self.may_have_gitlink_status_supplement(&repo, &index_stamp),
+            &staged,
+        );
+        let gitlinks = run_gitlink_query(&self.spec.workdir, query, cancellation);
+        apply_gitlink_outputs(gitlinks, &mut staged, &mut Vec::new())?;
+        cancellation.check_cancelled()?;
         sort_and_dedup_status_entries(&mut staged);
         remove_conflicted_paths_from_staged(
             &mut staged,
@@ -348,13 +346,11 @@ fn should_supplement_unmerged_conflicts(
 }
 
 fn finalize_status(
-    workdir: &Path,
     repo: &gix::Repository,
-    may_have_gitlinks: bool,
+    gitlinks: GitlinkOutputs,
     mut staged: Vec<FileStatus>,
     mut unstaged: Vec<FileStatus>,
     has_conflicted_unstaged: bool,
-    cancellation: &CancellationToken,
 ) -> Result<RepoStatus> {
     // Some platforms may omit certain unmerged shapes (notably stage-1-only both-deleted
     // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
@@ -367,19 +363,7 @@ fn finalize_status(
         apply_unmerged_conflicts(repo, &mut unstaged)?;
     }
 
-    // Only shell out for gitlink/submodule status when the repo is likely to contain submodules
-    // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
-    // case.
-    if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(
-            workdir,
-            repo,
-            &mut staged,
-            &mut unstaged,
-            cancellation,
-        )?;
-    }
-    cancellation.check_cancelled()?;
+    apply_gitlink_outputs(gitlinks, &mut staged, &mut unstaged)?;
 
     sort_and_dedup_status_entries(&mut staged);
     sort_and_dedup_status_entries(&mut unstaged);
@@ -1478,39 +1462,103 @@ fn gitlink_status_output(
     }
 }
 
-fn supplement_gitlink_status_from_porcelain(
-    workdir: &Path,
+/// What to ask Git about gitlinks. Chosen on the thread that holds the
+/// repository, so that the asking can run beside the worktree walk.
+enum GitlinkQuery {
+    Nothing,
+    Everything,
+    Paths(Vec<Vec<PathBuf>>),
+}
+
+/// Asks nothing unless the repository may have gitlinks: that spares the
+/// common case a `git status` subprocess on every refresh.
+fn gitlink_query(
     repo: &gix::Repository,
-    staged: &mut Vec<FileStatus>,
-    unstaged: &mut Vec<FileStatus>,
-    cancellation: &CancellationToken,
-) -> Result<()> {
-    let outputs = match gitlink_status_paths(repo, staged) {
-        Some(paths) if paths.is_empty() => return Ok(()),
+    may_have_gitlinks: bool,
+    staged: &[FileStatus],
+) -> GitlinkQuery {
+    if !may_have_gitlinks {
+        return GitlinkQuery::Nothing;
+    }
+    match gitlink_status_paths(repo, staged) {
+        Some(paths) if paths.is_empty() => GitlinkQuery::Nothing,
         Some(paths) => {
             let workers = std::thread::available_parallelism().map_or(1, usize::from);
-            let mut queries = gitlink_queries(paths, workers).into_iter();
+            GitlinkQuery::Paths(gitlink_queries(paths, workers))
+        }
+        None => GitlinkQuery::Everything,
+    }
+}
+
+type GitlinkOutputs = Vec<Result<Option<Vec<u8>>>>;
+
+fn run_gitlink_query(
+    workdir: &Path,
+    query: GitlinkQuery,
+    cancellation: &CancellationToken,
+) -> GitlinkOutputs {
+    match query {
+        GitlinkQuery::Nothing => Vec::new(),
+        GitlinkQuery::Everything => vec![gitlink_status_output(workdir, None, cancellation)],
+        GitlinkQuery::Paths(queries) => {
+            let mut queries = queries.into_iter();
             let first = queries.next();
             std::thread::scope(|scope| {
                 let others: Vec<_> = queries
                     .map(|paths| {
-                        scope.spawn(|| gitlink_status_output(workdir, Some(paths), cancellation))
+                        scope.spawn(crate::command_trace::for_helper(|| {
+                            gitlink_status_output(workdir, Some(paths), cancellation)
+                        }))
                     })
                     .collect();
                 let mut outputs = vec![gitlink_status_output(workdir, first, cancellation)];
                 for other in others {
-                    outputs.push(
-                        other
-                            .join()
-                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
-                    );
+                    let (output, commands) = other
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                    commands.adopt();
+                    outputs.push(output);
                 }
                 outputs
             })
         }
-        None => vec![gitlink_status_output(workdir, None, cancellation)],
-    };
+    }
+}
 
+/// Runs `walk` here while Git answers `query` on another thread. Neither
+/// needs anything from the other, and with many checked-out submodules each
+/// takes as long as the other.
+fn walk_beside_gitlink_query<W>(
+    workdir: &Path,
+    query: GitlinkQuery,
+    cancellation: &CancellationToken,
+    walk: impl FnOnce() -> W,
+) -> (W, GitlinkOutputs) {
+    if matches!(query, GitlinkQuery::Nothing) {
+        return (walk(), Vec::new());
+    }
+    beside(|| run_gitlink_query(workdir, query, cancellation), walk)
+}
+
+fn beside<A: Send, W>(ask: impl FnOnce() -> A + Send, walk: impl FnOnce() -> W) -> (W, A) {
+    std::thread::scope(|scope| {
+        let asked = scope.spawn(crate::command_trace::for_helper(ask));
+        let walked = walk();
+        #[cfg(feature = "benchmarks")]
+        let _timing = crate::status_trace::StageTimer::new("gitlink-query-wait");
+        let (asked, commands) = asked
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        commands.adopt();
+        (walked, asked)
+    })
+}
+
+fn apply_gitlink_outputs(
+    outputs: GitlinkOutputs,
+    staged: &mut Vec<FileStatus>,
+    unstaged: &mut Vec<FileStatus>,
+) -> Result<()> {
     for output in outputs {
         let Some(output) = output? else {
             continue;

@@ -38,6 +38,44 @@ pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Vec<CommandTiming>) {
     (value, records)
 }
 
+/// The commands a helper thread ran for a capture on the thread waiting for it.
+pub(crate) struct HelperCommands(
+    #[cfg(any(test, feature = "benchmarks"))] Option<Vec<CommandTiming>>,
+);
+
+/// Wraps work for a helper thread. A capture is per thread, so the commands
+/// the helper runs come back with its result, for the caller to `adopt`.
+pub(crate) fn for_helper<T>(work: impl FnOnce() -> T) -> impl FnOnce() -> (T, HelperCommands) {
+    #[cfg(any(test, feature = "benchmarks"))]
+    let capturing = RECORDS.with(|records| records.borrow().is_some());
+    move || {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            if capturing {
+                let (value, commands) = capture(work);
+                (value, HelperCommands(Some(commands)))
+            } else {
+                (work(), HelperCommands(None))
+            }
+        }
+        #[cfg(not(any(test, feature = "benchmarks")))]
+        (work(), HelperCommands())
+    }
+}
+
+impl HelperCommands {
+    pub(crate) fn adopt(self) {
+        #[cfg(any(test, feature = "benchmarks"))]
+        if let Some(commands) = self.0 {
+            RECORDS.with(|records| {
+                if let Some(records) = records.borrow_mut().as_mut() {
+                    records.extend(commands);
+                }
+            });
+        }
+    }
+}
+
 pub(crate) struct CommandTimer {
     trace: Option<(Instant, u64)>,
     #[cfg(any(test, feature = "benchmarks"))]
