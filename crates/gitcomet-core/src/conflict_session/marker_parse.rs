@@ -118,23 +118,102 @@ impl<'a> LineCursor<'a> {
     }
 }
 
+/// Git's default `conflict-marker-size`, and the shortest marker read back.
+const MIN_MARKER_SIZE: usize = 7;
+
+/// The length of the run of `marker` that starts `line`, when the run is a
+/// conflict marker: Git follows one with a space (and label) or ends the line.
+pub(crate) fn conflict_marker_run(line: &[u8], marker: u8) -> Option<usize> {
+    let run = line.iter().take_while(|&&byte| byte == marker).count();
+    (run > 0 && matches!(line.get(run), None | Some(b' ' | b'\t' | b'\r' | b'\n'))).then_some(run)
+}
+
+/// The marker size of the conflicts in `text`: the longest marker length that
+/// closes a complete block.
+///
+/// Git writes markers of exactly `conflict-marker-size` characters (7 unless
+/// configured). Content can hold marker-like lines of other lengths, such as
+/// a Markdown `=======` underline or a decorative `<<<<<<<<<<`, so a block is
+/// only read from lines of one length. GitComet's own marker projections use
+/// a size longer than any run in the content, which makes them win here.
+///
+/// One pass with a state per length, so no input makes this quadratic.
+fn conflict_marker_size(text: &[u8]) -> Option<usize> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Phase {
+        Opened,
+        Separated,
+    }
+    let mut phases = rustc_hash::FxHashMap::<usize, Phase>::default();
+    let mut longest = None;
+    let mut it = LineCursor::new(text);
+    while let Some((_, line)) = it.next() {
+        match line.first() {
+            Some(b'<') => {
+                if let Some(size) =
+                    conflict_marker_run(line, b'<').filter(|size| *size >= MIN_MARKER_SIZE)
+                {
+                    // An opener inside an open block is content, so keep its phase.
+                    phases.entry(size).or_insert(Phase::Opened);
+                }
+            }
+            Some(b'=') => {
+                if let Some(phase) =
+                    conflict_marker_run(line, b'=').and_then(|size| phases.get_mut(&size))
+                    && *phase == Phase::Opened
+                {
+                    *phase = Phase::Separated;
+                }
+            }
+            Some(b'>') => {
+                if let Some(size) = conflict_marker_run(line, b'>')
+                    && phases.get(&size) == Some(&Phase::Separated)
+                {
+                    phases.remove(&size);
+                    longest = longest.max(Some(size));
+                }
+            }
+            _ => {}
+        }
+    }
+    longest
+}
+
 /// Parse merged text into alternating context byte ranges and conflict block
 /// byte ranges.
 ///
 /// Parsing is intentionally conservative. If a marker block is malformed, all
 /// consumed marker text is preserved as context and parsing continues.
+/// Marker lines are exactly as long as the text's marker size; see
+/// `conflict_marker_size`.
 pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRanges> {
     parse_conflict_marker_ranges_bytes(text.as_bytes())
 }
 
 /// The same ASCII marker grammar over original bytes, before text decoding.
 pub fn parse_conflict_marker_ranges_bytes(text: &[u8]) -> Vec<ParsedConflictSegmentRanges> {
+    // With no complete block, the first opener still marks where the
+    // malformed text begins, as a segment of its own.
+    let first_opener_size = || {
+        let mut it = LineCursor::new(text);
+        std::iter::from_fn(|| it.next()).find_map(|(_, line)| {
+            conflict_marker_run(line, b'<').filter(|size| *size >= MIN_MARKER_SIZE)
+        })
+    };
+    let Some(size) = conflict_marker_size(text).or_else(first_opener_size) else {
+        return if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ParsedConflictSegmentRanges::Text(0..text.len())]
+        };
+    };
+    let is_marker = |line: &[u8], marker: u8| conflict_marker_run(line, marker) == Some(size);
     let mut segments = Vec::new();
     let mut context_start = 0usize;
     let mut it = LineCursor::new(text);
 
     while let Some((line_range, line)) = it.next() {
-        if !line.starts_with(b"<<<<<<<") {
+        if !is_marker(line, b'<') {
             continue;
         }
 
@@ -151,19 +230,19 @@ pub fn parse_conflict_marker_ranges_bytes(text: &[u8]) -> Vec<ParsedConflictSegm
         let mut base_range: Option<Range<usize>> = None;
 
         while let Some((next_range, next_line)) = it.next() {
-            if next_line.starts_with(b"=======") {
+            if is_marker(next_line, b'=') {
                 separator_range = Some(next_range.clone());
                 ours_end = next_range.start;
                 break;
             }
 
-            if next_line.starts_with(b"|||||||") {
+            if is_marker(next_line, b'|') {
                 ours_end = next_range.start;
                 let base_start = next_range.end;
                 let mut base_end = base_start;
 
                 while let Some((base_line_range, base_line)) = it.next() {
-                    if base_line.starts_with(b"=======") {
+                    if is_marker(base_line, b'=') {
                         separator_range = Some(base_line_range.clone());
                         base_end = base_line_range.start;
                         break;
@@ -188,7 +267,7 @@ pub fn parse_conflict_marker_ranges_bytes(text: &[u8]) -> Vec<ParsedConflictSegm
         let mut marker_end: Option<usize> = None;
 
         while let Some((theirs_line_range, theirs_line)) = it.next() {
-            if theirs_line.starts_with(b">>>>>>>") {
+            if is_marker(theirs_line, b'>') {
                 marker_end = Some(theirs_line_range.end);
                 theirs_end = theirs_line_range.start;
                 break;
@@ -244,8 +323,8 @@ pub fn reader_has_conflict_markers<R: std::io::BufRead>(
     // Bytes, not `read_line`: the scan must not fail on a file that is not valid
     // UTF-8, and the markers are ASCII at the start of a line either way.
     let mut line = Vec::new();
-    let mut saw_opener = false;
-    let mut saw_separator = false;
+    // Per marker length, as in `conflict_marker_size`: `true` once separated.
+    let mut separated = rustc_hash::FxHashMap::<usize, bool>::default();
 
     loop {
         line.clear();
@@ -254,17 +333,22 @@ pub fn reader_has_conflict_markers<R: std::io::BufRead>(
             // left open is malformed and the strict parser treats it as ordinary
             // text, or the budget running out, where an opener that never closed
             // cannot be called resolved.
-            return Ok(saw_opener && reader.limit() == 0);
+            return Ok(!separated.is_empty() && reader.limit() == 0);
         }
 
-        if line.starts_with(b"<<<<<<<") {
-            // Deliberately does not reset `saw_separator`: past the separator the
-            // strict parser scans only for a closing marker, so an opener nested
-            // in the `theirs` side is content, not the start of a new block.
-            saw_opener = true;
-        } else if saw_opener && line.starts_with(b"=======") {
-            saw_separator = true;
-        } else if saw_separator && line.starts_with(b">>>>>>>") {
+        if let Some(size) = conflict_marker_run(&line, b'<').filter(|size| *size >= MIN_MARKER_SIZE)
+        {
+            // Deliberately does not reset a separated block: past the separator
+            // the strict parser scans only for a closing marker, so an opener
+            // nested in the `theirs` side is content, not the start of a block.
+            separated.entry(size).or_insert(false);
+        } else if let Some(state) =
+            conflict_marker_run(&line, b'=').and_then(|size| separated.get_mut(&size))
+        {
+            *state = true;
+        } else if conflict_marker_run(&line, b'>')
+            .is_some_and(|size| separated.get(&size) == Some(&true))
+        {
             return Ok(true);
         }
     }
@@ -354,6 +438,11 @@ mod marker_detection_tests {
             "<<<<<<< a\n<<<<<<< c\nours\n",
             // A closing marker before any separator closes nothing.
             "<<<<<<< a\nours\n>>>>>>> b\n",
+            // Marker lines are exactly as long as their opener.
+            "<<<<<<< a\nx\n========\ny\n=======\nz\n>>>>>>> b\n",
+            "<<<<<<<<<< decoration\ntext\n<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n",
+            "<<<<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n",
+            "<<<<<<<<<< a\nx\n==========\ny\n>>>>>>>>>> b\n",
         ] {
             assert_eq!(
                 scan(text),
@@ -361,6 +450,46 @@ mod marker_detection_tests {
                 "streamed and strict scans disagree on {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn marker_lines_must_be_as_long_as_their_opener() {
+        let text = "<<<<<<< a\nx\n========\ny\n=======\nz\n>>>>>>> b\n";
+        let segments = super::parse_conflict_marker_segments(text);
+        let [super::ParsedConflictSegment::Conflict(block)] = segments.as_slice() else {
+            panic!("expected one block: {segments:?}");
+        };
+        assert_eq!(block.ours, "x\n========\ny\n");
+        assert_eq!(block.theirs, "z\n");
+    }
+
+    #[test]
+    fn an_unclosed_longer_opener_does_not_hide_a_later_conflict() {
+        let text = "<<<<<<<<<< decoration\ntext\n<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n";
+        let segments = super::parse_conflict_marker_segments(text);
+        assert_eq!(
+            segments,
+            vec![
+                super::ParsedConflictSegment::Text("<<<<<<<<<< decoration\ntext\n".into()),
+                super::ParsedConflictSegment::Conflict(super::ParsedConflictBlock {
+                    base: None,
+                    ours: "x\n".into(),
+                    theirs: "y\n".into(),
+                }),
+            ]
+        );
+    }
+
+    /// `conflict-marker-size=10` in `.gitattributes`: Git writes ten.
+    #[test]
+    fn a_configured_marker_size_is_read_from_the_markers() {
+        let text = "<<<<<<<<<< ours\na\n=======\n==========\nb\n>>>>>>>>>> theirs\n";
+        let segments = super::parse_conflict_marker_segments(text);
+        let [super::ParsedConflictSegment::Conflict(block)] = segments.as_slice() else {
+            panic!("expected one block: {segments:?}");
+        };
+        assert_eq!(block.ours, "a\n=======\n");
+        assert_eq!(block.theirs, "b\n");
     }
 
     #[test]

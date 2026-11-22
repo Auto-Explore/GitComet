@@ -313,16 +313,29 @@ pub struct ConflictTextValidation {
 
 /// Validate merged text before staging by scanning for unresolved
 /// conflict marker lines.
+///
+/// Every marker of a complete conflict block counts, and so does an opening
+/// or closing marker left on its own. A separator outside a block does not:
+/// that is how a Markdown heading is underlined.
 pub fn validate_conflict_resolution_text(text: &str) -> ConflictTextValidation {
-    let marker_lines = text
-        .lines()
-        .filter(|line| {
-            line.starts_with("<<<<<<<")
-                || line.starts_with(">>>>>>>")
-                || line.starts_with("=======")
-                || line.starts_with("|||||||")
+    use crate::conflict_session::{
+        ParsedConflictSegmentRanges, conflict_marker_run, parse_conflict_marker_ranges,
+    };
+    let stray_marker = |line: &&str| {
+        b"<>".iter().any(|&marker| {
+            conflict_marker_run(line.as_bytes(), marker)
+                .is_some_and(|size| size >= crate::merge::DEFAULT_MARKER_SIZE)
         })
-        .count();
+    };
+    let marker_lines = parse_conflict_marker_ranges(text)
+        .into_iter()
+        .map(|segment| match segment {
+            ParsedConflictSegmentRanges::Conflict(block) => 3 + usize::from(block.base.is_some()),
+            ParsedConflictSegmentRanges::Text(range) => {
+                text[range].lines().filter(stray_marker).count()
+            }
+        })
+        .sum();
 
     ConflictTextValidation {
         has_conflict_markers: marker_lines > 0,
@@ -1946,6 +1959,12 @@ pub trait GitRepository: Send + Sync {
         _path: &Path,
         _commit: &CommitId,
     ) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
+
+    /// The name `path` was renamed from in `commit`, against its first parent;
+    /// `None` when that commit did not rename it.
+    fn rename_source_at_commit(&self, _path: &Path, _commit: &CommitId) -> Result<Option<PathBuf>> {
         Ok(None)
     }
 

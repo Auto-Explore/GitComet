@@ -52,7 +52,10 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn force_file_diff_fallback_mode(pane: &mut DiffRenderer) {
-        pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
+        // Keep this phase on the fallback renderer: normal visible-row draws
+        // now repair absent syntax documents automatically.
+        pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+        pane.advance_file_diff_syntax_generation();
         for view_mode in [
             PreparedSyntaxViewMode::FileDiffSplitLeft,
             PreparedSyntaxViewMode::FileDiffSplitRight,
@@ -731,6 +734,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.diff_renderer.update(cx, |pane, _cx| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(true);
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });

@@ -10,13 +10,13 @@ import subprocess
 import tarfile
 import urllib.request
 
-VERSION = "0.9.145"
+VERSION = "0.9.152"
 SHA256 = {
-    "x86_64-unknown-linux-gnu": "32aa82416099eb12fffae9cf1a279ad201fecbd3f74826c613e32e9006b29867",
-    "aarch64-unknown-linux-gnu": "0ad2815fd91a7ecec3a7e25c749b584f66729ac688fd26b2fd494f7ff94b7fd0",
-    "universal-apple-darwin": "52ecaedb4f5af9267ef7ed02bc937d2a15a94ff96cb663080e81311f798c9905",
-    "x86_64-pc-windows-msvc": "bfecd545af057adb83be7ddfe135fd067fb9c990544da1ea111e675f45d628a9",
-    "aarch64-pc-windows-msvc": "29614accc4b232b0fabdda1805d449bae3130a8de6cb343a5b2584e0e886cf0a",
+    "x86_64-unknown-linux-gnu": "d039b43c3e0958441b6ad0a39c8884d018b3d2e8fb9928f209074b1100b5e17a",
+    "aarch64-unknown-linux-gnu": "ca1f81a5b86533eb45ab97e0064aa88e925e53aab9a698ca6331a7cad1f85f07",
+    "universal-apple-darwin": "2fadf57df4243e691f088ee3bff4f4ab9af16da0c95a1db84b5cb1685e098a76",
+    "x86_64-pc-windows-msvc": "0384fc89a5a547d4fd5e183fcc101d31dba2837feafd8e64d5ea003a0ddb1941",
+    "aarch64-pc-windows-msvc": "dfdfc60a235866dbd5330102194e8f9f4fe06a2c34f6810b79c3c7e768c718e3",
 }
 
 

@@ -53,6 +53,34 @@ pub(crate) fn update_checks_available() -> bool {
         )
 }
 
+/// What "Check for updates" runs.
+pub(crate) enum ManualUpdateCheck<A> {
+    /// The product's own check, supplied by an extension. The host's switches
+    /// (`GITCOMET_NO_UPDATE_CHECK`, the update source) are the host check's and
+    /// do not reach it.
+    Extension(A),
+    Host,
+    Unavailable,
+}
+
+pub(crate) fn manual_update_check<A>(extension: Option<A>) -> ManualUpdateCheck<A> {
+    if let Some(action) = extension {
+        return ManualUpdateCheck::Extension(action);
+    }
+    if update_checks_disabled_by_environment() || !update_checks_available() {
+        return ManualUpdateCheck::Unavailable;
+    }
+    ManualUpdateCheck::Host
+}
+
+/// Whether the menus grey "Check for updates" out.
+pub(crate) fn manual_update_check_unavailable(extension_check: bool) -> bool {
+    matches!(
+        manual_update_check(extension_check.then_some(())),
+        ManualUpdateCheck::Unavailable
+    )
+}
+
 impl GitCometView {
     pub(in crate::view) fn maybe_check_for_updates_on_startup(
         &mut self,
@@ -70,13 +98,16 @@ impl GitCometView {
     }
 
     pub(crate) fn check_for_updates_manually(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.view_mode != GitCometViewMode::Normal
-            || update_checks_disabled_by_environment()
-            || !update_checks_available()
-        {
+        if self.view_mode != GitCometViewMode::Normal {
             return;
         }
-        self.start_update_check(true, cx);
+        let extension = super::extension_host::registry(cx)
+            .and_then(|registry| registry.update_check_action().cloned());
+        match manual_update_check(extension) {
+            ManualUpdateCheck::Extension(action) => self.run_extension_window_action(action, cx),
+            ManualUpdateCheck::Host => self.start_update_check(true, cx),
+            ManualUpdateCheck::Unavailable => {}
+        }
     }
 
     fn start_update_check(&mut self, manual: bool, cx: &mut gpui::Context<Self>) {
@@ -348,6 +379,15 @@ mod tests {
             tag_name: tag_name.to_string(),
             html_url: html_url.map(ToOwned::to_owned),
         }
+    }
+
+    #[test]
+    fn an_extensions_check_wins() {
+        assert!(matches!(
+            manual_update_check(Some("pro")),
+            ManualUpdateCheck::Extension("pro")
+        ));
+        assert!(!manual_update_check_unavailable(true));
     }
 
     #[test]

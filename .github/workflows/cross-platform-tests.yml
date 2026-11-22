@@ -115,7 +115,9 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64') && 90 || 60 }}
+    # The lanes with a compiled dependency bundle are the longest. A miss costs them a cold compile
+    # and, on the default branch, packing the bundle as well.
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64' || matrix.name == 'windows-arm64') && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -248,7 +250,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     container:
-      image: fedora:41
+      image: fedora:45
     steps:
       - name: Install native dependencies
         run: |
@@ -263,7 +265,7 @@ jobs:
       - uses: ./.github/actions/ci-setup
         id: setup
         with:
-          context: fedora41-x64-workspace-ci-test
+          context: fedora45-x64-workspace-ci-test
           cold-cache: ${{ inputs.cold-cache }}
           python: "false"
       - name: Verify test prerequisites
@@ -302,4 +304,4 @@ jobs:
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
-          name: fedora41-x64
+          name: fedora45-x64

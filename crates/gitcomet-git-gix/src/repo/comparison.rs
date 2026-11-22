@@ -458,7 +458,7 @@ mod tests {
             filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 120, 0);
         write_file(dir, "edited.txt", "one\n2\n");
         for name in ["touched.txt", "edited.txt"] {
-            filetime::set_file_mtime(dir.join(name), stale).unwrap();
+            crate::test_support::set_file_mtime(dir.join(name), stale).unwrap();
         }
         let index = dir.join(".git/index");
         let before = std::fs::read(&index).unwrap();

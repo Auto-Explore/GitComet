@@ -1795,3 +1795,79 @@ fn two_ellipsis_projection_maps_hidden_boundaries_on_both_sides(cx: &mut gpui::T
         );
     });
 }
+
+/// The widest `RefLeaf` cut of `text` when the line is half way between
+/// `expected` and `longer`, the next cut that would keep more.
+fn ref_leaf_cut_between(
+    cx: &mut gpui::TestAppContext,
+    text: &str,
+    expected: &str,
+    longer: &str,
+) -> (String, bool) {
+    let text: SharedString = text.to_owned().into();
+    let (_view, cx) = cx.add_window_view(|_window, _cx| gpui::Empty);
+    cx.update(|window, app| {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let expected_width = display_width(window, expected, &style, font_size);
+        let longer_width = display_width(window, longer, &style, font_size);
+        assert!(expected_width < longer_width, "{expected:?} vs {longer:?}");
+        let max_width = expected_width + (longer_width - expected_width) / 2.0;
+
+        let line = shape_truncated_line_cached(
+            window,
+            app,
+            &style,
+            &text,
+            Some(max_width),
+            TextTruncationProfile::RefLeaf,
+            &[],
+            None,
+        );
+        (line.display_text.to_string(), line.truncated)
+    })
+}
+
+#[gpui::test]
+fn ref_leaf_profile_clips_the_path_from_the_start_without_a_marker(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        ref_leaf_cut_between(
+            cx,
+            "feat/new-component",
+            "at/new-component",
+            "eat/new-component"
+        ),
+        ("at/new-component".to_owned(), true)
+    );
+}
+
+#[gpui::test]
+fn ref_leaf_profile_keeps_the_whole_leaf_before_cutting_it(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        ref_leaf_cut_between(
+            cx,
+            "origin/claude/new-component",
+            "new-component",
+            "/new-component"
+        ),
+        ("new-component".to_owned(), true)
+    );
+}
+
+#[gpui::test]
+fn ref_leaf_profile_cuts_an_overflowing_leaf_from_its_end_with_an_ellipsis(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_eq!(
+        ref_leaf_cut_between(cx, "origin/feat/new-component", "new-comp…", "new-compo…"),
+        ("new-comp…".to_owned(), true)
+    );
+}
+
+#[gpui::test]
+fn ref_leaf_profile_cuts_a_name_without_a_slash_from_its_end(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        ref_leaf_cut_between(cx, "new-component", "new-comp…", "new-compo…"),
+        ("new-comp…".to_owned(), true)
+    );
+}

@@ -728,6 +728,7 @@ impl DiffRenderer {
                 layout: this.diff_markdown.layouts[side].clone(),
                 // Only the split's new side is parsed from the working-tree file.
                 disclosures: None,
+                flush_left: false,
                 tasks_editable: region == DiffTextRegion::SplitRight
                     && this.markdown_preview_tasks_editable(),
             };

@@ -913,7 +913,7 @@ fn make_stale_unlocked_file(repo: &Path) {
 /// restage within that second.
 #[cfg(unix)]
 fn wait_out_racy_second(path: &Path) {
-    let mtime = filetime::FileTime::from_last_modification_time(&fs::metadata(path).unwrap());
+    let mtime = filetime::FileTime::from(fs::metadata(path).unwrap().modified().unwrap());
     // The margin covers the file clock lagging the wall clock.
     let past = filetime::FileTime::from_unix_time(mtime.unix_seconds() + 1, 50_000_000);
     while filetime::FileTime::now() < past {

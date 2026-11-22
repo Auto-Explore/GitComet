@@ -10,6 +10,8 @@
 # Upstream removed the implementation-only shebang node from its highlights
 # query, so that query now compiles against both .ml and .mli. GitComet uses
 # HIGHLIGHTS_QUERY directly; its old duplicate query is no longer needed.
+# The query also carries upstream a1c562e (2026-11-20 sweep), which colours
+# OxCaml's SIMD types (`int8x16#`, `float32x4`, ...) as builtin types.
 #
 # Generated with tree-sitter-cli 0.27.0, ABI 15, TS_SMALL_STATE_THRESHOLD=128.
 # STATE_COUNT/SYMBOL_COUNT match upstream for all three parsers: 13556/537

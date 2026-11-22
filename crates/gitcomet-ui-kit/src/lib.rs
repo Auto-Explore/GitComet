@@ -28,6 +28,7 @@ pub mod clipboard;
 pub mod components;
 pub mod drag_autoscroll;
 pub mod file_icons;
+pub mod focus_order;
 pub mod font_preferences;
 pub mod icons;
 pub mod interaction;
@@ -74,7 +75,7 @@ pub use text_input::{
     HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right, SelectAll,
     SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown, SelectPageUp, SelectRight,
     SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput, TextInputChanged,
-    TextInputOptions, Undo, Up, WordLeft, WordRight,
+    TextInputOptions, TextInputTab, Undo, Up, WordLeft, WordRight,
 };
 #[cfg(feature = "benchmarks")]
 pub use text_input::{
@@ -120,6 +121,7 @@ mod version_contract {
             "gpui_platform",
             "gpui_wgpu",
             "gpui_parley",
+            "gpui_render",
             "gpui_shared_string",
             "gpui_sum_tree",
         ] {

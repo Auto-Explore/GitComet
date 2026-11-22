@@ -674,7 +674,7 @@ fn ensure_macos_dev_app_bundle(
   <key>CFBundleVersion</key>
   <string>{version}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
+  <string>15.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>

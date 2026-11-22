@@ -45,22 +45,48 @@ enum TokenType {
 
 typedef char Delimiter;
 
+// A delimiter occupies bits 0..5 of the first byte ('"' is 34, '"'+1 is 35),
+// leaving bits 6..7 free. We lend those two bits to the prefix length, which
+// gives it ten bits across the entry without making the entry any larger, so
+// the maximum interpolation nesting depth is unaffected.
+#define DELIMITER_MASK 0x3F
+#define PREFIX_HI_SHIFT 6
+#define PREFIX_LEN_MAX 1023
+
+// Sentinel for a prefix longer than PREFIX_LEN_MAX. A real prefix is always at
+// least 1 (a string with no '$' prefix still uses a single '$' as its trigger),
+// so 0 is free to mean "this prefix does not fit in the entry".
+//
+// Such a string needs a run of more than PREFIX_LEN_MAX '$' to interpolate,
+// and we no longer know the exact count, so we cannot decide a run that long.
+// Every run we *can* decide — anything up to PREFIX_LEN_MAX — is shorter than
+// the prefix and is therefore literal content, which is what we emit. Storing
+// the length exactly instead would need a third byte per open string and would
+// cut the maximum nesting depth from 512 to 341, a far more reachable limit
+// than a 1024-'$' prefix.
+#define PREFIX_LEN_UNREPRESENTABLE 0
+
 // We use a stack to keep track of the string delimiters.
-// Each entry is two bytes: [delimiter_byte, prefix_len_byte].
-// delimiter_byte: '"' for single-quoted, '"'+1 for triple-quoted.
-// prefix_len_byte: number of '$' signs required to trigger interpolation
-//   (1 for regular strings and $"...", 2 for $$"...", etc.; max 255).
+// Each entry is two bytes: [delimiter_and_prefix_hi, prefix_lo].
+// bits 0..5 of byte 0: '"' for single-quoted, '"'+1 for triple-quoted.
+// bits 6..7 of byte 0, then byte 1: number of '$' signs required to trigger
+//   interpolation (1 for regular strings and $"...", 2 for $$"...", etc.; max
+//   PREFIX_LEN_MAX), or PREFIX_LEN_UNREPRESENTABLE for a longer prefix.
 typedef Array(Delimiter) Stack;
 
-static inline void stack_push(Stack *stack, char chr, bool triple, uint8_t prefix_len) {
-  if (stack->size + 1 >= TREE_SITTER_SERIALIZATION_BUFFER_SIZE) abort();
-  array_push(stack, (Delimiter)(triple ? (chr + 1) : chr));
-  array_push(stack, (Delimiter)prefix_len);
+static inline void stack_push(Stack *stack, char chr, bool triple, uint16_t prefix_len) {
+  uint8_t delim = (uint8_t)(triple ? (chr + 1) : chr);
+  uint8_t hi = (uint8_t)((prefix_len >> 8) & 0x3);
+  array_push(stack, (Delimiter)(uint8_t)(delim | (hi << PREFIX_HI_SHIFT)));
+  array_push(stack, (Delimiter)(uint8_t)(prefix_len & 0xFF));
 }
 
-static inline void stack_pop(Stack *stack) {
-  if (stack->size < 2) abort();
+// Returns false instead of aborting when there is nothing to pop, so that no
+// input can terminate the host process through this path.
+static inline bool stack_pop(Stack *stack) {
+  if (stack->size < 2) return false;
   stack->size -= 2;
+  return true;
 }
 
 static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
@@ -70,14 +96,29 @@ static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 // Scanner functions
 
 static bool scan_string_start(TSLexer *lexer, Stack *stack) {
-  // Count leading '$' signs (the interpolation prefix). Capped at 255.
-  uint8_t prefix_len = 0;
+  // The stack is serialized whole, two bytes per open string, so it holds at
+  // most TREE_SITTER_SERIALIZATION_BUFFER_SIZE / 2 of them. When it is full,
+  // decline the string start before consuming any input; the parser then
+  // recovers with an ERROR node instead of the scanner aborting the host.
+  if (stack->size + 2 > TREE_SITTER_SERIALIZATION_BUFFER_SIZE) return false;
+
+  // Count leading '$' signs (the interpolation prefix). The counter stops one
+  // past PREFIX_LEN_MAX, which is enough to tell "too long" from an exact
+  // length and cannot wrap no matter how many '$' the input supplies.
+  uint32_t dollars = 0;
   while (lexer->lookahead == '$') {
     advance(lexer);
-    if (prefix_len < 255) prefix_len++;
+    if (dollars <= PREFIX_LEN_MAX) dollars++;
   }
-  // Regular strings with no prefix still use a single '$' as the trigger.
-  if (prefix_len == 0) prefix_len = 1;
+  uint16_t prefix_len;
+  if (dollars == 0) {
+    // Regular strings with no prefix still use a single '$' as the trigger.
+    prefix_len = 1;
+  } else if (dollars > PREFIX_LEN_MAX) {
+    prefix_len = PREFIX_LEN_UNREPRESENTABLE;
+  } else {
+    prefix_len = (uint16_t)dollars;
+  }
 
   if (lexer->lookahead != '"') return false;
   advance(lexer);
@@ -98,8 +139,18 @@ static bool scan_string_start(TSLexer *lexer, Stack *stack) {
 static bool scan_string_content(TSLexer *lexer, Stack *stack,
                                 const bool *valid_symbols) {
   if (stack->size < 2) return false;  // Stack is empty. We're not in a string.
-  uint8_t prefix_len = (uint8_t)stack->contents[stack->size - 1];
-  Delimiter raw_delim = stack->contents[stack->size - 2];
+  uint8_t packed = (uint8_t)stack->contents[stack->size - 2];
+  uint16_t prefix_len =
+      (uint16_t)(((packed >> PREFIX_HI_SHIFT) << 8) |
+                 (uint8_t)stack->contents[stack->size - 1]);
+  // A prefix we could not record is longer than PREFIX_LEN_MAX, so every run
+  // up to PREFIX_LEN_MAX is certainly shorter than it and is literal content.
+  // Treating the prefix as PREFIX_LEN_MAX + 1 says exactly that, and leaves
+  // longer runs — the only ones we cannot decide — interpolating as before.
+  uint32_t trigger_len = (prefix_len == PREFIX_LEN_UNREPRESENTABLE)
+                             ? (uint32_t)PREFIX_LEN_MAX + 1
+                             : (uint32_t)prefix_len;
+  Delimiter raw_delim = (Delimiter)(packed & DELIMITER_MASK);
   bool is_triple = (raw_delim & 1) != 0;
   char end_char = is_triple ? (char)(raw_delim - 1) : (char)raw_delim;
   bool has_content = false;
@@ -131,15 +182,21 @@ static bool scan_string_content(TSLexer *lexer, Stack *stack,
       // next scan call, the remaining dollars will be re-examined.
       advance(lexer);
       lexer->mark_end(lexer);
-      uint16_t additional_dollars = 0;
+      // Saturate one past PREFIX_LEN_MAX. Only the comparison against
+      // trigger_len matters and trigger_len never exceeds PREFIX_LEN_MAX + 1,
+      // so capping keeps every decision below correct while making it
+      // impossible for a long run of '$' to wrap and read as a short one.
+      uint32_t additional_dollars = 0;
       while (lexer->lookahead == '$') {
         advance(lexer);
-        additional_dollars++;
+        if (additional_dollars <= PREFIX_LEN_MAX) additional_dollars++;
       }
-      uint16_t total_dollars = 1 + additional_dollars;
-      if (total_dollars >= prefix_len &&
+      uint32_t total_dollars = 1 + additional_dollars;
+      // The counter saturates strictly above trigger_len, so a run longer than
+      // the cap always reads as "more than the prefix", never as a match.
+      if (total_dollars >= trigger_len &&
           (iswalpha(lexer->lookahead) || lexer->lookahead == '_' || lexer->lookahead == '{')) {
-        if (total_dollars > prefix_len) {
+        if (total_dollars > trigger_len) {
           // Excess: emit first '$' as literal STRING_CONTENT.
           // mark_end is after the first '$'; tree-sitter rewinds there.
           lexer->result_symbol = STRING_CONTENT;
@@ -191,7 +248,7 @@ static bool scan_string_content(TSLexer *lexer, Stack *stack,
         // appear at the end of a string (e.g "aa\$") which isn't handled
         // correctly; if we were at the end of the string, terminate properly
         if (lexer->lookahead == end_char) {
-          stack_pop(stack);
+          if (!stack_pop(stack)) return false;
           advance(lexer);
           lexer->mark_end(lexer);
           lexer->result_symbol = STRING_END;
@@ -245,7 +302,7 @@ static bool scan_string_content(TSLexer *lexer, Stack *stack,
           advance(lexer);
           lexer->mark_end(lexer);
         }
-        stack_pop(stack);
+        if (!stack_pop(stack)) return false;
         return true;
       }
       if (has_content) {
@@ -253,7 +310,7 @@ static bool scan_string_content(TSLexer *lexer, Stack *stack,
         lexer->result_symbol = STRING_CONTENT;
         return true;
       }
-      stack_pop(stack);
+      if (!stack_pop(stack)) return false;
       advance(lexer);
       lexer->mark_end(lexer);
       lexer->result_symbol = STRING_END;

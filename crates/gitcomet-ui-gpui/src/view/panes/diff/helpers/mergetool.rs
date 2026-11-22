@@ -51,6 +51,42 @@ pub(in crate::view::panes::diff) enum FocusedMergetoolOutput<'a> {
     Delete,
 }
 
+/// The conflict `side` of `path` as Git's checkout writes it: the stage's
+/// blob through the path's filters, line endings and working-tree encoding,
+/// none of which the blob in the index has.
+pub(in crate::view::panes::diff) fn checked_out_conflict_side(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    side: ThreeWayColumn,
+) -> std::io::Result<Vec<u8>> {
+    let stage = match side {
+        ThreeWayColumn::Base => 1,
+        ThreeWayColumn::Ours => 2,
+        ThreeWayColumn::Theirs => 3,
+    };
+    let relative = gitcomet_core::path_utils::validated_repo_relative_path(path)?;
+    // `:<stage>:<path>`, with the `/` Git names a path by on every platform.
+    let mut object = std::ffi::OsString::from(format!(":{stage}:"));
+    for (ix, component) in relative.components().enumerate() {
+        if ix > 0 {
+            object.push("/");
+        }
+        object.push(component.as_os_str());
+    }
+    let output = gitcomet_core::process::git_command()
+        .current_dir(workdir)
+        .args(["cat-file", "--filters"])
+        .arg(object)
+        .output()?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ))
+    }
+}
+
 /// Apply a focused-mergetool result to the repository-relative `path`. Resolved
 /// here, not at the call sites, so none of them can write through a symlink.
 pub(in crate::view::panes::diff) fn apply_focused_mergetool_output(

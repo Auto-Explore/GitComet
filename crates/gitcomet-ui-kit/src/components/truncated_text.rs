@@ -61,6 +61,7 @@ pub struct TruncatedText {
     path_alignment_group: Option<PathTruncationAlignmentGroup>,
     id: Option<ElementId>,
     text_color: Option<Rgba>,
+    leaf_color: Option<Rgba>,
     text_size: AbsoluteLength,
     font_weight: Option<FontWeight>,
     font_family: Option<SharedString>,
@@ -81,6 +82,7 @@ impl TruncatedText {
             path_alignment_group: None,
             id: None,
             text_color: None,
+            leaf_color: None,
             text_size: text_size.into(),
             font_weight: None,
             font_family: None,
@@ -126,6 +128,15 @@ impl TruncatedText {
         self
     }
 
+    /// Draws the text's last path component, the file or folder it names, in
+    /// `leaf_color` and leaves the folders before it, and any ellipsis
+    /// standing in for them, in [`Self::text_color`], which callers set
+    /// dimmer. [`Self::highlights`] keep their own style over the leaf.
+    pub fn path_leaf_color(mut self, leaf_color: Rgba) -> Self {
+        self.leaf_color = Some(leaf_color);
+        self
+    }
+
     pub fn font_family(mut self, font_family: impl Into<SharedString>) -> Self {
         self.font_family = Some(font_family.into());
         self
@@ -158,6 +169,22 @@ impl TruncatedText {
         Self::path(text, text_size).path_alignment_group(path_alignment_group)
     }
 
+    /// The highlights the line is drawn with: the caller's, with the path leaf
+    /// under them when [`Self::path_leaf_color`] is set.
+    fn display_highlights(&self) -> Arc<[(Range<usize>, HighlightStyle)]> {
+        match self.leaf_color {
+            Some(leaf_color) => Arc::from(crate::text_runs::path_leaf_highlights(
+                &self.text,
+                HighlightStyle {
+                    color: Some(leaf_color.into_color()),
+                    ..Default::default()
+                },
+                &self.highlights,
+            )),
+            None => Arc::clone(&self.highlights),
+        }
+    }
+
     pub fn render<V: 'static>(self, cx: &Context<V>) -> impl IntoElement {
         let tooltip_host = matches!(
             self.tooltip_mode,
@@ -173,10 +200,11 @@ impl TruncatedText {
                 .is_some()
                 .then(|| fallback_tooltip_element_id(&self.text, self.profile, &self.focus_range))
         });
+        let highlights = self.display_highlights();
         let element = TruncatedTextElement {
             text: self.text,
             profile: self.profile,
-            highlights: self.highlights,
+            highlights,
             focus_range: self.focus_range,
             layout: TruncatedTextLayoutState::default(),
             truncated: truncated.clone(),
@@ -406,6 +434,35 @@ impl IntoElement for TruncatedTextElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_leaf_color_colours_the_last_component_under_the_highlights() {
+        let leaf = gpui::rgba(0x112233ff);
+        let hit = HighlightStyle {
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        let text = TruncatedText::new("crates/kit/lib.rs", px(14.0))
+            .highlights([(13..15, hit)])
+            .path_leaf_color(leaf);
+        let leaf = HighlightStyle {
+            color: Some(leaf.into_color()),
+            ..Default::default()
+        };
+        assert_eq!(
+            text.display_highlights().as_ref(),
+            [(11..13, leaf), (13..15, hit), (15..17, leaf)]
+        );
+        assert_eq!(
+            TruncatedText::new("crates/kit/lib.rs", px(14.0))
+                .highlights([(13..15, hit)])
+                .display_highlights()
+                .as_ref(),
+            [(13..15, hit)],
+            "without a leaf colour the highlights are the caller's"
+        );
+    }
+
     const PATH_A: &str = "src/components/really_long_directory_name/rows/file_name_alpha.rs";
     const PATH_B: &str = "src/components/dir/another_super_long_directory_name/file_name_beta.rs";
 

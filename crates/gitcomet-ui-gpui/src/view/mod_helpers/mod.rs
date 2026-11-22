@@ -1203,6 +1203,9 @@ pub struct GitCometView {
 
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
+    /// The prompt is a form Tab stays inside: username, secret, Confirm,
+    /// Cancel and round again.
+    pub(super) auth_prompt_tab_scope: crate::kit::focus_order::TabScope,
     pub(super) auth_prompt_key: Option<u64>,
     pub(super) auth_prompt_submitted_generation: Option<u64>,
     pub(super) auth_prompt_input_error: Option<String>,

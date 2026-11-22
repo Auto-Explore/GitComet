@@ -16,7 +16,7 @@ from cache import CACHE_ALLOWANCE_BYTES, COMPILED_BUDGETS_MIB
 LEGACY_LANES = {
     "Linux Headless Suite (x86_64-linux / ubuntu-22.04)": "native/ubuntu22-x64",
     "Linux Headless Suite (aarch64-linux / ubuntu-22.04-arm)": "native/ubuntu22-arm64",
-    "Linux Headless Suite (Fedora container)": "native/fedora41-x64",
+    "Linux Headless Suite (Fedora container)": "native/fedora45-x64",
     "macOS Tests (macbook-m1 / macos-15)": "native/macos15-arm64",
     "macOS Tests (latest-macos / macos-26)": "native/macos26-arm64",
     "macOS Tests (intel (macos-15-intel))": "native/macos15-x64",

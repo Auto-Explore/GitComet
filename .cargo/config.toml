@@ -7,5 +7,11 @@ linker = "scripts/windows/windows-lld-linker.cmd"
 [target.aarch64-pc-windows-msvc]
 linker = "scripts/windows/windows-lld-linker.cmd"
 
+# The oldest macOS GitComet runs on: rustc, the C compilers and gpui's Metal
+# shaders all build for it. The bundles' LSMinimumSystemVersion
+# (scripts/package-macos.sh, crates/gitcomet-app/src/launch.rs) says the same.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "15.0"
+
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-Ctarget-cpu=x86-64-v3"]

@@ -6,6 +6,7 @@ use super::*;
 impl DetailsPaneView {
     pub(in crate::view) fn commit_details_view(
         &mut self,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let active_repo_id = self.active_repo_id();
@@ -53,7 +54,7 @@ impl DetailsPaneView {
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
             self.retain_commit_reword_for(Some((repo_id, &selected_id)), cx);
-            return self.single_commit_details_view(repo_id, selected_id, cx);
+            return self.single_commit_details_view(repo_id, selected_id, window, cx);
         }
 
         self.retain_commit_reword_for(None, cx);
@@ -65,6 +66,7 @@ impl DetailsPaneView {
         &mut self,
         repo_id: RepoId,
         selected_id: CommitId,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -187,6 +189,7 @@ impl DetailsPaneView {
                         find.sha,
                         repo_id,
                         current,
+                        window,
                         cx,
                     );
 

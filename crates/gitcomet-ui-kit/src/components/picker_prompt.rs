@@ -1654,6 +1654,7 @@ fn picker_item_label<V: 'static>(
             parts: item.parts(),
             base_color: theme.colors.foreground.primary,
             dim_color: theme.colors.foreground.secondary,
+            path_folders_dim: true,
             text_size: gpui::rems(0.875),
             weight: FontWeight::NORMAL,
         },
@@ -1675,6 +1676,9 @@ fn picker_item_label<V: 'static>(
             // Half-strength muted, the weight Zed gives the dots between a row's
             // detail fields.
             dim_color: with_alpha(theme.colors.foreground.secondary, 0.5),
+            // The detail line is muted whole; a part there may also join
+            // several paths, which have no single last component.
+            path_folders_dim: false,
             text_size: gpui::rems(0.75),
             weight: FontWeight::NORMAL,
         },
@@ -1702,6 +1706,9 @@ struct LineRole<'a> {
     parts: &'a [PickerPromptItemPart],
     base_color: gpui::Rgba,
     dim_color: gpui::Rgba,
+    /// A path part draws its folders in `dim_color`, keeping `base_color` for
+    /// the file or folder it names.
+    path_folders_dim: bool,
     /// Set on the line *and* on each `TruncatedText`. The latter measures itself
     /// against the text style in effect during layout, which does not yet carry
     /// the line's own `text_sm`/`text_xs`; leaving it to inherit reserved a line
@@ -1748,14 +1755,19 @@ fn picker_item_line<V: 'static>(
             TruncatedTextFlex::Fixed
         };
 
+        let path_folders_dim =
+            role.path_folders_dim && !part.dim && part.profile == TextTruncationProfile::Path;
         let mut text = TruncatedText::new(part.text.clone(), role.text_size)
             .profile(part.profile)
             .flex(flex)
-            .text_color(if part.dim {
+            .text_color(if part.dim || path_folders_dim {
                 role.dim_color
             } else {
                 role.base_color
             });
+        if path_folders_dim {
+            text = text.path_leaf_color(role.base_color);
+        }
         if let Some(family) = part.font_family.as_ref() {
             text = text.font_family(family.clone());
         }

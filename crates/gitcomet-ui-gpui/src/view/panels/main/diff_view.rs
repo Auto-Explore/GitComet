@@ -2359,6 +2359,7 @@ impl DiffRenderer {
                                             change_extents: None,
                                             tasks_editable: self.markdown_preview_tasks_editable(),
                                             disclosures: Some(self.worktree_markdown.disclosures.clone()),
+                                            flush_left: false,
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0

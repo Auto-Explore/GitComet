@@ -1094,9 +1094,14 @@ fn discarding_files_closes_only_the_affected_unstaged_diff(cx: &mut gpui::TestAp
 /// `main` and `theirs` both edit `a.txt`, merged with `--no-commit` into a
 /// conflict; `b.txt` is unchanged.
 fn conflicted_merge(dir: &Path) {
-    git(dir, &["init", "-q", "-b", "main"]);
     // Git for Windows defaults to autocrlf=true, so the backend's checkout would write CRLF.
-    git(dir, &["config", "core.autocrlf", "false"]);
+    conflicted_merge_with_autocrlf(dir, false);
+}
+
+fn conflicted_merge_with_autocrlf(dir: &Path, autocrlf: bool) {
+    git(dir, &["init", "-q", "-b", "main"]);
+    let autocrlf = if autocrlf { "true" } else { "false" };
+    git(dir, &["config", "core.autocrlf", autocrlf]);
     for path in ["a.txt", "b.txt"] {
         std::fs::write(dir.join(path), "base\n").unwrap();
     }
@@ -1214,8 +1219,22 @@ fn open_text_resolver(
     Entity<DiffRenderer>,
     &mut gpui::VisualTestContext,
 ) {
+    open_text_resolver_on(cx, conflicted_merge)
+}
+
+/// [`open_text_resolver`] on the conflict `fixture` leaves in `a.txt`.
+fn open_text_resolver_on(
+    cx: &mut gpui::TestAppContext,
+    fixture: fn(&Path),
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    View,
+    Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
     let dir = tempfile::tempdir().unwrap();
-    conflicted_merge(dir.path());
+    fixture(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let status = backend
         .status(&gitcomet_core::services::CancellationToken::new())
@@ -1386,6 +1405,62 @@ fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppConte
     );
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+/// With `core.autocrlf=true` the stages hold LF and Git writes the working
+/// file with CRLF. A resolution built from the stages is saved with CRLF
+/// too, by Save and by the focused window's Save & close; saved as LF,
+/// `git add` refuses it under `core.safecrlf=true`.
+fn save_under_autocrlf(cx: &mut gpui::TestAppContext, close: bool) {
+    let (dir, store, view, diff_renderer, cx) =
+        open_text_resolver_on(cx, |dir| conflicted_merge_with_autocrlf(dir, true));
+    let file = dir.path().join("a.txt");
+    assert!(std::fs::read(&file).unwrap().ends_with(b"theirs\r\n"));
+    wait_for(cx, &view, &store, "the full conflict payload", |repo| {
+        repo.conflict_state.conflict_file_load_mode
+            == gitcomet_state::model::ConflictFileLoadMode::Full
+            && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    if close {
+        cx.update(|_, app| {
+            diff_renderer.update(app, |pane, cx| {
+                pane.focused_mergetool_save_and_exit(REPO, "a.txt".into(), cx);
+            });
+        });
+    } else {
+        let ops_before = store.snapshot().repos[0].ops_rev;
+        click(cx, "conflict_save");
+        wait_for(cx, &view, &store, "save the resolution", |repo| {
+            repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
+        });
+        let error = store.snapshot().repos[0].feedback.last_error.clone();
+        assert!(error.is_none(), "{error:?}");
+    }
+
+    assert_eq!(std::fs::read(&file).unwrap(), b"ours\r\n");
+    git(dir.path(), &["-c", "core.safecrlf=true", "add", "a.txt"]);
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_saves_the_line_endings_git_checks_out(cx: &mut gpui::TestAppContext) {
+    save_under_autocrlf(cx, false);
+}
+
+#[gpui::test]
+fn save_and_close_writes_the_line_endings_git_checks_out(cx: &mut gpui::TestAppContext) {
+    save_under_autocrlf(cx, true);
 }
 
 /// The bar's plain Save writes the resolution and leaves the file unmerged.

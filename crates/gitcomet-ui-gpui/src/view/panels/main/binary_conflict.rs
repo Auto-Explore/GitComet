@@ -86,9 +86,6 @@ impl DiffRenderer {
         let mergetool_path = path.clone();
 
         let focused_mergetool = self.view_mode == GitCometViewMode::FocusedMergetool;
-        let base_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Base);
-        let ours_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Ours);
-        let theirs_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Theirs);
 
         let has_base = file.base_bytes.is_some();
         let has_ours = file.ours_bytes.is_some();
@@ -114,11 +111,12 @@ impl DiffRenderer {
                 .disabled(!has_base)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     if focused_mergetool {
-                        if let Some(bytes) = base_bytes.as_deref() {
-                            this.focused_mergetool_write_side_and_exit(
-                                repo_id, &base_path, bytes, cx,
-                            );
-                        }
+                        this.focused_mergetool_write_side_and_exit(
+                            repo_id,
+                            &base_path,
+                            ThreeWayColumn::Base,
+                            cx,
+                        );
                         return;
                     }
                     this.store.dispatch(Msg::CheckoutConflictBase {
@@ -140,11 +138,12 @@ impl DiffRenderer {
                 .disabled(!has_ours)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     if focused_mergetool {
-                        if let Some(bytes) = ours_bytes.as_deref() {
-                            this.focused_mergetool_write_side_and_exit(
-                                repo_id, &ours_path, bytes, cx,
-                            );
-                        }
+                        this.focused_mergetool_write_side_and_exit(
+                            repo_id,
+                            &ours_path,
+                            ThreeWayColumn::Ours,
+                            cx,
+                        );
                         return;
                     }
                     this.store.dispatch(Msg::CheckoutConflictSide {
@@ -167,14 +166,12 @@ impl DiffRenderer {
                 .disabled(!has_theirs)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     if focused_mergetool {
-                        if let Some(bytes) = theirs_bytes.as_deref() {
-                            this.focused_mergetool_write_side_and_exit(
-                                repo_id,
-                                &theirs_path,
-                                bytes,
-                                cx,
-                            );
-                        }
+                        this.focused_mergetool_write_side_and_exit(
+                            repo_id,
+                            &theirs_path,
+                            ThreeWayColumn::Theirs,
+                            cx,
+                        );
                         return;
                     }
                     this.store.dispatch(Msg::CheckoutConflictSide {

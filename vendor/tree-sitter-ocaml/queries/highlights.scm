@@ -182,7 +182,7 @@
 
 (
   [(type_constructor)] @type.builtin
-  (#match? @type.builtin "^(int|char|bytes|string|float|float32|bool|unit|exn|eff|continuation|array|floatarray|iarray|list|option|nativeint|int(8|16|32|64)|lazy_t|extension_constructor|lexing_position|atomic_loc|or_null|idx_imm|idx_mut|nativeint#|int(8|16|32|64)#|float#|float32#|int(8|16|32|64)x(8|16|32|64)#|float(16|32|64)x(8|16|32)#|char#|bool#|unit#)$")
+  (#match? @type.builtin "^(int|char|bytes|string|float|float32|bool|unit|exn|eff|continuation|array|floatarray|iarray|list|option|nativeint|int(8|16|32|64)|lazy_t|extension_constructor|lexing_position|atomic_loc|or_null|idx_imm|idx_mut|nativeint#|int(8|16|32|64)#|float#|float32#|char#|bool#|unit#|int8x(16|32|64)#?|(int|float)16x(8|16|32)#?|(int|float)32x(4|8|16)#?|(int|float)64x(2|4|8)#?)$")
 )
 
 (

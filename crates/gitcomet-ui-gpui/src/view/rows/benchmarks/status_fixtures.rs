@@ -801,7 +801,7 @@ fn shape_status_truncation_label(
         TextTruncationProfile::Middle => {
             metrics.middle_profile_shapes = metrics.middle_profile_shapes.saturating_add(1);
         }
-        TextTruncationProfile::End => {
+        TextTruncationProfile::End | TextTruncationProfile::RefLeaf => {
             metrics.end_profile_shapes = metrics.end_profile_shapes.saturating_add(1);
         }
     }

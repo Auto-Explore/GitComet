@@ -14,7 +14,7 @@ fn cancels_clean_walk(cached: bool, through_parent: bool) {
     let timestamp = filetime::FileTime::now().unix_seconds() - 30;
     let touch = |seconds| {
         for ix in 0..count {
-            filetime::set_file_mtime(
+            crate::test_support::set_file_mtime(
                 workdir.join(format!("{ix:03}.txt")),
                 filetime::FileTime::from_unix_time(seconds, 0),
             )

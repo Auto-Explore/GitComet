@@ -82,6 +82,9 @@ pub(in crate::view) struct MarkdownDocumentContext {
     /// from the working-tree file itself, so its byte offsets are the disk's.
     pub(in crate::view) tasks_editable: bool,
     pub(in crate::view) disclosures: Option<crate::view::markdown_disclosures::MarkdownDisclosures>,
+    /// The text starts at the container's left edge instead of the inset a
+    /// document keeps: for a host that already insets what it shows.
+    pub(in crate::view) flush_left: bool,
 }
 
 /// Vertical extents of changed blocks in scroll-content coordinates, placed
@@ -522,6 +525,7 @@ impl MarkdownDocumentContext {
             change_extents: None,
             tasks_editable: false,
             disclosures: None,
+            flush_left: false,
         }
     }
 }
@@ -1209,10 +1213,7 @@ fn render_windowed_block_column(
         // Padded per item, not on the column: the measuring layer is
         // positioned absolutely, so it would span the column's padding too and
         // measure every block wider than the column lays it out.
-        let mut item = div()
-            .w_full()
-            .min_w(px(0.0))
-            .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context));
+        let mut item = div().w_full().min_w(px(0.0)).pl(content_inset(context));
         if ix > 0 {
             item = item.child(render_column_gap(blocks, ix, context, false));
         }
@@ -1255,7 +1256,7 @@ fn render_block_column(
         context,
         BlockNesting::default(),
     )
-    .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
+    .pl(content_inset(context))
     .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context))
     .text_color(context.theme.colors.foreground.primary)
 }
@@ -2840,6 +2841,15 @@ fn pictures(context: &MarkdownDocumentContext) -> crate::view::rows::MarkdownPic
 
 fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
     context.theme.markdown_px(value, context.ui_scale_percent)
+}
+
+/// How far the document's text sits from its container's left edge.
+fn content_inset(context: &MarkdownDocumentContext) -> Pixels {
+    if context.flush_left {
+        px(0.0)
+    } else {
+        scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context)
+    }
 }
 
 #[cfg(test)]

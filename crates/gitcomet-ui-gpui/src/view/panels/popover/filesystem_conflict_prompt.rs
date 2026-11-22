@@ -41,6 +41,7 @@ pub(super) fn panel(
     // The file name is the part to keep when the path is long.
     .profile(components::TextTruncationProfile::Path)
     .text_color(theme.colors.foreground.secondary)
+    .path_leaf_color(theme.colors.foreground.primary)
     .full_text_tooltip(this.tooltip_host.clone());
 
     let mut note = String::from(

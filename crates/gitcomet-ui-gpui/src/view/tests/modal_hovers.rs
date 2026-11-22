@@ -215,6 +215,51 @@ fn opening_modals_cancels_pending_hover_timers(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// Deactivating the window clears focus and leaves a modal open. Tab then
+/// enters the modal's search field, never a control behind its scrim.
+#[gpui::test]
+fn modals_take_tab_after_the_window_is_reactivated(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::app::bind_text_input_keys_for_test);
+    for modal in [Modal::Palette, Modal::GoTo, Modal::Documents] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            window.activate();
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+        store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+        sync_view_snapshot(cx, &view);
+        cx.update(|window, app| view.update(app, |view, cx| modal.open(view, window, cx)));
+        test_support::redraw(cx);
+
+        cx.deactivate_window();
+        cx.update(|window, _| window.activate());
+        cx.run_until_parked();
+        test_support::redraw(cx);
+        cx.update(|window, app| {
+            assert!(
+                window.focused(app).is_none(),
+                "{modal:?}: deactivation clears focus"
+            );
+        });
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let view = view.read(app);
+            let field = match modal {
+                Modal::Palette => view.command_palette.read(app).query_input.read(app),
+                Modal::GoTo => view.reveal_commit_dialog.read(app).query_input.read(app),
+                _ => view.document_picker.read(app).search.read(app),
+            };
+            assert!(
+                field.focus_handle().is_focused(window),
+                "{modal:?}: Tab enters it, got {:?}",
+                window.focused(app)
+            );
+        });
+    }
+}
+
 #[gpui::test]
 fn keyboard_modal_dismisses_gpui_managed_tooltip_without_mouse_movement(
     cx: &mut gpui::TestAppContext,

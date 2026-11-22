@@ -1111,6 +1111,90 @@ fn a_mergetool_resolver_closes_from_the_bottom_bar(cx: &mut gpui::TestAppContext
     );
 }
 
+/// Taking a whole side in a mergetool window writes the file as Git's checkout
+/// of that side would: here with the CRLF `eol=crlf` gives it, which the
+/// side's blob in the index does not have, and on Unix through a filter.
+#[gpui::test]
+fn a_mergetool_side_is_written_as_git_checks_it_out(cx: &mut gpui::TestAppContext) {
+    use crate::test_support::git;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = tempfile::tempdir().unwrap();
+    let root = workdir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.name", "GitComet"]);
+    git(root, &["config", "user.email", "gitcomet@example.com"]);
+    git(root, &["config", "core.autocrlf", "false"]);
+    let mut attributes = String::from("notes.txt text eol=crlf\n");
+    let mut cases = vec![("notes.txt", "ours\r\n")];
+    // The filter is `tr`, which a Windows runner need not have.
+    if cfg!(unix) {
+        for (key, value) in [
+            ("filter.rot13.clean", "tr A-Za-z N-ZA-Mn-za-m"),
+            ("filter.rot13.smudge", "tr A-Za-z N-ZA-Mn-za-m"),
+        ] {
+            git(root, &["config", key, value]);
+        }
+        attributes.push_str("secret.txt filter=rot13\n");
+        cases.push(("secret.txt", "ours\n"));
+    }
+    std::fs::write(root.join(".gitattributes"), attributes).unwrap();
+    let commit = |side: &str| {
+        std::fs::write(root.join("notes.txt"), format!("{side}\r\n")).unwrap();
+        if cfg!(unix) {
+            std::fs::write(root.join("secret.txt"), format!("{side}\n")).unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", side]);
+    };
+    commit("base");
+    git(root, &["checkout", "-qb", "theirs"]);
+    commit("theirs");
+    git(root, &["checkout", "-q", "main"]);
+    commit("ours");
+    let merged = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["merge", "-q", "theirs"])
+        .output()
+        .unwrap();
+    assert!(!merged.status.success(), "the merge conflicts");
+
+    let repo_id = RepoId(70578);
+    let commit_id = CommitId("abcdef0011223395".into());
+    let repo = simple_conflict_repo(repo_id, root, &commit_id, std::path::Path::new("notes.txt"));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    for (path, checked_out) in cases {
+        let exit_code = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+        cx.update(|_window, app| {
+            diff_renderer.update(app, |pane, cx| {
+                pane.view_mode = GitCometViewMode::FocusedMergetool;
+                pane.focused_mergetool_exit_code = Some(Arc::clone(&exit_code));
+                pane.focused_mergetool_write_side_and_exit(
+                    repo_id,
+                    std::path::Path::new(path),
+                    ThreeWayColumn::Ours,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            exit_code.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "{path}: taking ours exits as a resolved merge"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(path)).unwrap(),
+            checked_out,
+            "{path}: written as `git checkout --ours` writes it"
+        );
+    }
+}
+
 /// While the conflict file loads the resolver output is empty, so the bar
 /// offers no save that would write it over the file; the saves come with it.
 #[gpui::test]

@@ -2242,10 +2242,26 @@ fn build_simple_commit_path_diff(
     let header_capacity = path_text.len().saturating_mul(4).saturating_add(96);
     let mut text = String::with_capacity(header_capacity);
 
-    text.push_str("diff --git a/");
-    text.push_str(path_text.as_ref());
-    text.push_str(" b/");
-    text.push_str(path_text.as_ref());
+    // A file name is commit content. One with a newline would read as more
+    // header or hunk lines, so quote such a name as Git does. Names Git's
+    // default quoting would only octal-escape for non-ASCII stay readable.
+    let needs_quoting = path_text
+        .bytes()
+        .any(|byte| byte < b' ' || byte == 0x7f || byte == b'"' || byte == b'\\');
+    let side = |side: &str| -> String {
+        let name = format!("{side}/{path_text}");
+        if needs_quoting {
+            gix::quote::ansi_c::quote(name.as_bytes().into()).to_string()
+        } else {
+            name
+        }
+    };
+    let (old_name, new_name) = (side("a"), side("b"));
+
+    text.push_str("diff --git ");
+    text.push_str(&old_name);
+    text.push(' ');
+    text.push_str(&new_name);
     text.push('\n');
 
     match prefix {
@@ -2257,8 +2273,8 @@ fn build_simple_commit_path_diff(
             text.push_str(blob.short_id.as_str());
             text.push('\n');
             text.push_str("--- /dev/null\n");
-            text.push_str("+++ b/");
-            text.push_str(path_text.as_ref());
+            text.push_str("+++ ");
+            text.push_str(&new_name);
             text.push('\n');
             text.push_str("@@ -0,0 +");
             push_unified_hunk_range(&mut text, 1, line_count);
@@ -2271,8 +2287,8 @@ fn build_simple_commit_path_diff(
             text.push_str("index ");
             text.push_str(blob.short_id.as_str());
             text.push_str("..0000000\n");
-            text.push_str("--- a/");
-            text.push_str(path_text.as_ref());
+            text.push_str("--- ");
+            text.push_str(&old_name);
             text.push('\n');
             text.push_str("+++ /dev/null\n");
             text.push_str("@@ -");

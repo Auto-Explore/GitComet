@@ -62,8 +62,9 @@ impl FileName {
 }
 
 /// Renames the file in a single-file patch's headers, so a change made under
-/// an old name applies to the file as it is named now. Only headers before the
-/// first hunk are touched.
+/// an old name applies to the file as it is named now. Only header lines are
+/// touched: those from each `diff --git` line to that section's first hunk.
+/// Git writes a file<->symlink change as two sections for the one file.
 pub(super) fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
     let path = to;
     let to = repo_path_bytes(path)?;
@@ -83,7 +84,10 @@ pub(super) fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
     let mut retargeted = false;
     for raw in patch.split_inclusive(|byte| *byte == b'\n') {
         let text = raw.strip_suffix(b"\n").unwrap_or(raw);
-        if text.starts_with(b"@@") || text.starts_with(b"GIT binary patch") {
+        // Hunk lines start with ' ', '+', '-' or '\', so only a header can.
+        if text.starts_with(b"diff --git ") {
+            in_header = true;
+        } else if text.starts_with(b"@@") || text.starts_with(b"GIT binary patch") {
             in_header = false;
         }
         let replacement = if !in_header {
@@ -359,27 +363,11 @@ impl GixRepo {
         let Some(base) = source.base else {
             return Ok(renames);
         };
-        let mut cmd = self.git_workdir_cmd();
-        cmd.args(["diff-tree", "-r", "-M", "-z", "--name-status"])
-            .arg(base.to_string())
-            .arg(source.tip.to_string());
-        let listing = run_git_capture_bytes(cmd, "git diff-tree -M --name-status")?;
-        let mut fields = listing.split(|byte| *byte == 0);
-        while let Some(status) = fields.next() {
-            let Some(first) = fields.next() else {
-                break;
-            };
-            if status.first() == Some(&b'R') || status.first() == Some(&b'C') {
-                let Some(second) = fields.next() else {
-                    break;
-                };
-                if status.first() == Some(&b'R') {
-                    renames.insert(
-                        path_buf_from_git_bytes(second, "apply change rename destination")?,
-                        path_buf_from_git_bytes(first, "apply change rename source")?,
-                    );
-                }
-            }
+        for (old, new) in self.renames_between(&base.to_string(), &source.tip.to_string())? {
+            renames.insert(
+                path_buf_from_git_bytes(&new, "apply change rename destination")?,
+                path_buf_from_git_bytes(&old, "apply change rename source")?,
+            );
         }
         Ok(renames)
     }
@@ -678,6 +666,76 @@ fn apply_checkpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Git writes a file<->symlink change as two sections, a deletion and a
+    /// creation. Both must name the file as it is named now; otherwise the
+    /// current file is deleted and the new one created under the old name.
+    #[test]
+    fn retarget_patch_renames_every_section_of_a_type_change() {
+        let patch = concat!(
+            "diff --git a/old b/old\n",
+            "deleted file mode 100644\n",
+            "index 1111111..0000000\n",
+            "--- a/old\n",
+            "+++ /dev/null\n",
+            "@@ -1 +0,0 @@\n",
+            "-content\n",
+            "diff --git a/old b/old\n",
+            "new file mode 120000\n",
+            "index 0000000..2222222\n",
+            "--- /dev/null\n",
+            "+++ b/old\n",
+            "@@ -0,0 +1 @@\n",
+            "+target\n",
+            "\\ No newline at end of file\n",
+        );
+
+        let retargeted = retarget_patch(patch.as_bytes(), Path::new("new")).expect("retarget");
+
+        assert_eq!(
+            String::from_utf8(retargeted).expect("utf-8 patch"),
+            concat!(
+                "diff --git a/new b/new\n",
+                "deleted file mode 100644\n",
+                "index 1111111..0000000\n",
+                "--- a/new\t\n",
+                "+++ /dev/null\n",
+                "@@ -1 +0,0 @@\n",
+                "-content\n",
+                "diff --git a/new b/new\n",
+                "new file mode 120000\n",
+                "index 0000000..2222222\n",
+                "--- /dev/null\n",
+                "+++ b/new\t\n",
+                "@@ -0,0 +1 @@\n",
+                "+target\n",
+                "\\ No newline at end of file\n",
+            )
+        );
+    }
+
+    /// A removed line reading `-- a/old` is `--- a/old` in the hunk: content,
+    /// not a header, and it must survive retargeting untouched.
+    #[test]
+    fn retarget_patch_leaves_header_like_hunk_lines_alone() {
+        let patch = concat!(
+            "diff --git a/old b/old\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/old\n",
+            "+++ b/old\n",
+            "@@ -1,2 +1 @@\n",
+            "--- a/old\n",
+            " keep\n",
+        );
+
+        let retargeted = retarget_patch(patch.as_bytes(), Path::new("new")).expect("retarget");
+
+        assert!(
+            String::from_utf8(retargeted)
+                .expect("utf-8 patch")
+                .ends_with("@@ -1,2 +1 @@\n--- a/old\n keep\n")
+        );
+    }
 
     #[test]
     fn failed_apply_with_an_unreadable_index_keeps_the_original_git_error() {

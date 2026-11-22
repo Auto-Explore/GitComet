@@ -384,6 +384,40 @@ fn crash_report_action_has_one_owner() {
     }));
 }
 
+#[test]
+fn update_check_has_one_owner() {
+    let provider = || Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.update_check("updates", Rc::new(|_, _, _| {}));
+        },
+    };
+    assert!(
+        build(vec![provider()])
+            .ok()
+            .unwrap()
+            .update_check_action()
+            .is_some()
+    );
+    assert!(Registry::default().update_check_action().is_none());
+    let errors = build(vec![
+        provider(),
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.update_check("updates", Rc::new(|_, _, _| {}));
+            },
+        },
+    ])
+    .err()
+    .expect("competing update checks must be refused");
+    assert!(errors.iter().any(|error| {
+        error
+            .message
+            .contains("update_check has more than one provider")
+    }));
+}
+
 fn ref_menu_item(label: &'static str) -> crate::RefMenuItemDescriptor {
     crate::RefMenuItemDescriptor::new(label, |_, _, _| {})
 }

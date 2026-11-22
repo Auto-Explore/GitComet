@@ -179,7 +179,7 @@ jobs:
           grep -Fq 'gnome-keyring-daemon --start --components=secrets' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'libsecret-1-0' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'runs-on: ubuntu-24.04' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'dotnet-version: "9.0.x"' .github/workflows/deploy-microsoft-store.yml
           grep -Fq "Microsoft.NETCore.App 9" .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4' .github/workflows/deploy-microsoft-store.yml
@@ -372,7 +372,7 @@ jobs:
           grep -q 'container type: :naked' dist/deployment-ci/gitcomet.rb
           grep -q 'binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
           grep -q 'gitcomet-v#{version}-linux-#{arch}.AppImage' dist/deployment-ci/gitcomet.rb
-          grep -q 'depends_on macos:' dist/deployment-ci/gitcomet.rb
+          grep -q 'depends_on macos: :sequoia' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap publish detection
         run: |
@@ -733,17 +733,17 @@ jobs:
         include:
           - target_platform: aarch64-darwin
             arch: arm64
-            runs_on: macos-latest
+            runs_on: macos-26
             dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
-            runs_on: macos-15-intel
+            runs_on: macos-26-intel
             dump_syms_triple: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: stable
 

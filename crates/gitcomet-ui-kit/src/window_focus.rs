@@ -1,6 +1,36 @@
 //! Shared focus policy for caret-bearing windows and controls.
 
 use gpui::{App, Context, FocusHandle, Subscription, Window};
+use std::cell::Cell;
+
+thread_local! {
+    /// One keyboard and one pointer serve every window.
+    static LAST_PRESS_WAS_KEY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True from a key press until the next pointer press: the span in which a
+/// focused control shows its focus ring. GPUI's own keyboard modality also
+/// ends when the pointer merely moves.
+pub fn keyboard_focus_shown() -> bool {
+    LAST_PRESS_WAS_KEY.with(Cell::get)
+}
+
+/// Starts [`keyboard_focus_shown`] at every key press.
+/// [`crate::focus_order::install`] installs this.
+pub(crate) fn observe_key_presses(cx: &mut App) -> Subscription {
+    // An interceptor, as observers miss the keys a control consumes. Nothing
+    // to redraw: GPUI shows the ring itself until the pointer moves, and
+    // redraws the window when it does.
+    cx.intercept_keystrokes(|_, _, _| LAST_PRESS_WAS_KEY.with(|key| key.set(true)))
+}
+
+/// Ends [`keyboard_focus_shown`]. Every control reports the presses in its
+/// window, so no window needs a hook of its own.
+pub(crate) fn pointer_pressed(window: &mut Window) {
+    if LAST_PRESS_WAS_KEY.with(|key| key.replace(false)) {
+        window.refresh();
+    }
+}
 
 pub fn is_active(focus: &FocusHandle, window: &Window) -> bool {
     window.is_window_active() && focus.is_focused(window)
@@ -32,20 +62,23 @@ pub fn observe_blur<T: 'static>(
     ]
 }
 
-/// Start keyboard navigation after blur without taking Tab from an editor,
-/// terminal, or prompt that already owns focus.
-pub fn observe_tab_navigation(cx: &mut App) -> Subscription {
+/// Answers Tab and Shift-Tab where the focus-order bindings cannot match:
+/// with nothing focused, or on a control with no key context on its path. An
+/// element that keeps Tab ([`crate::focus_order::CAPTURES_TAB`]) keeps it.
+///
+/// [`crate::focus_order::install`] installs this, once: a second observer
+/// would move focus twice.
+pub(crate) fn observe_tab_navigation(cx: &mut App) -> Subscription {
     // With no focus GPUI dispatches only through its root node, so a listener
-    // inside the window frame would never receive this first Tab.
+    // inside the window frame would never receive this first Tab, and with no
+    // key context on that path the context-bound Tab binding does not match.
     cx.observe_keystrokes(|event, window, cx| {
         if event.action.is_some()
             || !window.is_window_active()
-            || event.context_stack.iter().any(|context| {
-                context.contains("TextInput")
-                    || context.contains("Terminal")
-                    || context.contains("ContextMenu")
-                    || context.contains("PopoverPrompt")
-            })
+            || event
+                .context_stack
+                .iter()
+                .any(|context| context.contains(crate::focus_order::CAPTURES_TAB))
             || event.keystroke.key != "tab"
             || event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
@@ -54,11 +87,12 @@ pub fn observe_tab_navigation(cx: &mut App) -> Subscription {
         {
             return;
         }
-        if event.keystroke.modifiers.shift {
-            window.focus_prev(cx);
+        let direction = if event.keystroke.modifiers.shift {
+            crate::focus_order::Direction::Previous
         } else {
-            window.focus_next(cx);
-        }
+            crate::focus_order::Direction::Next
+        };
+        crate::focus_order::move_focus_from_outside_forms(direction, window, cx);
         if window.focused(cx).is_some() {
             cx.stop_propagation();
         }

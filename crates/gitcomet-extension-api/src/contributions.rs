@@ -28,6 +28,10 @@ pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
 /// or repository context; invoking this action must not submit a report.
 pub type CrashReportAction = Rc<dyn Fn(WindowHost, &mut Window, &mut App)>;
 
+/// The product's own update check, run by "Check for updates" in place of the
+/// host's. The action reports its own outcome; the host shows nothing for it.
+pub type UpdateCheckAction = Rc<dyn Fn(WindowHost, &mut Window, &mut App)>;
+
 /// What a repository view is built for: its window and repository.
 #[derive(Clone, Debug)]
 pub struct RepositoryViewContext {

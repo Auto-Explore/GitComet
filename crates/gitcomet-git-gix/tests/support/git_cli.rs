@@ -67,3 +67,27 @@ pub(crate) fn git_stdout_raw(repo: &Path, args: &[&str]) -> String {
 pub(crate) fn stdout_text(output: Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
+
+/// File names a pathspec, an option parser or quoted output could read as
+/// something other than one file. Windows forbids most of them.
+pub(crate) fn unusual_file_names() -> Vec<&'static str> {
+    let mut names = vec![
+        "-n", "--all", " a.txt", "a b.txt", "é.txt", "~a.txt", "@{u}",
+    ];
+    if !cfg!(windows) {
+        names.extend([
+            "*.txt",
+            "?.txt",
+            ":(top)a.txt",
+            ":(glob)*.txt",
+            ":!a.txt",
+            ":/a.txt",
+            "\\*.txt",
+            "a.txt ",
+            "tab\ta.txt",
+            "line\nbreak.txt",
+            "\"quoted\".txt",
+        ]);
+    }
+    names
+}

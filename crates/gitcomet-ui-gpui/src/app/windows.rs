@@ -380,10 +380,10 @@ pub(super) fn check_for_updates_in_active_or_existing_normal_window(cx: &mut App
 
 #[cfg(any(test, target_os = "macos"))]
 pub(super) fn manual_update_check_menu_disabled(
-    disabled_by_environment: bool,
+    unavailable: bool,
     normal_window_available: bool,
 ) -> bool {
-    disabled_by_environment || !normal_window_available
+    unavailable || !normal_window_available
 }
 
 pub(super) fn normal_gitcomet_window_blocks_repository_management_actions(

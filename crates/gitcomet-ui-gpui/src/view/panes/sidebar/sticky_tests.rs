@@ -633,6 +633,20 @@ fn sticky_sidebar_pins_share_scrolling_filtering_and_virtualized_overflow(
         test_support::popover_kind(view.read(app), app),
         Some(PopoverKind::SidebarPinnedOverflow { bottom: false, .. })
     )));
+    // The menu keeps Tab: it walks the entries as the arrows do.
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    let selected = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .context_menu_selected_ix_for_tests()
+        })
+    };
+    cx.simulate_keystrokes("tab tab");
+    let walked = selected(cx).expect("Tab selects an entry");
+    cx.simulate_keystrokes("shift-tab");
+    assert_eq!(selected(cx), Some(walked - 1), "Shift-Tab walks back");
     let entry = cx.debug_bounds("pin_overflow_entry_0").unwrap();
     cx.simulate_click(entry.center(), gpui::Modifiers::default());
     test_support::redraw(cx);

@@ -63,9 +63,6 @@ impl DiffRenderer {
         let restore_theirs_path = path.clone();
         let mergetool_path = path.clone();
         let focused_mergetool = self.view_mode == GitCometViewMode::FocusedMergetool;
-        let base_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Base);
-        let ours_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Ours);
-        let theirs_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Theirs);
 
         let title: SharedString =
             format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
@@ -97,7 +94,6 @@ impl DiffRenderer {
             )
             .when(restore.has_ours, |d| {
                 let p = restore_ours_path.clone();
-                let bytes = ours_bytes.clone();
                 d.child(
                     components::Button::new(
                         "decision_restore_ours",
@@ -110,9 +106,12 @@ impl DiffRenderer {
                     .style(components::ButtonStyle::Outlined)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         if focused_mergetool {
-                            if let Some(bytes) = bytes.as_deref() {
-                                this.focused_mergetool_write_side_and_exit(repo_id, &p, bytes, cx);
-                            }
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id,
+                                &p,
+                                ThreeWayColumn::Ours,
+                                cx,
+                            );
                             return;
                         }
                         this.store.dispatch(Msg::CheckoutConflictSide {
@@ -125,7 +124,6 @@ impl DiffRenderer {
             })
             .when(restore.has_theirs, |d| {
                 let p = restore_theirs_path.clone();
-                let bytes = theirs_bytes.clone();
                 d.child(
                     components::Button::new(
                         "decision_restore_theirs",
@@ -138,9 +136,12 @@ impl DiffRenderer {
                     .style(components::ButtonStyle::Outlined)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         if focused_mergetool {
-                            if let Some(bytes) = bytes.as_deref() {
-                                this.focused_mergetool_write_side_and_exit(repo_id, &p, bytes, cx);
-                            }
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id,
+                                &p,
+                                ThreeWayColumn::Theirs,
+                                cx,
+                            );
                             return;
                         }
                         this.store.dispatch(Msg::CheckoutConflictSide {
@@ -153,7 +154,6 @@ impl DiffRenderer {
             })
             .when(restore.has_base, |d| {
                 let p = restore_path.clone();
-                let bytes = base_bytes.clone();
                 d.child(
                     components::Button::new(
                         "decision_restore_base",
@@ -166,9 +166,12 @@ impl DiffRenderer {
                     .style(components::ButtonStyle::Outlined)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         if focused_mergetool {
-                            if let Some(bytes) = bytes.as_deref() {
-                                this.focused_mergetool_write_side_and_exit(repo_id, &p, bytes, cx);
-                            }
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id,
+                                &p,
+                                ThreeWayColumn::Base,
+                                cx,
+                            );
                             return;
                         }
                         this.store.dispatch(Msg::CheckoutConflictBase {

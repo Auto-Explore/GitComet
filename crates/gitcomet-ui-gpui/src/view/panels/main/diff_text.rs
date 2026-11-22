@@ -4,9 +4,8 @@ use super::{
     ResizeDividerDrag, components, diff_split_drag_params, empty_diff_text_document,
     next_diff_split_drag_ratio,
 };
-use crate::view::panes::diff::DiffBody;
+use crate::view::panes::diff::ZeroRowNotice;
 use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
-use gitcomet_core::diff_engine::DiffEngineStatus;
 use gpui::{
     AnyElement, CursorStyle, MouseButton, MouseDownEvent, Window, div, prelude::*, px, uniform_list,
 };
@@ -40,17 +39,6 @@ impl DiffRenderer {
         }
     }
 
-    pub(super) fn collapsed_difftastic_has_only_text_changes(&self) -> bool {
-        self.is_collapsed_diff_projection_active()
-            && matches!(
-                self.diff_engine_status,
-                DiffEngineStatus::Difftastic {
-                    syntactic_changes: false,
-                    text_differs: true,
-                }
-            )
-    }
-
     pub(super) fn render_text_diff(
         &mut self,
         theme: AppTheme,
@@ -64,60 +52,46 @@ impl DiffRenderer {
         self.maybe_autoscroll_diff_to_first_change();
         self.maybe_advance_after_stage();
 
-        if self.collapsed_difftastic_has_only_text_changes() {
-            return components::empty_state(
-                theme,
-                "Difftastic - Collapsed mode",
-                "No syntactic changes; text differs",
-            )
-            .debug_selector(|| "difftastic_text_only_canvas".to_string())
-            .size_full()
-            .text_center()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap_2()
+        if let Some(notice) = self.zero_row_notice() {
+            let state = components::empty_state(theme, notice.title(), notice.message())
+                .text_center()
+                .debug_selector(|| notice.debug_selector().to_string());
+            match notice {
+                ZeroRowNotice::OnlyTextDiffers => state
+                    .size_full()
                     .child(
-                        components::Button::new("difftastic_show_full", "Show full text").on_click(
-                            theme,
-                            cx,
-                            |this, _, _, cx| this.set_diff_content_mode(DiffContentMode::Full, cx),
-                        ),
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .justify_center()
+                            .gap_2()
+                            .child(
+                                components::Button::new("difftastic_show_full", "Show full text")
+                                    .on_click(theme, cx, |this, _, _, cx| {
+                                        this.set_diff_content_mode(DiffContentMode::Full, cx)
+                                    }),
+                            )
+                            .child(
+                                components::Button::new(
+                                    "difftastic_show_line_changes",
+                                    "Show line changes",
+                                )
+                                .on_click(
+                                    theme,
+                                    cx,
+                                    |this, _, _, cx| this.show_line_changes(cx),
+                                ),
+                            ),
                     )
-                    .child(
-                        components::Button::new(
-                            "difftastic_show_line_changes",
-                            "Show line changes",
-                        )
-                        .on_click(theme, cx, |this, _, _, cx| this.show_line_changes(cx)),
-                    ),
-            )
-            .into_any_element();
-        }
-
-        let total_len = if self.diff_surface().body == DiffBody::Patch {
-            self.patch_diff_row_len()
-        } else if self.is_collapsed_diff_projection_active() {
-            self.collapsed_diff_visible_rows.len()
-        } else {
-            match self.diff_view {
-                DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                DiffViewMode::Split => self.file_diff_split_row_len(),
+                    .into_any_element(),
+                ZeroRowNotice::NoChanges
+                | ZeroRowNotice::EmptyFile { .. }
+                | ZeroRowNotice::NoChangedLines { .. } => empty_diff_text_document(
+                    cx.entity(),
+                    DiffTextRegion::Inline,
+                    state.into_any_element(),
+                ),
             }
-        };
-        if total_len == 0 {
-            let message = if self.diff_surface().body == DiffBody::Patch {
-                "No changes."
-            } else {
-                "Empty file."
-            };
-            empty_diff_text_document(
-                cx.entity(),
-                DiffTextRegion::Inline,
-                components::empty_state(theme, "Diff", message).into_any_element(),
-            )
         } else if self.diff_visible_len() == 0 {
             components::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
         } else {

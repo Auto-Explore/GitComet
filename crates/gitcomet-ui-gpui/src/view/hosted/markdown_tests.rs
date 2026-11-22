@@ -388,6 +388,37 @@ fn hosted_markdown_compact_list_geometry_scales_with_the_preview(cx: &mut gpui::
 }
 
 #[gpui::test]
+fn hosted_markdown_interface_text_takes_the_ui_font_size_from_the_left_edge(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = open_markdown(cx, "Paragraph\n");
+    let row = row_ix(&view, cx, "Paragraph");
+    let theme = AppTheme::gitcomet_dark();
+    assert!(theme.metrics.ui_font_size_px < theme.metrics.markdown_preview_font_size_px);
+
+    let edge = cx.debug_bounds("hosted_markdown").expect("drawn").left();
+    let document = bounds(cx, "markdown_preview_text_box", row);
+    assert!((document.left() - edge - theme.markdown_px(12.0, 100)).abs() < px(1.0));
+
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.set_text_style(gitcomet_extension_api::MarkdownTextStyle::Interface, cx)
+        })
+    });
+    redraw(cx);
+    draw_scheduled_frames(cx);
+    let interface = bounds(cx, "markdown_preview_text_box", row);
+    assert!((interface.left() - edge).abs() < px(1.0));
+    let ratio = interface.size.height / document.size.height;
+    let expected =
+        theme.metrics.ui_font_size_px as f32 / theme.metrics.markdown_preview_font_size_px as f32;
+    assert!(
+        (ratio - expected).abs() < 0.05,
+        "a line is {ratio} of the document's, expected {expected}"
+    );
+}
+
+#[gpui::test]
 fn hosted_markdown_nested_disclosures_toggle_and_reset_only_for_changed_source(
     cx: &mut gpui::TestAppContext,
 ) {

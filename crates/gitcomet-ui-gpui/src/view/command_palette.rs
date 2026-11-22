@@ -1,4 +1,5 @@
 use crate::kit::click::PointerClickExt as _;
+use crate::kit::focus_order::{TabScope, TabScopeExt as _};
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -61,6 +62,8 @@ pub(crate) enum Needs {
     Push,
     /// A remote whose URL points at a web page.
     RemoteWebPage,
+    /// "Check for updates" has a check to run.
+    UpdateCheck,
     MacOs,
     Linux,
     /// Git can run `git lfs`.
@@ -104,6 +107,8 @@ pub(crate) struct PaletteContext {
     pub(crate) repo_uses_annex: bool,
     pub(crate) annex_initialized: bool,
     pub(crate) annex_adjusted: bool,
+    /// "Check for updates" has a check to run, as the menus decide.
+    pub(crate) update_check: bool,
 }
 
 const GIT_LFS_MISSING: &str = "Install Git LFS where Git can find it first";
@@ -148,6 +153,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
         Needs::Pull => ctx.pull_unavailable,
         Needs::Push => ctx.push_unavailable,
         Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
+        Needs::UpdateCheck => (!ctx.update_check).then_some("Update checks are not available here"),
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
@@ -772,7 +778,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "update upgrade version release",
         requires_repo: false,
-        needs: Needs::Nothing,
+        needs: Needs::UpdateCheck,
     },
     CommandEntry {
         id: Command::InstallDesktopIntegration.id(),
@@ -1142,6 +1148,7 @@ enum PaletteRow {
 
 pub(crate) struct CommandPaletteView {
     pub(crate) query_input: Entity<components::TextInput>,
+    tab_scope: TabScope,
     pub(crate) restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
@@ -1172,6 +1179,8 @@ impl CommandPaletteView {
                 components::TextInputOptions {
                     placeholder: "Search commands…".into(),
                     chromeless: true,
+                    // Tab walks the command list.
+                    tab: components::TextInputTab::Report,
                     ..Default::default()
                 },
                 window,
@@ -1184,6 +1193,7 @@ impl CommandPaletteView {
 
         Self {
             query_input,
+            tab_scope: TabScope::modal(cx),
             restore_focus: None,
             fallback_focus: None,
             root_view,
@@ -1679,6 +1689,7 @@ impl Render for CommandPaletteView {
         };
 
         let palette_body = components::modal_surface(theme)
+            .tab_scope(&self.tab_scope)
             .child(
                 div()
                     .w_full()
@@ -2014,6 +2025,13 @@ mod tests {
                 Needs::Sequencer,
                 PaletteContext {
                     sequencer: true,
+                    ..ctx.clone()
+                },
+            ),
+            (
+                Needs::UpdateCheck,
+                PaletteContext {
+                    update_check: true,
                     ..ctx.clone()
                 },
             ),

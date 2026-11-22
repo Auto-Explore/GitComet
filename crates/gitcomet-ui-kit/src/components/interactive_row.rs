@@ -1,6 +1,6 @@
-#[cfg(test)]
-use crate::interaction::interaction_outline;
 use crate::interaction::{InteractionFeedback, InteractionState, InteractionStyle};
+#[cfg(test)]
+use crate::interaction::{focus_outline, interaction_outline};
 use crate::theme::{AppTheme, composite_over, layer_over};
 use gpui::prelude::*;
 use gpui::{Div, Rgba, Stateful, StyleRefinement, px};
@@ -89,7 +89,7 @@ impl InteractiveRowStyle {
 
     #[cfg(test)]
     fn focus_outline(&self) -> gpui::BoxShadow {
-        interaction_outline(self.theme.colors.interaction.focus_ring)
+        focus_outline(self.theme.colors.interaction.focus_ring)
     }
 
     #[cfg(test)]
@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_outline_is_a_one_pixel_inset_in_both_appearances() {
+    fn focus_outline_is_a_two_pixel_inset_in_both_appearances() {
         for theme in [dark_theme(), AppTheme::gitcomet_light()] {
             let outline =
                 InteractiveRowStyle::new(theme, theme.colors.surface.chrome).focus_outline();
@@ -205,7 +205,7 @@ mod tests {
             assert!(outline.inset);
             assert_eq!(outline.offset, gpui::point(px(0.0), px(0.0)));
             assert_eq!(outline.blur_radius, px(0.0));
-            assert_eq!(outline.spread_radius, px(1.0));
+            assert_eq!(outline.spread_radius, px(2.0));
         }
     }
 

@@ -940,3 +940,18 @@ fn only_an_all_branches_walk_hides_remotes() {
         assert_eq!(walk, HistoryWalk::from(mode), "{mode:?}");
     }
 }
+
+/// A Markdown heading underline is not a conflict marker, so a correctly
+/// resolved README must stage. A stray opener or closer still blocks staging.
+#[test]
+fn conflict_resolution_validation_ignores_separator_like_lines_outside_a_block() {
+    let resolved = "Title\n=======\n\nBody\n";
+    let validation = validate_conflict_resolution_text(resolved);
+    assert!(!validation.has_conflict_markers, "{validation:?}");
+    assert_eq!(validation.marker_lines, 0);
+
+    let stray_opener = "kept\n<<<<<<< HEAD\nleft behind\n";
+    assert!(validate_conflict_resolution_text(stray_opener).has_conflict_markers);
+    let stray_closer = "kept\n>>>>>>> feature\n";
+    assert!(validate_conflict_resolution_text(stray_closer).has_conflict_markers);
+}

@@ -2,6 +2,7 @@
 //! and the system Open dialog, floating above the button that opened it.
 
 use super::*;
+use crate::kit::focus_order::{TabScope, TabScopeExt as _};
 use std::rc::Rc;
 
 const PICKER_WIDTH_PX: f32 = 520.0;
@@ -74,7 +75,8 @@ pub(crate) struct DocumentPicker {
     root: WeakEntity<GitCometView>,
     documents: WeakEntity<DocumentsView>,
     recents: Entity<RecentDocumentList>,
-    search: Entity<TextInput>,
+    pub(in crate::view) search: Entity<TextInput>,
+    tab_scope: TabScope,
     scroll: gpui::ScrollHandle,
     /// Repainted by id when the picker opens or closes; it draws the button.
     status_bar: gpui::EntityId,
@@ -104,6 +106,8 @@ impl DocumentPicker {
                     placeholder: "Search recent files or type a path…".into(),
                     leading_icon: Some("icons/zoom.svg"),
                     chromeless: true,
+                    // Tab walks the file list.
+                    tab: TextInputTab::Report,
                     ..Default::default()
                 },
                 cx,
@@ -130,6 +134,7 @@ impl DocumentPicker {
             documents: documents.downgrade(),
             recents,
             search,
+            tab_scope: TabScope::modal(cx),
             scroll: gpui::ScrollHandle::new(),
             status_bar,
             open: false,
@@ -486,6 +491,7 @@ impl Render for DocumentPicker {
                     .snap_to_window_with_margin(scaled_px(8.0))
                     .child(
                         components::popover_surface(theme)
+                            .tab_scope(&self.tab_scope)
                             .id("documents_picker")
                             .debug_selector(|| "documents_picker".into())
                             .w(scaled_px(PICKER_WIDTH_PX))

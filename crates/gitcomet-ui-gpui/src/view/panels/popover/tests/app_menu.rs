@@ -409,6 +409,44 @@ fn app_menu_open_remote_hands_off_to_the_remote_picker(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn app_menu_update_check_runs_an_extensions_own_check(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{Extension, ExtensionId, Registrar, Registry};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Updating(Rc<Cell<usize>>);
+    impl Extension for Updating {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.updating").unwrap()
+        }
+        fn register(&self, registrar: &mut Registrar) {
+            let checked = self.0.clone();
+            registrar.update_check(
+                "updates",
+                Rc::new(move |_, _, _| checked.set(checked.get() + 1)),
+            );
+        }
+    }
+    let checked = Rc::new(Cell::new(0));
+    cx.update(|app| {
+        let registry = Registry::build(vec![Box::new(Updating(checked.clone()))]).unwrap();
+        crate::view::extension_host::install(registry, app);
+    });
+    let (_view, cx) = open_app_menu(cx);
+    let row = cx
+        .debug_bounds("app_menu_check_for_updates")
+        .expect("app menu should offer Check for updates")
+        .center();
+    assert_eq!(checked.get(), 0, "opening the menu checks nothing");
+    cx.simulate_mouse_move(row, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(row, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(row, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(checked.get(), 1);
+}
+
+#[gpui::test]
 fn app_menu_places_update_check_immediately_after_apply_patch(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = open_app_menu(cx);
     let apply_patch = cx
@@ -480,5 +518,59 @@ fn app_menu_zoom_in_zooms_only_this_window(cx: &mut gpui::TestAppContext) {
     assert_eq!(default, before, "the default UI scale is untouched");
     cx.update(|window, app| {
         crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), None);
+    });
+}
+
+/// Switching away from the window clears focus and leaves the menu open. Tab
+/// then gives the keyboard back to the menu, not to a control it covers.
+#[gpui::test]
+fn app_menu_takes_the_keyboard_back_on_tab(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_app_menu(cx);
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        window.activate();
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        assert!(window.is_window_active());
+        window.blur(app);
+        let _ = window.draw(app);
+    });
+    let selected = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .context_menu_selected_ix
+        })
+    };
+    let before = selected(cx);
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            host.tab_scope.contains_focused(window, app),
+            "Tab moves focus into the menu's popover, got {:?}",
+            window.focused(app)
+        );
+        assert!(host.is_open());
+    });
+
+    simulate_key_press(cx, "down");
+    assert_ne!(selected(cx), before, "the arrows walk the menu again");
+    // A menu keeps Tab: it walks the selection rather than moving focus.
+    let walked = selected(cx);
+    simulate_key_press(cx, "tab");
+    assert_ne!(selected(cx), walked, "Tab walks the menu");
+    simulate_key_press(cx, "shift-tab");
+    assert_eq!(selected(cx), walked, "Shift-Tab walks back");
+    simulate_key_press(cx, "escape");
+    cx.update(|_window, app| {
+        assert!(!view.read(app).popover_host.read(app).is_open());
     });
 }

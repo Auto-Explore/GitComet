@@ -5,7 +5,7 @@ use crate::contributions::{
     CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, DetailsTabDescriptor,
     MenuLocation, RefMenuItemDescriptor, RepositoryEntryGate, RepositoryViewDescriptor,
     SettingsPageDescriptor, SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor,
-    WindowGateDescriptor,
+    UpdateCheckAction, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -87,6 +87,7 @@ pub struct Registrar {
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
     crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
     errors: Vec<String>,
 }
 
@@ -118,6 +119,7 @@ impl Registrar {
             close_guards: Vec::new(),
             startup_workflows: Vec::new(),
             crash_report_actions: Vec::new(),
+            update_check_actions: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -427,6 +429,23 @@ impl Registrar {
         self
     }
 
+    /// Runs "Check for updates" (the application menu, the in-window app menu
+    /// and the command palette) instead of the host's own check, and enables it
+    /// for a product whose identity names no update source. At most one
+    /// extension may provide it. The host's startup check, its setting and
+    /// `GITCOMET_NO_UPDATE_CHECK` stay the host's: they follow the identity's
+    /// update source alone and do not reach this check.
+    pub fn update_check(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        action: UpdateCheckAction,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.update_check_actions.push((id, action));
+        }
+        self
+    }
+
     pub fn close_guard(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -469,6 +488,7 @@ pub struct Registry {
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
     crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
 }
 
 impl Registry {
@@ -523,6 +543,9 @@ impl Registry {
             registry
                 .crash_report_actions
                 .extend(registrar.crash_report_actions);
+            registry
+                .update_check_actions
+                .extend(registrar.update_check_actions);
             registry.title_bar_brand.extend(registrar.title_bar_brand);
             registry.status_items.extend(registrar.status_items);
             registry.commit_box_items.extend(registrar.commit_box_items);
@@ -633,28 +656,17 @@ impl Registry {
                 }
             }
         }
-        if registry.crash_report_actions.len() > 1 {
-            for (id, _) in registry.crash_report_actions.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "crash_report_action has more than one provider".to_string(),
-                );
-            }
-        }
-        if registry.edition_strip.len() > 1 {
-            for (id, _) in registry.edition_strip.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "edition_strip has more than one provider".to_string(),
-                );
-            }
-        }
-        if registry.title_bar_brand.len() > 1 {
-            for (id, _) in registry.title_bar_brand.iter().skip(1) {
-                error(
-                    id.extension(),
-                    "title_bar_brand has more than one provider".to_string(),
-                );
+        for (slot, ids) in [
+            (
+                "crash_report_action",
+                provider_ids(&registry.crash_report_actions),
+            ),
+            ("update_check", provider_ids(&registry.update_check_actions)),
+            ("edition_strip", provider_ids(&registry.edition_strip)),
+            ("title_bar_brand", provider_ids(&registry.title_bar_brand)),
+        ] {
+            for id in ids.into_iter().skip(1) {
+                error(id.extension(), format!("{slot} has more than one provider"));
             }
         }
         let commands: BTreeSet<&ContributionId> =
@@ -766,6 +778,11 @@ impl Registry {
         self.crash_report_actions.first().map(|(_, action)| action)
     }
 
+    /// The product's own update check, when provided.
+    pub fn update_check_action(&self) -> Option<&UpdateCheckAction> {
+        self.update_check_actions.first().map(|(_, action)| action)
+    }
+
     pub fn edition_strip(&self) -> Option<&ChromeDescriptor> {
         self.edition_strip.first().map(|(_, descriptor)| descriptor)
     }
@@ -839,6 +856,11 @@ impl Registry {
     pub fn close_guards(&self) -> &[(ContributionId, CloseGuard)] {
         &self.close_guards
     }
+}
+
+/// The contributors to a slot that takes one provider, in registration order.
+fn provider_ids<T>(slot: &[(ContributionId, T)]) -> Vec<&ContributionId> {
+    slot.iter().map(|(id, _)| id).collect()
 }
 
 #[cfg(test)]

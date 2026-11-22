@@ -351,9 +351,10 @@ impl GixRepo {
 
     pub(super) fn rebase_with_output_impl(&self, onto: &str) -> Result<CommandOutput> {
         validate_ref_like_arg(onto, "rebase target")?;
+        let onto_arg = crate::refs::local_branch_rev_arg(&self.repo(), onto)?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("rebase").arg("--").arg(onto);
+        cmd.arg("rebase").arg("--").arg(onto_arg);
         run_git_with_output(cmd, &format!("git rebase {onto}"))
     }
 

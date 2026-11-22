@@ -1,6 +1,10 @@
 use super::repository_views::MainSlot;
 use super::*;
 
+/// A crash-report or update-check action: run with the window's host.
+type ExtensionWindowAction =
+    std::rc::Rc<dyn Fn(gitcomet_extension_api::WindowHost, &mut Window, &mut App)>;
+
 impl GitCometView {
     fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
         match kind {
@@ -222,6 +226,9 @@ impl GitCometView {
             repo_uses_annex: annex.is_some_and(|annex| annex.in_use()),
             annex_initialized: annex.is_some_and(|annex| annex.initialized()),
             annex_adjusted: repo.is_some_and(|repo| repo.annex_adjusted_branch().is_some()),
+            update_check: !super::manual_update_check_unavailable(
+                super::extension_host::provides_update_check(cx),
+            ),
         }
     }
 
@@ -1387,6 +1394,7 @@ impl GitCometView {
             recent_repos_session_stamp: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
+            auth_prompt_tab_scope: crate::kit::focus_order::TabScope::new(cx),
             auth_prompt_key: None,
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
@@ -1709,6 +1717,17 @@ impl GitCometView {
         .detach();
     }
 
+    /// Brings the History view to the main canvas, from a document or a
+    /// contributed view.
+    pub(in crate::view) fn show_history_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.show_repository_canvas(cx);
+        self.select_routed_view(repository_views::RoutedArea::Main, None, window, cx);
+    }
+
     /// Opens the file history tab for `path`; does nothing for an inactive repository.
     pub(in crate::view) fn open_file_history(
         &mut self,
@@ -1721,6 +1740,10 @@ impl GitCometView {
             return;
         }
         self.set_sidebar_collapsed(false, cx);
+        // The tab lists commits the History view shows. Shown before the tab
+        // is selected, since changing the view may select a sidebar tab of
+        // its own.
+        self.show_history_view(window, cx);
         self.file_history_pane
             .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
         self.sidebar_pane
@@ -2350,20 +2373,30 @@ impl GitCometView {
         if let Some(action) = super::extension_host::registry(cx)
             .and_then(|registry| registry.crash_report_action().cloned())
         {
-            if let Some(host) = self
-                .extension_window
-                .as_ref()
-                .map(|extension| extension.host())
-            {
-                let window = self.window_handle;
-                // Release this view's borrow before the extension opens a dialog.
-                cx.defer(move |cx| {
-                    let _ = window.update(cx, |_, window, cx| action(host, window, cx));
-                });
-            }
+            self.run_extension_window_action(action, cx);
             return;
         }
         self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
+    }
+
+    /// Runs an extension's window-wide action once this view's borrow is
+    /// released, so the action may open a dialog or a window.
+    pub(super) fn run_extension_window_action(
+        &self,
+        action: ExtensionWindowAction,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(host) = self
+            .extension_window
+            .as_ref()
+            .map(|extension| extension.host())
+        else {
+            return;
+        };
+        let window = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| action(host, window, cx));
+        });
     }
 
     pub(super) fn report_startup_crash_report_with(
@@ -2423,6 +2456,27 @@ impl GitCometView {
         self.extension_window
             .as_ref()?
             .diff_pane_for_keys(scope, window, cx)
+    }
+
+    /// Cmd/Ctrl+F outside the side panes opens the search of the diff the
+    /// diff keys act on ([`Self::diff_shortcut_target`]): History's find or
+    /// diff search, or the hosted diff pane in the extension view or overlay
+    /// over History. With no pane there it opens nothing, rather than
+    /// History's hidden find, and the key goes on to the focused view.
+    pub(super) fn open_main_slot_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        match self.diff_shortcut_target(window, cx) {
+            Some(target) if target.entity_id() == self.diff_renderer.entity_id() => self
+                .main_pane
+                .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx)),
+            Some(target) => {
+                target.update(cx, |pane, cx| pane.open_search_for_active_view(window, cx))
+            }
+            None => false,
+        }
     }
 
     /// F2/F3 step the open search of the side pane holding focus (the

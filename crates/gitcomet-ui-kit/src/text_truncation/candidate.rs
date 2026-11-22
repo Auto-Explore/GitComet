@@ -22,6 +22,8 @@ pub(super) struct CandidateLayout {
 pub(super) enum SegmentSpec {
     Source(Range<usize>),
     Ellipsis(Range<usize>),
+    /// Hidden like [`Self::Ellipsis`], but with nothing drawn in its place.
+    Clipped(Range<usize>),
 }
 
 #[derive(Clone)]
@@ -289,6 +291,9 @@ pub(super) fn build_truncated_candidate(
             max_width,
             path_ellipsis_anchor,
         ),
+        TextTruncationProfile::RefLeaf => truncate_ref_leaf(
+            window, cx, base_style, text, highlights, font_size, max_width,
+        ),
     }
 }
 
@@ -395,6 +400,82 @@ pub(super) fn truncate_from_start(
                 &[
                     SegmentSpec::Ellipsis(0..suffix_start),
                     SegmentSpec::Source(suffix_start..text.len()),
+                ],
+                highlights,
+            )
+        },
+    )
+    .unwrap_or_else(|| ellipsis_only_candidate(text.len()))
+}
+
+/// [`TextTruncationProfile::RefLeaf`]. Only called once the whole text is
+/// known not to fit.
+pub(super) fn truncate_ref_leaf(
+    window: &mut Window,
+    cx: &mut App,
+    base_style: &TextStyle,
+    text: &SharedString,
+    highlights: &[(Range<usize>, HighlightStyle)],
+    font_size: Pixels,
+    max_width: Pixels,
+) -> CandidateLayout {
+    let leaf_start = text.rfind('/').map_or(0, |slash| slash + 1);
+    if leaf_start == 0 || leaf_start == text.len() {
+        return truncate_from_end(
+            window, cx, base_style, text, highlights, font_size, max_width,
+        );
+    }
+    let boundaries = char_boundaries(text.as_ref());
+    // `/` is one byte, so the leaf starts on a boundary.
+    let Ok(leaf_ix) = boundaries.binary_search(&leaf_start) else {
+        return truncate_from_end(
+            window, cx, base_style, text, highlights, font_size, max_width,
+        );
+    };
+
+    // Clip the start, keeping the leaf whole. Option 0 keeps just the leaf;
+    // each later one keeps one more character before it. Keeping everything
+    // is not an option: the whole text does not fit.
+    let clipped = widest_fitting_monotonic_candidate(
+        window,
+        cx,
+        base_style,
+        font_size,
+        max_width,
+        leaf_ix,
+        |option_ix| {
+            let start = boundaries[leaf_ix - option_ix];
+            candidate_from_segments(
+                text,
+                &[
+                    SegmentSpec::Clipped(0..start),
+                    SegmentSpec::Source(start..text.len()),
+                ],
+                highlights,
+            )
+        },
+    );
+    if let Some(clipped) = clipped {
+        return clipped;
+    }
+
+    // The leaf overflows on its own: cut it from its end.
+    let leaf_ends = &boundaries[leaf_ix + 1..boundaries.len() - 1];
+    widest_fitting_monotonic_candidate(
+        window,
+        cx,
+        base_style,
+        font_size,
+        max_width,
+        leaf_ends.len(),
+        |option_ix| {
+            let end = leaf_ends[option_ix];
+            candidate_from_segments(
+                text,
+                &[
+                    SegmentSpec::Clipped(0..leaf_start),
+                    SegmentSpec::Source(leaf_start..end),
+                    SegmentSpec::Ellipsis(end..text.len()),
                 ],
                 highlights,
             )
@@ -675,6 +756,13 @@ pub(super) fn candidate_from_segments(
                 projection_segments.push(ProjectionSegment::Ellipsis {
                     hidden_range: hidden_range.clone(),
                     display_range: display_start..display.len(),
+                });
+            }
+            SegmentSpec::Clipped(hidden_range) => {
+                truncated = true;
+                projection_segments.push(ProjectionSegment::Ellipsis {
+                    hidden_range: hidden_range.clone(),
+                    display_range: display_start..display_start,
                 });
             }
         }

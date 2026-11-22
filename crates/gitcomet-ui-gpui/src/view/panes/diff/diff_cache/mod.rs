@@ -33,6 +33,16 @@ pub(in crate::view) use self::patch_diff::{
 };
 
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
+
+// One initial read plus three retries, for row builds and syntax documents
+// alike. A locked or briefly missing source usually clears without the file
+// changing, so no new revision would ask again; a source that stays unreadable
+// must not cost a request per frame.
+const FILE_DIFF_SOURCE_RETRY_DELAYS: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(250),
+    std::time::Duration::from_secs(1),
+    std::time::Duration::from_secs(4),
+];
 const FILE_DIFF_PAGE_SIZE: usize = 256;
 const FILE_DIFF_MAX_CACHED_PAGES: usize = 64;
 const COLLAPSED_DIFF_REVEAL_STEP: usize = 20;
@@ -80,6 +90,13 @@ fn diff_syntax_edit_from_text_change(old: &str, new: &str) -> Option<rows::DiffS
 }
 
 impl DiffRenderer {
+    pub(in crate::view) fn file_diff_row_len(&self) -> usize {
+        match self.diff_view {
+            DiffViewMode::Inline => self.file_diff_inline_row_len(),
+            DiffViewMode::Split => self.file_diff_split_row_len(),
+        }
+    }
+
     pub(in crate::view) fn file_diff_split_row_len(&self) -> usize {
         self.file_diff_row_provider
             .as_ref()
@@ -256,10 +273,14 @@ impl DiffRenderer {
 }
 
 impl DiffRenderer {
-    fn advance_file_diff_syntax_generation(&mut self) {
+    pub(in crate::view) fn advance_file_diff_syntax_generation(&mut self) {
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_pair_syntax_text.clear();
         self.file_diff_click_syntax_inflight.clear();
+        self.file_diff_side_syntax_attempts.clear();
+        self.file_diff_side_syntax_deferred.clear();
+        self.file_diff_syntax_availability = [None; 2];
+        self.file_diff_resident_syntax_inflight = false;
     }
 
     /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row
@@ -273,7 +294,29 @@ impl DiffRenderer {
             rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
     }
 
+    /// The rows on screen carry on under `rev`: a reload delivered the content
+    /// they already show.
+    fn adopt_file_diff_revision(&mut self, rev: u64) {
+        if self.file_diff_cache_rev == rev {
+            return;
+        }
+        self.rekey_file_diff_prepared_syntax_documents_for_rev(rev);
+        self.file_diff_cache_rev = rev;
+        // A row build started for the previous revision rejects its own result.
+        self.file_diff_cache_inflight = None;
+        // Reloading the same content is a re-selection. Like a click, it may
+        // retry a side whose automatic attempts are exhausted.
+        self.file_diff_side_syntax_attempts
+            .retain(|_, attempt| !attempt.stopped);
+    }
+
     pub(in crate::view) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
+        self.ensure_file_diff_cache_attempt(0, cx);
+    }
+
+    /// `retry` counts the automatic retries behind this call. A scheduled retry
+    /// rebuilds the failed revision that every other caller leaves alone.
+    fn ensure_file_diff_cache_attempt(&mut self, retry: usize, cx: &mut gpui::Context<Self>) {
         let Some((
             repo_id,
             diff_file_rev,
@@ -335,11 +378,13 @@ impl DiffRenderer {
             signature ^= (self.diff_whitespace_mode.key().len() as u64).rotate_left(7);
             signature
         });
-        let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
+        let same_request = self.file_diff_cache_repo_id == Some(repo_id)
             && self.file_diff_cache_target == Some(diff_target.clone())
             && self.file_diff_cache_engine == engine
-            && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
-            && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
+            && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode;
+        // The path is recorded when a build lands, so this also means rows exist.
+        let same_repo_and_target =
+            same_request && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
         let previous_split_left_reparse_seed = same_repo_and_target
             .then(|| self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft))
             .flatten();
@@ -357,8 +402,7 @@ impl DiffRenderer {
         {
             if same_repo_and_target {
                 self.file_diff_cache_inflight = None;
-                self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
-                self.file_diff_cache_rev = diff_file_rev;
+                self.adopt_file_diff_revision(diff_file_rev);
             } else {
                 self.file_diff_cache_repo_id = Some(repo_id);
                 self.file_diff_cache_rev = diff_file_rev;
@@ -378,12 +422,21 @@ impl DiffRenderer {
             // Keep the current same-target rows visible while a refresh is pending.
             // Dropping them would create a zero-width frame, and GPUI would clamp
             // any horizontal offset back to the start before the ready payload returns.
-            self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
-            self.file_diff_cache_rev = diff_file_rev;
+            self.adopt_file_diff_revision(diff_file_rev);
             return;
         }
 
-        if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
+        // This exact build is already running. Frames arrive faster than a
+        // large file builds, and restarting it on each one never lets it finish.
+        if self.file_diff_cache_inflight.is_some()
+            && same_request
+            && self.file_diff_cache_rev == diff_file_rev
+            && file_content_signature == Some(self.file_diff_cache_inflight_signature)
+        {
+            return;
+        }
+
+        if retry == 0 && same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
             // Reselecting the same file enters Loading with an unchanged file rev; keep the
             // current cache until a ready file payload proves the effective content changed.
             let content_changed_without_rev_bump = file_content_signature
@@ -393,7 +446,10 @@ impl DiffRenderer {
             }
         }
 
+        // A failed rebuild has no reusable rows. A new revision retries it,
+        // while the same-revision guard above prevents an idle retry loop.
         if same_repo_and_target
+            && self.file_diff_cache_error.is_none()
             && let Some(signature) = file_content_signature
             && self.file_diff_cache_content_signature == Some(signature)
         {
@@ -401,9 +457,7 @@ impl DiffRenderer {
             // Keep the row cache and prepared syntax documents alive across rev-only refreshes.
             // Any older row rebuild is now redundant because the current rows already match
             // the active content signature.
-            self.file_diff_cache_inflight = None;
-            self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
-            self.file_diff_cache_rev = diff_file_rev;
+            self.adopt_file_diff_revision(diff_file_rev);
             self.refresh_file_diff_syntax_documents(cx, None, None, None, None);
             return;
         }
@@ -440,6 +494,7 @@ impl DiffRenderer {
         let cancellation = self.file_diff_cancellation.clone();
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
+        self.file_diff_cache_inflight_signature = content_signature;
         let whitespace_mode = self.diff_whitespace_mode;
         let shared_file = self.hosted_decor.as_mut().map(|decor| {
             if !decor.file_cache.as_ref().is_some_and(|cache| {
@@ -504,6 +559,14 @@ impl DiffRenderer {
                         Ok(rebuild) => rebuild,
                         Err(file_diff::FileDiffCacheError::Cancelled) => return,
                         Err(error) => {
+                            // A side that is not text stays that way; any other
+                            // failure is a read that may succeed a moment later.
+                            let retry_delay = match error {
+                                file_diff::FileDiffCacheError::Message(_) => {
+                                    FILE_DIFF_SOURCE_RETRY_DELAYS.get(retry).copied()
+                                }
+                                _ => None,
+                            };
                             this.reset_file_diff_cache_data();
                             this.file_diff_cache_repo_id = Some(repo_id);
                             this.file_diff_cache_rev = diff_file_rev;
@@ -513,6 +576,21 @@ impl DiffRenderer {
                             this.file_diff_cache_content_signature = Some(content_signature);
                             this.file_diff_cache_error = Some(error);
                             cx.notify();
+                            if let Some(delay) = retry_delay {
+                                cx.spawn(async move |view, cx| {
+                                    cx.background_executor().timer(delay).await;
+                                    let _ = view.update(cx, |this, cx| {
+                                        // Any build or selection since then has
+                                        // moved the sequence or cleared the error.
+                                        if this.file_diff_cache_seq == seq
+                                            && this.file_diff_cache_error.is_some()
+                                        {
+                                            this.ensure_file_diff_cache_attempt(retry + 1, cx);
+                                        }
+                                    });
+                                })
+                                .detach();
+                            }
                             return;
                         }
                     };

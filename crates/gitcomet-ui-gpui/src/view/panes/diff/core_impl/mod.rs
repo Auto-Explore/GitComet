@@ -15,6 +15,7 @@ mod init;
 pub(in crate::view) use diff_wrap::LineNumberCells;
 pub(in crate::view) use engine::EngineNotice;
 pub(in crate::view) use init::DiffRendererInit;
+pub(in crate::view) use zero_row_notice::ZeroRowNotice;
 
 /// Resolve the file path and blame source for a diff target, or `None` for
 /// targets that do not support blame annotation (e.g. whole-commit diffs with no
@@ -276,8 +277,8 @@ impl DiffRenderer {
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        // Written back in the encoding the file was read in.
-        let Some(output) = self.conflict_output_bytes_for_save(save_payload.output, cx) else {
+        let output = self.conflict_output_text_for_save(repo_id, &path, save_payload.output);
+        let Some(output) = self.conflict_output_bytes_for_save(output, cx) else {
             cx.notify();
             return;
         };
@@ -294,7 +295,7 @@ impl DiffRenderer {
         &mut self,
         repo_id: RepoId,
         path: &std::path::Path,
-        bytes: &[u8],
+        side: ThreeWayColumn,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(workdir) = self
@@ -307,12 +308,24 @@ impl DiffRenderer {
             cx.quit();
             return;
         };
-        // Whole-side restoration uses the stage's original bytes. Its encoding
-        // can differ from the current file's, and the current file may be absent.
+        // The side as Git checks it out, not the stage's blob: the current file
+        // may be absent, and its encoding can differ from the side's.
+        let bytes = match checked_out_conflict_side(&workdir, path, side) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                eprintln!(
+                    "Failed to read the {side:?} side of {}: {err}",
+                    path.display()
+                );
+                self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+                cx.quit();
+                return;
+            }
+        };
         self.finish_focused_mergetool_output(
             &workdir,
             path,
-            FocusedMergetoolOutput::Write(bytes),
+            FocusedMergetoolOutput::Write(&bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
         );
@@ -2582,6 +2595,7 @@ mod live_syntax;
 mod outline;
 mod rendered_target;
 mod scroll_sync;
+mod zero_row_notice;
 
 use diff_wrap::*;
 use outline::*;

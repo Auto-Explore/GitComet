@@ -1033,6 +1033,47 @@ fn staging_a_file_replaced_by_a_directory_stages_only_its_deletion() {
     );
 }
 
+/// Staging reads the index before `git rm --cached` rewrites it. Filesystem
+/// timestamps are coarse, so the rewrite can keep the index's modification
+/// time, and gix reloads its shared index only when that time moves on.
+#[test]
+fn status_reads_an_index_rewritten_within_one_timestamp_tick() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_file_replaced_by_directory(repo);
+    let index = repo.join(".git/index");
+    let before = fs::metadata(&index).unwrap().modified().unwrap();
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.stage(&[Path::new("foo")]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&index)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(before))
+        .unwrap();
+
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let staged: Vec<_> = status
+        .staged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(staged, [(PathBuf::from("foo"), FileStatusKind::Deleted)]);
+    let unstaged: Vec<_> = status
+        .unstaged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(
+        unstaged,
+        [(PathBuf::from("foo/new.txt"), FileStatusKind::Untracked)]
+    );
+}
+
 /// Restoring `foo` means removing the directory in its place, and a forced
 /// checkout does that without asking: discarding the deleted file also
 /// deleted every untracked and ignored file under the directory.
@@ -1206,6 +1247,304 @@ fn file_history_reads_glob_characters_in_names_literally() {
             .unwrap(),
         None
     );
+}
+
+/// A repository on `main` with an identity to commit as.
+fn init_on_main(repo: &Path) {
+    run_git(repo, &["init", "-b", "main"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
+}
+
+/// The glob tests above each cover `[a].txt`; this runs the same operations,
+/// and the reads beside them, over names with pathspec magic, a leading dash,
+/// whitespace, quotes and a line break. Every name is in one repository with
+/// `a.txt` and `b.txt`, so each is also what another could be misread as, and
+/// each operation must address the one file.
+#[test]
+fn working_tree_operations_address_one_file_whatever_its_name() {
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions};
+    test_git_env::ensure_initialized();
+    let token = CancellationToken::new();
+    let names = git_cli::unusual_file_names();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_on_main(repo);
+    let siblings = ["a.txt", "b.txt"];
+    for sibling in siblings {
+        write(repo, sibling, "sibling\n");
+    }
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "siblings"]);
+    let head_id = || CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let without_names = head_id();
+    // One commit adds every name and changes the siblings: a diff or a
+    // history read as a pattern shows more than its file.
+    for (index, name) in names.iter().enumerate() {
+        write(repo, name, format!("file {index}\n"));
+    }
+    for sibling in siblings {
+        write(repo, sibling, "sibling changed\n");
+    }
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-qm", "names"]);
+    let with_names = head_id();
+    let edit = |name: &str, index: usize| {
+        write(repo, name, format!("file {index}\nfile {index} edited\n"));
+    };
+    for (index, name) in names.iter().enumerate() {
+        edit(name, index);
+    }
+    for sibling in siblings {
+        write(repo, sibling, "sibling edited\n");
+    }
+
+    let opened = GixBackend.open(repo).unwrap();
+    let listed = |staged: bool| -> Vec<PathBuf> {
+        let status = opened.status(&token).unwrap();
+        let entries = if staged {
+            &status.staged
+        } else {
+            &status.unstaged
+        };
+        let mut paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+        paths.sort();
+        paths
+    };
+    let mut every_file: Vec<PathBuf> = names.iter().chain(&siblings).map(PathBuf::from).collect();
+    every_file.sort();
+    assert_eq!(listed(false), every_file, "status");
+
+    for (index, name) in names.iter().enumerate() {
+        let path = Path::new(name);
+        let diff = opened
+            .diff_unified(&DiffTarget::working_tree(path.into(), DiffArea::Unstaged))
+            .unwrap();
+        assert!(
+            diff.contains(&format!("+file {index} edited")) && diff.matches(" edited").count() == 1,
+            "{name:?}: working tree diff {diff}"
+        );
+        let diff = opened
+            .diff_unified(&DiffTarget::commit(with_names.clone(), path.into()))
+            .unwrap();
+        assert!(
+            diff.contains(&format!("+file {index}\n"))
+                && diff.matches("+file ").count() == 1
+                && !diff.contains("sibling"),
+            "{name:?}: commit diff {diff}"
+        );
+
+        opened.stage(&[path]).unwrap();
+        assert_eq!(listed(true), [PathBuf::from(name)], "{name:?}: stage");
+        run_git(repo, &["add", "--", "a.txt"]);
+        opened.unstage(&[path]).unwrap();
+        assert_eq!(listed(true), [PathBuf::from("a.txt")], "{name:?}: unstage");
+        run_git(repo, &["reset", "-q"]);
+
+        let history = opened.log_file_page(path, 10, None).unwrap();
+        let summaries: Vec<&str> = history
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect();
+        assert_eq!(summaries, ["names"], "{name:?}: history");
+        // The file is not in that commit, so this follows its history.
+        assert_eq!(
+            opened
+                .resolve_file_path_at_commit(path, &without_names)
+                .unwrap(),
+            None,
+            "{name:?}: path before the file existed"
+        );
+        // One committed line and one that is not, both this file's own.
+        let blame = opened
+            .blame_worktree_file(path, DiffArea::Unstaged)
+            .unwrap();
+        let lines: Vec<_> = blame
+            .iter()
+            .map(|line| (line.line.as_str(), &line.source_path))
+            .collect();
+        let (committed, edited) = (format!("file {index}"), format!("file {index} edited"));
+        assert_eq!(
+            lines,
+            [(committed.as_str(), &None), (edited.as_str(), &None)],
+            "{name:?}: blame"
+        );
+
+        opened.discard_worktree_changes(&[path]).unwrap();
+        let mut still_edited = every_file.clone();
+        still_edited.retain(|file| file != path);
+        assert_eq!(listed(false), still_edited, "{name:?}: discard");
+        edit(name, index);
+    }
+
+    // Untracked now, every one of them: a comparison lists each by its
+    // name, and a discard removes the one file.
+    run_git(repo, &["rm", "-rq", "--cached", "."]);
+    run_git(repo, &["commit", "-qm", "untrack"]);
+    let mut options = ComparisonOptions::direct();
+    options.include_untracked = true;
+    let compared = |from: &CommitId, kind: FileStatusKind| -> Vec<PathBuf> {
+        let compared = opened.compare_files(from, None, &options, &token).unwrap();
+        let mut paths: Vec<PathBuf> = compared
+            .files
+            .into_iter()
+            .filter(|file| file.kind == kind)
+            .map(|file| file.path)
+            .collect();
+        paths.sort();
+        paths
+    };
+    assert_eq!(
+        compared(&head_id(), FileStatusKind::Untracked),
+        every_file,
+        "untracked files in a comparison"
+    );
+    // Against a commit that has them, git diffs each with its own name in an
+    // index the untracked files are added to by pathspec. A name that pathspec
+    // misread would be left out of it, and list as deleted, not modified.
+    assert_eq!(
+        compared(&with_names, FileStatusKind::Modified),
+        every_file,
+        "untracked files against a commit that has them"
+    );
+    let mut remaining = every_file;
+    for name in names {
+        let path = Path::new(name);
+        opened.discard_worktree_changes(&[path]).unwrap();
+        remaining.retain(|file| file != path);
+        assert!(!repo.join(name).exists(), "{name:?}: untracked discard");
+        for file in &remaining {
+            assert!(repo.join(file).exists(), "{name:?}: took {file:?} with it");
+        }
+    }
+}
+
+/// As above for conflicted files: every name and `a.txt` conflict at once,
+/// and taking a side, the base or a deletion resolves the one file.
+#[test]
+fn conflict_operations_address_one_file_whatever_its_name() {
+    #[derive(Clone, Copy, Debug)]
+    enum Resolve {
+        Theirs,
+        Ours,
+        Base,
+        /// We deleted the files; the deletion is accepted.
+        Deletion,
+        /// We deleted the files; our side, which has no stage, is taken.
+        OursOfDeletion,
+    }
+    use std::collections::BTreeMap;
+    test_git_env::ensure_initialized();
+    let names = git_cli::unusual_file_names();
+    for resolve in [
+        Resolve::Theirs,
+        Resolve::Ours,
+        Resolve::Base,
+        Resolve::Deletion,
+        Resolve::OursOfDeletion,
+    ] {
+        let deleted = matches!(resolve, Resolve::Deletion | Resolve::OursOfDeletion);
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_on_main(repo);
+        let files: Vec<&str> = names.iter().copied().chain(["a.txt"]).collect();
+        let write_all = |side: &str| {
+            for (index, file) in files.iter().enumerate() {
+                write(repo, file, format!("{side} {index}\n"));
+            }
+        };
+        write_all("base");
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-qm", "base"]);
+        run_git(repo, &["checkout", "-qb", "feature"]);
+        write_all("theirs");
+        run_git(repo, &["commit", "-qam", "theirs"]);
+        run_git(repo, &["checkout", "-q", "main"]);
+        if deleted {
+            run_git(repo, &["rm", "-rq", "."]);
+        } else {
+            write_all("ours");
+        }
+        run_git(repo, &["commit", "-qam", "ours"]);
+        run_git_expect_failure(repo, &["merge", "feature"]);
+        // Each file's index records, as `mode blob stage`, and working text.
+        let state = || {
+            let mut state = BTreeMap::new();
+            for file in &files {
+                let working = fs::read_to_string(repo.join(file)).ok();
+                state.insert(*file, (Vec::new(), working));
+            }
+            for record in run_git_output(repo, &["ls-files", "-s", "-z"]).split_terminator('\0') {
+                let (entry, path) = record.split_once('\t').unwrap();
+                state.get_mut(path).unwrap().0.push(entry.to_string());
+            }
+            state
+        };
+        let mut expected = state();
+        assert!(
+            expected.values().all(|(entries, _)| entries.len() > 1),
+            "{resolve:?}: every file conflicts"
+        );
+
+        let opened = GixBackend.open(repo).unwrap();
+        for (index, name) in names.iter().enumerate() {
+            let case = format!("{name:?}, {resolve:?}");
+            let path = Path::new(name);
+            let session = opened.conflict_session(path, None).unwrap().unwrap();
+            assert_eq!(
+                session.theirs.as_text(),
+                Some(format!("theirs {index}\n").as_str()),
+                "{case}: the session's file"
+            );
+            // The stage taken and the side it holds; a deletion takes none.
+            let taken = match resolve {
+                Resolve::Theirs => {
+                    opened
+                        .checkout_conflict_side(path, ConflictSide::Theirs)
+                        .unwrap();
+                    Some((" 3", "theirs"))
+                }
+                Resolve::Ours => {
+                    opened
+                        .checkout_conflict_side(path, ConflictSide::Ours)
+                        .unwrap();
+                    Some((" 2", "ours"))
+                }
+                Resolve::Base => {
+                    opened.checkout_conflict_base(path).unwrap();
+                    Some((" 1", "base"))
+                }
+                Resolve::Deletion => {
+                    opened.accept_conflict_deletion(path).unwrap();
+                    None
+                }
+                Resolve::OursOfDeletion => {
+                    opened
+                        .checkout_conflict_side(path, ConflictSide::Ours)
+                        .unwrap();
+                    None
+                }
+            };
+            // The file is left with that stage alone, as stage 0, and its
+            // content; every other file is as it was.
+            let (entries, working) = expected.get_mut(name).unwrap();
+            entries.retain(|entry| taken.is_some_and(|(stage, _)| entry.ends_with(stage)));
+            for entry in entries {
+                entry.replace_range(entry.len() - 1.., "0");
+            }
+            *working = taken.map(|(_, side)| format!("{side} {index}\n"));
+            for (file, now) in state() {
+                assert_eq!(now, expected[file], "{case}: {file:?}");
+            }
+        }
+    }
 }
 
 #[test]

@@ -469,6 +469,7 @@ mod prepared;
 mod prepared_documents;
 mod razor;
 mod reparse;
+mod shared_seed_eviction;
 
 /// Pattern index of every match of `query` over `text` parsed as `lang`, and
 /// whether the cursor overflowed `TS_QUERY_MATCH_LIMIT`.

@@ -329,7 +329,7 @@ fn macos_file_menu_hides_unconfigured_external_editor_action() {
 #[test]
 fn macos_apply_patch_menu_is_disabled_for_bare_repositories() {
     for bare in [false, true] {
-        let menus = macos_app_menus_with_options(true, true, bare);
+        let menus = macos_app_menus_with_options(true, true, bare, false);
         let file = menus
             .iter()
             .find(|menu| menu.name.as_ref() == "File")
@@ -2025,7 +2025,13 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(Hide))
             .on_action(record_action_listener!(HideOthers))
             .on_action(record_action_listener!(ShowAll))
-            .on_action(record_action_listener!(Quit));
+            .on_action(record_action_listener!(Quit))
+            .on_action(record_action_listener!(
+                gitcomet_ui_kit::focus_order::FocusNext
+            ))
+            .on_action(record_action_listener!(
+                gitcomet_ui_kit::focus_order::FocusPrevious
+            ));
 
         #[cfg(target_os = "macos")]
         let root = root.on_action(record_action_listener!(crate::kit::ShowCharacterPalette));
@@ -2177,6 +2183,33 @@ fn focused_mergetool_exit_codes_match_mergetool_contract() {
     assert_eq!(FOCUSED_MERGETOOL_EXIT_SUCCESS, 0);
     assert_eq!(FOCUSED_MERGETOOL_EXIT_CANCELED, 1);
     assert_eq!(FOCUSED_MERGETOOL_EXIT_ERROR, 2);
+}
+
+#[gpui::test]
+fn tab_moves_focus_except_where_an_element_keeps_it(cx: &mut gpui::TestAppContext) {
+    use gitcomet_ui_kit::focus_order::{FocusNext, FocusPrevious};
+    let moves = vec![FocusNext.name().to_owned(), FocusPrevious.name().to_owned()];
+    for (context, expected) in [
+        (Some("TextInput"), moves.clone()),
+        (Some("PopoverPrompt"), moves.clone()),
+        (Some("TabScope"), moves),
+        (Some("TextInput CapturesTab"), Vec::new()),
+        (Some("Terminal CapturesTab"), Vec::new()),
+        (Some("ContextMenu CapturesTab"), Vec::new()),
+    ] {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| KeyBindingProbe::new(context, Arc::clone(&observed), cx));
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            bind_text_input_keys(app);
+            window.focus(&view.read(app).focus_handle(), app);
+            let _ = window.draw(app);
+        });
+        cx.simulate_keystrokes("tab shift-tab");
+        assert_eq!(*observed.lock().unwrap(), expected, "in {context:?}");
+    }
 }
 
 #[gpui::test]

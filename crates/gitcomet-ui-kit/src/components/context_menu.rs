@@ -154,6 +154,7 @@ pub fn context_menu_header<V: 'static>(
                 .when(max_lines == 1, |s| s.whitespace_nowrap())
                 .when(max_lines > 1, |s| s.line_clamp(max_lines))
                 .child(context_menu_text_content(
+                    theme,
                     title,
                     tooltip_host,
                     cx,
@@ -187,6 +188,7 @@ pub fn context_menu_description<V: 'static>(
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
+            theme,
             text,
             tooltip_host,
             cx,
@@ -222,6 +224,7 @@ pub fn context_menu_label<V: 'static>(
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
+            theme,
             text,
             tooltip_host,
             cx,
@@ -453,6 +456,7 @@ fn context_menu_entry<V: 'static>(
                         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
                         .when(max_lines > 1, |s| s.line_clamp(max_lines))
                         .child(context_menu_text_content(
+                            theme,
                             label,
                             tooltip_host,
                             cx,
@@ -518,7 +522,9 @@ fn context_menu_icon_color(theme: AppTheme, disabled: bool, tone: ContextMenuTon
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn context_menu_text_content<V: 'static>(
+    theme: AppTheme,
     text: ContextMenuText,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
@@ -531,9 +537,21 @@ fn context_menu_text_content<V: 'static>(
         // `text_size`/`font_weight` are set on the element itself: it shapes its
         // line from `window.text_style()` in a deferred measure closure, so the
         // caller's text styling on the wrapping div does not reach it.
-        let mut truncated = TruncatedText::new(text.text.clone(), text_size)
-            .profile(text.profile)
-            .text_color(text_color);
+        let mut truncated = TruncatedText::new(text.text.clone(), text_size).profile(text.profile);
+        // A path's folders recede and the file or folder it names stands
+        // out, in a title or a label alike. A disabled or tinted item keeps
+        // its one colour.
+        let (primary, secondary) = (
+            theme.colors.foreground.primary,
+            theme.colors.foreground.secondary,
+        );
+        truncated = if text.profile == TextTruncationProfile::Path
+            && (text_color == primary || text_color == secondary)
+        {
+            truncated.text_color(secondary).path_leaf_color(primary)
+        } else {
+            truncated.text_color(text_color)
+        };
         if let Some(font_weight) = font_weight {
             truncated = truncated.font_weight(font_weight);
         }

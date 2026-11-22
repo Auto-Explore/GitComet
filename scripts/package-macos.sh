@@ -216,10 +216,9 @@ clean_target_intermediates_for_ci() {
   fi
 
   echo "Cleaning Cargo ${mode} build intermediates before creating macOS archives."
+  # Since Rust 1.100, build/ holds every unit's outputs and fingerprints.
   for path in \
-    "${target_dir}/.fingerprint" \
     "${target_dir}/build" \
-    "${target_dir}/deps" \
     "${target_dir}/examples" \
     "${target_dir}/incremental"
   do
@@ -287,7 +286,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundleVersion</key>
   <string>${version}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
+  <string>15.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
