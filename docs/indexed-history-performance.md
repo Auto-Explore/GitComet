@@ -630,3 +630,23 @@ and topologies; `Work::HistoryIndexBuild` and `Work::LogTopologyBuild` count
 rebuilds. The tests in `tests/integration/log/incremental.rs` compare a held
 index and the pages against `git log --all --date-order` across random
 changes, and check date order itself where committer times tie.
+
+## First index from the commit-graph's tables (2026-11-22)
+
+With a commit-graph the paged walk is lazy: it serves the first page in tens
+of milliseconds, but an index build that reads every commit paid its
+per-commit bookkeeping 1.8 million times. The index build now orders the
+whole history in one pass instead (`new_whole_history_walk`): the header
+topology reads parents and committer times from the commit-graph by position
+where the graph holds the commit, and from the object header otherwise. The
+order is the paged walk's, equal timestamps included
+(`indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips`
+runs without a graph, with a whole one and with a partial one). This topology
+belongs to the build alone and is not cached; pages keep the lazy walk.
+
+Release build, first index after opening:
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| Chromium, `HEAD`, 1,792,921 commits | 2.83 s | 0.65 s |
+| Chromium, all branches, 1,820,508 commits | 3.43 s | 0.64 s |

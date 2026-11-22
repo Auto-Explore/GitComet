@@ -92,14 +92,13 @@ impl GixRepo {
         let author = &query.author;
         let mut builder =
             HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
-        let mut walk = new_log_paged_walk(
+        let mut walk = new_whole_history_walk(
             store,
-            query.tips.iter().copied(),
+            &query.tips,
             mode,
             &query.shallow,
-            Some(cancellation),
-            None,
-            Some((topology_cache, query.generation)),
+            cancellation,
+            (topology_cache, query.generation),
         )?;
         let mut decode_buf = Vec::new();
         let mut scanned = 0u64;

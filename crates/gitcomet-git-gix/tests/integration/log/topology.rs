@@ -84,7 +84,21 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
 #[test]
 fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips() {
     use std::io::Write as _;
-    for format in ["sha1", "sha256"] {
+    // Header by header, from a commit-graph of every commit, and from one
+    // that holds only the commits one branch reaches.
+    #[derive(Clone, Copy, Debug)]
+    enum Graph {
+        None,
+        Whole,
+        Partial,
+    }
+    for (format, graph) in [
+        ("sha1", Graph::None),
+        ("sha256", Graph::None),
+        ("sha1", Graph::Whole),
+        ("sha256", Graph::Whole),
+        ("sha1", Graph::Partial),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         run_git(
             dir.path(),
@@ -121,6 +135,32 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
             .unwrap();
         assert!(child.wait().unwrap().success());
         run_git(dir.path(), &["symbolic-ref", "HEAD", "refs/heads/tip-255"]);
+        let in_graph = match graph {
+            Graph::None => 0,
+            Graph::Whole => {
+                run_git(dir.path(), &["commit-graph", "write", "--reachable"]);
+                256
+            }
+            Graph::Partial => {
+                let tip = git_stdout(dir.path(), &["rev-parse", "refs/heads/tip-100"]);
+                let mut child = git_cmd(dir.path())
+                    .args(["commit-graph", "write", "--stdin-commits"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(tip.as_bytes())
+                    .unwrap();
+                assert!(child.wait().unwrap().success());
+                git_stdout(dir.path(), &["rev-list", "--count", "refs/heads/tip-100"])
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap()
+            }
+        };
 
         let repo = gix::open(dir.path()).unwrap();
         let mut tips: Vec<_> = git_stdout(dir.path(), &["for-each-ref", "--format=%(objectname)"])
@@ -148,13 +188,20 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
             )
             .unwrap()
             .unwrap();
-        assert_eq!(count(Work::LogWalkObjectRead), 256);
+        // The index reads every commit, so it orders them in one pass: from
+        // the commit-graph's tables where it has them, else from headers.
+        assert_eq!(count(Work::LogTopologyBuild), 1, "{format} {graph:?}");
+        assert_eq!(
+            count(Work::LogWalkObjectRead),
+            256 - in_graph,
+            "{format} {graph:?}"
+        );
         assert_eq!(index.len(), expected.len());
         for (row, info) in expected.iter().enumerate() {
             assert_eq!(
                 index.id_bytes(row),
                 Some(info.id.as_bytes()),
-                "{format} row={row}"
+                "{format} {graph:?} row={row}"
             );
             assert_eq!(index.parents(row).len(), info.parent_ids.len());
             for (parent, id) in info.parent_ids.iter().enumerate() {

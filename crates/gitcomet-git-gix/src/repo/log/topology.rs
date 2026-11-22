@@ -373,13 +373,17 @@ impl Topology {
     ) -> gix::Result<Self> {
         record(Work::LogTopologyBuild);
         let hash_len = repo.objects.object_hash().len_in_bytes();
-        let mut ids = Vec::new();
-        let mut rows = FxHashMap::default();
-        let mut degrees = Vec::new();
+        let graph = repo
+            .to_thread_local()
+            .commit_graph_if_enabled()
+            .ok()
+            .flatten();
+        let mut rows = Rows::new(graph.as_ref());
         let mut tip_rows = Vec::new();
         for &tip in tips {
-            if !rows.contains_key(&tip) {
-                let row = intern(tip, &mut rows, &mut ids, &mut degrees)?;
+            let known = rows.len();
+            let row = rows.of_id(tip)?;
+            if row as usize == known {
                 tip_rows.push(row);
             }
         }
@@ -389,37 +393,47 @@ impl Topology {
         let mut parents = Vec::new();
         let mut times = Vec::new();
         let mut row = 0;
-        while row < degrees.len() {
+        while row < rows.len() {
             check_cancelled(cancelled())?;
-            let id = gix::ObjectId::from_bytes_or_panic(&ids[row * hash_len..(row + 1) * hash_len]);
-            record(Work::LogWalkObjectRead);
-            let commit = objects.find_commit_iter(&id, &mut buffer)?;
             let mut time = 0;
-            for token in commit {
-                use gix::objs::commit::ref_iter::Token;
-                match token? {
-                    Token::Parent { id } => {
-                        let parent = intern(id, &mut rows, &mut ids, &mut degrees)?;
-                        degrees[parent as usize] = degrees[parent as usize]
-                            .checked_add(1)
-                            .ok_or_else(too_large)?;
-                        parents.push(parent);
+            if let (Some(graph), Some(position)) = (rows.graph, rows.position(row)) {
+                // The graph's own tables: no object to find or inflate.
+                let commit = graph.commit_at(position);
+                time = commit.committer_timestamp() as i64;
+                for parent in commit.iter_parents() {
+                    let parent = parent.map_err(|_| {
+                        gix::Error::from(gix::error::corruption("Commit-graph parent edge"))
+                    })?;
+                    parents.push(rows.child_of_position(parent)?);
+                }
+            } else {
+                let id = gix::ObjectId::from_bytes_or_panic(
+                    &rows.ids[row * hash_len..(row + 1) * hash_len],
+                );
+                record(Work::LogWalkObjectRead);
+                for token in objects.find_commit_iter(&id, &mut buffer)? {
+                    use gix::objs::commit::ref_iter::Token;
+                    match token? {
+                        Token::Parent { id } => parents.push(rows.child_of_id(id)?),
+                        Token::Committer { signature } => {
+                            time = signature.seconds();
+                            break;
+                        }
+                        Token::Tree { .. } | Token::Author { .. } => {}
+                        _ => break,
                     }
-                    Token::Committer { signature } => {
-                        time = signature.seconds();
-                        break;
-                    }
-                    Token::Tree { .. } | Token::Author { .. } => {}
-                    _ => break,
                 }
             }
             times.push(time);
             offsets.push(u32::try_from(parents.len()).map_err(|_| too_large())?);
             row += 1;
         }
-        // Release the lookup map and the object store before sorting; neither
-        // belongs in a parked page cursor or a cached topology snapshot.
-        drop(rows);
+        let Rows {
+            ids, mut degrees, ..
+        } = rows;
+        // The lookup tables went with `rows`. Release the object store too
+        // before sorting; neither belongs in a parked page cursor or a cached
+        // topology snapshot.
         drop(objects);
         drop(buffer);
 
@@ -459,21 +473,89 @@ impl Topology {
     }
 }
 
-fn intern(
-    id: gix::ObjectId,
-    rows: &mut FxHashMap<gix::ObjectId, u32>,
-    ids: &mut Vec<u8>,
-    degrees: &mut Vec<u32>,
-) -> gix::Result<u32> {
-    match rows.entry(id) {
-        std::collections::hash_map::Entry::Occupied(entry) => Ok(*entry.get()),
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            let row = u32::try_from(degrees.len()).map_err(|_| too_large())?;
-            entry.insert(row);
-            ids.extend_from_slice(id.as_bytes());
-            degrees.push(0);
-            Ok(row)
+/// Row numbers for the commits a scan meets, in the order it meets them: by
+/// commit-graph position where the graph holds the commit, by ID otherwise.
+struct Rows<'a> {
+    graph: Option<&'a gix::commitgraph::Graph>,
+    /// Indexed by commit-graph position; `u32::MAX` until the commit is met.
+    by_position: Vec<u32>,
+    by_id: FxHashMap<gix::ObjectId, u32>,
+    ids: Vec<u8>,
+    /// Each row's commit-graph position, or `u32::MAX` outside the graph.
+    positions: Vec<u32>,
+    /// How many rows met so far have the row as a parent.
+    degrees: Vec<u32>,
+}
+
+impl<'a> Rows<'a> {
+    fn new(graph: Option<&'a gix::commitgraph::Graph>) -> Self {
+        Self {
+            graph,
+            by_position: vec![u32::MAX; graph.map_or(0, |graph| graph.num_commits() as usize)],
+            by_id: FxHashMap::default(),
+            ids: Vec::new(),
+            positions: Vec::new(),
+            degrees: Vec::new(),
         }
+    }
+
+    fn len(&self) -> usize {
+        self.degrees.len()
+    }
+
+    fn position(&self, row: usize) -> Option<gix::commitgraph::Position> {
+        Some(self.positions[row])
+            .filter(|&position| position != u32::MAX)
+            .map(gix::commitgraph::Position)
+    }
+
+    fn push(&mut self, id: &gix::oid, position: u32) -> gix::Result<u32> {
+        let row = u32::try_from(self.len()).map_err(|_| too_large())?;
+        self.ids.extend_from_slice(id.as_bytes());
+        self.positions.push(position);
+        self.degrees.push(0);
+        Ok(row)
+    }
+
+    fn of_position(&mut self, position: gix::commitgraph::Position) -> gix::Result<u32> {
+        let known = self.by_position[position.0 as usize];
+        if known != u32::MAX {
+            return Ok(known);
+        }
+        let graph = self.graph.expect("a position comes from the graph");
+        let row = self.push(graph.id_at(position), position.0)?;
+        self.by_position[position.0 as usize] = row;
+        Ok(row)
+    }
+
+    fn of_id(&mut self, id: gix::ObjectId) -> gix::Result<u32> {
+        if let Some(position) = self.graph.and_then(|graph| graph.lookup(id)) {
+            return self.of_position(position);
+        }
+        if let Some(&row) = self.by_id.get(&id) {
+            return Ok(row);
+        }
+        let row = self.push(&id, u32::MAX)?;
+        self.by_id.insert(id, row);
+        Ok(row)
+    }
+
+    fn child_of(&mut self, parent: u32) -> gix::Result<u32> {
+        let degree = &mut self.degrees[parent as usize];
+        *degree = degree.checked_add(1).ok_or_else(too_large)?;
+        Ok(parent)
+    }
+
+    /// The row of a parent named by commit-graph position, counted as one.
+    fn child_of_position(&mut self, parent: gix::commitgraph::Position) -> gix::Result<u32> {
+        let parent = self.of_position(parent)?;
+        self.child_of(parent)
+    }
+
+    /// The row of a parent named by ID, counted as one.
+    fn child_of_id(&mut self, parent: gix::ObjectId) -> gix::Result<u32> {
+        let parent = self.of_id(parent)?;
+        self.child_of(parent)
     }
 }
 

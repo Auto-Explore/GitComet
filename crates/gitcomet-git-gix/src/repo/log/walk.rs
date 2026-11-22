@@ -290,6 +290,47 @@ pub(super) fn new_log_paged_walk(
     })
 }
 
+/// A walk for a caller that reads every commit, as an index build does. With
+/// a commit-graph the paged walk is lazy, which serves a first page at once
+/// but costs far more per commit than ordering the graph's tables in one
+/// pass. Both give the same order.
+pub(super) fn new_whole_history_walk(
+    repo: &gix::ThreadSafeRepository,
+    tips: &[gix::ObjectId],
+    mode: HistoryMode,
+    shallow: &super::ShallowSnapshot,
+    cancellation: &CancellationToken,
+    topology_cache: (&TopologyCache, u64),
+) -> Result<super::LogPagedWalkState> {
+    if mode != HistoryMode::FirstParent && !shallow.is_shallow() {
+        let walk_cancellation = LogWalkCancellation::new(Some(cancellation));
+        // Without a commit-graph the paged walk builds this topology too,
+        // and shares it through the cache; with one it is this walk's alone.
+        let has_graph = repo
+            .to_thread_local()
+            .commit_graph_if_enabled()
+            .is_ok_and(|graph| graph.is_some());
+        let cache = (!has_graph).then_some(topology_cache);
+        if let Ok(walk) = TopologyWalk::new(repo, tips, &walk_cancellation, cache) {
+            return Ok(super::LogPagedWalkState {
+                pending: std::collections::VecDeque::new(),
+                walk: super::LogPagedWalk::CachedDateOrder(walk),
+                cancellation: walk_cancellation,
+            });
+        }
+        cancellation.check_cancelled()?;
+    }
+    new_log_paged_walk(
+        repo,
+        tips.iter().copied(),
+        mode,
+        shallow,
+        Some(cancellation),
+        None,
+        Some(topology_cache),
+    )
+}
+
 /// A first-parent walk from several tips that puts every commit after all of
 /// its children, for when gix's topo walk cannot be built.
 ///
