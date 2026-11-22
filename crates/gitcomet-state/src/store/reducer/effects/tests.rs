@@ -3690,3 +3690,30 @@ fn ensure_sidebar_data_loads_tags() {
         Loadable::Loading
     ));
 }
+
+/// A request that repeats, as on every repository activation, leaves a loaded
+/// list alone: a reload would empty the sidebar's tag section meanwhile.
+#[test]
+fn ensure_sidebar_data_keeps_loaded_tags() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    repo_mut(&mut state, repo_id).set_tags(Loadable::Ready(Vec::new()));
+
+    let request = SidebarDataRequest {
+        tags: true,
+        ..Default::default()
+    };
+    let effects = ensure_sidebar_data(&mut state, repo_id, request);
+
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadTags { .. }))),
+        "{effects:?}"
+    );
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).tags,
+        Loadable::Ready(_)
+    ));
+}

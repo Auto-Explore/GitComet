@@ -1174,6 +1174,28 @@ fn branch_sidebar_cache_rev_bumps_only_for_relevant_changes() {
     assert_ne!(repo.branch_sidebar_cache_rev(), after_head);
 }
 
+/// The sidebar lists the tags, so its cached rows go stale with the list.
+#[test]
+fn a_changed_tag_list_invalidates_the_sidebar_rows() {
+    let mut repo = new_repo();
+    // Past the first bump the revision no longer derives from the lanes' own.
+    repo.set_head_branch(Loadable::Ready("main".to_string()));
+    let before = repo.branch_sidebar_cache_rev();
+    let tags = || {
+        Loadable::Ready(vec![Tag {
+            name: "v1.0".to_string(),
+            target: CommitId("abc123".into()),
+        }])
+    };
+
+    repo.set_tags(tags());
+    let after = repo.branch_sidebar_cache_rev();
+    assert_ne!(after, before);
+
+    repo.set_tags(tags());
+    assert_eq!(repo.branch_sidebar_cache_rev(), after);
+}
+
 #[test]
 fn set_detached_head_commit_updates_only_on_change() {
     let mut repo = new_repo();
