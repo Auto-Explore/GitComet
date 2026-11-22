@@ -692,3 +692,29 @@ check this replaces did the same from the graph's tables.
 
 git.git's index build takes 17 ms. A merge whose message reads like a stash's
 is no longer taken for one where there is no commit-graph.
+
+## Index from the topology's rows, graph read front to back (2026-11-22)
+
+Two parts of the whole-history build repeated work it already had:
+
+- The date-ordered topology holds each parent as a row. The build turned
+  every commit into IDs, pushed those, and found each parent's row again by
+  ID. `HistoryIndex::from_rows` now takes the tables as they are, each parent
+  mapped to its place in the order; only the IDs are sorted for lookup. Walks
+  with an author filter, without merges or of merges only build as before.
+- A commit-graph lists commits in the order of their IDs, so following parents
+  through it read a record, the row table and an ID at random for every
+  commit: 255 ns each. `graph_scan` reads the records front to back into one
+  compact array on the decode threads, follows parents through that array
+  alone, and copies the IDs last, again on several threads. Rows are still
+  numbered as they are met, which keeps a commit near its parents for the
+  ordering pass (numbering them in the graph's order made that pass six times
+  slower).
+
+Release build, first index of Chromium at `HEAD`, 1,792,921 commits:
+
+| Step | Before | After |
+| --- | ---: | ---: |
+| Whole build | 0.90 s | 0.22 s |
+| Scan of the commit-graph | 450 ms | 130 ms |
+| Parents found by ID | 270 ms | none |

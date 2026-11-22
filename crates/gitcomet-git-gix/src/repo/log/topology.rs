@@ -7,6 +7,8 @@ use gitcomet_core::history_perf::{Work, record};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
+mod graph_scan;
+
 /// How long a waiter sleeps between checks of its own cancellation.
 const WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -438,92 +440,30 @@ impl Topology {
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        // Without a graph, the packs' commits are read on several threads
-        // before the scan below asks for them one at a time.
-        let packed = match graph {
-            Some(_) => None,
-            None => PackedCommits::read(repo, cancelled),
+        let scanned = match &graph {
+            Some(graph) => graph_scan::scan(repo, graph, tips, cancelled)?,
+            None => scan_objects(repo, tips, cancelled)?,
         };
-        let table = match (&graph, &packed) {
-            (Some(graph), _) => Table::Graph(graph),
-            (None, Some(packed)) => Table::Packed(packed),
-            (None, None) => Table::None,
-        };
-        let mut rows = Rows::new(table);
-        let mut tip_rows = Vec::new();
-        for &tip in tips {
-            let known = rows.len();
-            let row = rows.of_id(tip)?;
-            if row as usize == known {
-                tip_rows.push(row);
-            }
-        }
-        let objects = log_paged_walk_handle(repo);
-        let mut buffer = Vec::new();
-        let mut offsets = vec![0];
-        let mut parents = Vec::new();
-        let mut times = Vec::new();
-        let mut row = 0;
-        while row < rows.len() {
-            check_cancelled(cancelled())?;
-            let mut time = 0;
-            // A table holds the header: no object to find or inflate.
-            let held = match (table, rows.position(row)) {
-                (Table::Graph(graph), Some(position)) => {
-                    let commit = graph.commit_at(gix::commitgraph::Position(position));
-                    time = commit.committer_timestamp() as i64;
-                    for parent in commit.iter_parents() {
-                        let parent = parent.map_err(|_| {
-                            gix::Error::from(gix::error::corruption("Commit-graph parent edge"))
-                        })?;
-                        parents.push(rows.child_of_position(parent.0)?);
-                    }
-                    true
-                }
-                (Table::Packed(packed), Some(position)) => match packed.commit(position) {
-                    Some((at, held)) => {
-                        time = at;
-                        for parent in held {
-                            parents.push(rows.child_of_position(parent)?);
-                        }
-                        true
-                    }
-                    None => false,
-                },
-                _ => false,
-            };
-            if !held {
-                let id = gix::ObjectId::from_bytes_or_panic(
-                    &rows.ids[row * hash_len..(row + 1) * hash_len],
-                );
-                record(Work::LogWalkObjectRead);
-                for token in objects.find_commit_iter(&id, &mut buffer)? {
-                    use gix::objs::commit::ref_iter::Token;
-                    match token? {
-                        Token::Parent { id } => parents.push(rows.child_of_id(id)?),
-                        Token::Committer { signature } => {
-                            time = signature.seconds();
-                            break;
-                        }
-                        Token::Tree { .. } | Token::Author { .. } => {}
-                        _ => break,
-                    }
-                }
-            }
-            times.push(time);
-            offsets.push(u32::try_from(parents.len()).map_err(|_| too_large())?);
-            row += 1;
-        }
-        let Rows {
-            ids, mut degrees, ..
-        } = rows;
-        // The lookup tables went with `rows`. Release the read-ahead and the
-        // object store too before sorting; none belongs in a parked page
-        // cursor or a cached topology snapshot.
-        drop(packed);
-        drop(objects);
-        drop(buffer);
+        // Nothing of the scan belongs in a parked page cursor or a cached
+        // topology snapshot.
+        drop(graph);
+        Self::ordered(hash_len, scanned, cancelled)
+    }
 
+    /// Puts scanned rows in date order, children before parents.
+    fn ordered(
+        hash_len: usize,
+        scanned: Scanned,
+        cancelled: &dyn Fn() -> bool,
+    ) -> gix::Result<Self> {
+        let Scanned {
+            ids,
+            offsets,
+            parents,
+            times,
+            mut degrees,
+            tip_rows,
+        } = scanned;
         // Use the same queue and insertion order as gix's date-order walker,
         // including its handling of equal timestamps and redundant tips.
         let mut ready = gix::revwalk::PriorityQueue::new();
@@ -560,12 +500,112 @@ impl Topology {
     }
 }
 
+/// Every commit reachable from the tips as a row, with its parents as rows
+/// and the number of rows naming it as a parent: what the ordering takes.
+struct Scanned {
+    ids: Vec<u8>,
+    offsets: Vec<u32>,
+    parents: Vec<u32>,
+    times: Vec<i64>,
+    degrees: Vec<u32>,
+    /// The tips' rows in the tips' order, each once.
+    tip_rows: Vec<u32>,
+}
+
+/// Scans without a commit-graph: each header is read from its object, or
+/// from the packs' commits read ahead on several threads.
+fn scan_objects(
+    repo: &gix::ThreadSafeRepository,
+    tips: &[gix::ObjectId],
+    cancelled: &dyn Fn() -> bool,
+) -> gix::Result<Scanned> {
+    let hash_len = repo.objects.object_hash().len_in_bytes();
+    let packed = PackedCommits::read(repo, cancelled);
+    let table = match &packed {
+        Some(packed) => Table::Packed(packed),
+        None => Table::None,
+    };
+    let mut rows = Rows::new(table);
+    let mut tip_rows = Vec::new();
+    for &tip in tips {
+        let known = rows.len();
+        let row = rows.of_id(tip)?;
+        if row as usize == known {
+            tip_rows.push(row);
+        }
+    }
+    let objects = log_paged_walk_handle(repo);
+    let mut buffer = Vec::new();
+    let mut offsets = vec![0];
+    let mut parents = Vec::new();
+    let mut times = Vec::new();
+    let mut row = 0;
+    while row < rows.len() {
+        check_cancelled(cancelled())?;
+        let mut time = 0;
+        // A table holds the header: no object to find or inflate.
+        let held = match (table, rows.position(row)) {
+            (Table::Packed(packed), Some(position)) => match packed.commit(position) {
+                Some((at, held)) => {
+                    time = at;
+                    for parent in held {
+                        parents.push(rows.child_of_position(parent)?);
+                    }
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        };
+        if !held {
+            let id =
+                gix::ObjectId::from_bytes_or_panic(&rows.ids[row * hash_len..(row + 1) * hash_len]);
+            time = read_header(&objects, &id, &mut buffer, |parent| {
+                parents.push(rows.child_of_id(parent)?);
+                Ok(())
+            })?;
+        }
+        times.push(time);
+        offsets.push(u32::try_from(parents.len()).map_err(|_| too_large())?);
+        row += 1;
+    }
+    let Rows { ids, degrees, .. } = rows;
+    Ok(Scanned {
+        ids,
+        offsets,
+        parents,
+        times,
+        degrees,
+        tip_rows,
+    })
+}
+
+/// Reads a commit's parents and committer time from its object.
+fn read_header(
+    objects: &impl gix::objs::Find,
+    id: &gix::oid,
+    buffer: &mut Vec<u8>,
+    mut parent: impl FnMut(gix::ObjectId) -> gix::Result<()>,
+) -> gix::Result<i64> {
+    use gix::objs::FindExt as _;
+    record(Work::LogWalkObjectRead);
+    for token in objects.find_commit_iter(id, buffer)? {
+        use gix::objs::commit::ref_iter::Token;
+        match token? {
+            Token::Parent { id } => parent(id)?,
+            Token::Committer { signature } => return Ok(signature.seconds()),
+            Token::Tree { .. } | Token::Author { .. } => {}
+            _ => break,
+        }
+    }
+    Ok(0)
+}
+
 /// Commit headers held in a table and addressed by their position in it,
 /// which makes finding a commit's row an array read.
 #[derive(Clone, Copy)]
 enum Table<'a> {
     None,
-    Graph(&'a gix::commitgraph::Graph),
     Packed(&'a PackedCommits),
 }
 
@@ -573,7 +613,6 @@ impl<'a> Table<'a> {
     fn len(self) -> usize {
         match self {
             Self::None => 0,
-            Self::Graph(graph) => graph.num_commits() as usize,
             Self::Packed(packed) => packed.len(),
         }
     }
@@ -581,7 +620,6 @@ impl<'a> Table<'a> {
     fn lookup(self, id: &gix::oid) -> Option<u32> {
         match self {
             Self::None => None,
-            Self::Graph(graph) => graph.lookup(id).map(|position| position.0),
             Self::Packed(packed) => packed.lookup(id),
         }
     }
@@ -589,7 +627,6 @@ impl<'a> Table<'a> {
     fn id_at(self, position: u32) -> &'a gix::oid {
         match self {
             Self::None => unreachable!("no table gave a position"),
-            Self::Graph(graph) => graph.id_at(gix::commitgraph::Position(position)),
             Self::Packed(packed) => packed.id_at(position),
         }
     }
@@ -702,6 +739,142 @@ mod tests {
 
     type Build =
         Box<dyn FnOnce(&dyn Fn() -> bool, Option<&Previous>) -> gix::Result<Topology> + Send>;
+
+    /// Adds commits `first..=last` to a repository through `git fast-import`,
+    /// each on some of the dozen before it: merges of up to five parents,
+    /// with times that repeat and run backwards.
+    fn import_commits(root: &std::path::Path, seed: u64, first: u64, last: u64) {
+        let mut stream = String::new();
+        for commit in first..=last {
+            let mut state = seed ^ commit.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut below = |limit: u64| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 33) % limit
+            };
+            let time = 1_700_000_000 + (commit / 4) * 10 - below(3) * 25;
+            stream.push_str(&format!(
+                "commit refs/heads/tip{}\nmark :{commit}\n\
+                 committer T <t@example.invalid> {time} +0000\ndata 2\nc\n",
+                commit % 7
+            ));
+            let reach = (commit - 1).min(12);
+            let mut parents = Vec::new();
+            let wanted = match below(20) {
+                _ if commit == 1 => 0,
+                0..=2 => 3 + below(3),
+                3..=6 => 2,
+                _ => 1,
+            };
+            while (parents.len() as u64) < wanted.min(reach) {
+                let parent = commit - 1 - below(reach);
+                if !parents.contains(&parent) {
+                    parents.push(parent);
+                }
+            }
+            for (at, parent) in parents.iter().enumerate() {
+                let edge = if at == 0 { "from" } else { "merge" };
+                stream.push_str(&format!("{edge} :{parent}\n"));
+            }
+            stream.push('\n');
+        }
+        let marks = root.join(".git/marks");
+        let import = format!("--import-marks-if-exists={}", marks.display());
+        let export = format!("--export-marks={}", marks.display());
+        crate::repo::log::tests::git_with_stdin(
+            root,
+            &["fast-import", "--quiet", "--force", &import, &export],
+            stream.as_bytes(),
+        );
+    }
+
+    /// The commits of a topology in its order.
+    fn walked(topology: Topology) -> Vec<(gix::ObjectId, Vec<gix::ObjectId>, Option<i64>)> {
+        let walk = TopologyWalk {
+            topology: Arc::new(topology),
+            next: 0,
+        };
+        walk.map(|info| (info.id, info.parent_ids.to_vec(), info.commit_time))
+            .collect()
+    }
+
+    /// The graph's commits are read in chunks on several threads and followed
+    /// from compact records; the order must be the one the objects give.
+    #[test]
+    fn a_commit_graph_scan_orders_a_history_as_the_object_scan_does() {
+        use crate::test_support::{git_stdout, git_success, init_test_repo};
+        for seed in [1, 2, 3] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            init_test_repo(root);
+            // A graph in two files, and commits newer than both.
+            import_commits(root, seed, 1, 260);
+            git_success(
+                root,
+                &["commit-graph", "write", "--reachable", "--split=no-merge"],
+            );
+            import_commits(root, seed, 261, 460);
+            git_success(
+                root,
+                &["commit-graph", "write", "--reachable", "--split=no-merge"],
+            );
+            import_commits(root, seed, 461, 500);
+            let graphs = std::fs::read_dir(root.join(".git/objects/info/commit-graphs"))
+                .unwrap()
+                .filter(|entry| {
+                    let name = entry.as_ref().unwrap().file_name();
+                    name.to_string_lossy().ends_with(".graph")
+                })
+                .count();
+            assert_eq!(graphs, 2);
+
+            // Every branch, one of them twice, and an ancestor of one.
+            let mut tips: Vec<gix::ObjectId> = git_stdout(
+                root,
+                &["for-each-ref", "--format=%(objectname)", "refs/heads"],
+            )
+            .lines()
+            .map(|id| gix::ObjectId::from_hex(id.as_bytes()).unwrap())
+            .collect();
+            tips.push(tips[2]);
+            let ancestor = git_stdout(root, &["rev-parse", "refs/heads/tip3~3"]);
+            tips.push(gix::ObjectId::from_hex(ancestor.trim().as_bytes()).unwrap());
+
+            let store = gix::open(root).unwrap().into_sync();
+            let graph = store
+                .to_thread_local()
+                .commit_graph_if_enabled()
+                .unwrap()
+                .unwrap();
+            let never = || false;
+            let capture = gitcomet_core::history_perf::capture();
+            let from_graph = graph_scan::scan_in_chunks(&store, &graph, &tips, &never, 64).unwrap();
+            let read = gitcomet_core::history_perf::count(Work::LogWalkObjectRead);
+            drop(capture);
+            let from_graph = walked(Topology::ordered(20, from_graph, &never).unwrap());
+            let from_objects = scan_objects(&store, &tips, &never).unwrap();
+            let from_objects = walked(Topology::ordered(20, from_objects, &never).unwrap());
+            assert_eq!(from_graph, from_objects, "seed {seed}");
+
+            let reachable = git_stdout(root, &["rev-list", "--count", "--branches"]);
+            assert_eq!(
+                from_graph.len().to_string(),
+                reachable.trim(),
+                "seed {seed}"
+            );
+            let many = from_graph
+                .iter()
+                .filter(|(_, parents, _)| parents.len() > 2)
+                .count();
+            assert!(
+                many > 5,
+                "seed {seed}: {many} commits of three parents or more"
+            );
+            // Only the commits newer than the graph are read as objects.
+            assert!((1..=40).contains(&read), "seed {seed}: {read} objects read");
+        }
+    }
 
     fn tips() -> Vec<gix::ObjectId> {
         vec![gix::ObjectId::null(gix::hash::Kind::Sha1)]

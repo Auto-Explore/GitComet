@@ -8,7 +8,7 @@ use std::fs;
 mod tracking;
 
 /// Runs git in `workdir` with `input` on its stdin; it must succeed.
-fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
+pub(super) fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
     use std::io::Write as _;
     let mut child = git_command()
         .arg("-C")
