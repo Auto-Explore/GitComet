@@ -590,6 +590,12 @@ impl<'r> Iterator for RefIter<'_, 'r> {
     }
 }
 
+/// Whether Git takes the directory `dir` for a Git directory. Both ref
+/// backends keep a `HEAD` file and a `refs` directory there for that test.
+pub(crate) fn is_git_directory(dir: &std::path::Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("refs").is_dir() && dir.join("objects").is_dir()
+}
+
 pub(crate) fn head_oid(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {
     view(repo)?.head_oid()
 }

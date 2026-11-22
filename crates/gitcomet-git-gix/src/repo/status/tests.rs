@@ -70,7 +70,8 @@ fn gitlink_query_excludes_ordinary_staged_paths_but_keeps_removed_and_replaced_l
         file_status("replaced", FileStatusKind::Modified),
     ];
     assert_eq!(
-        super::gitlink_status_paths(&open_repo(root).repo(), &staged),
+        super::gitlink_selection(&open_repo(root).repo(), &staged)
+            .map(super::GitlinkSelection::asked),
         Some(
             ["removed", "replaced", "retained"]
                 .map(PathBuf::from)
@@ -82,7 +83,8 @@ fn gitlink_query_excludes_ordinary_staged_paths_but_keeps_removed_and_replaced_l
     write_file(root, "ordinary.txt", "changed again\n");
     git_success(root, &["add", "ordinary.txt"]);
     assert_eq!(
-        super::gitlink_status_paths(&open_repo(root).repo(), &staged[..1]),
+        super::gitlink_selection(&open_repo(root).repo(), &staged[..1])
+            .map(super::GitlinkSelection::asked),
         Some(Vec::new())
     );
 }
