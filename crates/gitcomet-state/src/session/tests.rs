@@ -707,28 +707,6 @@ fn survey_prompt_persistence_preserves_existing_session_fields() {
 }
 
 #[test]
-fn detects_test_harness_executable_paths() {
-    // `cargo test` / nextest binaries are typically located under a `deps` directory.
-    assert!(looks_like_test_binary(Path::new(
-        "/tmp/target/debug/deps/foo"
-    )));
-    assert!(!looks_like_test_binary(Path::new("/tmp/target/debug/foo")));
-
-    // nextest uses a separate target subdir.
-    assert!(looks_like_test_binary(Path::new(
-        "/tmp/target/nextest/default/foo"
-    )));
-
-    // Cargo test binaries also have a hash suffix.
-    assert!(looks_like_test_binary(Path::new(
-        "/tmp/target/debug/gitcomet_ui_gpui-3ad1b0fd3f0c0d3e"
-    )));
-    assert!(!looks_like_test_binary(Path::new(
-        "/tmp/target/debug/gitcomet"
-    )));
-}
-
-#[test]
 fn persist_from_state_and_load_from_path_round_trip() {
     let dir_guard = tempfile::tempdir().expect("create tempdir");
     let dir = dir_guard.path().to_path_buf();

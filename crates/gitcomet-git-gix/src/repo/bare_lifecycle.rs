@@ -231,10 +231,21 @@ impl Drop for HeldFileLock {
     }
 }
 
+/// A lock file made this long ago is removed when nothing holds it.
+const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// The same for a test binary, whose repositories last as long as a test.
+const TEST_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// Times a lock file may lose its name while it is being locked.
+const LOCK_ATTEMPTS: usize = 8;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum LockAdmission {
     NewConversion,
     Recovery,
+}
+
+fn is_test_binary() -> bool {
+    cfg!(test) || gitcomet_core::platform::test_harness::running_under_test_harness()
 }
 
 fn coordination_root(common_dir: &Path) -> &Path {
@@ -251,11 +262,18 @@ fn coordination_root(common_dir: &Path) -> &Path {
 pub(super) fn coordination_path(common_dir: &Path) -> Result<PathBuf> {
     use gitcomet_core::identity::ProductIdentity;
     use gitcomet_core::platform::dirs::{Platform, ProductDirs};
+    // Every profile of one user coordinates through one directory. A test
+    // binary's is under the temporary directory instead: each repository a
+    // test opens leaves a lock file, which is not the user's state to keep.
+    let identity = ProductIdentity::gitcomet();
     let environment = |key: &str| match key {
-        "GITCOMET_PROFILE_ROOT" | "XDG_STATE_HOME" => None,
+        "GITCOMET_PROFILE_ROOT" => is_test_binary().then(|| {
+            let profile = format!("{}-test-profile", identity.directory_name());
+            std::env::temp_dir().join(profile).into()
+        }),
+        "XDG_STATE_HOME" => None,
         key => std::env::var_os(key),
     };
-    let identity = ProductIdentity::gitcomet();
     let directories = ProductDirs::new(&identity, Platform::current(), &environment);
     let directory = directories
         .state_dir()
@@ -266,6 +284,14 @@ pub(super) fn coordination_path(common_dir: &Path) -> Result<PathBuf> {
         })?
         .join("repository-locks");
     gitcomet_core::fs_utils::ensure_private_dir(&directory)?;
+    // Once per process, and off the thread that is opening a repository.
+    static PRUNE: std::sync::Once = std::sync::Once::new();
+    PRUNE.call_once(|| {
+        let directory = directory.clone();
+        let _ = std::thread::Builder::new()
+            .name("repository-lock-prune".into())
+            .spawn(move || prune_when_due(&directory, stale_after()));
+    });
     let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha256);
     hasher.update(coordination_root(common_dir).as_os_str().as_encoded_bytes());
     let key = hasher
@@ -286,6 +312,131 @@ fn open_lock(path: &Path) -> Result<File> {
         })
 }
 
+/// Opens the lock file at `path` and locks it with `lock`, again if the file
+/// was removed in between: a prune may take an unused file away after it was
+/// opened here, and a lock on a file without a name excludes nobody who opens
+/// the name afterwards.
+fn lock_named(path: &Path, mut lock: impl FnMut(&File) -> Result<()>) -> Result<HeldFileLock> {
+    for _ in 0..LOCK_ATTEMPTS {
+        let file = open_lock(path)?;
+        lock(&file)?;
+        let held = HeldFileLock(file);
+        if names(path, &held.0) {
+            return Ok(held);
+        }
+    }
+    Err(
+        Error::new(ErrorKind::Backend("lock file kept being removed".into()))
+            .with_context("lock repository coordination file", Some(path)),
+    )
+}
+
+/// Whether `path` still names the open `file`.
+#[cfg(unix)]
+fn names(path: &Path, file: &File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (path.metadata(), file.metadata()) {
+        (Ok(named), Ok(held)) => named.dev() == held.dev() && named.ino() == held.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn names(path: &Path, file: &File) -> bool {
+    let identity = |file: &File| {
+        winapi_util::file::information(file)
+            .map(|file| (file.volume_serial_number(), file.file_index()))
+    };
+    match (
+        File::open(path).and_then(|named| identity(&named)),
+        identity(file),
+    ) {
+        (Ok(named), Ok(held)) => named == held,
+        _ => false,
+    }
+}
+
+/// Nothing is pruned where a file's identity cannot be read.
+#[cfg(not(any(unix, windows)))]
+fn names(_path: &Path, _file: &File) -> bool {
+    true
+}
+
+/// How long ago `file` was written, if it can be told.
+fn age(file: &File) -> Option<std::time::Duration> {
+    file.metadata().ok()?.modified().ok()?.elapsed().ok()
+}
+
+fn stale_after() -> std::time::Duration {
+    if is_test_binary() {
+        TEST_STALE_AFTER
+    } else {
+        STALE_AFTER
+    }
+}
+
+/// Its modification time is when the directory was last pruned.
+const PRUNED_MARKER: &str = "pruned";
+
+/// Prunes `directory` unless that was done lately: every process that opens
+/// a repository asks, and reading the directory is the cost.
+fn prune_when_due(directory: &Path, stale_after: std::time::Duration) {
+    let marker = directory.join(PRUNED_MARKER);
+    let pruned_lately = File::open(&marker)
+        .ok()
+        .and_then(|marker| age(&marker))
+        .is_some_and(|since| since < stale_after / 4);
+    // Written, not just created: the write is what moves its time. Without
+    // the mark every process would read the directory.
+    if !pruned_lately && std::fs::write(&marker, "pruned\n").is_ok() {
+        prune_stale_locks(directory, stale_after);
+    }
+}
+
+/// Removes the lock files in `directory` that were made `stale_after` ago or
+/// earlier and that nothing holds now. One file per repository ever opened
+/// would otherwise stay for good; a repository still in use gets a new one.
+///
+/// A file is removed under its own exclusive lock, which whoever uses the
+/// repository at that moment prevents; whoever opened it just before finds
+/// that it no longer has its name (`lock_named`).
+#[cfg(any(unix, windows))]
+fn prune_stale_locks(directory: &Path, stale_after: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let stale = |modified: std::io::Result<std::time::SystemTime>| {
+        modified
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|unused| unused >= stale_after)
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "lock")
+            || !stale(entry.metadata().and_then(|metadata| metadata.modified()))
+        {
+            continue;
+        }
+        let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
+            continue;
+        };
+        if file.try_lock().is_err() {
+            continue;
+        }
+        let held = HeldFileLock(file);
+        // Under the lock it is still the file of that name, or a new one.
+        if stale(held.0.metadata().and_then(|metadata| metadata.modified()))
+            && names(&path, &held.0)
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn prune_stale_locks(_directory: &Path, _stale_after: std::time::Duration) {}
+
 impl OperationLock {
     pub(crate) fn acquire(common_dir: &Path) -> Result<Self> {
         Self::acquire_at(
@@ -295,16 +446,13 @@ impl OperationLock {
     }
 
     fn acquire_at(coordination_path: &Path, intent_path: &Path) -> Result<Self> {
-        let file = open_lock(coordination_path)?;
-        match file.try_lock_shared() {
-            Ok(()) => {
-                let file = HeldFileLock(file);
-                check_conversion_intent(intent_path)?;
-                Ok(Self { _file: file })
-            }
+        let file = lock_named(coordination_path, |file| match file.try_lock_shared() {
+            Ok(()) => Ok(()),
             Err(std::fs::TryLockError::WouldBlock) => Err(Error::new(ErrorKind::RepositoryChanged)),
             Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
-        }
+        })?;
+        check_conversion_intent(intent_path)?;
+        Ok(Self { _file: file })
     }
 }
 
@@ -358,18 +506,18 @@ impl ConversionLock {
             }
         }
         let sibling = HeldFileLock(sibling);
-        let coordination = open_lock(&coordination_path(common_dir)?)?;
-        loop {
-            cancellation.check_cancelled()?;
-            match coordination.try_lock() {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    std::thread::sleep(crate::util::GIT_COMMAND_WAIT_POLL_MAX)
+        let coordination = lock_named(&coordination_path(common_dir)?, |file| {
+            loop {
+                cancellation.check_cancelled()?;
+                match file.try_lock() {
+                    Ok(()) => return Ok(()),
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        std::thread::sleep(crate::util::GIT_COMMAND_WAIT_POLL_MAX)
+                    }
+                    Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
                 }
-                Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
             }
-        }
-        let coordination = HeldFileLock(coordination);
+        })?;
         Ok(Self {
             _coordination: coordination,
             _sibling: sibling,
@@ -573,6 +721,96 @@ mod tests {
         let _admitted = OperationLock::acquire(&root).unwrap();
         drop(duplicate_intent);
         drop(duplicate);
+    }
+
+    /// Every repository a test opens gets a lock file. Those belong in the
+    /// temporary directory, not among the user's own application state.
+    #[test]
+    fn a_test_binary_keeps_its_lock_files_in_the_temporary_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = coordination_path(directory.path()).unwrap();
+        assert!(path.starts_with(std::env::temp_dir()), "{}", path.display());
+    }
+
+    const HOUR: std::time::Duration = std::time::Duration::from_secs(3_600);
+
+    fn lock_file(directory: &Path, name: &str, age: std::time::Duration) -> PathBuf {
+        let path = directory.join(name);
+        let file = open_lock(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+        path
+    }
+
+    fn try_shared(file: &File) -> Result<()> {
+        file.try_lock_shared()
+            .map_err(|_| Error::new(ErrorKind::RepositoryChanged))
+    }
+
+    #[test]
+    fn old_lock_files_nothing_holds_are_removed_and_the_rest_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let unused = lock_file(directory.path(), "unused.lock", 2 * HOUR);
+        let held_path = lock_file(directory.path(), "held.lock", 2 * HOUR);
+        let recent = lock_file(directory.path(), "recent.lock", HOUR / 2);
+        // A conversion's journal lives beside the locks and is not one.
+        let journal = lock_file(directory.path(), "journal.conversion.json", 2 * HOUR);
+        let held = open_lock(&held_path).unwrap();
+        held.try_lock_shared().unwrap();
+
+        prune_stale_locks(directory.path(), HOUR);
+
+        assert!(!unused.exists());
+        assert!(held_path.exists());
+        assert!(recent.exists());
+        assert!(journal.exists());
+        drop(HeldFileLock(held));
+    }
+
+    /// Every process that opens a repository asks for a prune, and under
+    /// nextest every test is a process: the directory is read when it is due.
+    #[test]
+    fn a_directory_pruned_lately_is_not_read_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = lock_file(directory.path(), "first.lock", 2 * HOUR);
+        prune_when_due(directory.path(), HOUR);
+        assert!(!first.exists());
+
+        let second = lock_file(directory.path(), "second.lock", 2 * HOUR);
+        prune_when_due(directory.path(), HOUR);
+        assert!(second.exists());
+
+        let marker = File::options()
+            .write(true)
+            .open(directory.path().join(PRUNED_MARKER))
+            .unwrap();
+        marker
+            .set_modified(std::time::SystemTime::now() - HOUR / 2)
+            .unwrap();
+        prune_when_due(directory.path(), HOUR);
+        assert!(!second.exists());
+    }
+
+    /// A prune may remove the file between its opening and its locking. A
+    /// lock on a file without a name excludes nobody who opens the name.
+    #[test]
+    fn a_lock_file_removed_before_it_was_locked_is_opened_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("repository.lock");
+        let mut attempts = 0;
+        let held = lock_named(&path, |file| {
+            attempts += 1;
+            if attempts == 1 {
+                std::fs::remove_file(&path).unwrap();
+            }
+            try_shared(file)
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert!(names(&path, &held.0));
+        // What a conversion now locks is the file the lease holds.
+        let conversion = open_lock(&path).unwrap();
+        assert!(conversion.try_lock().is_err());
     }
 
     #[cfg(windows)]
