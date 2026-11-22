@@ -53,6 +53,9 @@ impl Flight {
     }
 }
 
+/// A topology and the tips it was built from.
+type Previous = (Arc<Topology>, Vec<gix::ObjectId>);
+
 struct Subscription(Arc<Flight>);
 
 impl Drop for Subscription {
@@ -66,6 +69,8 @@ struct Builder<'a> {
     cache: &'a TopologyCache,
     flight: Arc<Flight>,
     built: Option<Arc<Topology>>,
+    /// The topology cached for other tips of the same store, and those tips.
+    previous: Option<Previous>,
 }
 
 impl Drop for Builder<'_> {
@@ -130,10 +135,16 @@ impl TopologyCache {
                     subscribers: AtomicUsize::new(1),
                 });
                 state.build = Some(Arc::clone(&flight));
+                let previous = state
+                    .cached
+                    .as_ref()
+                    .filter(|cached| cached.generation == generation)
+                    .map(|cached| (Arc::clone(&cached.topology), cached.tips.clone()));
                 return Ok(Err(Builder {
                     cache: self,
                     flight,
                     built: None,
+                    previous,
                 }));
             };
             if joined
@@ -159,7 +170,7 @@ impl TopologyCache {
         tips: &[gix::ObjectId],
         cancellation: &LogWalkCancellation,
         generation: u64,
-        build: impl FnOnce(&dyn Fn() -> bool) -> gix::Result<Topology>,
+        build: impl FnOnce(&dyn Fn() -> bool, Option<&Previous>) -> gix::Result<Topology>,
     ) -> gix::Result<Arc<Topology>> {
         let mut builder = match self.join(tips, cancellation, generation)? {
             Ok(topology) => return Ok(topology),
@@ -174,7 +185,7 @@ impl TopologyCache {
             }
             flight.is_cancelled()
         };
-        let result = build(&cancelled).map(Arc::new);
+        let result = build(&cancelled, builder.previous.as_ref()).map(Arc::new);
         cancelled();
         builder.built = result.as_ref().ok().cloned();
         drop(builder);
@@ -198,7 +209,12 @@ impl TopologyWalk {
         check_cancelled(cancellation.is_cancelled())?;
         let topology = match cache {
             Some((cache, generation)) => {
-                cache.get_or_build(tips, cancellation, generation, |cancelled| {
+                cache.get_or_build(tips, cancellation, generation, |cancelled, previous| {
+                    if let Some((older, older_tips)) = previous
+                        && let Some(grown) = older.grown(repo, older_tips, tips, cancelled)
+                    {
+                        return Ok(grown);
+                    }
                     Topology::build(repo, tips, cancelled)
                 })?
             }
@@ -237,13 +253,117 @@ struct Topology {
     parents: Box<[u32]>,
     times: Box<[i64]>,
     order: Box<[u32]>,
+    /// Rows by ID, made when a lookup first needs it: see [`Topology::grown`].
+    sorted: std::sync::OnceLock<Box<[u32]>>,
 }
 
 impl Topology {
     fn id(&self, row: usize) -> gix::ObjectId {
-        gix::ObjectId::from_bytes_or_panic(
-            &self.ids[row * self.hash_len..(row + 1) * self.hash_len],
+        gix::ObjectId::from_bytes_or_panic(self.id_bytes(row as u32))
+    }
+
+    fn id_bytes(&self, row: u32) -> &[u8] {
+        &self.ids[row as usize * self.hash_len..][..self.hash_len]
+    }
+
+    fn sorted(&self) -> &[u32] {
+        self.sorted.get_or_init(|| {
+            // Sort on a contiguous prefix; the ID table settles equal ones.
+            let mut keyed: Vec<(u64, u32)> = (0..self.times.len() as u32)
+                .map(|row| {
+                    let prefix = self.id_bytes(row)[..8].try_into().expect("an ID's prefix");
+                    (u64::from_be_bytes(prefix), row)
+                })
+                .collect();
+            keyed.sort_unstable_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| self.id_bytes(a.1).cmp(self.id_bytes(b.1)))
+            });
+            keyed.into_iter().map(|(_, row)| row).collect()
+        })
+    }
+
+    fn row_of(&self, id: &gix::oid) -> Option<u32> {
+        let sorted = self.sorted();
+        sorted
+            .binary_search_by(|&row| self.id_bytes(row).cmp(id.as_bytes()))
+            .ok()
+            .map(|at| sorted[at])
+    }
+
+    /// The topology for `tips`, made from this one, built for `older_tips`,
+    /// and the commits `tips` add: see [`super::extend`]. `None` when a
+    /// rebuild could differ. Rows keep their numbers; added rows follow them.
+    fn grown(
+        &self,
+        repo: &gix::ThreadSafeRepository,
+        older_tips: &[gix::ObjectId],
+        tips: &[gix::ObjectId],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Self> {
+        let floor = self.times[*self.order.first()? as usize];
+        let row_of = |id: &gix::oid| self.row_of(id);
+        let added = super::extend::Added::find(
+            &log_paged_walk_handle(repo),
+            tips,
+            &row_of,
+            Work::LogWalkObjectRead,
+            cancelled,
         )
+        .ok()??;
+        if !added.keeps(older_tips, &row_of, self.parents.iter().copied()) {
+            return None;
+        }
+        let added_order = added.date_order(floor)?;
+        let rows = self.times.len();
+        let first = u32::try_from(rows).ok()?;
+        first.checked_add(u32::try_from(added.ids.len()).ok()?)?;
+
+        let mut ids = Vec::with_capacity(self.ids.len() + added.ids.len() * self.hash_len);
+        ids.extend_from_slice(&self.ids);
+        let mut offsets = self.offsets.to_vec();
+        let mut parents = self.parents.to_vec();
+        let mut times = self.times.to_vec();
+        for (row, id) in added.ids.iter().enumerate() {
+            ids.extend_from_slice(id.as_bytes());
+            for parent in &added.parents[row] {
+                parents.push(match added.rows.get(parent) {
+                    Some(&added_row) => first + added_row,
+                    None => self.row_of(parent)?,
+                });
+            }
+            offsets.push(u32::try_from(parents.len()).ok()?);
+            times.push(added.times[row]);
+        }
+        let mut order = Vec::with_capacity(rows + added_order.len());
+        order.extend(added_order.iter().map(|row| first + row));
+        order.extend_from_slice(&self.order);
+
+        // By ID: the added rows merged into the older rows.
+        let mut added_sorted: Vec<u32> = (0..added.ids.len() as u32).collect();
+        added_sorted.sort_unstable_by_key(|&row| added.ids[row as usize]);
+        let mut sorted = Vec::with_capacity(order.len());
+        let mut pending = added_sorted.into_iter().peekable();
+        for &row in self.sorted() {
+            while let Some(next) =
+                pending.next_if(|&next| added.ids[next as usize].as_bytes() < self.id_bytes(row))
+            {
+                sorted.push(first + next);
+            }
+            sorted.push(row);
+        }
+        sorted.extend(pending.map(|row| first + row));
+
+        record(Work::LogTopologyExtend);
+        Some(Self {
+            hash_len: self.hash_len,
+            ids: ids.into_boxed_slice(),
+            offsets: offsets.into_boxed_slice(),
+            parents: parents.into_boxed_slice(),
+            times: times.into_boxed_slice(),
+            order: order.into_boxed_slice(),
+            sorted: sorted.into_boxed_slice().into(),
+        })
     }
 
     fn build(
@@ -334,6 +454,7 @@ impl Topology {
             parents: parents.into_boxed_slice(),
             times: times.into_boxed_slice(),
             order: order.into_boxed_slice(),
+            sorted: std::sync::OnceLock::new(),
         })
     }
 }
@@ -378,7 +499,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    type Build = Box<dyn FnOnce(&dyn Fn() -> bool) -> gix::Result<Topology> + Send>;
+    type Build =
+        Box<dyn FnOnce(&dyn Fn() -> bool, Option<&Previous>) -> gix::Result<Topology> + Send>;
 
     fn tips() -> Vec<gix::ObjectId> {
         vec![gix::ObjectId::null(gix::hash::Kind::Sha1)]
@@ -392,7 +514,7 @@ mod tests {
         gate: Option<mpsc::Receiver<()>>,
     ) -> Build {
         let builds = builds.clone();
-        Box::new(move |cancelled| {
+        Box::new(move |cancelled, _| {
             builds.fetch_add(1, SeqCst);
             if let Some(started) = started {
                 started.send(()).unwrap();
@@ -412,6 +534,7 @@ mod tests {
                 parents: [].into(),
                 times: [].into(),
                 order: [].into(),
+                sorted: Default::default(),
             })
         })
     }

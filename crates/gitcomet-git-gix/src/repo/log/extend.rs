@@ -1,9 +1,10 @@
-//! Growing a history index when its history only gained commits on top.
+//! Growing a date-ordered history when it only gained commits on top.
 //!
 //! Date order shows a commit once all its children are shown, newest first.
-//! When every added commit is at least as new as the older index's first row,
+//! When every added commit is at least as new as the older order's first row,
 //! they all come before it and the older rows follow unchanged: the walk for
 //! the larger history reaches the older walk's starting state after them.
+//! Both the history index and the header topology grow this way.
 
 use super::index::{HistoryQuery, retain_probable_stashes};
 use super::walk::log_paged_walk_handle;
@@ -42,13 +43,13 @@ impl HistoryQuery {
 /// faster way to the same index.
 const ADDED_COMMIT_LIMIT: usize = 20_000;
 
-/// The commits a query adds to an older index, in the order they were found.
-struct Added {
-    rows: FxHashMap<gix::ObjectId, u32>,
-    ids: Vec<gix::ObjectId>,
-    parents: Vec<smallvec::SmallVec<[gix::ObjectId; 2]>>,
-    times: Vec<i64>,
-    /// Rows of the older index that a new tip or an added commit points at.
+/// The commits new tips add to an older history, in the order they were found.
+pub(super) struct Added {
+    pub(super) rows: FxHashMap<gix::ObjectId, u32>,
+    pub(super) ids: Vec<gix::ObjectId>,
+    pub(super) parents: Vec<smallvec::SmallVec<[gix::ObjectId; 2]>>,
+    pub(super) times: Vec<i64>,
+    /// Rows of the older history that a new tip or an added commit points at.
     reached: FxHashSet<u32>,
 }
 
@@ -56,8 +57,9 @@ fn header(
     objects: &gix::OdbHandleArc,
     id: &gix::oid,
     buffer: &mut Vec<u8>,
+    work: Work,
 ) -> Result<(smallvec::SmallVec<[gix::ObjectId; 2]>, i64)> {
-    record(Work::IndexObjectRead);
+    record(work);
     let failed = |error: &dyn std::fmt::Display| {
         Error::new(ErrorKind::Backend(format!("gix history index: {error}")))
     };
@@ -78,12 +80,14 @@ fn header(
 }
 
 impl Added {
-    /// `None` past [`ADDED_COMMIT_LIMIT`].
-    fn find(
+    /// Walks from `tips` to the rows `row_of` knows, reading each added
+    /// commit's header as `work`. `None` past [`ADDED_COMMIT_LIMIT`].
+    pub(super) fn find(
         objects: &gix::OdbHandleArc,
         tips: &[gix::ObjectId],
-        older: &HistoryIndex,
-        cancellation: &CancellationToken,
+        row_of: &dyn Fn(&gix::oid) -> Option<u32>,
+        work: Work,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<Option<Self>> {
         let mut added = Self {
             rows: FxHashMap::default(),
@@ -98,15 +102,17 @@ impl Added {
             if added.rows.contains_key(&id) {
                 continue;
             }
-            if let Some(row) = older.position_bytes(id.as_bytes()) {
-                added.reached.insert(row as u32);
+            if let Some(row) = row_of(&id) {
+                added.reached.insert(row);
                 continue;
             }
             if added.ids.len() >= ADDED_COMMIT_LIMIT {
                 return Ok(None);
             }
-            cancellation.check_cancelled()?;
-            let (parents, time) = header(objects, &id, &mut buffer)?;
+            if cancelled() {
+                return Err(Error::new(ErrorKind::Cancelled));
+            }
+            let (parents, time) = header(objects, &id, &mut buffer, work)?;
             added.rows.insert(id, added.ids.len() as u32);
             pending.extend(parents.iter().copied());
             added.ids.push(id);
@@ -116,33 +122,39 @@ impl Added {
         Ok(Some(added))
     }
 
-    /// Whether every commit of the older index is still reached. A tip it was
-    /// walked from may be gone only if another of its rows has it as a parent.
-    fn keeps(&self, older_tips: &[gix::ObjectId], older: &HistoryIndex) -> bool {
+    /// Whether every commit of the older history is still reached. A tip it
+    /// was walked from may be gone only if another of its rows has it as a
+    /// parent; `parent_rows` lists the parent of every edge between its rows.
+    pub(super) fn keeps(
+        &self,
+        older_tips: &[gix::ObjectId],
+        row_of: &dyn Fn(&gix::oid) -> Option<u32>,
+        parent_rows: impl IntoIterator<Item = u32>,
+    ) -> bool {
         let mut gone = FxHashSet::default();
         for tip in older_tips {
-            match older.position_bytes(tip.as_bytes()) {
-                Some(row) if self.reached.contains(&(row as u32)) => {}
+            match row_of(tip) {
+                Some(row) if self.reached.contains(&row) => {}
                 Some(row) => {
-                    gone.insert(row as u32);
+                    gone.insert(row);
                 }
                 None => return false,
             }
         }
-        for row in 0..older.len() {
-            if gone.is_empty() {
-                break;
-            }
-            for parent in older.parents(row) {
-                gone.remove(parent);
+        if gone.is_empty() {
+            return true;
+        }
+        for parent in parent_rows {
+            if gone.remove(&parent) && gone.is_empty() {
+                return true;
             }
         }
-        gone.is_empty()
+        false
     }
 
     /// The added commits in date order, or `None` when one of them is older
     /// than `floor`, the time of the older index's first row.
-    fn date_order(&self, floor: i64) -> Option<Vec<u32>> {
+    pub(super) fn date_order(&self, floor: i64) -> Option<Vec<u32>> {
         let mut children = vec![0u32; self.ids.len()];
         for parent in self.parents.iter().flatten() {
             if let Some(&row) = self.rows.get(parent) {
@@ -195,16 +207,26 @@ pub(in crate::repo) fn extend_history_index(
         return Ok(None);
     }
     let objects = log_paged_walk_handle(store);
-    let Some(added) = Added::find(&objects, &query.tips, older, cancellation)? else {
+    let row_of = |id: &gix::oid| older.position_bytes(id.as_bytes()).map(|row| row as u32);
+    let Some(added) = Added::find(
+        &objects,
+        &query.tips,
+        &row_of,
+        Work::IndexObjectRead,
+        &|| cancellation.is_cancelled(),
+    )?
+    else {
         return Ok(None);
     };
-    if !added.keeps(&older_query.tips, older) {
+    let parent_rows = (0..older.len()).flat_map(|row| older.parents(row).iter().copied());
+    if !added.keeps(&older_query.tips, &row_of, parent_rows) {
         return Ok(None);
     }
     let (_, floor) = header(
         &objects,
         gix::oid::from_bytes_unchecked(first),
         &mut Vec::new(),
+        Work::IndexObjectRead,
     )?;
     let Some(order) = added.date_order(floor) else {
         return Ok(None);

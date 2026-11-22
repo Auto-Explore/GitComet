@@ -23,6 +23,8 @@ pub enum Work {
     PickerFilterItem,
     LogWalkObjectRead,
     LogTopologyBuild,
+    /// A topology made from the cached one and the commits added on top.
+    LogTopologyExtend,
     HistoryIndexBuild,
     /// An index made from an existing one and the commits added on top.
     HistoryIndexExtend,
@@ -30,7 +32,7 @@ pub enum Work {
 }
 
 impl Work {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -48,6 +50,7 @@ impl Work {
         Self::PickerFilterItem,
         Self::LogWalkObjectRead,
         Self::LogTopologyBuild,
+        Self::LogTopologyExtend,
         Self::HistoryIndexBuild,
         Self::HistoryIndexExtend,
         Self::RepositoryReopen,
@@ -72,6 +75,7 @@ impl Work {
             Self::PickerFilterItem => "picker_filter_item",
             Self::LogWalkObjectRead => "log_walk_object_read",
             Self::LogTopologyBuild => "log_topology_build",
+            Self::LogTopologyExtend => "log_topology_extend",
             Self::HistoryIndexBuild => "history_index_build",
             Self::HistoryIndexExtend => "history_index_extend",
             Self::RepositoryReopen => "repository_reopen",

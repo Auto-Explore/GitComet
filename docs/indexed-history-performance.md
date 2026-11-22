@@ -610,7 +610,23 @@ Release build, index requested again after one commit on top of `HEAD`:
 | Generated history, 2,040,001 commits | 5.0–6.7 s | 44–76 ms |
 | Chromium, 1,792,921 commits, 39,250 refs | 6.6–11.5 s | 19–66 ms |
 
-`Work::HistoryIndexExtend` counts grown indexes and `Work::HistoryIndexBuild`
+Without a commit-graph the first page of a refresh orders the header
+topology, which is cached by tips in the same way and was scanned again from
+every header. It grows by the same rules from the cached topology
+(`Topology::grown`), reading only the added headers; its rows are found through
+an ID-sorted row list made on first use and carried forward.
+
+Release build, through the store: time from asking for a reload after one
+commit on top of `HEAD` until the state holds the new index.
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| git.git, 79,849 commits, no commit-graph | 312–352 ms | 20 ms |
+| Generated history, 2,040,001 commits, no commit-graph | 4.4 s | 50–161 ms |
+| Chromium, 1,792,921 commits, commit-graph | 3.1 s | 80–161 ms |
+
+`Work::HistoryIndexExtend` and `Work::LogTopologyExtend` count grown indexes
+and topologies; `Work::HistoryIndexBuild` and `Work::LogTopologyBuild` count
 rebuilds. The tests in `tests/integration/log/incremental.rs` compare a held
-index against `git log --all --date-order` across random changes, and check
-date order itself where committer times tie.
+index and the pages against `git log --all --date-order` across random
+changes, and check date order itself where committer times tie.

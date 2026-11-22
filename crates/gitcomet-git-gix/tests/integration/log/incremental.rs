@@ -103,6 +103,31 @@ fn index_rows(index: &HistoryIndexHandle) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// The rows of the whole history as pages give them. These fixtures have no
+/// commit-graph, so the page walk orders the header topology.
+fn page_rows(repo: &dyn GitRepository) -> Vec<(String, Vec<String>)> {
+    repo.log_history_mode_page(
+        HistoryMode::AllBranches,
+        100_000,
+        None,
+        &CancellationToken::new(),
+    )
+    .unwrap()
+    .commits
+    .iter()
+    .map(|commit| {
+        (
+            commit.id.as_ref().to_owned(),
+            commit
+                .parent_ids
+                .iter()
+                .map(|id| id.as_ref().to_owned())
+                .collect(),
+        )
+    })
+    .collect()
+}
+
 /// An index is grown from one that is still held, as a window holds the one
 /// it shows; `held` now holds `index` for the next change.
 fn keep(held: &mut HistoryIndexHandle, index: HistoryIndexHandle) {
@@ -287,6 +312,11 @@ fn an_index_kept_across_random_changes_matches_git_after_each() {
                 fixture.git_rows(),
                 "seed {seed} step {step}"
             );
+            assert_eq!(
+                page_rows(repo.as_ref()),
+                fixture.git_rows(),
+                "seed {seed} step {step}: pages"
+            );
             keep(&mut held, index);
         }
         assert!(
@@ -300,7 +330,7 @@ fn an_index_kept_across_random_changes_matches_git_after_each() {
 /// With equal committer times date order has several answers, so the grown
 /// index is checked for being one of them: every row comes after all its
 /// children and is as new as any other row that could have come instead.
-fn assert_date_order(fixture: &Fixture, index: &HistoryIndexHandle, context: &str) {
+fn assert_date_order(fixture: &Fixture, rows: &[(String, Vec<String>)], context: &str) {
     let times: rustc_hash::FxHashMap<String, i64> =
         git_stdout(fixture.path(), &["log", "--all", "--format=%H %ct"])
             .lines()
@@ -309,7 +339,6 @@ fn assert_date_order(fixture: &Fixture, index: &HistoryIndexHandle, context: &st
                 (id.to_owned(), time.parse().unwrap())
             })
             .collect();
-    let rows = index_rows(index);
     assert_eq!(rows.len(), times.len(), "{context}: every commit, once");
     let mut waiting: rustc_hash::FxHashMap<&str, usize> =
         rows.iter().map(|(id, _)| (id.as_str(), 0)).collect();
@@ -317,7 +346,7 @@ fn assert_date_order(fixture: &Fixture, index: &HistoryIndexHandle, context: &st
         *waiting.get_mut(parent.as_str()).expect("a parent is a row") += 1;
     }
     let mut shown = rustc_hash::FxHashSet::default();
-    for (id, parents) in &rows {
+    for (id, parents) in rows {
         assert_eq!(waiting[id.as_str()], 0, "{context}: {id} before a child");
         let newest_ready = waiting
             .iter()
@@ -373,7 +402,13 @@ fn an_index_grown_among_equal_times_is_still_in_date_order() {
             }
             let (index, _, extended) = rebuilt(repo.as_ref());
             extends += extended;
-            assert_date_order(&fixture, &index, &format!("seed {seed} step {step}"));
+            let context = format!("seed {seed} step {step}");
+            assert_date_order(&fixture, &index_rows(&index), &context);
+            assert_date_order(
+                &fixture,
+                &page_rows(repo.as_ref()),
+                &format!("{context}: pages"),
+            );
             keep(&mut held, index);
         }
         assert!(
@@ -410,4 +445,38 @@ fn a_stash_on_top_grows_the_index_and_is_marked_as_one() {
         assert_eq!(index.is_probable_stash(row), row == stash_row, "row {row}");
     }
     drop(held);
+}
+
+#[test]
+fn pages_after_commits_on_top_read_only_the_added_headers() {
+    let mut fixture = Fixture::new();
+    let mut tip = fixture.commit("main", &[], 100);
+    for time in 101..140 {
+        tip = fixture.commit("main", &[tip], time);
+    }
+    let side = fixture.commit("side", &[tip], 140);
+    let repo = GixBackend.open(fixture.path()).unwrap();
+    let _capture = capture();
+    let work = || {
+        (
+            count(Work::LogTopologyBuild),
+            count(Work::LogTopologyExtend),
+            count(Work::LogWalkObjectRead),
+        )
+    };
+    assert_eq!(page_rows(repo.as_ref()), fixture.git_rows());
+    assert_eq!(work(), (1, 0, 41));
+
+    // Two commits and a merge on top: three headers, no scan of the rest.
+    let next = fixture.commit("main", &[tip], 141);
+    let merged = fixture.commit("main", &[next, side], 142);
+    fixture.commit("main", &[merged], 143);
+    assert_eq!(page_rows(repo.as_ref()), fixture.git_rows());
+    assert_eq!(work(), (1, 1, 44));
+
+    // A commit dated among the older rows is sorted by a full scan, after
+    // its own header showed that it is.
+    fixture.commit("late", &[tip], 120);
+    assert_eq!(page_rows(repo.as_ref()), fixture.git_rows());
+    assert_eq!(work(), (2, 1, 44 + 1 + 45));
 }
