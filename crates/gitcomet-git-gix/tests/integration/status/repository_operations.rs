@@ -2933,6 +2933,75 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     assert!(!branches.iter().any(|b| b.name == "HEAD"));
 }
 
+/// The list reads tips through the object store that is already open. A tip
+/// fetched since then lies in a pack that store has not seen.
+#[test]
+fn list_remote_branches_includes_a_tip_fetched_into_a_new_pack_after_open() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let other = dir.path().join("other");
+    let origin = dir.path().join("origin.git");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&origin).unwrap();
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
+    run_git(&repo, &["init", "-b", "main"]);
+    for (key, value) in [
+        ("user.email", "you@example.com"),
+        ("user.name", "You"),
+        ("commit.gpgsign", "false"),
+    ] {
+        run_git(&repo, &["config", key, value]);
+    }
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(&repo, &["commit", "-m", "init"]);
+    let url = git_remote_url(&origin);
+    run_git(&repo, &["remote", "add", "origin", url.as_str()]);
+    run_git(&repo, &["push", "-u", "origin", "main"]);
+    // Packed, so that the open store has pack indexes to hold on to.
+    run_git(&repo, &["gc", "-q"]);
+
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    let opened = GixBackend.open(&repo).unwrap();
+    let before = opened.list_remote_branches(&cancellation).unwrap();
+    assert_eq!(before.len(), 1, "{before:?}");
+
+    run_git(dir.path(), &["clone", "-q", url.as_str(), "other"]);
+    for (key, value) in [("user.email", "you@example.com"), ("user.name", "You")] {
+        run_git(&other, &["config", key, value]);
+    }
+    run_git(&other, &["checkout", "-q", "-b", "later"]);
+    write(&other, "b.txt", "later\n");
+    run_git(&other, &["add", "b.txt"]);
+    run_git(
+        &other,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "later"],
+    );
+    run_git(&other, &["push", "-q", "origin", "later"]);
+    let tip = crate::git_cli::git_stdout(&other, &["rev-parse", "HEAD"]);
+    // Kept as a pack however few the objects.
+    run_git(
+        &repo,
+        &["-c", "fetch.unpackLimit=1", "fetch", "-q", "origin"],
+    );
+    let packs = fs::read_dir(repo.join(".git/objects/pack"))
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy().ends_with(".pack")
+        })
+        .count();
+    assert_eq!(packs, 2);
+
+    let after = opened.list_remote_branches(&cancellation).unwrap();
+    let later = after
+        .iter()
+        .find(|branch| branch.remote == "origin" && branch.name == "later")
+        .unwrap_or_else(|| panic!("{after:?}"));
+    assert_eq!(later.target.as_ref(), tip.trim());
+}
+
 #[test]
 fn checkout_remote_branch_creates_tracking_branch_when_missing_locally() {
     test_git_env::ensure_initialized();
