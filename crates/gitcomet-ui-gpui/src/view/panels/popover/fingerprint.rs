@@ -1134,9 +1134,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             submodule_repo_path.hash(hasher);
             view_fingerprint::hash_diff_target(target, hasher);
         }
-        PopoverKind::TagMenu { repo_id, commit_id } => {
+        PopoverKind::TagMenu {
+            repo_id,
+            commit_id,
+            name,
+        } => {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+            name.hash(hasher);
         }
         PopoverKind::HistoryBranchFilter { repo_id } => {
             repo_id.hash(hasher);
@@ -1415,6 +1420,20 @@ mod tests {
         ];
         let hashes: rustc_hash::FxHashSet<u64> = kinds.iter().cloned().map(hash_kind).collect();
         assert_eq!(hashes.len(), kinds.len(), "{kinds:?}");
+    }
+
+    /// Two tags on one commit open different menus; hashing alike would leave
+    /// the first tag's actions up when the second is right-clicked.
+    #[test]
+    fn tag_menus_on_one_commit_hash_their_tag() {
+        let menu = |name: Option<&str>| PopoverKind::TagMenu {
+            repo_id: RepoId(7),
+            commit_id: CommitId("1111111111111111111111111111111111111111".into()),
+            name: name.map(str::to_owned),
+        };
+        assert_eq!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.0"))));
+        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.1"))));
+        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(None)));
     }
 
     #[test]

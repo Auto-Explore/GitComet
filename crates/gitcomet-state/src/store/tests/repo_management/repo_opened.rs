@@ -909,6 +909,7 @@ fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     });
 
     state.repos[0].loads_in_flight.request(LoadKind::Worktrees);

@@ -1320,6 +1320,7 @@ fn append_focus_target_tips(
 ) -> Result<()> {
     let ref_names: Vec<String> = match focus {
         HistoryFocus::LocalBranch { name } => vec![format!("refs/heads/{name}")],
+        HistoryFocus::Tag { name } => vec![format!("refs/tags/{name}")],
         // A remote that is no longer configured has no refspecs to map
         // through, so its branch contributes no tips, like a deleted one.
         HistoryFocus::RemoteBranch { remote, branch } => {

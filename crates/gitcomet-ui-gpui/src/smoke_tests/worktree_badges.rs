@@ -748,6 +748,7 @@ fn worktree_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Test
             worktrees: false,
             submodules: false,
             stashes: false,
+            tags: false,
         },
     });
 
@@ -774,6 +775,7 @@ fn worktree_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Test
             worktrees: true,
             submodules: true,
             stashes: true,
+            tags: false,
         },
     });
 

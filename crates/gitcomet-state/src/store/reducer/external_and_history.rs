@@ -551,6 +551,7 @@ pub(super) enum FocusRefList {
     LocalBranches,
     RemoteBranches,
     Remotes,
+    Tags,
 }
 
 /// Clears focus targets whose refs have gone away.
@@ -605,6 +606,10 @@ pub(super) fn clear_missing_history_focus(
         }
         (HistoryFocus::Remote { name }, FocusRefList::Remotes) => match conclusive(&repo.remotes) {
             Some(remotes) => remotes.iter().any(|remote| remote.name == name.as_ref()),
+            None => true,
+        },
+        (HistoryFocus::Tag { name }, FocusRefList::Tags) => match conclusive(&repo.tags) {
+            Some(tags) => tags.iter().any(|tag| tag.name == name.as_ref()),
             None => true,
         },
         // This list does not govern this target.

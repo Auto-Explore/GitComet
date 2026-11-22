@@ -37,6 +37,7 @@ pub(super) enum HistoryFocusSetting {
     LocalBranch { name: String },
     RemoteBranch { remote: String, branch: String },
     Remote { name: String },
+    Tag { name: String },
 }
 
 /// Reads the stored focus map, tolerating anything it does not recognise.
@@ -83,6 +84,9 @@ impl From<&HistoryFocus> for HistoryFocusSetting {
             HistoryFocus::Remote { name } => Self::Remote {
                 name: name.to_string(),
             },
+            HistoryFocus::Tag { name } => Self::Tag {
+                name: name.to_string(),
+            },
         }
     }
 }
@@ -95,6 +99,7 @@ impl From<HistoryFocusSetting> for HistoryFocus {
                 Self::remote_branch(remote, branch)
             }
             HistoryFocusSetting::Remote { name } => Self::remote(name),
+            HistoryFocusSetting::Tag { name } => Self::tag(name),
         }
     }
 }

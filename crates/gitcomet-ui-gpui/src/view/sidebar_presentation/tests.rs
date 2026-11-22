@@ -177,7 +177,12 @@ fn review_sidebar_requests_follow_the_visible_top_level_sections() {
     let (_, hidden) = active_sidebar_data_request(&state, &empty, false).unwrap();
     assert!(!hidden.submodules && !hidden.stashes);
     let (_, visible) = active_sidebar_data_request(&state, &empty, true).unwrap();
-    let rows = branch_sidebar::expanded_sidebar_rows(&state.repos[0], &BTreeSet::new(), "");
+    let rows = branch_sidebar::expanded_sidebar_rows(
+        &state.repos[0],
+        &BTreeSet::new(),
+        "",
+        &mut Default::default(),
+    );
     assert!(rows.iter().any(|row| matches!(
         row,
         BranchSidebarRow::SubmodulesHeader {
@@ -496,6 +501,28 @@ fn active_sidebar_data_request_respects_repo_collapse_state() {
     assert!(request.worktrees);
     assert!(request.submodules);
     assert!(request.stashes);
+}
+
+#[test]
+fn active_sidebar_data_request_requests_tags_when_visible_or_expanded() {
+    let state = AppState {
+        active_repo: Some(RepoId(1)),
+        repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+        ..AppState::test_default()
+    };
+    let tags = |collapsed: BTreeSet<String>, visible| {
+        let items = BTreeMap::from([(PathBuf::from("/tmp/repo"), collapsed)]);
+        active_sidebar_data_request(&state, &items, visible)
+            .expect("request exists")
+            .1
+            .tags
+    };
+    assert!(tags(BTreeSet::new(), true));
+    assert!(!tags(BTreeSet::new(), false));
+    assert!(tags(
+        BTreeSet::from(["expanded:section:tags".into()]),
+        false
+    ));
 }
 
 #[test]
@@ -917,4 +944,87 @@ fn build_sidebar_presentation_removes_badge_when_worktree_becomes_detached() {
             .expect("refreshed sidebar presentation");
 
     assert!(refreshed.worktree_badges.listed_path("feature").is_none());
+}
+
+/// Every rebuild lists every tag, and ordering 20k names takes longer than a
+/// frame, so a rebuild for some other reason (here a new branch) must reuse the
+/// ordered tag rows instead of sorting the same list again.
+#[test]
+fn a_rebuild_with_the_same_tag_list_reuses_its_sorted_rows() {
+    let mut repo = repo_state(RepoId(1), "/tmp/repo");
+    repo.tags = Loadable::Ready(Arc::new(
+        [
+            "release-candidate-build-1.9",
+            "release-candidate-build-1.10",
+        ]
+        .map(|name| gitcomet_core::domain::Tag {
+            name: name.into(),
+            target: CommitId("a".into()),
+        })
+        .to_vec(),
+    ));
+    let mut state = AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    };
+    // The names are long enough to live on the heap, so a reused row shares
+    // its name's allocation and a rebuilt one does not.
+    let tag_names = |presentation: &SidebarPresentation| {
+        presentation
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::TagItem { name, .. } => Some((name.to_string(), name.as_ptr())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let build = |cache: &mut SidebarPresentationCache, state: &AppState| {
+        build_sidebar_presentation(cache, state, &BTreeMap::new(), &BTreeMap::new(), "").unwrap()
+    };
+
+    let mut cache = SidebarPresentationCache::default();
+    let first = build(&mut cache, &state);
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+        name: "topic".into(),
+        target: CommitId("a".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    state.repos[0].branches_rev += 1;
+    let second = build(&mut cache, &state);
+    assert!(
+        !Rc::ptr_eq(&first.rows, &second.rows),
+        "the new branch rebuilt the rows"
+    );
+    assert_eq!(tag_names(&first), tag_names(&second));
+    assert_eq!(tag_names(&first)[0].0, "release-candidate-build-1.10");
+
+    // A different list is sorted afresh, even when it reuses the old names.
+    state.repos[0].tags = Loadable::Ready(Arc::new(
+        [
+            "release-candidate-build-1.9",
+            "release-candidate-build-1.10",
+            "release-candidate-build-2.0",
+        ]
+        .map(|name| gitcomet_core::domain::Tag {
+            name: name.into(),
+            target: CommitId("a".into()),
+        })
+        .to_vec(),
+    ));
+    state.repos[0].tags_rev += 1;
+    let third = build(&mut cache, &state);
+    assert_eq!(
+        tag_names(&third)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>(),
+        [
+            "release-candidate-build-2.0",
+            "release-candidate-build-1.10",
+            "release-candidate-build-1.9"
+        ]
+    );
 }

@@ -138,6 +138,35 @@ fn focusing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
 }
 
 #[test]
+fn focusing_a_tag_walks_from_the_commit_it_names() {
+    let dir = forked_repo();
+    run_git(dir.path(), &["tag", "light", "feature"]);
+    run_git(
+        dir.path(),
+        &["tag", "-a", "annotated", "-m", "release", "master~1"],
+    );
+    let repo = GixBackend.open(dir.path()).unwrap();
+
+    assert_eq!(
+        summaries(
+            repo.as_ref(),
+            HistoryMode::AllBranches,
+            &HistoryFocusSet::from_iter([HistoryFocus::tag("light")]),
+        ),
+        vec!["on-feature".to_string(), "base".to_string()],
+    );
+    // An annotated tag points at a tag object; the walk starts at its commit.
+    assert_eq!(
+        summaries(
+            repo.as_ref(),
+            HistoryMode::AllBranches,
+            &HistoryFocusSet::from_iter([HistoryFocus::tag("annotated")]),
+        ),
+        vec!["base".to_string()],
+    );
+}
+
+#[test]
 fn a_focus_on_a_missing_ref_walks_nothing() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();

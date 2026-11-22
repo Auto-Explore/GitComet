@@ -178,18 +178,20 @@ pub(in crate::view) enum CollapsedSidebarSection {
     Submodules,
     Annex,
     Stashes,
+    Tags,
     Files,
 }
 
 impl CollapsedSidebarSection {
     /// Rail order, top to bottom, matching the expanded sidebar.
-    pub(in crate::view) const ALL: [Self; 7] = [
+    pub(in crate::view) const ALL: [Self; 8] = [
         Self::Local,
         Self::Remote,
         Self::Worktrees,
         Self::Submodules,
         Self::Annex,
         Self::Stashes,
+        Self::Tags,
         Self::Files,
     ];
 
@@ -210,6 +212,7 @@ impl CollapsedSidebarSection {
             Self::Submodules => "icons/box.svg",
             Self::Annex => "icons/disk.svg",
             Self::Stashes => super::super::icons::STASH_ICON_PATH,
+            Self::Tags => "icons/tag.svg",
             Self::Files => "icons/file.svg",
         }
     }
@@ -222,6 +225,7 @@ impl CollapsedSidebarSection {
             Self::Submodules => "Submodules",
             Self::Annex => "git-annex",
             Self::Stashes => "Stashes",
+            Self::Tags => "Tags",
             Self::Files => "Files",
         }
     }
@@ -234,6 +238,7 @@ impl CollapsedSidebarSection {
             Self::Submodules => "collapsed_sidebar_icon_submodules",
             Self::Annex => "collapsed_sidebar_icon_annex",
             Self::Stashes => "collapsed_sidebar_icon_stashes",
+            Self::Tags => "collapsed_sidebar_icon_tags",
             Self::Files => "collapsed_sidebar_icon_files",
         }
     }
@@ -273,6 +278,7 @@ impl CollapsedSidebarSection {
                 format!("stash_section_menu_{}", repo_id.0),
                 PopoverKind::StashPrompt,
             ),
+            Self::Tags => return None,
             Self::Files => (
                 format!("explorer_settings_menu_{}", repo_id.0),
                 PopoverKind::ExplorerSettingsMenu { repo_id },
@@ -289,6 +295,7 @@ impl CollapsedSidebarSection {
             Self::Submodules => Some(branch_sidebar::submodules_section_storage_key()),
             Self::Annex => Some(branch_sidebar::annex_section_storage_key()),
             Self::Stashes => Some(branch_sidebar::stash_section_storage_key()),
+            Self::Tags => Some(branch_sidebar::tags_section_storage_key()),
             Self::Files => None,
         }
     }
@@ -440,7 +447,7 @@ struct SidebarNotifyFingerprint {
     /// when the user opens a different file.
     diff_target_rev: u64,
     /// The focused refs. The sidebar draws them in the accent colour, gives
-    /// every branch row an eye toggle and puts a banner above the branch list,
+    /// every branch and tag row an eye toggle and puts a banner above the branch list,
     /// and none of that is part of the cached row data — it is all computed at
     /// render time — so the pane has to be told to repaint when the set
     /// changes. Hashed because this fingerprint is `Copy`.
@@ -1653,6 +1660,17 @@ impl SidebarPaneView {
                         worktrees: true,
                         submodules: false,
                         stashes: true,
+                        tags: false,
+                    },
+                });
+            }
+            CollapsedSidebarSection::Tags => {
+                self.store.dispatch(Msg::EnsureSidebarData {
+                    repo_id,
+                    request: SidebarDataRequest {
+                        worktrees: true,
+                        tags: true,
+                        ..Default::default()
                     },
                 });
             }
@@ -1663,6 +1681,7 @@ impl SidebarPaneView {
                         worktrees: true,
                         submodules: false,
                         stashes: false,
+                        tags: false,
                     },
                 });
             }
@@ -1888,9 +1907,8 @@ impl SidebarPaneView {
         if repo.history_state.history_focus.is_empty() {
             return None;
         }
-        // Both sides count branch refs, local and remote: remote branches can
-        // be focused too, so leaving them out of the total would let the count
-        // read "3/2".
+        // Both sides count every focusable ref -- local and remote branches
+        // and tags -- so the count never reads "3/2".
         let count = crate::view::history_focus::history_focus_count(repo);
         let accent = theme.colors.accent;
         let store = self.store.clone();
@@ -2187,6 +2205,22 @@ impl SidebarPaneView {
             let _ = root_view.update(cx, |root, cx| {
                 root.main_pane.update(cx, |pane, cx| {
                     pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
+                });
+            });
+        });
+    }
+
+    pub(in super::super) fn reveal_tag_commit(
+        &mut self,
+        repo_id: RepoId,
+        target: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.reveal_history_commit(repo_id, target, Some(LogScope::AllBranches), cx);
                 });
             });
         });
@@ -2498,6 +2532,8 @@ mod sticky;
 
 #[cfg(test)]
 mod sticky_tests;
+#[cfg(test)]
+mod tag_row_tests;
 
 #[cfg(feature = "benchmarks")]
 mod sticky_benchmark;

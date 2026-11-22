@@ -204,6 +204,8 @@ pub enum HistoryFocus {
     RemoteBranch { remote: Arc<str>, branch: Arc<str> },
     /// Every branch under `refs/remotes/<remote>/`.
     Remote { name: Arc<str> },
+    /// `refs/tags/<name>`; an annotated tag seeds from the commit it peels to.
+    Tag { name: Arc<str> },
 }
 
 impl HistoryFocus {
@@ -226,12 +228,18 @@ impl HistoryFocus {
         }
     }
 
-    /// What the user sees: the branch name, `remote/branch`, or the remote.
+    pub fn tag(name: impl AsRef<str>) -> Self {
+        Self::Tag {
+            name: Arc::from(name.as_ref()),
+        }
+    }
+
+    /// What the user sees: the branch or tag name, `remote/branch`, or the remote.
     pub fn label(&self) -> String {
         match self {
             Self::LocalBranch { name } => name.to_string(),
             Self::RemoteBranch { remote, branch } => format!("{remote}/{branch}"),
-            Self::Remote { name } => name.to_string(),
+            Self::Remote { name } | Self::Tag { name } => name.to_string(),
         }
     }
 
@@ -243,6 +251,7 @@ impl HistoryFocus {
             Self::RemoteBranch { remote, branch } => {
                 Some(format!("refs/remotes/{remote}/{branch}"))
             }
+            Self::Tag { name } => Some(format!("refs/tags/{name}")),
             Self::Remote { .. } => None,
         }
     }
@@ -298,8 +307,14 @@ impl HistoryFocusSet {
             HistoryFocus::RemoteBranch { remote, branch } => {
                 self.covers_remote_branch(remote, branch)
             }
-            HistoryFocus::Remote { .. } => self.contains(target),
+            HistoryFocus::Remote { .. } | HistoryFocus::Tag { .. } => self.contains(target),
         }
+    }
+
+    /// [`Self::covers`] for `refs/tags/<name>`, without building a target.
+    pub fn covers_tag(&self, name: &str) -> bool {
+        self.iter()
+            .any(|held| matches!(held, HistoryFocus::Tag { name: held } if held.as_ref() == name))
     }
 
     /// [`Self::covers`] for `refs/heads/<name>`, without building a target.
@@ -319,7 +334,7 @@ impl HistoryFocusSet {
                 branch: held_branch,
             } => held_remote.as_ref() == remote && held_branch.as_ref() == branch,
             HistoryFocus::Remote { name } => name.as_ref() == remote,
-            HistoryFocus::LocalBranch { .. } => false,
+            HistoryFocus::LocalBranch { .. } | HistoryFocus::Tag { .. } => false,
         })
     }
 
