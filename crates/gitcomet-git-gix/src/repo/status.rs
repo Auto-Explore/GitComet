@@ -1484,11 +1484,16 @@ fn gitlink_status_output(
     let command = match ask {
         GitlinkAsk::Repository(paths) => {
             let mut command = git_workdir_cmd_for(workdir);
+            // Untracked files here are gix's to find, and preparing to look
+            // for them costs Git as much as the rest of a query for a few
+            // paths. Told not to ignore anything in submodules, Git still
+            // counts the untracked files inside them.
             command
                 .arg("--no-optional-locks")
                 .arg("status")
                 .arg("--porcelain=v2")
                 .arg("-z")
+                .arg("--untracked-files=no")
                 .arg("--ignore-submodules=none");
             if let Some(paths) = paths {
                 push_literal_paths(&mut command, paths);

@@ -920,4 +920,21 @@ fn checked_out_gitlinks_read_as_git_reads_them_in_one_query() {
     unstaged.sort_by(|a, b| a.path.cmp(&b.path));
     assert_eq!(unstaged, expected);
     assert!(staged.is_empty());
+
+    // The repository's own untracked files are not Git's to look for here,
+    // while untracked files inside a submodule still make it modified.
+    write_file(root, "untracked.txt", "new\n");
+    let everything = super::RepositoryQuery::Everything;
+    let records = super::run_repository_query(root, everything, &token);
+    let record = records[0].as_ref().unwrap().as_ref().unwrap();
+    let records: Vec<_> = record.split(|byte| *byte == 0).collect();
+    assert!(!records.iter().any(|record| record.starts_with(b"? ")));
+    let gitlinks = |number: usize| {
+        let path = children[number].as_bytes();
+        records
+            .iter()
+            .filter(|record| record.ends_with(path))
+            .count()
+    };
+    assert_eq!([3, 12].map(gitlinks), [1, 1]);
 }
