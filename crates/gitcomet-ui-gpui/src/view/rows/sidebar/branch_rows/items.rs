@@ -116,6 +116,18 @@ impl SidebarPaneView {
         let row_state = components::InteractiveRowState::default().open(context_menu_active);
         let target_for_click = target.clone();
         let tooltip_name = name.clone();
+        let in_history_focus = ctx.history_focus.covers_tag(&name);
+        let label_color = if in_history_focus {
+            theme.colors.accent.foreground
+        } else {
+            theme.colors.foreground.primary
+        };
+        let focus_eye = ctx.ref_focus_eye(
+            ix,
+            in_history_focus,
+            gitcomet_core::domain::HistoryFocus::tag(&name),
+            cx,
+        );
 
         div()
             .id(("tag_sidebar_row", ix))
@@ -130,17 +142,19 @@ impl SidebarPaneView {
             .h(ctx.row_height())
             .w_full()
             .interactive_row(row_style, row_state)
+            .children(focus_eye)
             .child(ctx.tree_toggle_slot(None))
             .child(ctx.tree_icon_slot("icons/tag.svg", ctx.icon_primary, 14.0))
             .child(
                 components::FadingText::new(
                     div()
                         .text_size(theme.ui_text(14.0))
+                        .text_color(label_color)
                         .child(filtered_label_element(
                             name.clone(),
                             None,
                             &ctx.filter_query,
-                            theme.colors.foreground.primary,
+                            label_color,
                             theme.colors.accent.foreground,
                             theme.ui_text(14.0).into(),
                             FontWeight::NORMAL,

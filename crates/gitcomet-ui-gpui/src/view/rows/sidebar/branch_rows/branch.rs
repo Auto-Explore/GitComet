@@ -134,36 +134,8 @@ impl SidebarPaneView {
         } else {
             ctx.icon_primary
         };
-        let focus_eye = ctx
-            .focus_eye_slot(if in_history_focus {
-                FocusEyeState::Focused
-            } else {
-                FocusEyeState::Unfocused
-            })
-            .map(|eye| {
-                let focus_target = focus_target_for_branch(&target);
-                eye.id(("sidebar_focus_eye", ix))
-                    .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
-                    .gitcomet_tooltip(
-                        theme,
-                        if in_history_focus {
-                            "Stop focus"
-                        } else {
-                            "Focus"
-                        }
-                        .into(),
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Nested,
-                        cx.listener(move |this, _, _, _| {
-                            this.store.dispatch(Msg::ToggleHistoryFocus {
-                                repo_id,
-                                target: focus_target.clone(),
-                            });
-                        }),
-                    )
-            });
+        let focus_eye =
+            ctx.ref_focus_eye(ix, in_history_focus, focus_target_for_branch(&target), cx);
         let badge_gap_px = ctx.px(BRANCH_BADGE_GAP_PX);
         let head_highlight = with_alpha(
             theme.colors.accent.foreground,
