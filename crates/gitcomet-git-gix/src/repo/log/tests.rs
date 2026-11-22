@@ -2645,6 +2645,22 @@ fn followed_names_keep_each_commits_first_status_line() {
 }
 
 #[test]
+fn tips_lie_far_apart_by_depth_and_by_its_share_of_the_history() {
+    let far = |generations: &[u32]| walk::generations_lie_far_apart(generations.iter().copied());
+    // No tip in the graph, one, and tips at the same depth.
+    assert!(!far(&[]));
+    assert!(!far(&[1_800_000]));
+    assert!(!far(&[1_800_000, 1_800_000]));
+    // A release branch cut ten thousand commits ago in a long history.
+    assert!(!far(&[1_800_000, 1_790_000, 1_799_990]));
+    // One old branch among them.
+    assert!(far(&[1_800_000, 1_790_000, 600_000]));
+    // A short history: far only when thousands of commits lie between.
+    assert!(!far(&[3_000, 10]));
+    assert!(far(&[6_000, 1_000]));
+}
+
+#[test]
 fn stash_shapes_rule_out_what_the_walk_shows_to_be_a_merge() {
     let id = |byte: u8| gix::ObjectId::from_bytes_or_panic(&[byte; 20]);
     let walk: &[(u8, &[u8])] = &[

@@ -718,3 +718,21 @@ Release build, first index of Chromium at `HEAD`, 1,792,921 commits:
 | Whole build | 0.90 s | 0.22 s |
 | Scan of the commit-graph | 450 ms | 130 ms |
 | Parents found by ID | 270 ms | none |
+
+## Pages from tips far apart take the topology (2026-11-22)
+
+With a commit-graph a page is walked lazily, which starts at once from one tip
+or from tips near each other. Before its first commit that walk counts the
+children of every commit above the lowest tip, about a microsecond each. On
+Chromium's all-branches view, nine tips of which one is old, that took 1.85 s,
+while the whole graph is ordered in a tenth of it. A page now takes the header
+topology when the depth between its tips, by their generations in the graph, is
+more than 4,096 commits and more than an eighth of the deepest tip's. The index
+build shares that topology through the cache, as it does without a
+commit-graph, and the cache keeps it (about 40 bytes a commit) while those are
+the tips.
+
+| Chromium, all branches, 1,922,916 commits | Before | After |
+| --- | ---: | ---: |
+| First page | 1.84–1.97 s | 0.30 s |
+| Index after it | 0.29–0.32 s | 0.12 s |

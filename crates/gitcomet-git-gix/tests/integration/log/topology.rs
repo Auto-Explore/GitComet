@@ -397,6 +397,51 @@ fn indexed_history_uses_existing_commit_graph_without_eager_object_scan() {
     assert_eq!(count(Work::LogTopologyBuild), 0);
 }
 
+/// With a commit-graph a page is walked lazily, which is at once from one tip
+/// or from tips near each other. A tip far back makes that walk count its
+/// way through everything above it first: such a page takes the topology an
+/// index build orders in a fraction of that time, and the build shares it.
+#[test]
+fn a_page_from_tips_far_apart_orders_the_whole_graph_once_for_the_index_too() {
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q", "-b", "master"]);
+    fast_import_linear_history(dir.path(), 6_000);
+    run_git(dir.path(), &["branch", "near", "HEAD~8"]);
+    run_git(dir.path(), &["commit-graph", "write", "--reachable"]);
+    let cancel = CancellationToken::new();
+    let page = |repo: &dyn gitcomet_core::services::GitRepository| {
+        repo.log_history_mode_page(HistoryMode::AllBranches, 20, None, &cancel)
+            .unwrap()
+    };
+
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let _capture = capture();
+    let near = page(&*repo);
+    assert_eq!(near.commits.len(), 20);
+    assert_eq!(count(Work::LogTopologyBuild), 0);
+
+    run_git(dir.path(), &["branch", "far", "HEAD~5000"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let far = page(&*repo);
+    assert_eq!(far.commits, near.commits);
+    assert_eq!(count(Work::LogTopologyBuild), 1);
+    let index = repo
+        .build_history_index(
+            &HistoryMode::AllBranches.into(),
+            None,
+            &Default::default(),
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(index.len(), 6_000);
+    let rows = repo.read_history_range(&index, 0..20, &cancel).unwrap();
+    assert_eq!(rows.commits, far.commits);
+    assert_eq!(count(Work::LogTopologyBuild), 1);
+    assert_eq!(count(Work::LogWalkObjectRead), 0);
+}
+
 #[test]
 fn indexed_history_honors_replacement_refs_like_git_and_bypasses_the_commit_graph() {
     fn rows(commits: &[gitcomet_core::domain::Commit]) -> Vec<String> {
