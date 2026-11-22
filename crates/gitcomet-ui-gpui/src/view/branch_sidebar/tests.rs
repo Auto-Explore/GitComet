@@ -946,12 +946,17 @@ fn tag_rows_sort_versions_newest_first_without_overflow() {
         tag("v01.9"),
         tag(&long),
         tag("v1"),
+        tag("beta"),
+        tag("nightly"),
     ])));
     let names = tag_names(&rows);
     assert_eq!(names[0], long);
     let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
     assert!(pos("v1.10") < pos("v1.9"));
     assert!(pos("v1.9") < pos("v1"));
+    // Names without a version run the same way, last in the alphabet first.
+    assert!(pos("v1") < pos("nightly"));
+    assert!(pos("nightly") < pos("beta"));
 }
 
 #[test]

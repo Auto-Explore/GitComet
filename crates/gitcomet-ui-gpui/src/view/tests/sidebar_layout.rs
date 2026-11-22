@@ -1435,6 +1435,47 @@ fn collapsed_tags_popover_renders_tag_rows(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// Nothing else loads the tags when history hides them, so the popover has to
+/// ask, or it sits on "Loading" for good.
+#[gpui::test]
+fn collapsed_tags_popover_requests_the_tag_list(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.git_log_settings.show_history_tags = false;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx));
+    });
+    finish_pane_transitions(cx, &view);
+    cx.run_until_parked();
+    assert!(
+        !store.snapshot().repos[0].sidebar_data_request.tags,
+        "the rail alone does not need the tags"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Tags, cx);
+        });
+    });
+    finish_pane_transitions(cx, &view);
+
+    // The request is reduced on the store's worker thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !store.snapshot().repos[0].sidebar_data_request.tags {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "opening the Tags popover never requested the tags"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 #[gpui::test]
 fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

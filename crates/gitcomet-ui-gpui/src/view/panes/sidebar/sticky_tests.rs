@@ -1714,6 +1714,51 @@ fn sticky_sidebar_stash_identity_survives_reindexing_and_invalidates_cached_rows
     assert!(!crate::view::sidebar_sticky::same_row(old, new));
 }
 
+/// A tag row is its name: moving the tag keeps the row (and the scroll
+/// position anchored on it) but must refresh its commit, or a click reveals
+/// the commit the tag used to name.
+#[test]
+fn sticky_sidebar_tag_identity_follows_the_name_and_invalidates_cached_rows() {
+    let mut state = long_list_tests::branch_fixture(1);
+    let mut cache = SidebarPresentationCache::default();
+    let empty = BTreeMap::new();
+    let mut set_tag = |state: &mut Arc<AppState>, name: &str, target: &str| {
+        let repo = &mut Arc::make_mut(state).repos[0];
+        repo.tags = Loadable::Ready(Arc::new(vec![Tag {
+            name: name.into(),
+            target: CommitId(target.into()),
+        }]));
+        repo.tags_rev += 1;
+        repo.branch_sidebar_rev += 1;
+        let presentation =
+            sidebar_presentation::build_sidebar_presentation(&mut cache, state, &empty, &empty, "")
+                .unwrap();
+        let row = presentation
+            .rows
+            .iter()
+            .find(|row| matches!(row, BranchSidebarRow::TagItem { .. }))
+            .unwrap()
+            .clone();
+        (presentation.rows, row)
+    };
+
+    let (first_rows, first) = set_tag(&mut state, "v1.0", "before");
+    let (moved_rows, moved) = set_tag(&mut state, "v1.0", "after");
+    assert!(!Rc::ptr_eq(&first_rows, &moved_rows));
+    assert!(matches!(
+        &moved,
+        BranchSidebarRow::TagItem { target, .. } if *target == CommitId("after".into())
+    ));
+    assert!(crate::view::sidebar_sticky::same_row(&first, &moved));
+
+    let (_, renamed) = set_tag(&mut state, "v2.0", "after");
+    assert!(matches!(
+        &renamed,
+        BranchSidebarRow::TagItem { name, .. } if name.as_ref() == "v2.0"
+    ));
+    assert!(!crate::view::sidebar_sticky::same_row(&moved, &renamed));
+}
+
 #[gpui::test]
 fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
     cx: &mut gpui::TestAppContext,

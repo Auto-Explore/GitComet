@@ -1422,6 +1422,20 @@ mod tests {
         assert_eq!(hashes.len(), kinds.len(), "{kinds:?}");
     }
 
+    /// Two tags on one commit open different menus; hashing alike would leave
+    /// the first tag's actions up when the second is right-clicked.
+    #[test]
+    fn tag_menus_on_one_commit_hash_their_tag() {
+        let menu = |name: Option<&str>| PopoverKind::TagMenu {
+            repo_id: RepoId(7),
+            commit_id: CommitId("1111111111111111111111111111111111111111".into()),
+            name: name.map(str::to_owned),
+        };
+        assert_eq!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.0"))));
+        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.1"))));
+        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(None)));
+    }
+
     #[test]
     fn local_file_link_menus_hash_their_path_and_presence() {
         let menu = |path: &str, missing: bool| PopoverKind::LocalFileLinkMenu {

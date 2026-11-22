@@ -1058,6 +1058,8 @@ mod tests {
                     .position(|row| matches!(row, BranchSidebarRow::TagItem { .. }))
                     .expect("tag row");
                 assert_eq!(rows, vec![tag_ix]);
+                // The counter beside the query counts the tag too.
+                assert_eq!(presentation.match_count, 1);
             })
         });
     }
