@@ -454,13 +454,40 @@ pub(super) fn tree_index_changes(
     repo: &gix::Repository,
     tree_id: &gix::ObjectId,
     walk: &str,
-    mut on_change: impl FnMut(
-        gix::diff::index::ChangeRef<'_, '_>,
-    ) -> gix::Result<gix::diff::index::Action>,
+    on_change: impl FnMut(gix::diff::index::ChangeRef<'_, '_>) -> gix::Result<gix::diff::index::Action>,
 ) -> Result<()> {
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    // Comparing means reading every tree below `tree_id`: most of a first
+    // status when nothing is staged, the usual case.
+    if index_is_tree(&index, tree_id) {
+        return Ok(());
+    }
+    compare_tree_with_index(repo, tree_id, &index, walk, on_change)
+}
+
+/// Whether the index holds exactly the tree `tree_id`, by the root of the
+/// trees it caches. Git drops that root when an entry is added, removed,
+/// changed, conflicted or only intended to be added, and trusts it likewise.
+fn index_is_tree(index: &gix::index::State, tree_id: &gix::hash::oid) -> bool {
+    index.tree().is_some_and(|root| {
+        root.id == tree_id
+            && root
+                .num_entries
+                .is_some_and(|entries| entries as usize == index.entries().len())
+    })
+}
+
+fn compare_tree_with_index(
+    repo: &gix::Repository,
+    tree_id: &gix::hash::oid,
+    index: &gix::index::State,
+    walk: &str,
+    mut on_change: impl FnMut(
+        gix::diff::index::ChangeRef<'_, '_>,
+    ) -> gix::Result<gix::diff::index::Action>,
+) -> Result<()> {
     // Without an on-disk index there can be no staged rename. Avoid gix's
     // diff-cache fallback to its files-only HEAD reader.
     let renames = if repo.try_index().map_err(crate::refs::failure)?.is_none() {
@@ -471,7 +498,7 @@ pub(super) fn tree_index_changes(
     let mut pathspec = whole_repository_pathspec(repo)?;
     repo.tree_index_status(
         tree_id,
-        &index,
+        index,
         Some(&mut pathspec),
         renames,
         |change, _, _| on_change(change),

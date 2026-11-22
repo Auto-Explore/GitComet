@@ -583,6 +583,77 @@ fn gitlink_paths_are_dealt_into_queries_worth_a_process_each() {
     assert_eq!(all, paths(152));
 }
 
+/// What the index's cached root tree says, and whether the comparison it
+/// spares agrees: a root equal to HEAD's tree must mean nothing is staged.
+fn cached_tree_says_nothing_is_staged(root: &Path) -> bool {
+    let repo = crate::test_support::open_gix(root);
+    let tree = crate::refs::head_tree_id_or_empty(&repo).unwrap();
+    let index = repo.index_or_empty().unwrap();
+    let mut compared = Vec::new();
+    super::compare_tree_with_index(&repo, &tree, &index, "test", |change| {
+        super::collect_tree_index_change(change, &mut compared).unwrap();
+        Ok(std::ops::ControlFlow::Continue(()))
+    })
+    .unwrap();
+    let says = super::index_is_tree(&index, &tree);
+    assert!(!says || compared.is_empty(), "{compared:?}");
+    let mut staged = super::collect_staged_status_from_tree_index(&repo, &tree).unwrap();
+    staged.sort_by(|a, b| a.path.cmp(&b.path));
+    compared.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(staged, compared);
+    says
+}
+
+#[test]
+fn the_cached_root_tree_spares_the_staged_comparison_only_when_nothing_is_staged() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    // Unborn, with an empty index and then a filled one.
+    cached_tree_says_nothing_is_staged(root);
+    write_file(root, "a/b/one.txt", "one\n");
+    write_file(root, "a/two.txt", "two\n");
+    write_file(root, "three.txt", "three\n");
+    git_success(root, &["add", "."]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["commit", "-qm", "seed"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    // A change in the working tree alone leaves the index as HEAD has it.
+    write_file(root, "a/b/one.txt", "changed\n");
+    assert!(cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["add", "a/b/one.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["commit", "-qm", "change"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    write_file(root, "a/new.txt", "new\n");
+    git_success(root, &["add", "-N", "a/new.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["reset", "-q"]);
+    cached_tree_says_nothing_is_staged(root);
+    git_success(root, &["rm", "-q", "--cached", "three.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["reset", "-q", "--hard"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    // Stages of a conflict are not what HEAD has either.
+    git_success(root, &["checkout", "-q", "-b", "side"]);
+    write_file(root, "a/two.txt", "theirs\n");
+    git_success(root, &["commit", "-qam", "theirs"]);
+    git_success(root, &["checkout", "-q", "-"]);
+    write_file(root, "a/two.txt", "ours\n");
+    git_success(root, &["commit", "-qam", "ours"]);
+    crate::test_support::git_expect_failure(root, &["merge", "-q", "side"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["merge", "--abort"]);
+    cached_tree_says_nothing_is_staged(root);
+
+    // An older HEAD is not what the index was written as.
+    git_success(root, &["reset", "-q", "--soft", "HEAD~1"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+}
+
 /// Each side waits for a word from the other, which only arrives when both
 /// run at once.
 #[test]
