@@ -418,3 +418,62 @@ fn clone_repo_browse_opens_at_the_typed_parent_folder(cx: &mut gpui::TestAppCont
     let _ = std::fs::remove_dir_all(&parent);
     assert_eq!(directory, Some(parent));
 }
+
+/// Deactivating the window clears focus and leaves the popover open. Tab then
+/// enters the popover, never a control of the window behind it.
+#[gpui::test]
+fn clone_repo_popover_takes_tab_after_the_window_is_reactivated(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    for (key, expect_first) in [("tab", true), ("shift-tab", false)] {
+        cx.deactivate_window();
+        cx.update(|window, _| window.activate());
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            assert!(window.focused(app).is_none(), "deactivation clears focus");
+            assert!(view.read(app).popover_host.read(app).is_open());
+        });
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let expected = if expect_first {
+                host.clone_repo_url_input.read(app).focus_handle()
+            } else {
+                host.clone_repo_focus.submit.clone()
+            };
+            // Clone is disabled without a URL, so backwards lands on Cancel.
+            let landed = window.focused(app) == Some(expected)
+                || (!expect_first
+                    && window.focused(app) == Some(host.clone_repo_focus.cancel.clone()));
+            assert!(
+                landed,
+                "{key} enters the popover, got {:?}",
+                window.focused(app)
+            );
+            assert!(host.tab_scope.contains_focused(window, app));
+        });
+    }
+}

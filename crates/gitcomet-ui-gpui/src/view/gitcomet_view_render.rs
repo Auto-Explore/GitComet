@@ -1,5 +1,6 @@
 use super::gitcomet_view::NavKeyFocus;
 use super::*;
+use crate::kit::focus_order::TabScopeExt as _;
 use crate::kit::search_keys::{
     DiffNextSearchMatchOrChange, DiffPrevSearchMatchOrChange, OpenActiveViewSearch,
     TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevSearchMatchOrChange,
@@ -480,6 +481,7 @@ impl Render for GitCometView {
                 });
 
             let prompt_form = prompt_banner_form(theme, title, subtitle)
+                .tab_scope(&self.auth_prompt_tab_scope)
                 .when(requires_username, |this| {
                     this.child(self.auth_prompt_username_input.clone())
                 })

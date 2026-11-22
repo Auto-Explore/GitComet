@@ -111,6 +111,7 @@ mod wrap;
 pub use editing::utf8_edit_delta_between_texts;
 pub use state::{
     HighlightProvider, HighlightProviderResult, TextInput, TextInputChanged, TextInputOptions,
+    TextInputTab,
 };
 
 #[cfg(feature = "benchmarks")]

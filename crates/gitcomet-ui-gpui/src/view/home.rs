@@ -132,6 +132,8 @@ impl HomeView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search workspaces and repositories".into(),
+                    // Tab walks the results.
+                    tab: components::TextInputTab::Report,
                     ..Default::default()
                 },
                 window,

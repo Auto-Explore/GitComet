@@ -11,6 +11,7 @@ impl Render for PopoverHost {
         let Some(kind) = self.popover.clone() else {
             return div().into_any_element();
         };
+        self.sync_picker_search_tab(cx);
 
         let history_refs_menu_active = self.history_refs_menu_active(cx);
         let close = cx.listener(|this, _e: &MouseDownEvent, window, cx| {

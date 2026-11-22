@@ -927,7 +927,7 @@ impl HistoryView {
             }
         });
 
-        let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let history_panel_focus_handle = crate::kit::focus_order::field(cx);
         let default_design_widths = default_history_column_design_widths();
         let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
         let default_widths = scaled_history_column_widths(default_design_widths, scale);

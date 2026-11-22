@@ -46,6 +46,8 @@ impl Fixture {
         explicit_focus: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        // As in the application: the focus ring follows the kit's modality.
+        crate::focus_order::install(cx);
         Self {
             theme,
             kind,
@@ -451,15 +453,18 @@ fn mouse_focus_does_not_latch_control_backgrounds(cx: &mut TestAppContext) {
                 resting,
                 "mouse focus must not paint a persistent fill"
             );
-            // Escape changes input modality without changing the button's
-            // semantic state. Keyboard focus must also leave its fill alone.
+            // Escape changes input modality without changing the control's
+            // semantic state. Only buttons fill under keyboard focus: on a
+            // row or tab a fill would read as selection.
             cx.simulate_keystrokes("escape");
             redraw(cx);
-            assert_eq!(
-                paint(cx, "subject"),
-                resting,
-                "keyboard focus must not replace the fill"
-            );
+            if matches!(kind, FixtureKind::Row | FixtureKind::PanelTab) {
+                assert_eq!(
+                    paint(cx, "subject"),
+                    resting,
+                    "keyboard focus must not replace the fill"
+                );
+            }
             cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
             cx.simulate_mouse_move(
                 point(px(280.0), px(200.0)),
@@ -476,6 +481,144 @@ fn mouse_focus_does_not_latch_control_backgrounds(cx: &mut TestAppContext) {
                 paint(cx, "subject"),
                 resting,
                 "cancelled press must release its styling"
+            );
+        }
+    }
+}
+
+const BUTTON_STYLES: [ButtonStyle; 6] = [
+    ButtonStyle::Filled,
+    ButtonStyle::Outlined,
+    ButtonStyle::Solid,
+    ButtonStyle::Subtle,
+    ButtonStyle::Transparent,
+    ButtonStyle::Danger,
+];
+
+/// Focus the subject the way Tab would: focused, with the keyboard as the
+/// last input.
+fn keyboard_focus(view: &gpui::Entity<Fixture>, cx: &mut VisualTestContext) {
+    cx.update(|window, app| {
+        let focus = view.read(app).focus.clone();
+        window.focus(&focus, app);
+    });
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+}
+
+fn painted_fill(quads: &[(gpui::Background, gpui::Background)]) -> Option<Rgba> {
+    quads
+        .iter()
+        .filter_map(|(fill, _)| solid_color(fill))
+        .find(|fill| fill.alpha > 0.0)
+}
+
+fn painted_border(quads: &[(gpui::Background, gpui::Background)]) -> Option<Rgba> {
+    quads
+        .iter()
+        .filter_map(|(_, border)| solid_color(border))
+        .find(|border| border.alpha > 0.0)
+}
+
+#[test]
+fn the_focus_ring_is_two_pixels_inset_and_yields_its_fill_to_semantic_state() {
+    for theme in themes() {
+        let tint = theme.colors.interaction.focus_background;
+        let style = InteractionStyle::new(theme).focus(StyleRefinement::default().bg(tint));
+        let idle = style.focus_refinement(InteractionState::default());
+        let ring = idle.box_shadow.clone().unwrap();
+        assert_eq!(ring.len(), 1);
+        assert!(ring[0].inset);
+        assert_eq!(ring[0].spread_radius, px(2.0));
+        assert_eq!(ring[0].blur_radius, px(0.0));
+        assert_eq!(ring[0].offset, point(px(0.0), px(0.0)));
+        assert_eq!(ring[0].color, theme.colors.interaction.focus_ring.into());
+        assert!(idle.background.is_some());
+
+        let selected = theme.colors.interaction.selected_background;
+        for state in [
+            InteractionState::default().selected(true, selected),
+            InteractionState::default().open(true),
+            InteractionState::default().busy(true),
+        ] {
+            let focus = style.focus_refinement(state);
+            assert!(focus.background.is_none(), "{state:?}");
+            assert_eq!(focus.box_shadow, idle.box_shadow, "{state:?}");
+        }
+    }
+}
+
+// GPUI paints a border after its element's inset shadows, so a border left in
+// place covers the ring's outer pixel: all of a one-pixel ring.
+#[gpui::test]
+fn keyboard_focus_swaps_a_buttons_border_for_the_ring(cx: &mut TestAppContext) {
+    for theme in themes() {
+        for style in BUTTON_STYLES {
+            let (view, cx) = cx
+                .add_window_view(|_, cx| Fixture::new(theme, FixtureKind::Button(style), true, cx));
+            leave(cx);
+            keyboard_focus(&view, cx);
+            assert_eq!(
+                painted_border(&paint(cx, "subject")),
+                None,
+                "{style:?}: a painted border hides the focus ring"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn keyboard_focus_fills_a_button_as_hover_does(cx: &mut TestAppContext) {
+    for theme in themes() {
+        for style in BUTTON_STYLES {
+            let (view, cx) = cx
+                .add_window_view(|_, cx| Fixture::new(theme, FixtureKind::Button(style), true, cx));
+            leave(cx);
+            let resting = painted_fill(&paint(cx, "subject"));
+            let bounds = cx.debug_bounds("subject").unwrap();
+            cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+            redraw(cx);
+            let hovered = painted_fill(&paint(cx, "subject"));
+            assert_ne!(hovered, resting, "{style:?}");
+            leave(cx);
+            keyboard_focus(&view, cx);
+            assert_eq!(painted_fill(&paint(cx, "subject")), hovered, "{style:?}");
+        }
+    }
+}
+
+// GPUI's own keyboard modality ends when the pointer merely moves.
+#[gpui::test]
+fn keyboard_focus_outlasts_pointer_moves_and_ends_with_a_press(cx: &mut TestAppContext) {
+    for theme in themes() {
+        for style in BUTTON_STYLES {
+            let (view, cx) = cx
+                .add_window_view(|_, cx| Fixture::new(theme, FixtureKind::Button(style), true, cx));
+            leave(cx);
+            let resting = paint(cx, "subject");
+            keyboard_focus(&view, cx);
+            let focused = paint(cx, "subject");
+            assert_ne!(focused, resting, "{style:?}");
+
+            cx.simulate_mouse_move(point(px(260.0), px(180.0)), None, Modifiers::default());
+            redraw(cx);
+            assert_eq!(
+                paint(cx, "subject"),
+                focused,
+                "{style:?}: a pointer move must not end keyboard focus"
+            );
+
+            // A press beside the subject leaves it focused. No forced refresh:
+            // the press itself has to redraw the window.
+            let beside = point(px(280.0), px(200.0));
+            cx.simulate_mouse_down(beside, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(beside, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, app| assert!(view.read(app).focus.is_focused(window)));
+            assert_eq!(
+                paint(cx, "subject"),
+                resting,
+                "{style:?}: a pointer press ends keyboard focus"
             );
         }
     }
@@ -662,6 +805,11 @@ fn selected_controls_keep_their_fill_through_pointer_and_keyboard_focus(cx: &mut
                     cx.notify();
                 })
             });
+            // The subject still has keyboard focus, and a button's focus fill
+            // is no longer outranked. A pointer press ends it.
+            let beside = point(px(280.0), px(200.0));
+            cx.simulate_mouse_down(beside, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(beside, MouseButton::Left, Modifiers::default());
             redraw(cx);
             assert_eq!(paint(cx, "subject"), resting);
         }

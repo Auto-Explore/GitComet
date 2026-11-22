@@ -9,12 +9,11 @@ use crate::view::{
     DiffNextChange, DiffNextFile, DiffPrevChange, DiffPrevFile, DiffRenderer,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode, LocateFileInExplorer,
-    OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
-    PushUpstreamRemoteClose, PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect,
-    PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste,
-    TerminalSelectAll, TextInputCommitAndPushSubmit, TextInputCommitSubmit,
-    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    ToggleCommandPalette, WorkspaceBootstrap, is_diff_shortcut_candidate,
+    OpenRemoteInBrowser, PopoverPromptDismiss, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
+    PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
+    TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitAndPushSubmit,
+    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffPrevChange,
+    TextInputDiffPrevFile, ToggleCommandPalette, WorkspaceBootstrap, is_diff_shortcut_candidate,
 };
 use gitcomet_core::identity::{self, WindowKind};
 use gitcomet_core::path_utils::canonicalize_or_original;

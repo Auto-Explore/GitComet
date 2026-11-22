@@ -118,8 +118,6 @@ actions!(
         TextInputDiffNextChange,
         HistoryFindPrevious,
         PopoverPromptDismiss,
-        PopoverPromptTabNext,
-        PopoverPromptTabPrev,
         PushUpstreamRemoteClose,
         PushUpstreamRemoteNext,
         PushUpstreamRemoteOpenOrSelect,
