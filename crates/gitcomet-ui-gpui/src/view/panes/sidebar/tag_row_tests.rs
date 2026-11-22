@@ -18,12 +18,12 @@ fn tag_fixture_with_focus(focus: HistoryFocusSet) -> Arc<AppState> {
 }
 
 /// Draws the sidebar with one tag and returns the center of its row.
-fn tag_row_center<'a>(
-    cx: &'a mut gpui::TestAppContext,
+fn tag_row_center(
+    cx: &mut gpui::TestAppContext,
 ) -> (
     gpui::Entity<GitCometView>,
     AppStore,
-    &'a mut gpui::VisualTestContext,
+    &mut gpui::VisualTestContext,
     gpui::Point<Pixels>,
 ) {
     let (view, store, cx, _, center) = render_tag_row(cx, tag_fixture());
@@ -32,13 +32,13 @@ fn tag_row_center<'a>(
 
 /// Draws the sidebar for `state` and returns its first tag row's index and
 /// center.
-fn render_tag_row<'a>(
-    cx: &'a mut gpui::TestAppContext,
+fn render_tag_row(
+    cx: &mut gpui::TestAppContext,
     state: Arc<AppState>,
 ) -> (
     gpui::Entity<GitCometView>,
     AppStore,
-    &'a mut gpui::VisualTestContext,
+    &mut gpui::VisualTestContext,
     usize,
     gpui::Point<Pixels>,
 ) {

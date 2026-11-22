@@ -11,17 +11,23 @@ pub(crate) struct HistoryFocusCount {
 }
 
 pub(crate) fn history_focus_count(repo: &RepoState) -> HistoryFocusCount {
-    let local_refs = repo.branches.ready().map_or(0, |branches| branches.len())
-        + repo.tags.ready().map_or(0, |tags| tags.len());
+    // Tags load lazily; until they do, the focused ones stand in for the list.
+    let focus = &repo.history_state.history_focus;
+    let tags = repo.tags.ready().map_or_else(
+        || {
+            focus
+                .iter()
+                .filter(|target| matches!(target, HistoryFocus::Tag { .. }))
+                .count()
+        },
+        |tags| tags.len(),
+    );
+    let local_refs = repo.branches.ready().map_or(0, |branches| branches.len()) + tags;
     let remote_branches = repo
         .remote_branches
         .ready()
         .map_or(&[][..], |branches| branches.as_slice());
-    count(
-        &repo.history_state.history_focus,
-        local_refs,
-        remote_branches,
-    )
+    count(focus, local_refs, remote_branches)
 }
 
 /// Counted per entry rather than per listed branch, so a focus restored before
@@ -164,6 +170,16 @@ mod tests {
             HistoryFocusCount {
                 focused: 1,
                 total: 3
+            }
+        );
+
+        // Before the tag list loads, the total still covers the focused tag.
+        repo.tags = gitcomet_state::model::Loadable::NotLoaded;
+        assert_eq!(
+            history_focus_count(&repo),
+            HistoryFocusCount {
+                focused: 1,
+                total: 2
             }
         );
     }

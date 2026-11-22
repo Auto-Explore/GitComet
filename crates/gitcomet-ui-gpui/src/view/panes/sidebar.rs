@@ -447,7 +447,7 @@ struct SidebarNotifyFingerprint {
     /// when the user opens a different file.
     diff_target_rev: u64,
     /// The focused refs. The sidebar draws them in the accent colour, gives
-    /// every branch row an eye toggle and puts a banner above the branch list,
+    /// every branch and tag row an eye toggle and puts a banner above the branch list,
     /// and none of that is part of the cached row data — it is all computed at
     /// render time — so the pane has to be told to repaint when the set
     /// changes. Hashed because this fingerprint is `Copy`.
@@ -1907,9 +1907,8 @@ impl SidebarPaneView {
         if repo.history_state.history_focus.is_empty() {
             return None;
         }
-        // Both sides count branch refs, local and remote: remote branches can
-        // be focused too, so leaving them out of the total would let the count
-        // read "3/2".
+        // Both sides count every focusable ref -- local and remote branches
+        // and tags -- so the count never reads "3/2".
         let count = crate::view::history_focus::history_focus_count(repo);
         let accent = theme.colors.accent;
         let store = self.store.clone();
