@@ -1,7 +1,4 @@
 use gpui_shared_string::SharedString;
-#[cfg(windows)]
-use rustc_hash::FxHashMap;
-#[cfg(not(windows))]
 use rustc_hash::FxHashMap;
 #[cfg(not(windows))]
 use rustc_hash::FxHasher;
@@ -32,6 +29,7 @@ type PathDisplayCacheMap = FxHashMap<PathBuf, SharedString>;
 
 /// A bounded two-generation cache. Keeping the previous generation avoids the
 /// all-or-nothing cliff when a large repo first crosses the cache cap.
+#[derive(Default)]
 pub struct PathDisplayCache {
     recent: PathDisplayCacheMap,
     previous: PathDisplayCacheMap,
@@ -43,45 +41,10 @@ pub struct PathDisplayCache {
     overflow_tail_active: bool,
 }
 
-impl Default for PathDisplayCache {
-    fn default() -> Self {
-        Self {
-            #[cfg(not(windows))]
-            recent: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(windows)]
-            recent: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(not(windows))]
-            previous: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(windows)]
-            previous: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            recent_entries: 0,
-            previous_entries: 0,
-            #[cfg(not(windows))]
-            present_hash_counts: FxHashMap::with_capacity_and_hasher(
-                Self::MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(not(windows))]
-            overflow_tail_active: false,
-        }
-    }
-}
-
 impl PathDisplayCache {
     const MAX_ENTRIES: usize = 8_192;
     const RECENT_MAX_ENTRIES: usize = Self::MAX_ENTRIES / 2;
+    const INITIAL_CAPACITY: usize = 256;
 
     pub fn len(&self) -> usize {
         self.recent_entries + self.previous_entries
@@ -108,6 +71,13 @@ impl PathDisplayCache {
         }
     }
 
+    fn reserve_recent(&mut self, capacity: usize) {
+        self.recent.reserve(capacity - self.recent.len());
+        #[cfg(not(windows))]
+        self.present_hash_counts
+            .reserve((capacity * 2).saturating_sub(self.present_hash_counts.len()));
+    }
+
     fn rotate_generations(&mut self) {
         #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
@@ -120,6 +90,7 @@ impl PathDisplayCache {
         self.previous_entries = 0;
         std::mem::swap(&mut self.previous, &mut self.recent);
         std::mem::swap(&mut self.previous_entries, &mut self.recent_entries);
+        self.reserve_recent(Self::RECENT_MAX_ENTRIES);
         debug_assert!(self.recent.is_empty());
         debug_assert_eq!(self.recent_entries, 0);
     }
@@ -312,6 +283,14 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
         return s.clone();
     }
 
+    match cache.recent_entries {
+        0 => cache.reserve_recent(PathDisplayCache::INITIAL_CAPACITY),
+        PathDisplayCache::INITIAL_CAPACITY => {
+            cache.reserve_recent(PathDisplayCache::RECENT_MAX_ENTRIES)
+        }
+        _ => {}
+    }
+
     // Skip the previous-generation lookup entirely when it is empty.
     // This avoids a redundant hash + probe on cold caches and after clear().
     #[cfg(not(windows))]
@@ -493,6 +472,58 @@ mod tests {
     };
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn empty_cache_reserves_no_table_storage() {
+        let cache = PathDisplayCache::default();
+        assert_eq!(cache.recent.capacity(), 0);
+        assert_eq!(cache.previous.capacity(), 0);
+        #[cfg(not(windows))]
+        assert_eq!(cache.present_hash_counts.capacity(), 0);
+    }
+
+    #[test]
+    fn a_small_working_set_keeps_the_second_generation_unallocated() {
+        let mut cache = PathDisplayCache::default();
+        for ix in 0..32 {
+            cached_path_display(&mut cache, Path::new(&format!("src/{ix}.rs")));
+        }
+        assert_eq!(cache.len(), 32);
+        assert_eq!(cache.previous.capacity(), 0);
+        assert!(cache.recent.capacity() < PathDisplayCache::RECENT_MAX_ENTRIES);
+        #[cfg(not(windows))]
+        assert!(cache.present_hash_counts.capacity() < PathDisplayCache::MAX_ENTRIES);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn colliding_paths_survive_promotion_and_generation_rotation() {
+        let mut cache = PathDisplayCache::default();
+        let promoted = "src/promoted.rs";
+        let collision = "src/collision.rs";
+        let hash = super::path_display_cache_key(promoted);
+        for text in [promoted, collision] {
+            super::cache_insert(
+                &mut cache.recent,
+                &mut cache.recent_entries,
+                &mut cache.present_hash_counts,
+                hash,
+                text.into(),
+            );
+        }
+        cache.rotate_generations();
+        assert_eq!(
+            cached_path_display(&mut cache, Path::new(promoted)).as_ref(),
+            promoted
+        );
+        assert!(super::cache_lookup(&cache.previous, hash, collision).is_some());
+        assert_eq!(cache.present_hash_counts[&hash], 2);
+        cache.rotate_generations();
+        assert!(super::cache_lookup(&cache.previous, hash, promoted).is_some());
+        assert!(super::cache_lookup(&cache.previous, hash, collision).is_none());
+        assert_eq!(cache.present_hash_counts[&hash], 1);
+        assert_eq!(cache.len(), 1);
+    }
 
     #[cfg(not(windows))]
     fn cache_contains(cache_map: &super::PathDisplayCacheMap, path: &Path) -> bool {
