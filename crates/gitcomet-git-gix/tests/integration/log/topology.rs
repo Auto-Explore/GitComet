@@ -108,6 +108,67 @@ fn a_missing_commit_builds_the_topology_once() {
     assert_eq!(count(Work::LogTopologyBuild), 1);
 }
 
+/// One damaged record in the commit-graph: the history is read from the
+/// objects instead, as gix's own walk reads it. Tips far apart, so that the
+/// graph is scanned whole rather than walked lazily by gix.
+#[test]
+fn a_damaged_commit_graph_record_still_gives_the_history() {
+    const COMMITS: usize = 4_200;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    run_git(path, &["init", "-q", "-b", "master"]);
+    fast_import_linear_history(path, COMMITS);
+    let tree = git_stdout(path, &["mktree"]);
+    let orphan = git_stdout(
+        path,
+        &["-c", "user.name=You", "-c", "user.email=you@example.com"]
+            .into_iter()
+            .chain(["commit-tree", "-m", "orphan", tree.trim()])
+            .collect::<Vec<_>>(),
+    );
+    run_git(path, &["update-ref", "refs/heads/orphan", orphan.trim()]);
+    run_git(path, &["commit-graph", "write", "--reachable"]);
+    let index = |repo: &dyn gitcomet_core::services::GitRepository| {
+        repo.build_history_index(
+            &HistoryMode::AllBranches.into(),
+            None,
+            &Default::default(),
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .unwrap()
+        .unwrap()
+        .len()
+    };
+    assert_eq!(index(&*GixBackend.open(path).unwrap()), COMMITS + 1);
+
+    // The first root commit's record: a second parent and no first.
+    let graph = path.join(".git/objects/info/commit-graph");
+    let mut bytes = std::fs::read(&graph).unwrap();
+    let chunk = |id: &[u8; 4]| {
+        let chunks = bytes[6] as usize;
+        (0..chunks)
+            .map(|at| 8 + at * 12)
+            .find(|&entry| &bytes[entry..entry + 4] == id)
+            .map(|entry| u64::from_be_bytes(bytes[entry + 4..entry + 12].try_into().unwrap()))
+            .unwrap() as usize
+    };
+    let (ids, data) = (chunk(b"OIDL"), chunk(b"CDAT"));
+    let root = git_stdout(path, &["rev-list", "--max-parents=0", "master"]);
+    let root = gix::ObjectId::from_hex(root.trim().as_bytes()).unwrap();
+    let position = (0..=COMMITS)
+        .find(|at| &bytes[ids + at * 20..ids + at * 20 + 20] == root.as_bytes())
+        .unwrap();
+    let second_parent = data + position * 36 + 24;
+    bytes[second_parent..second_parent + 4].copy_from_slice(&0u32.to_be_bytes());
+    let mut permissions = std::fs::metadata(&graph).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&graph, permissions).unwrap();
+    std::fs::write(&graph, bytes).unwrap();
+    assert_eq!(index(&*GixBackend.open(path).unwrap()), COMMITS + 1);
+}
+
 #[test]
 fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips() {
     use std::io::Write as _;

@@ -481,8 +481,14 @@ impl Topology {
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        let scanned = match &graph {
-            Some(graph) => graph_scan::scan(repo, graph, tips, cancelled)?,
+        let scanned = match graph
+            .as_ref()
+            .map(|graph| graph_scan::scan(repo, graph, tips, cancelled))
+        {
+            Some(Ok(scanned)) => scanned,
+            // A damaged graph is read past, as gix's own walk reads past it.
+            Some(Err(_)) if !cancelled() => scan_objects(repo, tips, cancelled)?,
+            Some(Err(error)) => return Err(error),
             None => scan_objects(repo, tips, cancelled)?,
         };
         // Nothing of the scan belongs in a parked page cursor or a cached
