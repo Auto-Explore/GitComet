@@ -126,6 +126,12 @@ The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 an
 
 GitComet requires a local Git installation of `2.53` or newer. With an older Git, GitComet shows a notice asking you to update, and features that need newer Git (such as repository maintenance) are turned off.
 
+### Opening a repository someone shared
+
+GitComet uses your installed Git for some operations. A copied repository folder can contain settings and hooks that run programs with your account's permissions, even when the folder is owned by you. For example, native Git can run a configured file filter when it converts working-tree content. This can happen during a read.
+
+Open a shared folder directly only if you trust the person who supplied its `.git` directory. For an unfamiliar project, clone it from its remote URL. If you only have a local copy, Git recommends making a fresh clone with `git clone --no-local` before opening it. [Git security guidance](https://git-scm.com/docs/git#_security)
+
 ### GitComet User Survey
 
 We’re running this short survey to better understand how people use our Git GUI client in their daily work. Your feedback will help us improve the product and prioritize the features that matter most.
