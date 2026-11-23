@@ -8,7 +8,8 @@ use crate::util::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::{
-    canonicalize_or_original, symlink_free_write_target, validated_repo_relative_path,
+    MAX_CONFLICT_WORKTREE_BYTES, canonicalize_or_original, read_worktree_file_bounded,
+    symlink_free_write_target, validated_repo_relative_path,
 };
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
@@ -74,7 +75,7 @@ impl GixRepo {
         let pre_merged_state = if trust_exit_code {
             None
         } else {
-            Some(read_merged_file_state(&merged_path)?)
+            Some(read_merged_file_state(workdir, &filesystem_path)?)
         };
 
         // Build and invoke the mergetool command
@@ -156,7 +157,7 @@ impl GixRepo {
         // The tool may leave a symlink here, so re-check before reading. It has
         // already run: report that rather than losing its output.
         let post_merged_state = match mergetool_worktree_target(workdir, &filesystem_path) {
-            Ok(merged_path) => read_merged_file_state(&merged_path)?,
+            Ok(_) => read_merged_file_state(workdir, &filesystem_path)?,
             Err(err) => {
                 return Ok(MergetoolResult {
                     tool_name,
@@ -916,12 +917,11 @@ enum MergedFileState {
     Missing,
 }
 
-fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(MergedFileState::Present(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MergedFileState::Missing),
-        Err(e) => Err(Error::from(e)),
-    }
+fn read_merged_file_state(workdir: &Path, path: &Path) -> Result<MergedFileState> {
+    Ok(
+        read_worktree_file_bounded(workdir, path, MAX_CONFLICT_WORKTREE_BYTES)?
+            .map_or(MergedFileState::Missing, MergedFileState::Present),
+    )
 }
 
 #[cfg(test)]

@@ -42,7 +42,13 @@ fn may_be_pointer(head: &[u8]) -> bool {
 
 /// Read a file only if it could be a pointer; `None` for ordinary content.
 pub(super) fn read_pointer_candidate(path: &Path) -> Option<Vec<u8>> {
-    let mut file = std::fs::File::open(path).ok()?;
+    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+        return None;
+    }
+    read_pointer_candidate_file(std::fs::File::open(path).ok()?)
+}
+
+fn read_pointer_candidate_file(mut file: std::fs::File) -> Option<Vec<u8>> {
     if file.metadata().ok()?.len() > MAX_POINTER_BYTES {
         return None;
     }
@@ -51,8 +57,10 @@ pub(super) fn read_pointer_candidate(path: &Path) -> Option<Vec<u8>> {
     if !may_be_pointer(&bytes) {
         return None;
     }
-    file.read_to_end(&mut bytes).ok()?;
-    Some(bytes)
+    file.take(MAX_POINTER_BYTES + 1 - bytes.len() as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() as u64 <= MAX_POINTER_BYTES).then_some(bytes)
 }
 
 /// Git-form bytes: pointer text, or annex link text as git stores a symlink.
@@ -651,12 +659,13 @@ impl super::GixRepo {
         if !self.committed_pointer_scan(repo).annex {
             return None;
         }
-        let full = self.spec.workdir.join(path);
-        let metadata = std::fs::symlink_metadata(&full).ok()?;
-        if !metadata.is_file()
-            || read_pointer_candidate(&full)
-                .and_then(|bytes| classify_git_form(&bytes))
-                .is_some()
+        let file = gitcomet_core::path_utils::open_worktree_regular_file(&self.spec.workdir, path)
+            .ok()
+            .flatten()?;
+        let metadata = file.metadata().ok()?;
+        if read_pointer_candidate_file(file)
+            .and_then(|bytes| classify_git_form(&bytes))
+            .is_some()
         {
             return None;
         }
@@ -674,6 +683,7 @@ impl super::GixRepo {
         }
         // The key describes the file only while it is as `git annex add` left it.
         let options = repo.stat_options().ok()?;
+        let full = self.spec.workdir.join(path);
         let unchanged = gix::index::fs::Metadata::from_path_no_follow(&full)
             .ok()
             .and_then(|metadata| gix::index::entry::Stat::from_fs(&metadata).ok())
@@ -712,22 +722,33 @@ impl super::GixRepo {
         if !scan.lfs && !scan.annex {
             return None;
         }
-        let classified = classify_git_form(&read_pointer_candidate(&source.path)?)?;
+        let pointer = if source.path.starts_with(&self.spec.workdir) {
+            let file = gitcomet_core::path_utils::open_worktree_regular_file(
+                &self.spec.workdir,
+                &source.path,
+            )
+            .ok()
+            .flatten()?;
+            read_pointer_candidate_file(file)?
+        } else {
+            read_pointer_candidate(&source.path)?
+        };
+        let classified = classify_git_form(&pointer)?;
         if !scan.supports(&classified.pointer) {
             return None;
         }
-        let full = self.spec.workdir.join(logical_path);
         let worktree_content = worktree
-            .then(|| match std::fs::symlink_metadata(&full) {
-                Ok(meta) if meta.file_type().is_symlink() => std::fs::metadata(&full)
-                    .is_ok_and(|m| m.is_file())
-                    .then(|| full.clone()),
-                // A pointer in the worktree is not content.
-                Ok(meta) if meta.is_file() => read_pointer_candidate(&full)
+            .then(|| {
+                let file = gitcomet_core::path_utils::open_worktree_regular_file(
+                    &self.spec.workdir,
+                    logical_path,
+                )
+                .ok()
+                .flatten()?;
+                read_pointer_candidate_file(file)
                     .and_then(|bytes| classify_bytes(&bytes, false))
                     .is_none()
-                    .then(|| full.clone()),
-                _ => None,
+                    .then(|| self.spec.workdir.join(logical_path))
             })
             .flatten();
         let (content_path, identity) = match worktree_content {
@@ -763,9 +784,18 @@ impl super::GixRepo {
         let replacement = (content == LargeFileContent::Available)
             .then_some(content_path)
             .flatten()
-            .map(|path| match identity {
-                Some(identity) => FileDiffTextSource::with_identity(path, identity),
-                None => FileDiffTextSource::new(path),
+            .and_then(|path| match identity {
+                Some(identity) => Some(FileDiffTextSource::with_identity(path, identity)),
+                None => {
+                    let bytes = gitcomet_core::path_utils::read_worktree_file_bounded(
+                        &self.spec.workdir,
+                        logical_path,
+                        LARGE_FILE_TEXT_DIFF_MAX_BYTES,
+                    )
+                    .ok()
+                    .flatten()?;
+                    self.cache_worktree_preview_bytes(logical_path, &bytes).ok()
+                }
             });
         Some((
             LargeFileSide {

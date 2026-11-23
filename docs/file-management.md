@@ -11,6 +11,10 @@ selects a range, including folders, without toggling expansion. Right-clicking a
 item in the selection preserves the selection. Keyboard focus is independent of
 selection.
 
+Working-tree text previews read up to 64 MiB from a regular file inside the
+repository. The editor accepts up to 32 MiB. If a folder on the path is a
+symbolic link, GitComet stops before reading the file it points to.
+
 The context menu provides New File, New Folder, Cut, Copy, Paste, Duplicate,
 Rename, Add to .gitignore, Trash, and Delete permanently. Creation and rename use
 inline entry with Enter to accept and Escape to cancel. Root menus provide

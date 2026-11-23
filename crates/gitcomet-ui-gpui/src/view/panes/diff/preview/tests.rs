@@ -29,6 +29,24 @@ fn crlf_preview_indexes_keep_tail_metadata_across_scan_chunks() {
 }
 
 #[test]
+fn repository_preview_keeps_the_bytes_it_indexed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("note.txt");
+    std::fs::write(&path, b"first\r\nsecond\n").unwrap();
+    let request = TextDecodeRequest {
+        kind: SideKind::Worktree,
+        attributes: Arc::default(),
+        encoding: None,
+    };
+    let (preview, snapshot) =
+        index_repository_worktree_preview_file(root.path(), &path, &request).unwrap();
+
+    std::fs::write(&path, b"new contents\n").unwrap();
+    assert_eq!(&*preview.line_starts, &[0, 7, 14]);
+    assert_eq!(std::fs::read(&snapshot).unwrap(), b"first\r\nsecond\n");
+}
+
+#[test]
 fn review_binary_preview_stops_before_indexing_the_file() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), b"\0\xff\n".repeat(1024 * 1024)).unwrap();

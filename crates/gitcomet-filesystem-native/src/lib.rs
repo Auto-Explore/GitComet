@@ -16,4 +16,6 @@ pub use macos::trash_item;
 #[cfg(windows)]
 mod windows_impl;
 #[cfg(windows)]
-pub use windows_impl::{file_identity, rename_exclusive, trash_item};
+pub use windows_impl::{
+    file_identity, final_file_path, open_file_identity, rename_exclusive, trash_item,
+};

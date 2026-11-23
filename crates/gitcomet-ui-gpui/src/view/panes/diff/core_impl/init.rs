@@ -513,6 +513,7 @@ impl DiffRenderer {
             conflict_image_preview_cancel: None,
             worktree_preview_path: None,
             worktree_preview_source_path: None,
+            worktree_preview_snapshot: None,
             worktree_preview_decode_key: None,
             worktree_preview_text_format: None,
             worktree_preview: Loadable::NotLoaded,

@@ -212,13 +212,14 @@ pub(in crate::view) enum DiskCheckOutcome {
 /// Compare the file at `path` with `known`. Reads the bytes only when the
 /// stamp cannot settle it, and only up to `hash_limit`.
 pub(in crate::view) fn check_disk_identity(
+    workdir: &Path,
     path: &Path,
     known: &DiskIdentity,
     hash_limit: u64,
 ) -> DiskCheckOutcome {
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let file = match gitcomet_core::path_utils::open_worktree_regular_file(workdir, path) {
+        Ok(Some(file)) => file,
+        Ok(None) => {
             return if known.missing {
                 DiskCheckOutcome::Unchanged
             } else {
@@ -228,9 +229,9 @@ pub(in crate::view) fn check_disk_identity(
         // A transient error is not a change worth nagging about.
         Err(_) => return DiskCheckOutcome::Unchanged,
     };
-    if meta.is_dir() {
+    let Ok(meta) = file.metadata() else {
         return DiskCheckOutcome::Unchanged;
-    }
+    };
     let fresh = disk_stamp(&meta);
     let stamp_matches = known
         .stamp
@@ -239,8 +240,13 @@ pub(in crate::view) fn check_disk_identity(
         return DiskCheckOutcome::Unchanged;
     }
     if fresh.len <= hash_limit && !known.known.is_empty() {
-        return match std::fs::read(path) {
-            Ok(bytes) => {
+        use std::io::Read as _;
+        let mut bytes = Vec::new();
+        return match file
+            .take(hash_limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+        {
+            Ok(_) if bytes.len() as u64 <= hash_limit => {
                 let hash = disk_content_hash(&bytes);
                 match known.known.iter().position(|k| k.matches(&bytes, hash)) {
                     Some(ix) => DiskCheckOutcome::Same {
@@ -253,6 +259,7 @@ pub(in crate::view) fn check_disk_identity(
                     },
                 }
             }
+            Ok(_) => DiskCheckOutcome::Changed { fresh, hash: None },
             Err(_) => DiskCheckOutcome::Unchanged,
         };
     }

@@ -996,7 +996,9 @@ impl DiffRenderer {
         self.worktree_markdown.inflight = Some(seq);
         let source_text =
             (!self.worktree_preview_text.is_empty()).then_some(self.worktree_preview_text.clone());
-        let source_path = self.worktree_preview_source_path.clone();
+        let source_path = self
+            .worktree_preview_disk_source_path()
+            .map(std::path::Path::to_path_buf);
         let image_root = self.markdown_preview_image_root();
 
         cx.spawn(

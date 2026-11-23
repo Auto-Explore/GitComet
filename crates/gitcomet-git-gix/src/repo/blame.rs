@@ -491,11 +491,30 @@ impl GixRepo {
         if !path_exists_at_head(&repo, path)? {
             let contents = match area {
                 DiffArea::Unstaged => {
-                    let abs_path = self.spec.workdir.join(path);
-                    fs::read(&abs_path).map_err(|error| {
-                        Error::from(error)
-                            .with_context("read worktree blame content", Some(&abs_path))
-                    })?
+                    use gitcomet_core::path_utils::{
+                        read_worktree_file_bounded, worktree_entry_metadata,
+                    };
+
+                    const MAX_BLAME_WORKTREE_BYTES: u64 = 64 * 1024 * 1024;
+                    let entry = worktree_entry_metadata(&self.spec.workdir, path)?;
+                    match entry {
+                        Some((full, metadata)) if metadata.is_symlink() => {
+                            gix::path::into_bstr(fs::read_link(full)?)
+                                .map_err(|_| {
+                                    Error::new(ErrorKind::Unsupported(
+                                        "symlink target is not valid UTF-8",
+                                    ))
+                                })?
+                                .into_owned()
+                                .into()
+                        }
+                        _ => read_worktree_file_bounded(
+                            &self.spec.workdir,
+                            path,
+                            MAX_BLAME_WORKTREE_BYTES,
+                        )?
+                        .ok_or_else(|| Error::new(ErrorKind::Io(std::io::ErrorKind::NotFound)))?,
+                    }
                 }
                 DiffArea::Staged => staged_blob_for_blame(&repo, path)?,
             };

@@ -9,6 +9,7 @@ use gitcomet_core::error::ErrorKind;
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
+use gitcomet_core::path_utils::{MAX_CONFLICT_WORKTREE_BYTES, read_worktree_file_bounded};
 use gitcomet_core::services::ConflictFileStages;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -182,9 +183,14 @@ pub(super) fn schedule_load_conflict_file(
                 current,
             )
         } else {
-            let current_bytes = std::fs::read(repo.spec().workdir.join(&path))
-                .ok()
-                .map(Arc::<[u8]>::from);
+            let current_bytes = read_worktree_file_bounded(
+                &repo.spec().workdir,
+                &path,
+                MAX_CONFLICT_WORKTREE_BYTES,
+            )
+            .ok()
+            .flatten()
+            .map(Arc::<[u8]>::from);
             (MergetoolTraceStage::LoadCurrentRead, current_bytes, None)
         };
         let current_text = current.as_deref().or_else(|| {

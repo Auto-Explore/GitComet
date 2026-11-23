@@ -895,6 +895,7 @@ pub(crate) struct DiffRenderer {
     // Read-only worktree file preview.
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,
+    pub(in crate::view) worktree_preview_snapshot: Option<tempfile::TempPath>,
     /// What the preview was decoded with; a change re-reads it.
     pub(in crate::view) worktree_preview_decode_key: Option<super::super::preview::TextDecodeKey>,
     /// How the previewed bytes were read, for the status strip.

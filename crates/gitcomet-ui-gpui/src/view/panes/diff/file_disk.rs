@@ -295,6 +295,9 @@ impl DiffRenderer {
         let Some((repo_id, abs_path, surface)) = self.file_disk_surface() else {
             return;
         };
+        let Some(workdir) = self.input.workdir().map(Path::to_path_buf) else {
+            return;
+        };
         let (known, hash_limit) = match surface {
             DiskSurface::Editor => (
                 self.file_editor_disk().clone(),
@@ -311,7 +314,7 @@ impl DiffRenderer {
         cx.spawn(async move |view: WeakEntity<DiffRenderer>, cx| {
             let check = {
                 let path = abs_path.clone();
-                move || check_disk_identity(&path, &known, hash_limit)
+                move || check_disk_identity(&workdir, &path, &known, hash_limit)
             };
             let outcome = if crate::ui_runtime::current().uses_background_compute() {
                 smol::unblock(check).await

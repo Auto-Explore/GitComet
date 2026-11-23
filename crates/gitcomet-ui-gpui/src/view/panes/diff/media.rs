@@ -222,10 +222,10 @@ impl DiffRenderer {
                             kind,
                             text: Arc::from(self.worktree_preview_text.as_ref()),
                         })
-                    } else if let Some(path) = self.worktree_preview_source_path.as_ref() {
+                    } else if let Some(path) = self.worktree_preview_disk_source_path() {
                         Some(DiagramInput::File {
                             kind,
-                            path: path.clone(),
+                            path: path.to_path_buf(),
                             revision: format!(
                                 "{}:{}",
                                 self.worktree_preview_content_rev, self.worktree_preview_source_len

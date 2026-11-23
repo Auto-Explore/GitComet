@@ -451,7 +451,9 @@ impl DiffRenderer {
             let starts = self.worktree_preview_line_starts.clone();
             let flags = self.worktree_preview_line_flags.clone();
             let text = self.worktree_preview_text.clone();
-            let path = self.worktree_preview_source_path.clone().map(Arc::new);
+            let path = self
+                .worktree_preview_disk_source_path()
+                .map(|path| Arc::new(path.to_path_buf()));
             let source_len = self.worktree_preview_source_len;
             (
                 self.worktree_preview_line_count().unwrap_or(0),
