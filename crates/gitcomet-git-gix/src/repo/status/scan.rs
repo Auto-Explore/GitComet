@@ -329,7 +329,7 @@ impl Scanner<'_> {
         while let Some(mut scanning) = self.roots.next() {
             delegate.root.clone_from(&scanning.root);
             let from = self.directory(delegate.root.as_bstr());
-            let (outcome, _) = gix::dir::walk(
+            let walked_root = gix::dir::walk(
                 self.worktree,
                 walk::Context {
                     should_interrupt: Some(self.should_interrupt),
@@ -358,7 +358,11 @@ impl Scanner<'_> {
                 },
                 self.options,
                 &mut delegate,
-            )?;
+            );
+            let Some((outcome, _)) = walked_or_gone(walked_root, from.as_deref())? else {
+                scanning.finished = true;
+                continue;
+            };
             walked.read_dir_calls += outcome.read_dir_calls;
             walked.returned_entries += outcome.returned_entries;
             walked.seen_entries += outcome.seen_entries;
@@ -377,6 +381,23 @@ impl Scanner<'_> {
         let mut directory = self.worktree.to_owned();
         directory.extend(relative.components());
         Some(directory)
+    }
+}
+
+/// What the scan of a shared `directory` came to: `None` when it failed
+/// because the directory is gone or no longer one. A checkout can do that to
+/// a directory waiting its turn; the next status reports it.
+fn walked_or_gone<T>(walked: gix::Result<T>, directory: Option<&Path>) -> gix::Result<Option<T>> {
+    match walked {
+        Ok(walked) => Ok(Some(walked)),
+        Err(_)
+            if directory.is_some_and(|directory| {
+                !std::fs::symlink_metadata(directory).is_ok_and(|meta| meta.is_dir())
+            }) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 

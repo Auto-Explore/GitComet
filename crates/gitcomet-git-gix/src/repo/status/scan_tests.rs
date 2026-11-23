@@ -146,3 +146,30 @@ fn a_directory_that_cannot_be_read_fails_the_status_at_any_sharing() {
     }
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+/// A directory handed to another thread can be gone by its turn, or be a
+/// symlink now, as during a checkout: its scan is skipped, not failed.
+#[test]
+fn a_shared_directory_gone_before_its_turn_is_skipped() {
+    use super::walked_or_gone;
+    let dir = tempfile::tempdir().unwrap();
+    let failed = || {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        Err::<(), _>(gix::Error::from_error(missing))
+    };
+    let gone = dir.path().join("gone");
+    assert!(matches!(walked_or_gone(failed(), Some(&gone)), Ok(None)));
+    std::fs::write(&gone, "a file in its place").unwrap();
+    assert!(matches!(walked_or_gone(failed(), Some(&gone)), Ok(None)));
+    #[cfg(unix)]
+    {
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(dir.path(), &linked).unwrap();
+        assert!(matches!(walked_or_gone(failed(), Some(&linked)), Ok(None)));
+    }
+    // A directory that is still one fails as before, and so does the
+    // worktree itself.
+    assert!(walked_or_gone(failed(), Some(dir.path())).is_err());
+    assert!(walked_or_gone(failed(), None).is_err());
+    assert!(matches!(walked_or_gone(Ok(()), Some(&gone)), Ok(Some(()))));
+}
