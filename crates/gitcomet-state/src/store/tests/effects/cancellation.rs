@@ -20,6 +20,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
         let executors = super::super::effects::EffectExecutors {
             executor: &primary,
             repo_load_executor: &primary,
+            interactive_executor: &crate::store::executor::interactive_queue(),
             worktree_scan_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
@@ -369,6 +370,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         super::super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            interactive_executor: &crate::store::executor::interactive_queue(),
             worktree_scan_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
@@ -398,6 +400,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         super::super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            interactive_executor: &crate::store::executor::interactive_queue(),
             worktree_scan_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
@@ -498,6 +501,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        interactive_executor: &crate::store::executor::interactive_queue(),
         worktree_scan_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
@@ -643,6 +647,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        interactive_executor: &crate::store::executor::interactive_queue(),
         worktree_scan_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),

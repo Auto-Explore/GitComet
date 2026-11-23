@@ -1,11 +1,13 @@
 use super::*;
-use crate::indexed_history::{IndexedHistoryEffect as Work, IndexedHistoryMsg as Event};
+use crate::indexed_history::{
+    HistoryReadPriority, IndexedHistoryEffect as Work, IndexedHistoryMsg as Event,
+};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
 use std::sync::OnceLock;
 
 pub(super) fn schedule(
-    range_executor: &TaskExecutor,
+    executors: EffectExecutors<'_>,
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     work: Work,
@@ -19,7 +21,14 @@ pub(super) fn schedule(
         Work::Build { .. } => {
             INDEX_EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-history-request", 8))
         }
-        Work::Range { .. } => range_executor,
+        Work::Range {
+            priority: HistoryReadPriority::Visible,
+            ..
+        } => executors.interactive_executor,
+        Work::Range {
+            priority: HistoryReadPriority::Prefetch,
+            ..
+        } => executors.repo_load_executor,
     };
     let repo_id = work.repo_id();
     let on_missing = work.clone();
@@ -68,10 +77,17 @@ pub(super) fn schedule(
                     index,
                     start,
                     cancellation,
+                    ..
                 } => {
                     let cancellation = cancellation.with_parent(parent);
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
                     let end = (start + HISTORY_BLOCK_SIZE).min(index.len());
                     let result = repo.read_history_range_shared(&index, start..end, &cancellation);
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
                     Event::RangeLoaded {
                         repo_id,
                         seq,

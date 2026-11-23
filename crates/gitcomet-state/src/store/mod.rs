@@ -275,14 +275,7 @@ struct WorkerLoopContext<'a> {
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     thread_msg_tx: &'a StoreWorkerSender,
-    executor: &'a TaskExecutor,
-    repo_load_executor: &'a TaskExecutor,
-    worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
-    metadata_executor: &'a TaskExecutor,
-    signature_executor: &'a TaskExecutor,
-    history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
-    session_persist_executor: &'a TaskExecutor,
-    filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
+    executors: EffectExecutors<'a>,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
     /// Feedback acknowledgements held for the next reducer pass; see
@@ -618,16 +611,7 @@ impl WorkerLoopContext<'_> {
             let _label =
                 gitcomet_core::op_trace::label_scope(repo_load_trace::effect_name(&effect));
             schedule_effect(
-                EffectExecutors {
-                    executor: self.executor,
-                    repo_load_executor: self.repo_load_executor,
-                    worktree_scan_executor: self.worktree_scan_executor,
-                    session_persist_executor: self.session_persist_executor,
-                    metadata_executor: self.metadata_executor,
-                    signature_executor: self.signature_executor,
-                    history_find_executor: self.history_find_executor,
-                    filesystem_executor: self.filesystem_executor,
-                },
+                self.executors,
                 self.thread_state,
                 self.backend,
                 repos,
@@ -850,6 +834,8 @@ impl AppStore {
             let mut repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
             #[allow(unused_mut)]
+            let mut interactive_executor = executor::interactive_queue();
+            #[allow(unused_mut)]
             let mut worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
                 std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
             let metadata_executor = TaskExecutor::shared_for_store(
@@ -1062,14 +1048,17 @@ impl AppStore {
                     event_tx: &event_tx,
                     repo_monitors: &mut repo_monitors,
                     thread_msg_tx: &thread_msg_tx,
-                    executor: &executor,
-                    repo_load_executor: &repo_load_executor,
-                    worktree_scan_executor: &worktree_scan_executor,
-                    metadata_executor: &metadata_executor,
-                    signature_executor: &signature_executor,
-                    history_find_executor: &history_find_executor,
-                    session_persist_executor: &session_persist_executor,
-                    filesystem_executor,
+                    executors: EffectExecutors {
+                        executor: &executor,
+                        repo_load_executor: &repo_load_executor,
+                        interactive_executor: &interactive_executor,
+                        worktree_scan_executor: &worktree_scan_executor,
+                        metadata_executor: &metadata_executor,
+                        signature_executor: &signature_executor,
+                        history_find_executor: &history_find_executor,
+                        session_persist_executor: &session_persist_executor,
+                        filesystem_executor,
+                    },
                     backend: &backend,
                     publication: &thread_publication,
                     deferred_acknowledgements: &mut deferred_acknowledgements,
@@ -1237,15 +1226,10 @@ impl AppStore {
             #[cfg(any(test, feature = "test-support"))]
             {
                 repo_load_executor.join_workers();
-                if let Some(executor) = std::sync::LazyLock::get_mut(&mut worktree_scan_executor) {
-                    executor.join_workers();
-                }
-                if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
-                    executor.join_workers();
-                }
-                if let Some(executor) = store_filesystem_executor
-                    .as_mut()
-                    .and_then(std::sync::LazyLock::get_mut)
+                for executor in [&mut interactive_executor, &mut worktree_scan_executor, &mut history_find_executor]
+                    .into_iter()
+                    .chain(store_filesystem_executor.as_mut())
+                    .filter_map(std::sync::LazyLock::get_mut)
                 {
                     executor.join_workers();
                 }

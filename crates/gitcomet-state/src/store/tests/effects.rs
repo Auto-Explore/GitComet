@@ -23,12 +23,14 @@ pub(super) fn schedule_effect_with_state_for_test(
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
 
+    let mut interactive = super::executor::interactive_queue();
     let repo_load_executor = super::executor::TaskExecutor::new(1);
     let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
         super::effects::EffectExecutors {
             executor,
             repo_load_executor: &repo_load_executor,
+            interactive_executor: &interactive,
             worktree_scan_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
@@ -49,6 +51,9 @@ pub(super) fn schedule_effect_with_state_for_test(
     // Helper-owned workers must exit before the test can finish: detached
     // workers can race process teardown on macOS.
     repo_load_executor.join();
+    if let Some(executor) = std::sync::LazyLock::get_mut(&mut interactive) {
+        executor.join_workers();
+    }
     metadata_executor.join();
 }
 
@@ -1316,6 +1321,7 @@ fn run_effect_with_fixture(
 }
 
 mod cancellation;
+mod interactive_load_tests;
 mod load_scheduling;
 mod open_file_at_commit;
 mod prepared_patch;

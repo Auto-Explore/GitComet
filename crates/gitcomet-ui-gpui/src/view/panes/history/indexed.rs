@@ -8,7 +8,7 @@ use gitcomet_core::domain::WorktreeDirtySummary;
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HistoryIndexHandle};
 use gitcomet_core::services::CancellationToken;
 use gitcomet_state::history_filter::HistoryFilterMsg;
-use gitcomet_state::indexed_history::IndexedHistoryMsg as Event;
+use gitcomet_state::indexed_history::{HistoryViewport, IndexedHistoryMsg as Event};
 use std::rc::Rc;
 
 type PreparedDecorations = ((bool, u64), Arc<FxHashMap<usize, HistoryDecorationRowVm>>);
@@ -151,7 +151,7 @@ pub(in crate::view) struct IndexedViewState {
     building: Option<(HistoryBaseCacheRequest, CancellationToken)>,
     pub window: Option<Rc<WindowCache>>,
     window_building: Option<(WindowKey, CancellationToken)>,
-    requested_blocks: Option<(gitcomet_core::services::HistorySnapshot, Vec<usize>)>,
+    requested_blocks: Option<(gitcomet_core::services::HistorySnapshot, HistoryViewport)>,
     pub plan: HistoryListPlan,
     pub worktrees: Arc<Vec<WorktreeDirtySummary>>,
     plan_key: Option<(usize, u64, bool)>,
@@ -234,6 +234,31 @@ fn push_blocks_for_visible_range(
         row = projection
             .visible_position_at_or_after(block + HISTORY_BLOCK_SIZE)
             .max(row + 1);
+    }
+}
+
+fn viewport_blocks(
+    projection: &gitcomet_core::history_index::HistoryProjection,
+    rows: std::ops::Range<usize>,
+    logical: &super::scroll::LogicalViewport,
+) -> HistoryViewport {
+    let screen = logical.visible_range().len().max(1);
+    let (ahead, behind) = if logical.down { (2, 1) } else { (1, 2) };
+    let older = rows.end..(rows.end + ahead * screen).min(projection.len());
+    let newer = rows.start.saturating_sub(behind * screen)..rows.start;
+    let mut blocks = Vec::new();
+    push_blocks_for_visible_range(projection, rows, &mut blocks);
+    let visible_count = blocks.len();
+    for range in if logical.down {
+        [older, newer]
+    } else {
+        [newer, older]
+    } {
+        push_blocks_for_visible_range(projection, range, &mut blocks);
+    }
+    HistoryViewport {
+        blocks,
+        visible_count,
     }
 }
 
@@ -887,37 +912,23 @@ impl HistoryView {
         handoff: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let visible = logical.visible_range();
         let (first, last) = window_commit_range(&shown, &plan, &logical);
-        let screen = visible.len().max(1);
-        let ahead = if logical.down { 2 } else { 1 };
-        let behind = if logical.down { 1 } else { 2 };
-        let mut blocks = Vec::new();
-        let older = last..(last + ahead * screen).min(shown.graph.projection.len());
-        let newer = first.saturating_sub(behind * screen)..first;
-        let ranges = if logical.down {
-            [first..last, older, newer]
-        } else {
-            [first..last, newer, older]
-        };
-        for range in ranges {
-            push_blocks_for_visible_range(&shown.graph.projection, range, &mut blocks);
-        }
+        let viewport = viewport_blocks(&shown.graph.projection, first..last, &logical);
         let snapshot = shown.graph.projection.index.snapshot.clone();
         if self
             .indexed
             .requested_blocks
             .as_ref()
             .is_none_or(|(old_snapshot, old_blocks)| {
-                old_snapshot != &snapshot || old_blocks != &blocks
+                old_snapshot != &snapshot || old_blocks != &viewport
             })
         {
-            self.indexed.requested_blocks = Some((snapshot.clone(), blocks.clone()));
+            self.indexed.requested_blocks = Some((snapshot.clone(), viewport.clone()));
             self.store
-                .dispatch(Msg::IndexedHistory(Event::RequestRanges {
+                .dispatch(Msg::IndexedHistory(Event::RequestViewport {
                     repo_id: shown.key.repo_id,
                     snapshot: snapshot.clone(),
-                    blocks,
+                    viewport,
                     retry: false,
                 }));
         }
@@ -1395,17 +1406,23 @@ impl HistoryView {
         snapshot: gitcomet_core::services::HistorySnapshot,
         block: Option<usize>,
     ) {
-        let blocks = self
+        let viewport = self
             .indexed
             .requested_blocks
             .as_ref()
             .filter(|(current, _)| current == &snapshot)
-            .map_or_else(|| block.into_iter().collect(), |(_, blocks)| blocks.clone());
+            .map_or_else(
+                || HistoryViewport {
+                    blocks: block.into_iter().collect(),
+                    visible_count: usize::from(block.is_some()),
+                },
+                |(_, viewport)| viewport.clone(),
+            );
         self.store
-            .dispatch(Msg::IndexedHistory(Event::RequestRanges {
+            .dispatch(Msg::IndexedHistory(Event::RequestViewport {
                 repo_id,
                 snapshot,
-                blocks,
+                viewport,
                 retry: true,
             }));
     }
@@ -1661,9 +1678,7 @@ mod cache_regressions {
     use gitcomet_core::history_perf::{self, Work};
     use gitcomet_core::services::HistorySnapshot;
 
-    #[test]
-    fn block_stepping_matches_a_row_by_row_scan_across_hidden_rows() {
-        let count = 5_000usize;
+    fn block_index(count: usize) -> HistoryIndexHandle {
         let mut builder =
             HistoryIndexBuilder::new(HistorySnapshot("blocks".into()), LogScope::AllBranches, 20)
                 .unwrap();
@@ -1672,7 +1687,29 @@ mod cache_regressions {
             id[..8].copy_from_slice(&(row as u64 + 1).to_be_bytes());
             builder.push(&id, std::iter::empty(), false).unwrap();
         }
-        let index = builder.finish(&CancellationToken::new()).unwrap();
+        builder.finish(&CancellationToken::new()).unwrap()
+    }
+
+    #[test]
+    fn scrolling_into_a_prefetched_block_changes_its_priority() {
+        let index = block_index(2 * HISTORY_BLOCK_SIZE);
+        let projection = gitcomet_core::history_index::HistoryProjection::new(index, Vec::new());
+        let screen = HISTORY_BLOCK_SIZE / 4;
+        let mut logical =
+            super::super::scroll::LogicalViewport::new(projection.len(), 1.0, (screen - 1) as f64);
+        logical.set_position((HISTORY_BLOCK_SIZE - screen) as f64);
+        let before = viewport_blocks(&projection, logical.visible_range(), &logical);
+        logical.set_position(logical.position() + 1.0);
+        let after = viewport_blocks(&projection, logical.visible_range(), &logical);
+        assert_eq!(before.blocks, [0, HISTORY_BLOCK_SIZE]);
+        assert_eq!(before.blocks, after.blocks);
+        assert_eq!((before.visible_count, after.visible_count), (1, 2));
+    }
+
+    #[test]
+    fn block_stepping_matches_a_row_by_row_scan_across_hidden_rows() {
+        let count = 5_000usize;
+        let index = block_index(count);
         let mut random = 0x1234_5678_9abc_def1u64;
         let mut next = move || {
             random ^= random << 13;

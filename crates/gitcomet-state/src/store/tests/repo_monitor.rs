@@ -732,18 +732,21 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         event_tx: &event_tx,
         repo_monitors: &mut repo_monitors,
         thread_msg_tx: &thread_msg_tx,
-        executor: &executor,
-        repo_load_executor: &repo_load_executor,
-        worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
-        metadata_executor: &metadata_executor,
-        signature_executor: &metadata_executor,
-        history_find_executor: &std::sync::LazyLock::new(|| {
-            super::super::executor::TaskExecutor::new(1)
-        }),
-        session_persist_executor: &session_persist_executor,
+        executors: crate::store::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            interactive_executor: &crate::store::executor::interactive_queue(),
+            worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
+            metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
+            session_persist_executor: &session_persist_executor,
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+        },
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),
-        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         deferred_acknowledgements: &mut Vec::new(),
         auto_fetch_inputs: &mut None,
     }
@@ -928,18 +931,21 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             event_tx: &event_tx,
             repo_monitors,
             thread_msg_tx: &thread_msg_tx,
-            executor: &executor,
-            repo_load_executor: &repo_load_executor,
-            worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
-            metadata_executor: &metadata_executor,
-            signature_executor: &metadata_executor,
-            history_find_executor: &std::sync::LazyLock::new(|| {
-                super::super::executor::TaskExecutor::new(1)
-            }),
-            session_persist_executor: &session_persist_executor,
+            executors: crate::store::effects::EffectExecutors {
+                executor: &executor,
+                repo_load_executor: &repo_load_executor,
+                interactive_executor: &crate::store::executor::interactive_queue(),
+                worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
+                metadata_executor: &metadata_executor,
+                signature_executor: &metadata_executor,
+                history_find_executor: &std::sync::LazyLock::new(|| {
+                    super::super::executor::TaskExecutor::new(1)
+                }),
+                session_persist_executor: &session_persist_executor,
+                filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+            },
             backend: &backend,
             publication: &std::sync::atomic::AtomicU64::new(0),
-            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
             deferred_acknowledgements: &mut Vec::new(),
             auto_fetch_inputs: &mut None,
         }

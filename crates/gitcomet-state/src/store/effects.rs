@@ -47,6 +47,7 @@ use load_tokens::repo_load_context;
 pub(super) struct EffectExecutors<'a> {
     pub(super) executor: &'a TaskExecutor,
     pub(super) repo_load_executor: &'a TaskExecutor,
+    pub(super) interactive_executor: &'a std::sync::LazyLock<TaskExecutor>,
     /// Status scans of other checkouts must not occupy foreground load workers.
     pub(super) worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
     pub(super) session_persist_executor: &'a TaskExecutor,
@@ -57,6 +58,18 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     /// Disk writes and explorer mutations, in submission order.
     pub(super) filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
+}
+
+impl<'a> EffectExecutors<'a> {
+    fn for_diff_session(self, work: &crate::diff_session::DiffSessionWork) -> &'a TaskExecutor {
+        use crate::diff_session::DiffSessionWork;
+        match work {
+            DiffSessionWork::Content { .. } => self.interactive_executor,
+            DiffSessionWork::Changes { .. } | DiffSessionWork::Blame { .. } => {
+                self.repo_load_executor
+            }
+        }
+    }
 }
 
 fn selected_diff_target(
@@ -136,12 +149,11 @@ pub(super) fn schedule_effect(
     let EffectExecutors {
         executor,
         repo_load_executor,
-        worktree_scan_executor,
         session_persist_executor,
         metadata_executor,
-        signature_executor,
         history_find_executor,
         filesystem_executor,
+        ..
     } = executors;
 
     if effect.requires_available_git() {
@@ -325,7 +337,7 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repos, msg_tx, repo_id)
             {
-                indexed_history::schedule(repo_load_executor, repos, msg_tx, work, cancellation);
+                indexed_history::schedule(executors, repos, msg_tx, work, cancellation);
             }
         }
         Effect::DiffSession(work) => {
@@ -334,7 +346,7 @@ pub(super) fn schedule_effect(
                     repo_load_context(thread_state, repos, msg_tx, work.repo_id)
             {
                 diff_session::schedule(
-                    repo_load_executor,
+                    executors.for_diff_session(&work.work),
                     repos,
                     Arc::clone(backend),
                     msg_tx,
@@ -496,7 +508,7 @@ pub(super) fn schedule_effect(
                     load_tokens::worktree_list_load_context(thread_state, repos, msg_tx, repo_id)
             {
                 repo_load::schedule_load_worktree_dirty(
-                    worktree_scan_executor,
+                    executors.worktree_scan_executor,
                     backend.clone(),
                     repos,
                     msg_tx,
@@ -639,7 +651,7 @@ pub(super) fn schedule_effect(
             // Signature requests have their own lifetime: staging and tab switches
             // cancel repo loads, but must not silently lose pending verification.
             repo_load::schedule_verify_commit_signatures(
-                signature_executor,
+                executors.signature_executor,
                 repos,
                 msg_tx,
                 repo_id,

@@ -47,6 +47,18 @@ pub(super) fn repo_load_worker_threads() -> usize {
     default_worker_threads().saturating_sub(1).clamp(1, 2)
 }
 
+pub(super) fn interactive_queue() -> std::sync::LazyLock<TaskExecutor> {
+    std::sync::LazyLock::new(|| {
+        static NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            format!(
+                "{}-interactive",
+                gitcomet_core::identity::current().executable_name()
+            )
+        });
+        TaskExecutor::named(&NAME, 1)
+    })
+}
+
 pub(super) fn metadata_worker_threads() -> usize {
     2
 }

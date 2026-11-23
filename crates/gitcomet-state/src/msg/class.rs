@@ -167,6 +167,7 @@ fn indexed_history(message: &IndexedHistoryMsg) -> MsgClass {
         | IndexedHistoryMsg::Ensure { .. }
         | IndexedHistoryMsg::Publish { .. }
         | IndexedHistoryMsg::RequestRanges { .. }
+        | IndexedHistoryMsg::RequestViewport { .. }
         | IndexedHistoryMsg::Progress { .. }
         | IndexedHistoryMsg::Built { .. }
         | IndexedHistoryMsg::RangeLoaded { .. } => PLAIN,

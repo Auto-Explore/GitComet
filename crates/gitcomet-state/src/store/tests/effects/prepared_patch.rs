@@ -104,6 +104,7 @@ fn run_queued_patch_with_view_change(
         super::super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &executor,
+            interactive_executor: &crate::store::executor::interactive_queue(),
             worktree_scan_executor: &scan_executor,
             session_persist_executor: &executor,
             metadata_executor: &executor,
@@ -238,6 +239,7 @@ fn reviewed_apply_excludes_repository_mutations_and_editor_saves() {
             super::super::effects::EffectExecutors {
                 executor: &executor,
                 repo_load_executor: &executor,
+                interactive_executor: &crate::store::executor::interactive_queue(),
                 worktree_scan_executor: &scan_executor,
                 session_persist_executor: &executor,
                 metadata_executor: &executor,
@@ -348,6 +350,7 @@ fn a_running_pull_refuses_a_reviewed_apply_but_a_fetch_does_not() {
             super::super::effects::EffectExecutors {
                 executor: &executor,
                 repo_load_executor: &executor,
+                interactive_executor: &crate::store::executor::interactive_queue(),
                 worktree_scan_executor: &scan_executor,
                 session_persist_executor: &executor,
                 metadata_executor: &executor,

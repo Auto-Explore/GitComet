@@ -1,5 +1,8 @@
 use super::*;
-use crate::indexed_history::{IndexedHistoryEffect as Work, IndexedHistoryMsg as Event};
+use crate::indexed_history::{
+    HistoryReadPriority, HistoryViewport, IndexedHistoryEffect as Work, IndexedHistoryMsg as Event,
+    IndexedHistoryState, PendingRange,
+};
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HISTORY_ROW_CACHE_LIMIT};
 use gitcomet_core::services::CancellationToken;
 
@@ -10,6 +13,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
         | Event::Publish { repo_id, .. }
         | Event::Ensure { repo_id }
         | Event::RequestRanges { repo_id, .. }
+        | Event::RequestViewport { repo_id, .. }
         | Event::Progress { repo_id, .. }
         | Event::Built { repo_id, .. }
         | Event::RangeLoaded { repo_id, .. } => *repo_id,
@@ -17,7 +21,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
     let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return Vec::new();
     };
-    let mut effects = Vec::new();
     match event {
         Event::Retry { .. } => {
             repo.history_state.indexed.requested = None;
@@ -176,72 +179,19 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             retry,
             ..
         } => {
-            let history = &mut repo.history_state.indexed;
-            let index = history
-                .index
-                .as_ref()
-                .filter(|index| index.snapshot == snapshot)
-                .or_else(|| {
-                    history
-                        .range_index
-                        .as_ref()
-                        .filter(|index| index.snapshot == snapshot)
-                })
-                .cloned();
-            let Some(index) = index else {
-                return Vec::new();
+            let viewport = HistoryViewport {
+                visible_count: blocks.len(),
+                blocks,
             };
-            if history
-                .range_index
-                .as_ref()
-                .is_none_or(|old| old.snapshot != snapshot)
-            {
-                for (_, token) in history.pending.values() {
-                    token.cancel();
-                }
-                history.pending.clear();
-                history.ranges.clear();
-                history.ranges_rev = history.ranges_rev.wrapping_add(1);
-                history.range_errors.clear();
-                history.lru.clear();
-                history.range_index = Some(index.clone());
-                history.rev = history.rev.wrapping_add(1);
-            }
-            let mut desired = Vec::new();
-            for block in blocks
-                .into_iter()
-                .take(HISTORY_ROW_CACHE_LIMIT / HISTORY_BLOCK_SIZE)
-            {
-                if block < index.len()
-                    && block.is_multiple_of(HISTORY_BLOCK_SIZE)
-                    && !desired.contains(&block)
-                {
-                    desired.push(block);
-                }
-            }
-            history.pending.retain(|start, (_, token)| {
-                if desired.contains(start) {
-                    true
-                } else {
-                    token.cancel();
-                    false
-                }
-            });
-            history
-                .range_errors
-                .retain(|start, _| desired.contains(start));
-            if retry {
-                for start in &desired {
-                    history.range_errors.remove(start);
-                }
-            }
-            for start in &desired {
-                if history.ranges.contains_key(start) {
-                    history.lru.retain(|entry| entry != start);
-                    history.lru.push_back(*start);
-                }
-            }
-            history.desired = desired;
+            update_viewport(&mut repo.history_state.indexed, snapshot, viewport, retry);
+        }
+        Event::RequestViewport {
+            snapshot,
+            viewport,
+            retry,
+            ..
+        } => {
+            update_viewport(&mut repo.history_state.indexed, snapshot, viewport, retry);
         }
         Event::RangeLoaded {
             snapshot,
@@ -258,7 +208,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 || history
                     .pending
                     .get(&start)
-                    .is_none_or(|(pending, _)| *pending != seq)
+                    .is_none_or(|pending| pending.seq != seq)
             {
                 return Vec::new();
             }
@@ -283,7 +233,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                         let Some(oldest) = history.lru.pop_front() else {
                             break;
                         };
-                        if history.desired.contains(&oldest) {
+                        if history.desired.blocks.contains(&oldest) {
                             history.lru.push_back(oldest);
                         } else {
                             history.ranges.remove(&oldest);
@@ -302,30 +252,129 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             history.rev = history.rev.wrapping_add(1);
         }
     }
-    let history = &mut repo.history_state.indexed;
-    let Some(index) = history.range_index.clone() else {
-        return effects;
+    schedule_ranges(&mut repo.history_state.indexed, repo_id)
+}
+
+fn update_viewport(
+    history: &mut IndexedHistoryState,
+    snapshot: gitcomet_core::services::HistorySnapshot,
+    viewport: HistoryViewport,
+    retry: bool,
+) {
+    let index = history
+        .index
+        .as_ref()
+        .filter(|index| index.snapshot == snapshot)
+        .or_else(|| {
+            history
+                .range_index
+                .as_ref()
+                .filter(|index| index.snapshot == snapshot)
+        })
+        .cloned();
+    let Some(index) = index else {
+        return;
     };
-    for &start in &history.desired {
-        if history.pending.len() >= 2 {
-            break;
+    if history
+        .range_index
+        .as_ref()
+        .is_none_or(|old| old.snapshot != snapshot)
+    {
+        for pending in history.pending.values() {
+            pending.cancellation.cancel();
         }
-        if history.pending.contains_key(&start)
-            || history.ranges.contains_key(&start)
-            || history.range_errors.contains_key(&start)
+        history.pending.clear();
+        history.ranges.clear();
+        history.ranges_rev = history.ranges_rev.wrapping_add(1);
+        history.range_errors.clear();
+        history.lru.clear();
+        history.range_index = Some(index.clone());
+        history.rev = history.rev.wrapping_add(1);
+    }
+    let mut desired = HistoryViewport::default();
+    for (position, block) in viewport
+        .blocks
+        .into_iter()
+        .take(HISTORY_ROW_CACHE_LIMIT / HISTORY_BLOCK_SIZE)
+        .enumerate()
+    {
+        if block < index.len()
+            && block.is_multiple_of(HISTORY_BLOCK_SIZE)
+            && !desired.blocks.contains(&block)
         {
+            desired.blocks.push(block);
+            if position < viewport.visible_count {
+                desired.visible_count += 1;
+            }
+        }
+    }
+    history
+        .range_errors
+        .retain(|start, _| desired.blocks.contains(start));
+    if retry {
+        for start in &desired.blocks {
+            history.range_errors.remove(start);
+        }
+    }
+    for start in &desired.blocks {
+        if history.ranges.contains_key(start) {
+            history.lru.retain(|entry| entry != start);
+            history.lru.push_back(*start);
+        }
+    }
+    history.desired = desired;
+}
+
+fn schedule_ranges(history: &mut IndexedHistoryState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(index) = history.range_index.clone() else {
+        return Vec::new();
+    };
+    let next: smallvec::SmallVec<[_; 2]> = history
+        .desired
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, start)| {
+            !history.ranges.contains_key(*start) && !history.range_errors.contains_key(*start)
+        })
+        .take(2)
+        .map(|(position, &start)| {
+            let priority = if position < history.desired.visible_count {
+                HistoryReadPriority::Visible
+            } else {
+                HistoryReadPriority::Prefetch
+            };
+            (start, priority)
+        })
+        .collect();
+    history.pending.retain(|start, pending| {
+        let keep = next.contains(&(*start, pending.priority));
+        if !keep {
+            pending.cancellation.cancel();
+        }
+        keep
+    });
+    let mut effects = Vec::new();
+    for (start, priority) in next {
+        if history.pending.contains_key(&start) {
             continue;
         }
         history.range_seq = history.range_seq.wrapping_add(1);
         let cancellation = CancellationToken::new();
-        history
-            .pending
-            .insert(start, (history.range_seq, cancellation.clone()));
+        history.pending.insert(
+            start,
+            PendingRange {
+                seq: history.range_seq,
+                cancellation: cancellation.clone(),
+                priority,
+            },
+        );
         effects.push(Effect::IndexedHistory(Work::Range {
             repo_id,
             seq: history.range_seq,
             index: index.clone(),
             start,
+            priority,
             cancellation,
         }));
     }
@@ -555,6 +604,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             [10_240, 10_496]
         );
+    }
+
+    #[test]
+    fn visible_blocks_preempt_pending_prefetch_even_when_the_blocks_stay_in_view() {
+        use HistoryReadPriority::{Prefetch, Visible};
+        let (mut state, index) = fixture();
+        let viewport = |blocks: Vec<usize>, visible_count| Event::RequestViewport {
+            repo_id: RepoId(1),
+            snapshot: index.snapshot.clone(),
+            viewport: HistoryViewport {
+                blocks,
+                visible_count,
+            },
+            retry: false,
+        };
+        let requested = |effects: &[Effect]| {
+            effects
+                .iter()
+                .map(|work| match work {
+                    Effect::IndexedHistory(Work::Range {
+                        start, priority, ..
+                    }) => (*start, *priority),
+                    _ => panic!("expected range"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = reduce(&mut state, viewport(vec![0, 256, 512], 1));
+        assert_eq!(requested(&first), [(0, Visible), (256, Prefetch)]);
+        let pending = state.repos[0].history_state.indexed.pending.clone();
+        let moved = reduce(&mut state, viewport(vec![512, 256, 0], 2));
+        assert_eq!(requested(&moved), [(512, Visible), (256, Visible)]);
+        assert!(
+            pending
+                .values()
+                .all(|work| work.cancellation.is_cancelled())
+        );
+        for work in first {
+            assert!(reduce(&mut state, loaded(work)).is_empty());
+        }
+        assert!(state.repos[0].history_state.indexed.ranges.is_empty());
+        let mut moved = moved.into_iter();
+        assert_eq!(
+            requested(&reduce(&mut state, loaded(moved.next().unwrap()))),
+            [(0, Prefetch)]
+        );
+        assert!(reduce(&mut state, loaded(moved.next().unwrap())).is_empty());
     }
     #[test]
     fn decoded_cache_is_bounded_and_bad_ranges_require_retry() {
