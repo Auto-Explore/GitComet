@@ -62,6 +62,31 @@ impl SharedFileDiffCache {
         }
     }
 
+    pub(super) fn get_or_replace(
+        current: &mut Option<Arc<Self>>,
+        file: &Arc<FileDiffText>,
+        patch: Option<&Arc<Diff>>,
+        workdir: &Path,
+        engine: DiffEngine,
+        whitespace: DiffWhitespaceMode,
+    ) -> Arc<Self> {
+        if let Some(cache) = current {
+            if cache.matches_engine(file, patch, workdir, engine, whitespace) {
+                return cache.clone();
+            }
+            cache.cancel();
+        }
+        let cache = Arc::new(Self::with_engine(
+            file.clone(),
+            patch,
+            workdir.to_path_buf(),
+            engine,
+            whitespace,
+        ));
+        *current = Some(cache.clone());
+        cache
+    }
+
     pub(in crate::view) fn cancel(&self) {
         self.cancellation.cancel();
     }

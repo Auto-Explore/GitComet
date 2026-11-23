@@ -100,7 +100,9 @@ impl GitCometView {
                 if let Some((width, height)) = size {
                     let _ = cx
                         .background_executor()
-                        .spawn(async move { session::persist_mergetool_window_size(width, height) })
+                        .spawn_with_priority(gpui::Priority::Low, async move {
+                            session::persist_mergetool_window_size(width, height)
+                        })
                         .await;
                 }
             },
@@ -298,7 +300,7 @@ impl GitCometView {
                     return;
                 };
 
-                let _ = cx.background_executor().spawn(async move {
+                let _ = cx.background_executor().spawn_with_priority(gpui::Priority::Low, async move {
                     session::persist_ui_settings(settings)
                 }).await;
             },

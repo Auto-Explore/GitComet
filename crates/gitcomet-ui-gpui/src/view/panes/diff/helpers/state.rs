@@ -875,7 +875,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_image_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_image_diff_cache_seq: u64,
-    pub(in crate::view) file_image_diff_cache_inflight: Option<u64>,
+    pub(in crate::view) file_image_diff_cache_inflight: Option<(Arc<()>, gpui::Task<()>)>,
     pub(in crate::view) file_image_diff_cache_complete: bool,
     pub(in crate::view) file_image_diff_cache_failed: bool,
     pub(in crate::view) file_image_diff_cache_path: Option<std::path::PathBuf>,

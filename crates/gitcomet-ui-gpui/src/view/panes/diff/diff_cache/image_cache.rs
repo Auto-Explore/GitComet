@@ -947,39 +947,28 @@ impl DiffRenderer {
 
         self.file_image_diff_cache_seq = self.file_image_diff_cache_seq.wrapping_add(1);
         let seq = self.file_image_diff_cache_seq;
-        self.file_image_diff_cache_inflight = Some(seq);
+        self.file_image_diff_cache_path = Some(expected_abs_path);
 
         if !crate::ui_runtime::current().uses_background_compute() {
             let rebuild = build_file_image_diff_cache_rebuild(file.as_ref(), &workdir);
-            if self.file_image_diff_cache_inflight == Some(seq)
-                && self.file_image_diff_cache_repo_id == Some(repo_id)
-                && self.file_image_diff_cache_rev == diff_file_rev
-                && self.file_image_diff_cache_target == Some(diff_target_for_task.clone())
-            {
-                self.file_image_diff_cache_inflight = None;
-                self.file_image_diff_cache_complete = true;
-                self.file_image_diff_cache_failed = rebuild.failed;
-                self.file_image_diff_cache_content_signature = Some(content_signature);
-                self.file_image_diff_cache_path = rebuild.file_path;
-                self.file_image_sources = rebuild.sources;
-                self.file_image_diff_cache_old = rebuild.old;
-                self.file_image_diff_cache_new = rebuild.new;
-                self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
-                self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
-                cx.notify();
-            }
+            self.apply_image_diff_rebuild(rebuild, content_signature, cx);
             return;
         }
 
-        cx.spawn(
+        let request = Arc::new(());
+        let pending = Arc::downgrade(&request);
+        let decode =
+            cx.background_executor()
+                .spawn_with_priority(gpui::Priority::High, async move {
+                    pending.upgrade()?;
+                    Some(build_file_image_diff_cache_rebuild(file.as_ref(), &workdir))
+                });
+        let apply = cx.spawn(
             async move |view: WeakEntity<DiffRenderer>, cx: &mut gpui::AsyncApp| {
-                let rebuild = smol::unblock(move || {
-                    build_file_image_diff_cache_rebuild(file.as_ref(), &workdir)
-                })
-                .await;
+                let Some(rebuild) = decode.await else { return };
 
                 let _ = view.update(cx, |this, cx| {
-                    if this.file_image_diff_cache_inflight != Some(seq) {
+                    if this.file_image_diff_cache_seq != seq {
                         return;
                     }
                     if this.file_image_diff_cache_repo_id != Some(repo_id)
@@ -990,20 +979,29 @@ impl DiffRenderer {
                     }
 
                     this.file_image_diff_cache_inflight = None;
-                    this.file_image_diff_cache_complete = true;
-                    this.file_image_diff_cache_failed = rebuild.failed;
-                    this.file_image_diff_cache_content_signature = Some(content_signature);
-                    this.file_image_diff_cache_path = rebuild.file_path;
-                    this.file_image_sources = rebuild.sources;
-                    this.file_image_diff_cache_old = rebuild.old;
-                    this.file_image_diff_cache_new = rebuild.new;
-                    this.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
-                    this.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
-                    cx.notify();
+                    this.apply_image_diff_rebuild(rebuild, content_signature, cx);
                 });
             },
-        )
-        .detach();
+        );
+        self.file_image_diff_cache_inflight = Some((request, apply));
+    }
+
+    fn apply_image_diff_rebuild(
+        &mut self,
+        rebuild: ImageDiffCacheRebuild,
+        content_signature: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.file_image_diff_cache_complete = true;
+        self.file_image_diff_cache_failed = rebuild.failed;
+        self.file_image_diff_cache_content_signature = Some(content_signature);
+        self.file_image_diff_cache_path = rebuild.file_path;
+        self.file_image_sources = rebuild.sources;
+        self.file_image_diff_cache_old = rebuild.old;
+        self.file_image_diff_cache_new = rebuild.new;
+        self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
+        self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
+        cx.notify();
     }
 }
 

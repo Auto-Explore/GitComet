@@ -2077,6 +2077,9 @@ pub(in crate::view) fn build_file_diff_cache_with_engine(
     engine: DiffEngine,
     cancellation: &gitcomet_core::services::CancellationToken,
 ) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
+    if cancellation.is_cancelled() {
+        return Err(FileDiffCacheError::Cancelled);
+    }
     let mut old_source = index_file_diff_side(file, file.old_source.as_ref(), file.old.as_ref())?;
     let mut new_source = index_file_diff_side(file, file.new_source.as_ref(), file.new.as_ref())?;
     let structural =

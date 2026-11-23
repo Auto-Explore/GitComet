@@ -79,9 +79,11 @@ impl Group {
         let expected = generation.load(Ordering::Relaxed);
         let cache = self.cache.clone();
         side.task = Some(cx.spawn(async move |group, cx| {
-            let result = gitcomet_ui_kit::ui_runtime::background_compute(move || {
-                cache.render(&source, &keys, &generation, expected)
-            })
+            let result = gitcomet_ui_kit::ui_runtime::background_compute_with_priority(
+                cx.background_executor(),
+                gpui::Priority::High,
+                move || cache.render(&source, &keys, &generation, expected),
+            )
             .await;
             let _ = group.update(cx, |this, cx| {
                 let side = &mut this.sides[index];
