@@ -48,6 +48,19 @@ fn make_config(
 // ── Clean merge ──────────────────────────────────────────────────
 
 #[test]
+fn headless_mergetool_replaces_a_hard_link_without_changing_the_other_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = make_config(dir.path(), None, "local", "remote", "original");
+    let notes = dir.path().join("notes.txt");
+    fs::hard_link(&config.merged, &notes).unwrap();
+
+    write_merged_output(&config, b"resolved").unwrap();
+
+    assert_eq!(fs::read(&notes).unwrap(), b"original");
+    assert_eq!(fs::read(&config.merged).unwrap(), b"resolved");
+}
+
+#[test]
 fn clean_merge_non_overlapping_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let config = make_config(

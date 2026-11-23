@@ -250,6 +250,27 @@ fn focused_mergetool_output_writes_exact_binary_bytes_and_creates_parent() {
 }
 
 #[test]
+fn focused_mergetool_replaces_a_hard_link_without_changing_the_other_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let notes = dir.path().join("notes.txt");
+    std::fs::write(&notes, b"ordinary notes").unwrap();
+    std::fs::hard_link(&notes, dir.path().join("result.txt")).unwrap();
+
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("result.txt"),
+        FocusedMergetoolOutput::Write(b"resolved"),
+    )
+    .unwrap();
+
+    assert_eq!(std::fs::read(&notes).unwrap(), b"ordinary notes");
+    assert_eq!(
+        std::fs::read(dir.path().join("result.txt")).unwrap(),
+        b"resolved"
+    );
+}
+
+#[test]
 fn focused_mergetool_delete_accepts_existing_and_missing_outputs() {
     let dir = tempfile::tempdir().expect("temp dir");
     let output = dir.path().join("result.txt");

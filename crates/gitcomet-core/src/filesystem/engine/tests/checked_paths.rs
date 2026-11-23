@@ -263,6 +263,44 @@ fn trash_job_keeps_the_admitted_source_when_its_parent_alias_changes_inside_the_
 }
 
 #[test]
+fn direct_repository_save_accepts_an_alias_above_the_worktree() {
+    let fixture = AliasedDirectory::new();
+    let root = fixture.admitted.join("repo");
+    fs::create_dir(&root).unwrap();
+    let worktree = fixture.alias.join("repo");
+    let result = run(
+        &mut Filesystem::default(),
+        Operation::Save {
+            path: worktree.join("note.txt"),
+            worktree: Some(worktree),
+            contents: Arc::from(b"saved".as_slice()),
+            expected: None,
+            overwrite: false,
+        },
+    );
+    success(&result);
+    assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"saved");
+}
+
+#[test]
+fn direct_repository_save_rejects_an_alias_at_the_worktree_entry() {
+    let fixture = AliasedDirectory::new();
+    let worktree = fixture.alias.join(".");
+    let result = run(
+        &mut Filesystem::default(),
+        Operation::Save {
+            path: worktree.join("note.txt"),
+            worktree: Some(worktree),
+            contents: Arc::from(b"saved".as_slice()),
+            expected: None,
+            overwrite: true,
+        },
+    );
+    assert!(!result.succeeded());
+    assert!(!fixture.admitted.join("note.txt").exists());
+}
+
+#[test]
 fn saves_keep_the_admitted_target_and_worktree_when_aliases_change_inside_the_check() {
     for repository in [false, true] {
         let fixture = AliasedDirectory::new();

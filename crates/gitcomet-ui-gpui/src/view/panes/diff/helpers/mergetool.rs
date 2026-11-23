@@ -97,15 +97,11 @@ pub(in crate::view::panes::diff) fn apply_focused_mergetool_output(
     let relative = gitcomet_core::path_utils::validated_repo_relative_path(path)?;
     let target = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative)?;
     match output {
-        FocusedMergetoolOutput::Write(bytes) => {
-            if let Some(parent) = target
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&target, bytes)
-        }
+        FocusedMergetoolOutput::Write(bytes) => gitcomet_core::filesystem::global()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .save_worktree(workdir, &relative, bytes, None, true)
+            .map(|_| ()),
         FocusedMergetoolOutput::Delete => match std::fs::remove_file(&target) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),

@@ -327,24 +327,34 @@ impl Filesystem {
             .map_err(|error| io::Error::new(error.kind(), error.to_string()))
             .and_then(|paths| check(paths));
         if let Err(error) = result {
-            return OperationResult {
-                saved_version: None,
-                moved_versions: BTreeMap::new(),
-                id: request.id,
-                items: vec![ItemResult {
-                    source: paths
-                        .ok()
-                        .and_then(|paths| paths.into_iter().next())
-                        .unwrap_or_default(),
-                    destination: None,
-                    outcome: ItemOutcome::Failed(error.to_string()),
-                }],
-                changes: Vec::new(),
-                undo_available: !self.undo.is_empty(),
-                redo_available: !self.redo.is_empty(),
-            };
+            let source = paths
+                .ok()
+                .and_then(|paths| paths.into_iter().next())
+                .unwrap_or_default();
+            return self.rejected_request(request.id, source, error);
         }
-        self.execute(request, progress)
+        self.execute_operation(request, progress)
+    }
+
+    fn rejected_request(
+        &self,
+        id: OperationId,
+        source: PathBuf,
+        error: io::Error,
+    ) -> OperationResult {
+        OperationResult {
+            saved_version: None,
+            moved_versions: BTreeMap::new(),
+            id,
+            items: vec![ItemResult {
+                source,
+                destination: None,
+                outcome: ItemOutcome::Failed(error.to_string()),
+            }],
+            changes: Vec::new(),
+            undo_available: !self.undo.is_empty(),
+            redo_available: !self.redo.is_empty(),
+        }
     }
 
     pub fn changes_since(&self, revision: u64) -> Vec<PathChange> {
@@ -374,13 +384,29 @@ impl Filesystem {
         expected: Option<&DiskVersion>,
         overwrite: bool,
     ) -> io::Result<DiskVersion> {
-        self.save_with_identity(path, bytes, expected, overwrite)
+        self.save_with_identity(path, None, bytes, expected, overwrite)
+            .map(|(_, version)| version)
+    }
+
+    pub fn save_worktree(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        bytes: &[u8],
+        expected: Option<&DiskVersion>,
+        overwrite: bool,
+    ) -> io::Result<DiskVersion> {
+        let root = resolve_save_worktree(root, overwrite)?;
+        let relative = crate::path_utils::validated_repo_relative_path(relative)?;
+        let target = crate::path_utils::symlink_free_write_target(&root, &relative)?;
+        self.save_with_identity(&target, Some(&root), bytes, expected, overwrite)
             .map(|(_, version)| version)
     }
 
     fn save_with_identity(
         &mut self,
         path: &Path,
+        worktree: Option<&Path>,
         bytes: &[u8],
         expected: Option<&DiskVersion>,
         overwrite: bool,
@@ -391,7 +417,18 @@ impl Filesystem {
                 "Filesystem service is shutting down",
             ));
         }
-        let path = save_identity(path, overwrite)?;
+        let requested = path;
+        let path = save_identity(requested, overwrite)?;
+        if let Some(root) = worktree {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| invalid("Save path is outside the repository worktree"))?;
+            crate::path_utils::validated_repo_relative_path(relative)?;
+            let requested_relative = requested
+                .strip_prefix(root)
+                .map_err(|_| invalid("Save path is outside the repository worktree"))?;
+            crate::path_utils::symlink_free_write_target(root, requested_relative)?;
+        }
         protect(&path, false, &Cancellation::default())?;
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => Some(metadata),
@@ -467,7 +504,22 @@ impl Filesystem {
         Ok((path, version))
     }
 
-    pub fn execute(
+    pub fn execute(&mut self, request: Request, progress: impl FnMut(Progress)) -> OperationResult {
+        if let Operation::Save {
+            path,
+            worktree: Some(root),
+            ..
+        } = &request.operation
+        {
+            if let Err(error) = validate_direct_save_worktree(root) {
+                return self.rejected_request(request.id, path.clone(), error);
+            }
+            return self.execute_checked(request, |_| Ok(()), progress);
+        }
+        self.execute_operation(request, progress)
+    }
+
+    fn execute_operation(
         &mut self,
         request: Request,
         mut progress: impl FnMut(Progress),
@@ -542,7 +594,13 @@ impl Filesystem {
                 } else {
                     path.clone()
                 };
-                self.save_with_identity(&target, contents, expected.as_ref(), *overwrite)
+                self.save_with_identity(
+                    &target,
+                    worktree.as_deref(),
+                    contents,
+                    expected.as_ref(),
+                    *overwrite,
+                )
             });
             let (target, outcome, saved_version, changes) = match saved {
                 Ok((target, version)) => (
@@ -1054,6 +1112,18 @@ fn native_trash(
         return Err(error);
     }
     result
+}
+
+fn validate_direct_save_worktree(root: &Path) -> io::Result<()> {
+    let entry: PathBuf = root.components().collect();
+    match fs::symlink_metadata(entry) {
+        Ok(metadata) if crate::path_utils::is_path_redirect(&metadata) => {
+            Err(invalid("A save worktree cannot be a filesystem redirect"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn normalize_operation_paths(operation: &mut Operation) -> io::Result<()> {
