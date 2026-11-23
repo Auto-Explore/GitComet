@@ -1,5 +1,6 @@
 use gpui::{App, Global, Result};
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 
 pub use gitcomet_fonts::{
     BUNDLED_FONT_BYTES, FIRA_CODE_FONT_FAMILY, IBM_PLEX_SANS_FONT_FAMILY, LILEX_FONT_FAMILY,
@@ -14,20 +15,46 @@ const FILTERED_FONT_ALIASES: &[&str] = &[
     "Lilex SemiBold Italic",
 ];
 
-pub fn register(cx: &mut App) -> Result<()> {
-    let result = cx.text_system().add_fonts(
-        BUNDLED_FONT_BYTES
-            .iter()
-            .map(|bytes| Cow::Borrowed(*bytes))
-            .collect(),
-    );
-    if result.is_ok() {
-        cx.set_global(DeferredFonts(Vec::new()));
-    }
-    result
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct FontGeneration(u64);
+
+impl Global for FontGeneration {}
+
+thread_local! {
+    static GENERATION: Cell<FontGeneration> = const { Cell::new(FontGeneration(0)) };
+    static LAYOUT_CACHES: RefCell<Vec<fn()>> = const { RefCell::new(Vec::new()) };
 }
 
-struct DeferredFonts(Vec<Cow<'static, [u8]>>);
+impl FontGeneration {
+    pub fn current() -> Self {
+        GENERATION.get()
+    }
+}
+
+/// Initialize a UI-thread cache and clear it when registration changes glyphs.
+/// Registering the callback here leaves unused caches unallocated.
+pub fn layout_cache<T>(initial: T, clear: fn()) -> RefCell<T> {
+    LAYOUT_CACHES.with_borrow_mut(|caches| caches.push(clear));
+    RefCell::new(initial)
+}
+
+fn add_fonts(faces: &[&'static [u8]], cx: &mut App) -> Result<()> {
+    cx.text_system()
+        .add_fonts(faces.iter().map(|face| Cow::Borrowed(*face)).collect())?;
+    let next = FontGeneration(FontGeneration::current().0.wrapping_add(1));
+    GENERATION.set(next);
+    LAYOUT_CACHES.with_borrow(|caches| caches.iter().for_each(|clear| clear()));
+    cx.set_global(next);
+    Ok(())
+}
+
+pub fn register(cx: &mut App) -> Result<()> {
+    add_fonts(BUNDLED_FONT_BYTES, cx)?;
+    cx.set_global(DeferredFonts(Vec::new()));
+    Ok(())
+}
+
+struct DeferredFonts(Vec<&'static [u8]>);
 
 impl Global for DeferredFonts {}
 
@@ -49,12 +76,11 @@ pub fn register_ui_face(ui_family: Option<&str>, cx: &mut App) -> Result<()> {
         return Ok(());
     }
     let first = first_face(ui_family);
-    let result = cx.text_system().add_fonts(vec![Cow::Borrowed(first)]);
+    let result = add_fonts(&[first], cx);
     let remaining = BUNDLED_FONT_BYTES
         .iter()
         .copied()
         .filter(|face| result.is_err() || *face != first)
-        .map(Cow::Borrowed)
         .collect();
     cx.set_global(DeferredFonts(remaining));
     result
@@ -66,15 +92,16 @@ pub fn has_deferred_fonts(cx: &App) -> bool {
 }
 
 pub fn register_after_first_frame(cx: &mut App) -> Result<()> {
-    if !cx.has_global::<DeferredFonts>() {
+    let Some(pending) = cx.try_global::<DeferredFonts>() else {
         return Ok(());
-    }
-    let pending = std::mem::take(&mut cx.global_mut::<DeferredFonts>().0);
-    if pending.is_empty() {
+    };
+    if pending.0.is_empty() {
         return Ok(());
     }
     let _stage = gitcomet_base::startup_trace::span("register_deferred_fonts");
-    cx.text_system().add_fonts(pending)?;
+    let faces = pending.0.clone();
+    add_fonts(&faces, cx)?;
+    cx.global_mut::<DeferredFonts>().0.clear();
     cx.refresh_windows();
     Ok(())
 }
@@ -107,7 +134,7 @@ mod tests {
             assert!(
                 pending
                     .iter()
-                    .all(|face| face.as_ref() != first_face(Some("Fira Code")))
+                    .all(|face| *face != first_face(Some("Fira Code")))
             );
             register_ui_face(Some("Lilex"), cx).unwrap();
             assert_eq!(
@@ -118,6 +145,27 @@ mod tests {
             assert!(!has_deferred_fonts(cx));
             register_ui_face(None, cx).unwrap();
             assert!(!has_deferred_fonts(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn failed_registration_retains_pending_faces_and_only_success_invalidates_layouts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        crate::test_support::use_real_text_backend_with_startup_font(cx);
+        cx.update(|cx| {
+            let first = FontGeneration::current();
+            cx.global_mut::<DeferredFonts>().0 = vec![b"invalid font"];
+            assert!(register_after_first_frame(cx).is_err());
+            assert_eq!(cx.global::<DeferredFonts>().0, [b"invalid font".as_slice()]);
+            assert_eq!(FontGeneration::current(), first);
+            cx.global_mut::<DeferredFonts>().0 = vec![gitcomet_fonts::LILEX_REGULAR_BYTES];
+            register_after_first_frame(cx).unwrap();
+            let registered = FontGeneration::current();
+            assert_ne!(registered, first);
+            assert!(!has_deferred_fonts(cx));
+            register_after_first_frame(cx).unwrap();
+            assert_eq!(FontGeneration::current(), registered);
         });
     }
 

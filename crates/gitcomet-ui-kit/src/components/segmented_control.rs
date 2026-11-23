@@ -81,6 +81,7 @@ impl Segment {
 #[derive(Clone, PartialEq)]
 pub(super) struct SegmentedMeasure {
     style: gpui::TextStyle,
+    fonts: crate::bundled_fonts::FontGeneration,
     rem: gpui::Pixels,
     pub(super) scale: UiScale,
     segments: Vec<SegmentMeasure>,
@@ -204,6 +205,7 @@ impl SegmentedControl {
         }
         SegmentedMeasure {
             style,
+            fonts: crate::bundled_fonts::FontGeneration::current(),
             rem: window.rem_size(),
             scale,
             segments: self

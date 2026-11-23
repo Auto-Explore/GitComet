@@ -24,9 +24,11 @@ const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
-        RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES),
+            || GUTTER_TEXT_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
     static CONFLICT_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
-        RefCell::new(new_fx_lru_cache(CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(new_fx_lru_cache(CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES),
+            || CONFLICT_TEXT_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
 }
 
 #[derive(Clone, Debug)]

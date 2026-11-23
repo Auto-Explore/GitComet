@@ -98,6 +98,53 @@ fn structural_fallback_notice_remains_visible_in_narrow_focused_panes(
 }
 
 #[gpui::test]
+fn focused_diff_redraw_replaces_the_fallback_face_and_then_reuses_the_shaped_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    gitcomet_ui_kit::test_support::use_real_text_backend_with_startup_font(cx);
+    let (view, cx) = focused(cx, true);
+    let row = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let pane = &view.read(app).focused_diff_pane.as_ref()?.pane;
+            let hosted = pane
+                .view()
+                .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                .ok()?;
+            let renderer = hosted.read(app).renderer()?.read(app);
+            let hit = renderer
+                .diff_text_hitboxes
+                .values()
+                .find(|hit| hit.painted_text.contains("old"))?;
+            Some(
+                renderer
+                    .diff_text_layout_cache
+                    .get(&hit.layout_key)?
+                    .layout
+                    .clone(),
+            )
+        })
+    };
+    pump_until(cx, "focused diff fallback row", |cx| row(cx).is_some());
+    let fallback = row(cx).unwrap();
+    cx.update(|_, app| crate::bundled_fonts::register_after_first_frame(app).unwrap());
+    test_support::redraw(cx);
+    let registered = row(cx).expect("the first redraw painted the same row");
+    let editor = cx.update(|window, _| {
+        window
+            .text_system()
+            .resolve_font(&gpui::font(crate::bundled_fonts::LILEX_FONT_FAMILY))
+    });
+    assert_ne!(fallback.paint_fragments[0].font_id, editor);
+    assert_eq!(registered.paint_fragments[0].font_id, editor);
+    assert_ne!(fallback.width, registered.width);
+    cx.run_until_parked();
+    gitcomet_ui_kit::test_support::refresh_and_draw(cx);
+    let warm = row(cx).unwrap();
+    gitcomet_ui_kit::test_support::refresh_and_draw(cx);
+    assert!(Arc::ptr_eq(&warm, &row(cx).unwrap()));
+}
+
+#[gpui::test]
 fn focused_patch_fallback_paints_both_sides_in_each_layout(cx: &mut gpui::TestAppContext) {
     let (root, cx) = focused(cx, true);
     let pane = cx.update(|_, app| {

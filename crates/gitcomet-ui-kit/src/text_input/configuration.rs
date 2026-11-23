@@ -82,8 +82,10 @@ impl TextInput {
     /// the old colours are not reused.
     pub(super) fn sync_theme(&mut self, cx: &App) {
         let style = TextInputStyle::from_theme(AppTheme::current(cx));
-        if self.style != style {
+        let fonts = crate::bundled_fonts::FontGeneration::current();
+        if self.style != style || self.layout.font_generation != fonts {
             self.style = style;
+            self.layout.font_generation = fonts;
             self.bump_shape_style_epoch();
         }
     }

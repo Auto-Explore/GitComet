@@ -37,6 +37,7 @@ pub(crate) struct TerminalGridSize {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TerminalLayoutKey {
+    fonts: gitcomet_ui_kit::bundled_fonts::FontGeneration,
     pub(crate) font_size_bits: u32,
     pub(crate) line_height_bits: u32,
     pub(crate) cell_width_bits: u32,
@@ -448,6 +449,7 @@ impl TerminalViewportView {
         let rem_size = window.rem_size();
         if let Some(ref cache) = self.layout_cache
             && cache.rem_size == rem_size
+            && cache.key.fonts == gitcomet_ui_kit::bundled_fonts::FontGeneration::current()
         {
             return cache.clone();
         }
@@ -1960,6 +1962,7 @@ fn terminal_line_height(font_size: Pixels) -> Pixels {
 
 fn terminal_layout_key(metrics: TerminalTextMetrics) -> TerminalLayoutKey {
     TerminalLayoutKey {
+        fonts: gitcomet_ui_kit::bundled_fonts::FontGeneration::current(),
         font_size_bits: pixels_bits(metrics.font_size),
         line_height_bits: pixels_bits(metrics.line_height),
         cell_width_bits: pixels_bits(metrics.cell_width),

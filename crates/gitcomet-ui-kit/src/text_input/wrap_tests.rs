@@ -10,6 +10,69 @@ struct WrappedInputView {
 }
 
 #[gpui::test]
+fn deferred_editor_face_reshapes_visible_input_and_rewraps_at_its_actual_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    struct Editors([Entity<TextInput>; 2]);
+    impl Render for Editors {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(160.0))
+                .flex()
+                .flex_col()
+                .font_family(crate::bundled_fonts::LILEX_FONT_FAMILY)
+                .children(self.0.iter().cloned())
+        }
+    }
+
+    crate::test_support::use_real_text_backend_with_startup_font(cx);
+    let (view, cx) = cx.add_window_view(|window, app| {
+        Editors([false, true].map(|soft_wrap| {
+            app.new(|cx| {
+                let mut input = TextInput::new(
+                    TextInputOptions {
+                        multiline: true,
+                        chromeless: true,
+                        soft_wrap,
+                        text_size: Some(16.0),
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
+                input.set_text("i".repeat(120), cx);
+                input
+            })
+        }))
+    });
+    let dimensions = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let [plain, wrapped] = &view.read(app).0;
+            let Some(TextInputLayout::Plain(lines)) = &plain.read(app).layout.last else {
+                panic!("plain editor must have painted");
+            };
+            let wrapped = wrapped.read(app);
+            (
+                lines.get(0).unwrap().width,
+                wrapped.wrap.row_counts[0],
+                wrapped.layout.bounds.unwrap().size.height,
+                wrapped.layout.line_height,
+            )
+        })
+    };
+    draw_frame(cx);
+    let fallback = dimensions(cx);
+    cx.update(|_, app| crate::bundled_fonts::register_after_first_frame(app).unwrap());
+    crate::test_support::redraw(cx);
+    let registered = dimensions(cx);
+    assert!(registered.0 > fallback.0, "{fallback:?} -> {registered:?}");
+    assert!(registered.1 > fallback.1, "{fallback:?} -> {registered:?}");
+    assert_eq!(registered.2, registered.3 * registered.1 as f32);
+    draw_frame(cx);
+    assert_eq!(dimensions(cx), registered);
+}
+
+#[gpui::test]
 fn typing_fifty_edits_in_a_four_mib_document_keeps_snapshots_lazy(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
     let row = format!("{:63}\n", "a line of source text with enough words to wrap");

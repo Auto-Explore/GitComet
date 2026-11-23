@@ -30,11 +30,11 @@ type FxLruCache<K, V> = LruCache<K, V, BuildHasherDefault<FxHasher>>;
 
 thread_local! {
     static TRUNCATED_LAYOUT_CACHE: RefCell<FxLruCache<TruncatedLayoutCacheKey, Arc<TruncatedLineLayout>>> =
-        RefCell::new(FxLruCache::with_hasher(
+        crate::bundled_fonts::layout_cache(FxLruCache::with_hasher(
             NonZeroUsize::new(TRUNCATED_LAYOUT_CACHE_MAX_ENTRIES)
                 .expect("truncated layout cache capacity must be > 0"),
             BuildHasherDefault::default(),
-        ));
+        ), || TRUNCATED_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
 }
 
 #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
@@ -403,6 +403,7 @@ fn hash_focus_range(focus_range: Option<&Range<usize>>) -> u64 {
 
 pub fn path_alignment_style_key(base_style: &TextStyle, rem_size: Pixels) -> u64 {
     let mut hasher = FxHasher::default();
+    crate::bundled_fonts::FontGeneration::current().hash(&mut hasher);
     f32::from(base_style.font_size.to_pixels(rem_size))
         .to_bits()
         .hash(&mut hasher);

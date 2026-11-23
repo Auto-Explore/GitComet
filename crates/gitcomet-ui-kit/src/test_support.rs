@@ -7,6 +7,16 @@ pub fn use_real_text_backend(cx: &mut gpui::TestAppContext) {
     use_text_backend(cx, text_system());
 }
 
+/// Start Parley with the same single UI face as a new GitComet window.
+pub fn use_real_text_backend_with_startup_font(cx: &mut gpui::TestAppContext) {
+    *cx = gpui::TestAppContext::build_with_text_system(
+        cx.dispatcher.clone(),
+        None,
+        std::sync::Arc::new(text_system()),
+    );
+    cx.update(|app| crate::bundled_fonts::register_ui_face(None, app).unwrap());
+}
+
 /// Include the OS font catalog for regressions involving the backend's default
 /// generic font (for example, synthetic direction markers without source runs).
 pub fn use_real_text_backend_with_system_fonts(cx: &mut gpui::TestAppContext) {

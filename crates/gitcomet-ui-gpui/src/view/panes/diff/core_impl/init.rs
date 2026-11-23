@@ -8,6 +8,19 @@ pub(in crate::view) struct DiffRendererInit {
 }
 
 impl DiffRenderer {
+    fn register_renderer(services: &DiffServices, cx: &mut gpui::Context<Self>) {
+        services
+            .documents
+            .register_repository(cx.entity().downgrade());
+        let fonts =
+            cx.observe_global::<crate::bundled_fonts::FontGeneration>(Self::fonts_registered);
+        cx.on_release(move |pane, cx| {
+            drop(fonts);
+            pane.release_document_presenter(cx);
+        })
+        .detach();
+    }
+
     pub(in crate::view) fn external_editor_available(&self) -> bool {
         self.extension_editor_available || crate::external_editor::configured_setting().is_some()
     }
@@ -26,11 +39,7 @@ impl DiffRenderer {
             focused_mergetool_labels,
             focused_mergetool_exit_code,
         } = init;
-        services
-            .documents
-            .register_repository(cx.entity().downgrade());
-        cx.on_release(|pane, cx| pane.release_document_presenter(cx))
-            .detach();
+        Self::register_renderer(&services, cx);
         let date_time_format = preferences.appearance.date_time_format;
         let diff_scroll_sync = preferences.diff.scroll_sync;
         let diff_content_mode = preferences.diff.content_mode;

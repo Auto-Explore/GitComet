@@ -13,6 +13,37 @@ use gpui::{FontFallbacks, FontFeatures, StrikethroughStyle, UnderlineStyle, hsla
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 
+#[gpui::test]
+fn deferred_face_remeasures_truncation_and_preserves_ordinary_cache_hits(
+    cx: &mut gpui::TestAppContext,
+) {
+    crate::test_support::use_real_text_backend_with_startup_font(cx);
+    let (_, cx) = cx.add_window_view(|_, _| gpui::Empty);
+    let shape = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let mut style = window.text_style();
+            style.font_family = crate::bundled_fonts::LILEX_FONT_FAMILY.into();
+            shape_truncated_line_cached(
+                window,
+                app,
+                &style,
+                &"iiiiiiiiiiiiiiii".into(),
+                Some(px(96.0)),
+                TextTruncationProfile::End,
+                &[],
+                None,
+            )
+        })
+    };
+    let fallback = shape(cx);
+    assert!(Arc::ptr_eq(&fallback, &shape(cx)));
+    cx.update(|_, app| crate::bundled_fonts::register_after_first_frame(app).unwrap());
+    let registered = shape(cx);
+    assert!(!fallback.truncated);
+    assert!(registered.truncated);
+    assert!(Arc::ptr_eq(&registered, &shape(cx)));
+}
+
 #[derive(Clone, Copy)]
 enum FocusSearchMode {
     Around,

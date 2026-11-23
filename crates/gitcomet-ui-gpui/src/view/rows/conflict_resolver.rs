@@ -188,7 +188,8 @@ thread_local! {
     /// that path (the canvas shapes the same line again through
     /// `CONFLICT_TEXT_LAYOUT_CACHE`).
     static CONFLICT_ROW_WIDTH_CACHE: std::cell::RefCell<super::FxLruCache<u64, Pixels>> =
-        std::cell::RefCell::new(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES),
+            || CONFLICT_ROW_WIDTH_CACHE.with_borrow_mut(super::FxLruCache::clear));
 }
 
 fn conflict_row_text_width(

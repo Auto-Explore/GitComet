@@ -731,6 +731,7 @@ pub(super) struct LayoutState {
     /// Bumped by every paint.
     pub(super) paint_seq: u64,
     pub(super) line_height: Pixels,
+    pub(super) font_generation: crate::bundled_fonts::FontGeneration,
     pub(super) shape_style_epoch: u64,
     pub(super) plain_line_cache: FxHashMap<ShapedRowCacheKey, EditorLine>,
 }
@@ -746,6 +747,7 @@ impl LayoutState {
             painted_line_range: 0..0,
             paint_seq: 0,
             line_height: px(0.0),
+            font_generation: crate::bundled_fonts::FontGeneration::current(),
             shape_style_epoch: 1,
             plain_line_cache: FxHashMap::default(),
         }

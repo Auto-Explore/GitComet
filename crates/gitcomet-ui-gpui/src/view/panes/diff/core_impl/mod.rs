@@ -447,6 +447,19 @@ impl DiffRenderer {
         cx.notify();
     }
 
+    fn fonts_registered(&mut self, cx: &mut gpui::Context<Self>) {
+        self.invalidate_diff_wrap_visible_cache();
+        self.diff_horizontal_scroll.reset();
+        self.forget_hosted_line_end_text();
+        if let Some(decor) = &mut self.hosted_decor {
+            decor.views.invalidate_text_measurements();
+        }
+        self.diff_markdown.change_extents_key = None;
+        self.diff_markdown.change_extents_requested = None;
+        self.conflict_text_hitboxes.clear();
+        self.invalidate_font_metrics(cx);
+    }
+
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
         let row_height = self.theme.editor_row_height(ui_scale::current(cx).percent);
         self.file_editor_gutter_row_height = row_height;
