@@ -583,12 +583,11 @@ impl<'r> Iterator for RefIter<'_, 'r> {
                 // gix reads the whole object a ref names to see whether it
                 // is a tag. Where the packed-refs file says it is none, as
                 // Git takes it to, there is nothing to read.
-                let peeled = *records_peeled
-                    && packed.is_some_and(|packed| {
-                        files::packed_entry_is_no_tag(packed, &reference.inner.inner)
-                    });
                 if *peel
-                    && !peeled
+                    && !(*records_peeled
+                        && packed.is_some_and(|packed| {
+                            files::packed_entry_is_no_tag(packed, &reference.inner.inner)
+                        }))
                     && let Err(error) = reference.inner.peel_to_id_packed(packed)
                 {
                     return Some(Err(failure(error)));

@@ -367,6 +367,35 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/hotfix\n";
         assert_eq!(prune, vec!["v1.1.0".to_string()]);
     }
 
+    /// Only a walk that peels asks packed-refs whether an entry is a tag:
+    /// branch lists and the refs fingerprint walk every ref unpeeled.
+    #[test]
+    fn an_unpeeled_ref_walk_looks_nothing_up_in_packed_refs() {
+        use crate::refs::files::PACKED_TAG_LOOKUPS;
+        use crate::test_support::{git_success, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        write_file(root, "file.txt", "one\n");
+        git_success(root, &["add", "."]);
+        git_success(root, &["commit", "-qm", "one"]);
+        for tag in ["a", "b", "c"] {
+            git_success(root, &["tag", tag]);
+        }
+        git_success(root, &["pack-refs", "--all"]);
+        let repo = gix::open(root).unwrap();
+        let walk = |peel: bool| {
+            PACKED_TAG_LOOKUPS.set(0);
+            let view = crate::refs::view(&repo).unwrap();
+            let tags = view.tags().unwrap();
+            let tags = if peel { tags.peeled() } else { tags };
+            let listed = tags.map(Result::unwrap).count();
+            (listed, PACKED_TAG_LOOKUPS.get())
+        };
+        assert_eq!(walk(false), (3, 0));
+        assert_eq!(walk(true), (3, 3));
+    }
+
     /// A packed-refs file that records peeled tags says of every entry
     /// whether it is an annotated tag. Listing then reads no object: shown
     /// here by tags whose objects cannot be read at all.

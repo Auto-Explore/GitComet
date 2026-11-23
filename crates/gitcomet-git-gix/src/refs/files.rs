@@ -76,6 +76,12 @@ pub(super) fn packed_refs_record_peeled(
         .is_some_and(|current| std::sync::Arc::ptr_eq(&current, snapshot))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The packed-refs lookups [`packed_entry_is_no_tag`] made on this thread.
+    pub(crate) static PACKED_TAG_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `packed` has `reference` with the object it names now and no
 /// peeled object. A loose ref of another value has taken the entry's place.
 pub(super) fn packed_entry_is_no_tag(
@@ -85,6 +91,8 @@ pub(super) fn packed_entry_is_no_tag(
     let gix::refs::Target::Object(id) = &reference.target else {
         return false;
     };
+    #[cfg(test)]
+    PACKED_TAG_LOOKUPS.set(PACKED_TAG_LOOKUPS.get() + 1);
     reference.peeled.is_none()
         && packed
             .try_find(reference.name.as_ref())
