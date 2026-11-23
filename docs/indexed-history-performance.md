@@ -600,6 +600,10 @@ else rebuilds as before: a rewritten or deleted tip that takes commits with
 it, a commit dated before the newest row (a fetch of older work), first-parent,
 author-filtered, merge-filtered and shallow walks.
 
+A later change replays a bounded prefix when older fetched commits interleave
+with existing rows. On the two-million-commit fixture, that refresh took
+69.19 ms. [Older-fetch measurements](ui-responsiveness.md#repository-and-renderer-work).
+
 Rows that are in both indexes keep their relative order. Among equal committer
 times a rebuild may order rows differently; both are valid date orders.
 
