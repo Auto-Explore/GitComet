@@ -5,6 +5,25 @@ use gitcomet_core::error::ErrorKind;
 use std::path::Path;
 
 #[test]
+fn appending_attributes_preserves_the_other_name_for_the_old_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let attributes = dir.path().join(".gitattributes");
+    let original = dir.path().join("notes.txt");
+    let contents = b"# existing notes\n";
+    std::fs::write(&original, contents).unwrap();
+    std::fs::hard_link(&original, &attributes).unwrap();
+    let engine = std::sync::Mutex::new(gitcomet_core::filesystem::Filesystem::default());
+
+    super::append_gitattributes_rule_in_workdir(&engine, dir.path(), "*.bin -text").unwrap();
+
+    assert_eq!(std::fs::read(&original).unwrap(), contents);
+    assert_eq!(
+        std::fs::read(&attributes).unwrap(),
+        b"# existing notes\n*.bin -text\n"
+    );
+}
+
+#[test]
 fn markdown_checkbox_saves_accept_the_read_baseline_and_reject_intervening_edits() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("README.md");

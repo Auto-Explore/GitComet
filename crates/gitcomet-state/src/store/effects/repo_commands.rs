@@ -646,36 +646,48 @@ fn schedule_append_gitattributes_rule(
     rule: String,
 ) {
     let command_rule = rule.clone();
+    let engine = msg_tx.filesystem;
     schedule_repo_command(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoCommandKind::AppendGitattributesRule { rule: command_rule },
-        move |repo| append_gitattributes_rule_in_workdir(&repo.spec().workdir, &rule),
+        move |repo| append_gitattributes_rule_in_workdir(engine, &repo.spec().workdir, &rule),
     );
 }
 
 /// Read and write in the worker, byte for byte: the file may be in any
 /// encoding and may be edited elsewhere at the same time.
 fn append_gitattributes_rule_in_workdir(
+    engine: &std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     workdir: &Path,
     rule: &str,
 ) -> Result<CommandOutput, Error> {
     use gitcomet_core::gitattributes::{GITATTRIBUTES_FILE_NAME, NOTHING_TO_ADD, append_rule};
-    let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITATTRIBUTES_FILE_NAME))?;
-    let existing = match std::fs::read(&full) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => {
-            return Err(Error::from(error).with_context("read .gitattributes", Some(&full)));
-        }
+    const MAX_ATTRIBUTES_BYTES: u64 = 64 * 1024 * 1024;
+    let mut filesystem = engine.lock().unwrap_or_else(|e| e.into_inner());
+    let (relative, full) =
+        resolve_worktree_save_target(workdir, Path::new(GITATTRIBUTES_FILE_NAME))?;
+    let file = gitcomet_core::path_utils::open_worktree_regular_file(workdir, &relative)
+        .map_err(|error| Error::from(error).with_context("open .gitattributes", Some(&full)))?;
+    let (version, existing) = if let Some(file) = file {
+        let (version, _, bytes) =
+            gitcomet_core::filesystem::DiskVersion::read_open_file(file, MAX_ATTRIBUTES_BYTES)
+                .map_err(|error| {
+                    Error::from(error).with_context("read .gitattributes", Some(&full))
+                })?;
+        (Some(version), bytes)
+    } else {
+        (None, Vec::new())
     };
     let stdout = match append_rule(&existing, rule) {
         Some(updated) => {
-            std::fs::write(&full, updated).map_err(|error| {
-                Error::from(error).with_context("write .gitattributes", Some(&full))
-            })?;
+            filesystem
+                .save_worktree(workdir, &relative, &updated, version.as_ref(), false)
+                .map_err(|error| {
+                    Error::from(error).with_context("write .gitattributes", Some(&full))
+                })?;
             String::new()
         }
         None => NOTHING_TO_ADD.to_string(),

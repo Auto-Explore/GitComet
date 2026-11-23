@@ -289,21 +289,17 @@ fn handle_binary_merge(
 }
 
 fn write_merged_output(config: &MergetoolConfig, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = config.merged.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|e| {
+    gitcomet_core::filesystem::global()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .save(&config.merged, bytes, None, true)
+        .map(|_| ())
+        .map_err(|error| {
             format!(
-                "Failed to create merged output directory {}: {e}",
-                parent.display()
+                "Failed to write merged output to {}: {error}",
+                config.merged.display()
             )
-        })?;
-    }
-
-    fs::write(&config.merged, bytes).map_err(|e| {
-        format!(
-            "Failed to write merged output to {}: {e}",
-            config.merged.display()
-        )
-    })
+        })
 }
 
 /// An encoding mismatch needs a user's decision, just like a binary conflict.

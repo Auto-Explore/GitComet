@@ -223,7 +223,7 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
     Ok(workdir.join(relative))
 }
 
-fn is_path_redirect(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn is_path_redirect(metadata: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
