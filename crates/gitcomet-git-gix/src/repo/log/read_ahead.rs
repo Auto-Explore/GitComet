@@ -96,7 +96,7 @@ impl PackedCommits {
         let helpers = budget.helpers().max(1);
         let objects = log_paged_walk_handle(repo);
         let hash_len = repo.objects.object_hash().len_in_bytes();
-        let ids = candidates(repo, &objects, helpers)?;
+        let ids = candidates(repo, &objects, helpers, cancelled)?;
         let count = ids.len() / hash_len;
         u32::try_from(count).ok()?;
         let mut table = Self {
@@ -271,11 +271,19 @@ fn fanout(ids: &[u8], hash_len: usize) -> Box<[u32]> {
     fanout.into()
 }
 
-/// The sorted IDs of the objects in every pack's leading run of commits.
+#[cfg(test)]
+thread_local! {
+    /// The pack indexes [`candidates`] opened on this thread.
+    pub(super) static INDEXES_OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The sorted IDs of the objects in every pack's leading run of commits;
+/// `None` once `cancelled`.
 fn candidates(
     repo: &gix::ThreadSafeRepository,
     objects: &gix::OdbHandleArc,
     helpers: usize,
+    cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<u8>> {
     let hash = repo.objects.object_hash();
     let mut directories = vec![repo.objects.path().to_owned()];
@@ -289,10 +297,15 @@ fn candidates(
             if path.extension().is_none_or(|extension| extension != "idx") {
                 continue;
             }
+            if cancelled() {
+                return None;
+            }
+            #[cfg(test)]
+            INDEXES_OPENED.set(INDEXES_OPENED.get() + 1);
             let Ok(index) = gix::odb::pack::index::File::at(&path, hash) else {
                 continue;
             };
-            runs.extend(commit_run(&index, objects, helpers));
+            runs.extend(commit_run(&index, objects, helpers, cancelled));
         }
     }
     if runs.len() < 2 {
@@ -321,6 +334,7 @@ fn commit_run(
     index: &gix::odb::pack::index::File,
     objects: &gix::OdbHandleArc,
     helpers: usize,
+    cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<u8>> {
     let count = index.num_objects() as usize;
     if count < MIN_OBJECTS {
@@ -337,6 +351,9 @@ fn commit_run(
     let mut end = u64::MAX;
     let (mut commits, mut strays, mut others) = (0, 0, 0);
     for (sample, &(_, entry)) in sampled.iter().enumerate() {
+        if sample % 256 == 0 && cancelled() {
+            return None;
+        }
         if is_commit(objects, index.oid_at_index(entry)) {
             commits += 1;
             strays += others;

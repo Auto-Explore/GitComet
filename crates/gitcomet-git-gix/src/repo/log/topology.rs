@@ -1125,6 +1125,27 @@ mod tests {
         }
     }
 
+    /// Asked to stop, the read-ahead opens no pack index: opening a large
+    /// one alone checks a gigabyte of offsets.
+    #[test]
+    fn a_cancelled_read_ahead_opens_no_pack_index() {
+        use super::super::read_ahead::INDEXES_OPENED;
+        use crate::test_support::{git_success, init_test_repo};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        import_line(root, 10);
+        git_success(root, &["repack", "-adq"]);
+        let store = gix::open(root).unwrap().into_sync();
+        let opened = |cancelled: bool| {
+            INDEXES_OPENED.set(0);
+            let _ = PackedCommits::read(&store, &|| cancelled);
+            INDEXES_OPENED.get()
+        };
+        assert_eq!(opened(false), 1);
+        assert_eq!(opened(true), 0);
+    }
+
     fn tips() -> Vec<gix::ObjectId> {
         vec![gix::ObjectId::null(gix::hash::Kind::Sha1)]
     }
