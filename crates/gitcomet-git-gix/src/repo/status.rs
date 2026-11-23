@@ -5,6 +5,7 @@ use super::{
 };
 use crate::util::{
     git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_background_output,
+    run_git_parsed_stdout_cancellable,
 };
 use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
@@ -1486,6 +1487,8 @@ enum GitlinkAsk<'a> {
     Checkout(&'a Path),
 }
 
+const GITLINK_STATUS: &str = "git status --porcelain=v2";
+
 /// What one `git status` printed. `None` when Git could not say: the
 /// supplement is best-effort parity glue on top of the primary gix status,
 /// which then stands as it is.
@@ -1495,7 +1498,38 @@ fn gitlink_status_output(
     cancellation: &CancellationToken,
 ) -> Result<Option<Vec<u8>>> {
     cancellation.check_cancelled()?;
-    let command = match ask {
+    let command = gitlink_status_command(workdir, ask);
+    match run_git_background_output(command, GITLINK_STATUS, cancellation) {
+        Ok(output) => Ok(output.status.success().then_some(output.stdout)),
+        // Also when the subprocess itself times out.
+        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Whether the submodule checked out at `path` makes its gitlink modified,
+/// from its status read as Git prints it: a checkout can hold any number of
+/// changed files, and none of them is kept. Unanswered counts as unchanged,
+/// as with [`gitlink_status_output`].
+fn checkout_modified(
+    workdir: &Path,
+    path: &Path,
+    recorded: gix::ObjectId,
+    cancellation: &CancellationToken,
+) -> Result<bool> {
+    cancellation.check_cancelled()?;
+    let command = gitlink_status_command(workdir, GitlinkAsk::Checkout(path));
+    let read = move |stdout| {
+        checkout_is_modified(std::io::BufReader::new(stdout), &recorded).map_err(Error::from)
+    };
+    match run_git_parsed_stdout_cancellable(command, GITLINK_STATUS, false, cancellation, read) {
+        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(false),
+        result => result,
+    }
+}
+
+fn gitlink_status_command(workdir: &Path, ask: GitlinkAsk<'_>) -> std::process::Command {
+    match ask {
         GitlinkAsk::Repository(paths) => {
             let mut command = git_workdir_cmd_for(workdir);
             // Untracked files here are gix's to find, and preparing to look
@@ -1535,29 +1569,31 @@ fn gitlink_status_output(
                 .arg("--no-ahead-behind");
             command
         }
-    };
-    match run_git_background_output(command, "git status --porcelain=v2", cancellation) {
-        Ok(output) => Ok(output.status.success().then_some(output.stdout)),
-        // Also when the subprocess itself times out.
-        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(None),
-        Err(err) => Err(err),
     }
 }
 
 /// Whether a submodule's own status makes its gitlink modified, as Git
 /// decides it: another commit is checked out than `recorded`, or anything in
 /// it is changed, conflicted or untracked. An unborn HEAD matches any commit.
-fn checkout_is_modified(status: &[u8], recorded: &gix::hash::oid) -> bool {
-    status
-        .split(|byte| *byte == b'\n')
-        .any(|line| match line.first() {
-            Some(b'1' | b'2' | b'u' | b'?') => true,
-            Some(b'#') => line
-                .strip_prefix(b"# branch.oid ")
-                .and_then(|head| gix::ObjectId::from_hex(head).ok())
-                .is_some_and(|head| head != recorded),
-            _ => false,
-        })
+/// Reads `status` to its end either way, so that Git finishes.
+fn checkout_is_modified(
+    status: impl std::io::BufRead,
+    recorded: &gix::hash::oid,
+) -> std::io::Result<bool> {
+    let mut modified = false;
+    for line in status.split(b'\n') {
+        let line = line?;
+        modified = modified
+            || match line.first() {
+                Some(b'1' | b'2' | b'u' | b'?') => true,
+                Some(b'#') => line
+                    .strip_prefix(b"# branch.oid ")
+                    .and_then(|head| gix::ObjectId::from_hex(head).ok())
+                    .is_some_and(|head| head != recorded),
+                _ => false,
+            };
+    }
+    Ok(modified)
 }
 
 /// Submodule checkouts asked at once: each answer is a short process.
@@ -1596,8 +1632,7 @@ fn modified_checkouts(
         while let Some((path, recorded)) =
             checkouts.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
         {
-            let status = gitlink_status_output(workdir, GitlinkAsk::Checkout(path), cancellation)?;
-            if status.is_some_and(|status| checkout_is_modified(&status, recorded)) {
+            if checkout_modified(workdir, path, *recorded, cancellation)? {
                 modified.push(path.clone());
             }
         }

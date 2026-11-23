@@ -710,7 +710,8 @@ fn the_gitlink_query_and_the_walk_run_at_once() {
 #[test]
 fn a_submodules_own_status_says_whether_its_gitlink_is_modified() {
     let recorded = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap();
-    let modified = |status: &str| super::checkout_is_modified(status.as_bytes(), &recorded);
+    let modified =
+        |status: &str| super::checkout_is_modified(status.as_bytes(), &recorded).unwrap();
     let same = "# branch.oid 1111111111111111111111111111111111111111\n# branch.head main\n";
     assert!(!modified(same));
     assert!(!modified(""));
@@ -729,6 +730,13 @@ fn a_submodules_own_status_says_whether_its_gitlink_is_modified() {
     }
     // Ignored files are not shown, and would not make it dirty.
     assert!(!modified(&format!("{same}! ignored.txt\n")));
+
+    // Read to the end past the answer, so that Git can finish writing; no
+    // line outlives the next.
+    let many: String = (0..10_000).map(|n| format!("? new-{n}.txt\n")).collect();
+    let mut status = std::io::Cursor::new(format!("{same}{many}").into_bytes());
+    assert!(super::checkout_is_modified(&mut status, &recorded).unwrap());
+    assert_eq!(status.position() as usize, status.get_ref().len());
 }
 
 /// A child repository in `path` with one commit, its Git directory inside
