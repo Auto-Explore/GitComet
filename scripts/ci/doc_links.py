@@ -41,7 +41,8 @@ def targets(text):
 
 
 def is_local(target):
-    return not re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*:", target) and not target.startswith("#")
+    return (not re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*:", target)
+            and not target.startswith(("#", "//")))
 
 
 def broken(path, text, exists):
@@ -50,7 +51,7 @@ def broken(path, text, exists):
     for line, target in targets(text):
         if not is_local(target):
             continue
-        file = unquote(target.split("#", 1)[0])
+        file = unquote(re.split(r"[?#]", target, maxsplit=1)[0])
         candidate = posixpath.normpath(file.lstrip("/") if file.startswith("/")
                                        else posixpath.join(posixpath.dirname(path), file))
         if candidate.startswith("..") or not exists(candidate):

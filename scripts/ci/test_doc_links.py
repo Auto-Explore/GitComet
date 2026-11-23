@@ -31,6 +31,10 @@ class DocLinkTests(unittest.TestCase):
             "a.md:11: link target 'gone.md' does not exist",
         ])
 
+    def test_query_strings_and_hosts_are_not_part_of_the_path(self):
+        text = "[a](README.md?plain=1#L4) [b](//example.com/x.md) [c](docs/x.md?raw)\n"
+        self.assertEqual(doc_links.broken("README.md", text, {"README.md", "docs/x.md"}.__contains__), [])
+
     def test_a_linked_image_checks_both_targets(self):
         text = "[![badge](docs/badge.svg)](LICENSE)\n"
         self.assertEqual(doc_links.broken("README.md", text, set().__contains__), [
