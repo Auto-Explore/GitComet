@@ -202,27 +202,119 @@ pub(in crate::view) fn markdown_preview_expanded_slice_range(
 pub(in crate::view) type MarkdownPreviewPictureSizes = Arc<FxHashMap<SharedString, (u32, u32)>>;
 
 /// Where a markdown image source resolves to.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum MarkdownPreviewImageSource {
     /// A file inside the previewed document's own directory tree.
-    File(std::path::PathBuf),
+    File {
+        workdir: Arc<std::path::Path>,
+        relative: Arc<std::path::Path>,
+    },
     /// An `http(s)` URL, fetched and cached by `gpui`'s image loader.
     Remote(SharedString),
 }
 
-impl MarkdownPreviewImageSource {
-    /// The key `gpui` stores this picture's decoded frames under.
-    ///
-    /// Everything that wants to know whether a picture is ready — the element
-    /// that draws it and the pane waiting to be told it finished decoding —
-    /// has to name it the same way, or they would be asking about two
-    /// different entries in the asset cache.
-    pub(in crate::view) fn to_resource(&self) -> gpui::Resource {
-        match self {
-            Self::File(path) => gpui::Resource::from(path.clone()),
-            Self::Remote(url) => gpui::Resource::Uri(gpui::SharedUri::from(url.to_string())),
+pub(in crate::view) const MAX_MARKDOWN_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+pub(in crate::view) struct MarkdownImageAsset;
+
+impl gpui::Asset for MarkdownImageAsset {
+    type Source = MarkdownPreviewImageSource;
+    type Output = Result<Arc<gpui::RenderImage>, gpui::ImageCacheError>;
+
+    fn load(
+        source: Self::Source,
+        cx: &mut App,
+    ) -> impl Future<Output = Self::Output> + Send + 'static {
+        let client = cx.http_client();
+        let renderer = cx.svg_renderer();
+        async move {
+            let bytes = match source {
+                MarkdownPreviewImageSource::File { workdir, relative } => {
+                    gitcomet_core::path_utils::read_worktree_file_bounded(
+                        &workdir,
+                        &relative,
+                        MAX_MARKDOWN_IMAGE_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Markdown image unavailable",
+                        )
+                    })?
+                }
+                MarkdownPreviewImageSource::Remote(url) => {
+                    let response = client.get(url.as_ref(), true).await?;
+                    if !response.status.is_success() {
+                        return Err(gpui::ImageCacheError::BadStatus {
+                            uri: gpui::SharedUri::from(url.to_string()),
+                            status: response.status,
+                            body: String::new(),
+                        });
+                    }
+                    response.body
+                }
+            };
+            decode_markdown_image(bytes, renderer)
         }
     }
+}
+
+fn decode_markdown_image(
+    bytes: Vec<u8>,
+    renderer: gpui::SvgRenderer,
+) -> Result<Arc<gpui::RenderImage>, gpui::ImageCacheError> {
+    use image::ImageFormat as Format;
+    let Ok(format) = image::guess_format(&bytes) else {
+        return renderer
+            .render_single_frame(&bytes, 1.0)
+            .map_err(Into::into);
+    };
+    let gpui_format = match format {
+        Format::Png => gpui::ImageFormat::Png,
+        Format::Jpeg => gpui::ImageFormat::Jpeg,
+        Format::Gif => gpui::ImageFormat::Gif,
+        Format::WebP => {
+            use image::AnimationDecoder as _;
+            let mut decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&bytes))?;
+            if decoder.has_animation() {
+                decoder.set_background_color(image::Rgba([0, 0, 0, 0]))?;
+                let mut frames = smallvec::SmallVec::new();
+                for mut frame in decoder.into_frames().flatten() {
+                    for pixel in frame.buffer_mut().pixels_mut() {
+                        pixel.0.swap(0, 2);
+                    }
+                    frames.push(frame);
+                }
+                if frames.is_empty() {
+                    return Err(anyhow::anyhow!("WebP image has no readable frames").into());
+                }
+                return Ok(Arc::new(gpui::RenderImage::new(frames)));
+            }
+            gpui::ImageFormat::Webp
+        }
+        Format::Bmp => gpui::ImageFormat::Bmp,
+        Format::Ico => gpui::ImageFormat::Ico,
+        Format::Tiff => gpui::ImageFormat::Tiff,
+        Format::Pnm => gpui::ImageFormat::Pnm,
+        _ => {
+            use image::ImageDecoder as _;
+            let mut decoder = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format)
+                .into_decoder()?;
+            let orientation = decoder.orientation()?;
+            let mut image = image::DynamicImage::from_decoder(decoder)?;
+            image.apply_orientation(orientation);
+            let mut pixels = image.into_rgba8();
+            for pixel in pixels.pixels_mut() {
+                pixel.0.swap(0, 2);
+            }
+            return Ok(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+                image::Frame::new(pixels)
+            ])));
+        }
+    };
+    gpui::Image::from_bytes(gpui_format, bytes)
+        .to_image_data(renderer)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -247,6 +339,21 @@ pub(in crate::view) fn markdown_preview_image_source(
     image_root: Option<&MarkdownImageRoot>,
     source: &str,
 ) -> Option<MarkdownPreviewImageSource> {
+    let source = markdown_preview_image_location(image_root, source)?;
+    if let MarkdownPreviewImageSource::File { workdir, relative } = &source {
+        #[cfg(test)]
+        MARKDOWN_IMAGE_STATS.with(|stats| stats.set(stats.get() + 1));
+        gitcomet_core::path_utils::open_worktree_regular_file(workdir, relative)
+            .ok()
+            .flatten()?;
+    }
+    Some(source)
+}
+
+pub(in crate::view) fn markdown_preview_image_location(
+    image_root: Option<&MarkdownImageRoot>,
+    source: &str,
+) -> Option<MarkdownPreviewImageSource> {
     let source = source.trim();
     if source.is_empty() {
         return None;
@@ -262,14 +369,11 @@ pub(in crate::view) fn markdown_preview_image_source(
     // repository or into `.git` — so document content cannot aim the preview
     // at arbitrary files.
     let root = image_root?;
-    let resolved = root
-        .workdir
-        .join(markdown_preview_local_link_path(&root.document, source)?);
-    #[cfg(test)]
-    MARKDOWN_IMAGE_STATS.with(|stats| stats.set(stats.get() + 1));
-    resolved
-        .is_file()
-        .then_some(MarkdownPreviewImageSource::File(resolved))
+    let relative = markdown_preview_local_link_path(&root.document, source)?;
+    Some(MarkdownPreviewImageSource::File {
+        workdir: root.workdir.clone(),
+        relative: relative.into(),
+    })
 }
 
 /// Where a document's local pictures are read from.
@@ -1109,7 +1213,10 @@ pub(in crate::view) fn markdown_preview_image_element(
     source: MarkdownPreviewImageSource,
     id: gpui::ElementId,
 ) -> gpui::Stateful<gpui::Img> {
-    gpui::img(gpui::ImageSource::Resource(source.to_resource())).id(id)
+    gpui::img(move |window: &mut Window, app: &mut App| {
+        window.use_asset::<MarkdownImageAsset>(&source, app)
+    })
+    .id(id)
 }
 
 /// Stand-in for a picture that cannot be drawn.
@@ -1165,11 +1272,11 @@ pub(in crate::view) fn markdown_preview_image_reason(
 /// image, so the pane waits on the ones it draws itself.
 #[derive(Clone, Default)]
 pub(in crate::view) struct MarkdownDrawnPictures(
-    std::rc::Rc<std::cell::RefCell<Vec<gpui::Resource>>>,
+    std::rc::Rc<std::cell::RefCell<Vec<MarkdownPreviewImageSource>>>,
 );
 
 impl MarkdownDrawnPictures {
-    pub(in crate::view) fn take(&self) -> Vec<gpui::Resource> {
+    pub(in crate::view) fn take(&self) -> Vec<MarkdownPreviewImageSource> {
         std::mem::take(&mut self.0.borrow_mut())
     }
 }
@@ -1193,7 +1300,7 @@ impl MarkdownPictureContext<'_> {
     ) -> Option<gpui::Stateful<gpui::Img>> {
         let source = markdown_preview_image_source(self.image_root, source)?;
         if let Some(drawn) = self.drawn {
-            drawn.0.borrow_mut().push(source.to_resource());
+            drawn.0.borrow_mut().push(source.clone());
         }
         Some(markdown_preview_image_element(source, id))
     }

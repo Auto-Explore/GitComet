@@ -97,12 +97,26 @@ pub(super) fn measure_markdown_preview_pictures(
         // Only a local file can be measured this cheaply. A remote picture
         // would have to be fetched, which is the expensive half anyway, and
         // `gpui` is already fetching it.
-        let Some(rows::MarkdownPreviewImageSource::File(path)) =
-            rows::markdown_preview_image_source(image_root, source.as_ref())
+        let Some(rows::MarkdownPreviewImageSource::File { workdir, relative }) =
+            rows::markdown_preview_image_location(image_root, source)
         else {
             return;
         };
-        if let Ok((width, height)) = image::image_dimensions(&path)
+        let Ok(Some(file)) =
+            gitcomet_core::path_utils::open_worktree_regular_file(&workdir, &relative)
+        else {
+            return;
+        };
+        if !file
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() <= rows::MAX_MARKDOWN_IMAGE_BYTES)
+        {
+            return;
+        }
+        if let Ok((width, height)) = image::ImageReader::new(std::io::BufReader::new(file))
+            .with_guessed_format()
+            .map_err(image::ImageError::IoError)
+            .and_then(image::ImageReader::into_dimensions)
             && width > 0
             && height > 0
         {

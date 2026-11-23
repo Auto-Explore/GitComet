@@ -1415,7 +1415,7 @@ impl DiffRenderer {
     /// long document's off-screen pictures cost nothing here.
     pub(in crate::view) fn watch_pending_markdown_preview_images(
         &mut self,
-        drawn: Vec<gpui::Resource>,
+        drawn: Vec<rows::MarkdownPreviewImageSource>,
         cx: &mut gpui::Context<Self>,
     ) {
         use futures::FutureExt as _;
@@ -1424,7 +1424,7 @@ impl DiffRenderer {
             if self.worktree_markdown.image_waits.contains(&resource) {
                 continue;
             }
-            let (task, _) = cx.fetch_asset::<gpui::ImgResourceLoader>(&resource);
+            let (task, _) = cx.fetch_asset::<rows::MarkdownImageAsset>(&resource);
             if task.clone().now_or_never().is_some() {
                 continue;
             }
@@ -1478,7 +1478,7 @@ impl DiffRenderer {
             DiffPaneInput::Snapshot { path, .. } if path.is_absolute() => {
                 (path.parent()?, std::path::Path::new(path.file_name()?))
             }
-            DiffPaneInput::Snapshot { path, .. } => (std::path::Path::new(""), path.as_path()),
+            DiffPaneInput::Snapshot { path, .. } => (std::path::Path::new("."), path.as_path()),
         };
         let document = crate::view::rows::markdown_preview_document_path(workdir, path)?;
         Some(crate::view::rows::MarkdownImageRoot {

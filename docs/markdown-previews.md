@@ -10,6 +10,8 @@ Drag to select text, double-click to select a word, or triple-click to select a 
 
 Click a link to open its menu; Cmd-click or Ctrl-click follows it directly. Dragging over link text selects it. Images obey the window's remote-image preference. Embedded descriptions have no local document path, so relative file links stay inert.
 
+Local images use regular files inside the working tree, up to 64 MiB per file. Paths through symbolic links and Git metadata are blocked.
+
 ## Embedding a preview
 
 `WindowHost::create_markdown_view` returns a content-height view. Place it inside the extension's scroll container, supply the source, and associate that container's `ScrollHandle`:

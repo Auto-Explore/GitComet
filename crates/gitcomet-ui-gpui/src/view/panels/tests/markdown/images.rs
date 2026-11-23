@@ -706,8 +706,12 @@ fn an_svg_root_background_is_painted_under_the_picture(cx: &mut gpui::TestAppCon
     cx.run_until_parked();
 
     cx.update(|window, app| {
+        let source = crate::view::rows::MarkdownPreviewImageSource::File {
+            workdir: Arc::from(fixture.workdir.as_path()),
+            relative: Arc::from(std::path::Path::new("docs/chart.svg")),
+        };
         let image = window
-            .get_asset::<gpui::ImgResourceLoader>(&gpui::Resource::from(chart.clone()), app)
+            .get_asset::<crate::view::rows::MarkdownImageAsset>(&source, app)
             .expect("the preview loaded the chart")
             .expect("the chart decodes");
         let corner = &image.as_bytes(0).expect("one frame")[..4];

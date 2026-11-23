@@ -566,7 +566,12 @@ fn image_paths_resolve_only_inside_the_documents_own_directory() {
         document: Arc::from(std::path::Path::new("README.md")),
     };
     let resolve = |source: &str| markdown_preview_image_source(Some(&root), source);
-    let file = |path: &std::path::Path| Some(MarkdownPreviewImageSource::File(path.to_owned()));
+    let file = |path: &std::path::Path| {
+        Some(MarkdownPreviewImageSource::File {
+            workdir: root.workdir.clone(),
+            relative: Arc::from(path.strip_prefix(&dir).unwrap()),
+        })
+    };
     let remote = |url: &str| {
         Some(MarkdownPreviewImageSource::Remote(SharedString::from(
             url.to_owned(),
@@ -710,23 +715,22 @@ fn a_height_only_skeleton_scales_the_measured_width_with_the_picture() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn a_picture_is_named_the_same_way_wherever_it_is_asked_about() {
-    // The element that draws a picture and the pane waiting to hear that it
-    // decoded look it up in the same cache, so both have to arrive at the
-    // key `gpui` filed it under. Building the element one way and the key
-    // another would leave the pane waiting on an entry nobody writes.
-    let path = std::path::PathBuf::from("assets").join("shot.png");
+fn markdown_local_images_refuse_symlinked_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().join("checkout");
+    std::fs::create_dir(&workdir).unwrap();
+    let image = directory.path().join("picture.png");
+    std::fs::write(&image, b"fixture").unwrap();
+    std::os::unix::fs::symlink(image, workdir.join("picture.png")).unwrap();
+    let root = MarkdownImageRoot {
+        workdir: Arc::from(workdir),
+        document: Arc::from(std::path::Path::new("README.md")),
+    };
     assert_eq!(
-        MarkdownPreviewImageSource::File(path.clone()).to_resource(),
-        gpui::Resource::Path(path.as_path().into())
-    );
-    assert_eq!(
-        MarkdownPreviewImageSource::Remote(SharedString::from("https://example.com/a.png"))
-            .to_resource(),
-        gpui::Resource::Uri(gpui::SharedUri::from(
-            "https://example.com/a.png".to_owned()
-        ))
+        markdown_preview_image_source(Some(&root), "picture.png"),
+        None
     );
 }
 
