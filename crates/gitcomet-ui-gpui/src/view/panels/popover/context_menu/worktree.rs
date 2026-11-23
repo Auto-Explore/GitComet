@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks a worktree folder on a background task"
+)]
 use super::*;
 
 use crate::kit::components::secondary_shortcut;

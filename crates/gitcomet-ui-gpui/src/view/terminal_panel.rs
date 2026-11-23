@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks the terminal's folder on a background task"
+)]
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;

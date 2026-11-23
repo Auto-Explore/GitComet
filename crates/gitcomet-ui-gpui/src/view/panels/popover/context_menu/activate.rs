@@ -1,4 +1,8 @@
 //! Running the action a context menu entry chose.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks that a clicked path still exists before opening it"
+)]
 
 use super::{
     ConflictResolverViewMode, ContextMenuAction, ContextMenuItem, ContextMenuModel, DiffArea,

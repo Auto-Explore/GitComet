@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks whether a worktree file exists while its menu is built"
+)]
 use super::*;
 
 pub(super) fn model(

@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "reveals a path, or its parent when the path is gone"
+)]
 use super::*;
 use gitcomet_core::domain::Upstream;
 

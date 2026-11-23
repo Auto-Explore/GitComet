@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "tells a folder entry from a file while the menu is built"
+)]
 use super::*;
 use gitcomet_core::permalink;
 
