@@ -82,7 +82,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/documents.rs::render_text 171 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view.rs::new_with_bootstrap 825 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_commands.rs::execute_builtin_command 637 -
 fn-lines crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs::render 926 -
-fn-lines crates/gitcomet-ui-gpui/src/view/history_graph_walk.rs::transition 200 -
+fn-lines crates/gitcomet-ui-gpui/src/view/history_graph_walk.rs::transition 183 -
 fn-lines crates/gitcomet-ui-gpui/src/view/history_refs_hover.rs::render 156 -
 fn-lines crates/gitcomet-ui-gpui/src/view/home.rs::home_screen 188 -
 fn-lines crates/gitcomet-ui-gpui/src/view/hosted/diff_pane.rs::render 153 -
@@ -181,7 +181,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/history_panel.rs::histor
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::apply_indexed_history 239 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::ensure_indexed_history 222 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed.rs::prepare_window_for 427 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed_graph.rs::build_reusing 192 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panes/history/indexed_graph.rs::build_reusing 171 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/main/interactive_rebase.rs::interactive_rebase_view 432 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/main/interactive_rebase.rs::render_irebase_row 418 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/reflog.rs::render_reflog_row 153 -

@@ -379,6 +379,8 @@ where
 mod oracle;
 #[path = "history_graph_walk.rs"]
 mod walk;
+#[cfg(test)]
+pub(in crate::view) use walk::PLAIN_STEPS_OFF;
 pub(in crate::view) use walk::{GraphCheckpoint, GraphTransition, GraphWalk};
 
 /// The whole-page graph as tests and benchmarks ask for it.

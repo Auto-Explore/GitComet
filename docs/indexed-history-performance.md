@@ -758,3 +758,19 @@ The first block still waits 43-47 ms for its store. Reading the first blocks
 through the store everything else uses removes that wait and was measured, but
 it leaves the index pages of those lookups mapped for as long as the repository
 is open: 1,874 MiB at the peak of the same 4,000 blocks.
+
+## Plain rows step without a transition (2026-11-23)
+
+The graph is laid out by replaying every row of the index. Most rows are plain:
+one lane arrives, the commit has one parent, no branch head sits on it and
+nobody paints it. Such a row only moves its lane on to the parent, yet the walk
+built the same transition record for it as for a merge. `GraphWalk::plain_step`
+now does the move alone, and the build and the replay up to a window ask it
+first. `a_plain_row_takes_the_transition_of_the_general_path` and
+`plain_rows_build_the_graph_the_general_path_builds` compare it with the
+general path over mixed histories.
+
+| Chromium, graph layout after the index | Before | After |
+| --- | ---: | ---: |
+| `HEAD`, 1,792,921 rows | 178-190 ms | 50-51 ms |
+| All branches, 1,922,916 rows | 206-212 ms | 88-95 ms |
