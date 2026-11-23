@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
+use gitcomet_core::file_diff::LineToRowMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
@@ -813,14 +814,14 @@ pub(crate) struct DiffRenderer {
     /// Empty when the side is source-backed; `file_diff_old_source_path` says so.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
-    pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_old_line_to_row: Arc<LineToRowMap>,
+    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<LineToRowMap>,
     /// Real new-side file text used for split and inline syntax projection.
     /// Empty when the side is source-backed; `file_diff_new_source_path` says so.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
-    pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_new_line_to_row: Arc<LineToRowMap>,
+    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<LineToRowMap>,
     pub(in crate::view) file_diff_inline_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::super::diff_cache::PagedFileDiffInlineRows>>,

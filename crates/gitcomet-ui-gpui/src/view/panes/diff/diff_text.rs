@@ -1,6 +1,7 @@
 use super::*;
 use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
 use crate::view::text_geometry::DiffTextHit;
+use gitcomet_core::file_diff::LineToRowMap;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 mod editor_context_menu;
 mod line_actions;
@@ -1274,13 +1275,13 @@ impl DiffRenderer {
             return Some((line_ix, DiffTextRegion::Inline));
         }
         let inline = self.diff_view == DiffViewMode::Inline;
-        let map: &[Option<usize>] = match (side, inline) {
+        let map: &LineToRowMap = match (side, inline) {
             (DiffTextPairSide::Old, true) => self.file_diff_old_line_to_inline_row.as_ref(),
             (DiffTextPairSide::Old, false) => self.file_diff_old_line_to_row.as_ref(),
             (_, true) => self.file_diff_new_line_to_inline_row.as_ref(),
             (_, false) => self.file_diff_new_line_to_row.as_ref(),
         };
-        let row_ix = (*map.get(line_ix)?)?;
+        let row_ix = map.get(line_ix)?;
         if inline
             && self
                 .file_diff_inline_row_provider

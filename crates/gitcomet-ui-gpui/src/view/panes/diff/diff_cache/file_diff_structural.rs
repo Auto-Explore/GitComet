@@ -5,6 +5,7 @@ use super::{
 use gitcomet_core::diff_engine::{DiffEngine, DiffEngineFallback, DiffEngineStatus};
 use gitcomet_core::diff_engine::{StructuralDiff, StructuralDiffOutcome};
 use gitcomet_core::domain::DiffLineKind;
+use gitcomet_core::file_diff::LineToRowMap;
 use gitcomet_core::file_diff::{FileDiffPlan, FileDiffRowKind};
 use gitcomet_core::services::CancellationToken;
 use std::collections::BTreeMap;
@@ -130,8 +131,8 @@ impl StreamedFileDiffSource {
     pub(super) fn apply_structural(
         &mut self,
         diff: StructuralDiff,
-        old_inline: &[Option<usize>],
-        new_inline: &[Option<usize>],
+        old_inline: &LineToRowMap,
+        new_inline: &LineToRowMap,
     ) {
         for row in 0..self.split_len() {
             let source = self.split_row(row).expect("planned split row");
@@ -154,8 +155,8 @@ impl StreamedFileDiffSource {
             (&diff.new_changes, new_inline, DiffLineKind::Add),
         ] {
             for line in changes.keys() {
-                if let Some(Some(row)) = rows.get(*line) {
-                    self.inline_visual_kinds[*row] = kind;
+                if let Some(row) = rows.get(*line) {
+                    self.inline_visual_kinds[row] = kind;
                 }
             }
         }
