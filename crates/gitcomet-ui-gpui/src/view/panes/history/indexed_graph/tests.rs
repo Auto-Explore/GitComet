@@ -233,8 +233,34 @@ fn plain_rows_build_the_graph_the_general_path_builds() {
                     (window.rows.to_vec(), window.labels.to_vec())
                 })
                 .collect();
-            // Labels alone, over rows a first window already painted.
-            let again = graph.window(4_900..4_990, &cancel).unwrap().labels.to_vec();
+            // Labels alone, over rows a first window already painted: a
+            // rebuild with a branch renamed keeps the lanes' geometry.
+            let renamed = [
+                branch("main", 0),
+                branch("feature", 40),
+                branch("renamed", 1_500),
+            ];
+            let reused = IndexedGraph::build_reusing(
+                index.clone(),
+                &renamed,
+                &[],
+                &[],
+                Some("main"),
+                Some(id(0).as_ref()),
+                &cancel,
+                Some(&graph),
+            )
+            .unwrap();
+            let capture = gitcomet_core::history_perf::capture();
+            let again = reused
+                .window(4_900..4_990, &cancel)
+                .unwrap()
+                .labels
+                .to_vec();
+            let painted =
+                gitcomet_core::history_perf::count(gitcomet_core::history_perf::Work::PaintRow);
+            drop(capture);
+            assert_eq!(painted, 0, "the labels alone are worked out");
             PLAIN_STEPS_OFF.set(false);
             let spans: Vec<Vec<_>> = graph
                 .lane_spans
