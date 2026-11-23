@@ -645,6 +645,32 @@ fn markdown_remote_image_access_requires_exact_url_approval_in_ask_mode() {
     );
 }
 
+#[gpui::test]
+fn markdown_animations_use_the_file_preview_frame_budget(cx: &mut gpui::TestAppContext) {
+    use gpui::Asset as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let name = std::path::Path::new("animation.gif");
+    let file = std::fs::File::create(dir.path().join(name)).unwrap();
+    image::codecs::gif::GifEncoder::new(file)
+        .encode_frames((0..125).map(|index| {
+            image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([index, 0, 0, 255]),
+            ))
+        }))
+        .unwrap();
+    let source = MarkdownPreviewImageSource::File {
+        workdir: Arc::from(dir.path()),
+        relative: Arc::from(name),
+    };
+    let animation = cx
+        .update(|app| smol::block_on(super::MarkdownImageAsset::load(source, app)))
+        .unwrap();
+    assert_eq!(animation.frame_count(), 120);
+}
+
 /// A picture row carrying `source`, and whatever size the document declared.
 fn picture_row(source: &str, width_px: Option<u32>, height_px: Option<u32>) -> MarkdownPreviewRow {
     let mut row = markdown_row(MarkdownPreviewRowKind::Image);

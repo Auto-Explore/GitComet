@@ -428,13 +428,12 @@ fn decode_oriented_static_raster_frame(
 }
 
 fn decode_raster_preview_frames(
-    format: gpui::ImageFormat,
+    format: image::ImageFormat,
     bytes: &[u8],
     policy: RasterPreviewPolicy,
 ) -> Option<Vec<image::Frame>> {
-    let image_format = crate::view::image_preview::raster_format(format)?;
     let frames = match format {
-        gpui::ImageFormat::Gif => {
+        image::ImageFormat::Gif => {
             let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
             limit_decoder(&mut decoder, policy.max_decode_bytes).ok()?;
             let dimensions = decoder.dimensions();
@@ -445,7 +444,7 @@ fn decode_raster_preview_frames(
                 policy,
             )
         }
-        gpui::ImageFormat::Webp => {
+        image::ImageFormat::WebP => {
             let mut decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
             limit_decoder(&mut decoder, policy.max_decode_bytes).ok()?;
             if decoder.has_animation() {
@@ -465,7 +464,7 @@ fn decode_raster_preview_frames(
             }
         }
         _ => {
-            let decoder = image::ImageReader::with_format(Cursor::new(bytes), image_format)
+            let decoder = image::ImageReader::with_format(Cursor::new(bytes), format)
                 .into_decoder()
                 .ok()?;
             vec![decode_oriented_static_raster_frame(decoder, policy)?]
@@ -518,6 +517,13 @@ pub(in crate::view) fn render_raster_image_diff_preview(
     format: gpui::ImageFormat,
     bytes: &[u8],
 ) -> Option<Arc<gpui::RenderImage>> {
+    render_raster_preview(crate::view::image_preview::raster_format(format)?, bytes)
+}
+
+pub(in crate::view) fn render_raster_preview(
+    format: image::ImageFormat,
+    bytes: &[u8],
+) -> Option<Arc<gpui::RenderImage>> {
     let frames = decode_raster_preview_frames(format, bytes, FILE_DIFF_RASTER_PREVIEW_POLICY)?;
     Some(Arc::new(gpui::RenderImage::new(frames)))
 }
@@ -526,6 +532,7 @@ pub(in crate::view) fn render_raster_conflict_preview(
     format: gpui::ImageFormat,
     bytes: &[u8],
 ) -> Option<Arc<gpui::RenderImage>> {
+    let format = crate::view::image_preview::raster_format(format)?;
     let frames = decode_raster_preview_frames(format, bytes, CONFLICT_RASTER_PREVIEW_POLICY)?;
     Some(Arc::new(gpui::RenderImage::new(frames)))
 }

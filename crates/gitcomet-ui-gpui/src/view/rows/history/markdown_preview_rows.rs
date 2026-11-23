@@ -263,7 +263,6 @@ fn decode_markdown_image(
     bytes: Vec<u8>,
     renderer: gpui::SvgRenderer,
 ) -> Result<Arc<gpui::RenderImage>, gpui::ImageCacheError> {
-    use image::ImageFormat as Format;
     let Ok(format) = image::guess_format(&bytes) else {
         if (bytes.len() as u64) > MAX_MARKDOWN_IMAGE_BYTES {
             return Err(gpui::ImageCacheError::Asset(
@@ -279,52 +278,9 @@ fn decode_markdown_image(
             .render_single_frame(&bytes, 1.0)
             .map_err(Into::into);
     };
-    let gpui_format = match format {
-        Format::Png => gpui::ImageFormat::Png,
-        Format::Jpeg => gpui::ImageFormat::Jpeg,
-        Format::Gif => gpui::ImageFormat::Gif,
-        Format::WebP => {
-            use image::AnimationDecoder as _;
-            let mut decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&bytes))?;
-            if decoder.has_animation() {
-                decoder.set_background_color(image::Rgba([0, 0, 0, 0]))?;
-                let mut frames = smallvec::SmallVec::new();
-                for mut frame in decoder.into_frames().flatten() {
-                    for pixel in frame.buffer_mut().pixels_mut() {
-                        pixel.0.swap(0, 2);
-                    }
-                    frames.push(frame);
-                }
-                if frames.is_empty() {
-                    return Err(anyhow::anyhow!("WebP image has no readable frames").into());
-                }
-                return Ok(Arc::new(gpui::RenderImage::new(frames)));
-            }
-            gpui::ImageFormat::Webp
-        }
-        Format::Bmp => gpui::ImageFormat::Bmp,
-        Format::Ico => gpui::ImageFormat::Ico,
-        Format::Tiff => gpui::ImageFormat::Tiff,
-        Format::Pnm => gpui::ImageFormat::Pnm,
-        _ => {
-            use image::ImageDecoder as _;
-            let mut decoder = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format)
-                .into_decoder()?;
-            let orientation = decoder.orientation()?;
-            let mut image = image::DynamicImage::from_decoder(decoder)?;
-            image.apply_orientation(orientation);
-            let mut pixels = image.into_rgba8();
-            for pixel in pixels.pixels_mut() {
-                pixel.0.swap(0, 2);
-            }
-            return Ok(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
-                image::Frame::new(pixels)
-            ])));
-        }
-    };
-    gpui::Image::from_bytes(gpui_format, bytes)
-        .to_image_data(renderer)
-        .map_err(Into::into)
+    crate::view::panes::diff::diff_cache::render_raster_preview(format, &bytes).ok_or_else(|| {
+        gpui::ImageCacheError::Asset("Image exceeds the preview limit or is invalid".into())
+    })
 }
 
 #[cfg(test)]
