@@ -1727,8 +1727,14 @@ fn collect_gitlinks(
     cancellation: &CancellationToken,
 ) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
     cancellation.check_cancelled()?;
-    let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
+    use gix::worktree::IndexPersistedOrInMemory as Index;
+    let index = match crate::refs::index_or_load_from_head_or_empty(repo)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?
+    {
+        // A held repository's snapshot can lag a rewrite within one tick.
+        Index::Persisted(index) => Index::Persisted(super::status::index_as_on_disk(repo, index)?),
+        from_head => from_head,
+    };
     let path_backing = index.path_backing();
 
     let mut gitlinks: BTreeMap<PathBuf, GitlinkIndexState> = BTreeMap::new();
@@ -2537,6 +2543,40 @@ mod tests {
     fn add_gitlink(repo: &Path, path: &str, id: &str) {
         let entry = format!("160000,{id},{path}");
         git_success(repo, &["update-index", "--add", "--cacheinfo", &entry]);
+    }
+
+    /// Recorded commits come from the index as it is on disk, also after Git
+    /// rewrote it within one timestamp tick.
+    #[test]
+    fn listed_submodules_follow_an_index_rewritten_without_a_newer_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let modules = "[submodule \"sub\"]\n\tpath = sub\n\turl = ./sub\n";
+        std::fs::write(root.join(".gitmodules"), modules).unwrap();
+        git_success(root, &["add", ".gitmodules"]);
+        add_gitlink(root, "sub", &"1".repeat(40));
+        let repo = open_repo(root);
+        let recorded = || {
+            repo.list_submodules_impl()
+                .unwrap()
+                .into_iter()
+                .map(|submodule| submodule.recorded_head.as_ref().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(recorded(), ["1".repeat(40)]);
+
+        let index = root.join(".git/index");
+        let modified = std::fs::metadata(&index).unwrap().modified().unwrap();
+        add_gitlink(root, "sub", &"2".repeat(40));
+        std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(recorded(), ["2".repeat(40)]);
     }
 
     /// Enough submodules to share out, one of each kind in every four.

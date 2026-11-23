@@ -683,6 +683,15 @@ pub(super) fn current_index(repo: &gix::Repository) -> Result<gix::worktree::Ind
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    index_as_on_disk(repo, index)
+}
+
+/// `index` from gix's shared snapshot, or the file again where Git has
+/// rewritten it since; see [`current_index`].
+pub(super) fn index_as_on_disk(
+    repo: &gix::Repository,
+    index: gix::worktree::Index,
+) -> Result<gix::worktree::Index> {
     let on_disk = std::fs::File::open(repo.index_path())
         .ok()
         .and_then(|mut file| {
