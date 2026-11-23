@@ -28,6 +28,15 @@ fn menu_with_focus(
     focus: HistoryFocusSet,
     kind: PopoverKind,
 ) -> ContextMenuModel {
+    menu_with_repo(cx, |repo| repo.history_state.history_focus = focus, kind)
+}
+
+/// [`menu_with_focus`] with the repository shaped by `setup`.
+fn menu_with_repo(
+    cx: &mut gpui::TestAppContext,
+    setup: impl FnOnce(&mut RepoState),
+    kind: PopoverKind,
+) -> ContextMenuModel {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -46,7 +55,7 @@ fn menu_with_focus(
                 },
             );
             repo.head_branch = Loadable::Ready("main".to_string());
-            repo.history_state.history_focus = focus;
+            setup(&mut repo);
 
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -342,5 +351,86 @@ fn focus_entries_carry_the_sidebar_eye_icons(cx: &mut gpui::TestAppContext) {
     assert_eq!(
         icon_of(&group, "Stop focusing group"),
         Some("icons/eye_off.svg")
+    );
+}
+
+fn tag_menu(name: Option<&str>) -> PopoverKind {
+    PopoverKind::TagMenu {
+        repo_id: RepoId(7),
+        commit_id: CommitId("a".repeat(40).into()),
+        name: name.map(str::to_string),
+    }
+}
+
+/// A tag's menu toggles that tag, and reads its state from the tag's own entry:
+/// a branch with the same name being focused does not count.
+#[gpui::test]
+fn a_tag_menu_focuses_and_stops_focusing_that_tag(cx: &mut gpui::TestAppContext) {
+    for (focus, expected) in [
+        (HistoryFocusSet::default(), "Focus"),
+        (
+            HistoryFocusSet::from_iter([HistoryFocus::local_branch("v1.0")]),
+            "Focus",
+        ),
+        (
+            HistoryFocusSet::from_iter([HistoryFocus::tag("v1.0")]),
+            "Stop focus",
+        ),
+    ] {
+        let model = menu_with_focus(cx, focus, tag_menu(Some("v1.0")));
+        let (label, action) = focus_entry(&model);
+        assert_eq!(label, expected);
+        assert!(matches!(
+            action,
+            ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
+                repo_id: RepoId(7),
+                target: HistoryFocus::Tag { ref name },
+            }) if name.as_ref() == "v1.0"
+        ));
+    }
+}
+
+/// A commit with several tags gives each its own entry, named, since a bare
+/// "Focus" would not say which tag it means.
+#[gpui::test]
+fn a_commit_with_several_tags_offers_a_named_entry_per_tag(cx: &mut gpui::TestAppContext) {
+    let commit_id = CommitId("a".repeat(40).into());
+    let model = menu_with_repo(
+        cx,
+        |repo| {
+            repo.tags = Loadable::Ready(Arc::new(
+                ["v1.0", "release"]
+                    .map(|name| gitcomet_core::domain::Tag {
+                        name: name.to_string(),
+                        target: commit_id.clone(),
+                    })
+                    .to_vec(),
+            ));
+            repo.history_state.history_focus =
+                HistoryFocusSet::from_iter([HistoryFocus::tag("v1.0")]);
+        },
+        tag_menu(None),
+    );
+
+    let entries = model
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } => match &**action {
+                ContextMenuAction::HistoryFilter(HistoryFilterMsg::ToggleFocus {
+                    target: HistoryFocus::Tag { name },
+                    ..
+                }) => Some((label.to_string(), name.to_string())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        vec![
+            ("Focus tag release".to_string(), "release".to_string()),
+            ("Stop focusing tag v1.0".to_string(), "v1.0".to_string()),
+        ]
     );
 }

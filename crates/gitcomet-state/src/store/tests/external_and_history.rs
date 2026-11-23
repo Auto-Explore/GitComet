@@ -1397,6 +1397,7 @@ fn reload_repo_reloads_requested_sidebar_data() {
         worktrees: true,
         submodules: false,
         stashes: true,
+        tags: false,
     });
     state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
     state.repos[0].set_stashes(Loadable::Ready(Vec::new()));

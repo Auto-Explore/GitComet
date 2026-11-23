@@ -42,6 +42,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
 
     tag_names_model(
         repo_id,
+        &super::focus::active_focus(this, repo_id),
         format!("Tags on {short}").into(),
         tag_names,
         remote_names,
@@ -65,6 +66,7 @@ pub(super) fn model_for_tag(
     let comparison_mark = comparison_mark_pair(repo);
     tag_names_model(
         repo_id,
+        &super::focus::active_focus(this, repo_id),
         format!("Tag {name} on {short}").into(),
         vec![name.clone()],
         remote_names,
@@ -115,6 +117,7 @@ fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, FxHashSet<(&str
 #[allow(clippy::too_many_arguments)]
 fn tag_names_model(
     repo_id: RepoId,
+    focus: &gitcomet_core::domain::HistoryFocusSet,
     title: SharedString,
     tag_names: Vec<String>,
     remote_names: Vec<String>,
@@ -162,10 +165,26 @@ fn tag_names_model(
             .map(|(mark_commit, mark_label)| (mark_commit, mark_label.as_str())),
     ));
     items.push(ContextMenuItem::Separator);
+    let several_tags = tag_names.len() > 1;
     for (tag_ix, name) in tag_names.into_iter().enumerate() {
         if tag_ix > 0 {
             items.push(ContextMenuItem::Separator);
         }
+        let (focus_label, stop_label) = if several_tags {
+            (
+                format!("Focus tag {name}").into(),
+                format!("Stop focusing tag {name}").into(),
+            )
+        } else {
+            ("Focus".into(), "Stop focus".into())
+        };
+        items.push(super::focus::labeled_entry(
+            focus,
+            repo_id,
+            gitcomet_core::domain::HistoryFocus::tag(&name),
+            focus_label,
+            stop_label,
+        ));
         items.push(ContextMenuItem::Entry {
             label: format!("Delete tag {name}").into(),
             icon: Some("icons/trash.svg".into()),

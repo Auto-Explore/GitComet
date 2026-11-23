@@ -2,6 +2,7 @@
 //! worktrees and submodules.
 
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 mod annex;
 mod branch;
@@ -193,6 +194,47 @@ impl SidebarRowContext {
                 .cursor_pointer()
                 .child(self.svg_icon(path, color, 12.0)),
         )
+    }
+
+    /// The eye for a row that names one ref: toggles `target` in the focus.
+    /// `target` is only built when the eye is shown, not for every painted row.
+    fn ref_focus_eye(
+        &self,
+        ix: usize,
+        in_history_focus: bool,
+        target: impl FnOnce() -> gitcomet_core::domain::HistoryFocus,
+        cx: &mut gpui::Context<SidebarPaneView>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let repo_id = self.repo_id;
+        let state = if in_history_focus {
+            FocusEyeState::Focused
+        } else {
+            FocusEyeState::Unfocused
+        };
+        self.focus_eye_slot(state).map(|eye| {
+            let target = target();
+            eye.id(("sidebar_focus_eye", ix))
+                .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
+                .gitcomet_tooltip(
+                    self.theme,
+                    if in_history_focus {
+                        "Stop focus"
+                    } else {
+                        "Focus"
+                    }
+                    .into(),
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Nested,
+                    cx.listener(move |this, _, _, _| {
+                        this.store.dispatch(HistoryFilterMsg::ToggleFocus {
+                            repo_id,
+                            target: target.clone(),
+                        });
+                    }),
+                )
+        })
     }
 
     fn svg_icon(&self, path: &'static str, color: gpui::Rgba, size_px: f32) -> gpui::Svg {
@@ -498,6 +540,17 @@ impl SidebarPaneView {
                     tooltip,
                     ..
                 } => Self::sidebar_stash_item_row(this, &ctx, slot, index, message, tooltip, cx),
+                BranchSidebarRow::TagsHeader {
+                    top_border: _,
+                    collapsed,
+                    collapse_key,
+                } => Self::sidebar_tags_header_row(this, &ctx, slot, collapsed, collapse_key, cx),
+                BranchSidebarRow::TagPlaceholder { message } => {
+                    ctx.placeholder_row("tag_placeholder", slot.ix, message)
+                }
+                BranchSidebarRow::TagItem { name, target } => {
+                    Self::sidebar_tag_item_row(this, &ctx, slot, name, target, cx)
+                }
                 BranchSidebarRow::Placeholder {
                     section: _,
                     message,

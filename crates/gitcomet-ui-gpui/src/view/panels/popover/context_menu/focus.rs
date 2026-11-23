@@ -18,14 +18,30 @@ pub(super) fn active_focus(host: &PopoverHost, repo_id: RepoId) -> HistoryFocusS
 /// "Stop focus" takes it back out. A branch under a focused remote reads as
 /// focused, because its commits are already in view.
 pub(super) fn entry(host: &PopoverHost, repo_id: RepoId, target: HistoryFocus) -> ContextMenuItem {
-    let in_history_focus = active_focus(host, repo_id).covers(&target);
+    labeled_entry(
+        &active_focus(host, repo_id),
+        repo_id,
+        target,
+        "Focus".into(),
+        "Stop focus".into(),
+    )
+}
+
+/// [`entry`] with its own labels, for menus that list several refs at once.
+pub(super) fn labeled_entry(
+    focus: &HistoryFocusSet,
+    repo_id: RepoId,
+    target: HistoryFocus,
+    focus_label: SharedString,
+    stop_label: SharedString,
+) -> ContextMenuItem {
+    let in_history_focus = focus.covers(&target);
     ContextMenuItem::Entry {
         label: if in_history_focus {
-            "Stop focus"
+            stop_label
         } else {
-            "Focus"
-        }
-        .into(),
+            focus_label
+        },
         // The same eyes the sidebar draws: open to focus, crossed out to stop.
         icon: Some(
             if in_history_focus {

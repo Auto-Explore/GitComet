@@ -394,9 +394,18 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::TagMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
-            }
+            PopoverKind::TagMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => self.context_menu_view(
+                PopoverKind::TagMenu {
+                    repo_id,
+                    commit_id,
+                    name,
+                },
+                cx,
+            ),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }

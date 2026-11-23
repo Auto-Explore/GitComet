@@ -1111,6 +1111,13 @@ pub(super) fn append_ensure_sidebar_data_effects(
             });
         }
     }
+
+    if request.tags && matches!(repo_state.tags, Loadable::NotLoaded) {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(LoadKind::Tags) {
+            effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
+        }
+    }
 }
 
 pub(super) fn ensure_sidebar_data(
@@ -2625,6 +2632,11 @@ pub(super) fn tags_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }
     }
+    effects.extend(super::history_filter::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::history_filter::FocusRefList::Tags,
+    ));
     effects
 }
 

@@ -402,3 +402,75 @@ fn a_successful_empty_list_clears_the_focus_it_governs() {
         "an empty remote-branch list retires the focused remote branch"
     );
 }
+
+fn tag_named(name: &str) -> gitcomet_core::domain::Tag {
+    gitcomet_core::domain::Tag {
+        name: name.to_string(),
+        target: CommitId("a".repeat(40).into()),
+    }
+}
+
+/// A deleted tag clears its own focus, like a deleted branch; the branches
+/// focused beside it stay.
+#[test]
+fn a_tag_list_without_the_focused_tag_clears_just_that_tag() {
+    use gitcomet_core::domain::HistoryFocus;
+
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_focus_tests();
+    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
+        HistoryFocus::tag("v1.0"),
+        HistoryFocus::tag("v2.0"),
+        HistoryFocus::local_branch("v1.0"),
+    ]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![tag_named("v2.0")]),
+        }),
+    );
+
+    assert_eq!(
+        state.repos[0].history_state.history_focus,
+        HistoryFocusSet::from_iter([
+            HistoryFocus::tag("v2.0"),
+            HistoryFocus::local_branch("v1.0")
+        ]),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog { focus, cursor: None, .. } if focus.len() == 2
+        )),
+        "expected the surviving focus to be reloaded, got {effects:?}"
+    );
+}
+
+/// A failed tag load says nothing about whether the tag exists.
+#[test]
+fn a_failed_tag_load_leaves_the_focus_alone() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_focus_tests();
+    let focus = HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::tag("v1.0")]);
+    state.repos[0].history_state.history_focus = focus.clone();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+            repo_id: RepoId(1),
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("no".into()),
+            )),
+        }),
+    );
+
+    assert_eq!(state.repos[0].history_state.history_focus, focus);
+}

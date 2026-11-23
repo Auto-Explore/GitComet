@@ -4,23 +4,30 @@ use gitcomet_state::model::RepoState;
 /// How much of a repository's branch list the history focus keeps in view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HistoryFocusCount {
-    /// Branch refs the focus covers.
+    /// Refs the focus covers.
     pub focused: usize,
-    /// Every branch ref that could be focused: local and remote alike.
+    /// Every ref that could be focused: local and remote branches, and tags.
     pub total: usize,
 }
 
 pub(crate) fn history_focus_count(repo: &RepoState) -> HistoryFocusCount {
-    let local_branches = repo.branches.ready().map_or(0, |branches| branches.len());
+    // Tags load lazily; until they do, the focused ones stand in for the list.
+    let focus = &repo.history_state.history_focus;
+    let tags = repo.tags.ready().map_or_else(
+        || {
+            focus
+                .iter()
+                .filter(|target| matches!(target, HistoryFocus::Tag { .. }))
+                .count()
+        },
+        |tags| tags.len(),
+    );
+    let local_refs = repo.branches.ready().map_or(0, |branches| branches.len()) + tags;
     let remote_branches = repo
         .remote_branches
         .ready()
         .map_or(&[][..], |branches| branches.as_slice());
-    count(
-        &repo.history_state.history_focus,
-        local_branches,
-        remote_branches,
-    )
+    count(focus, local_refs, remote_branches)
 }
 
 /// Counted per entry rather than per listed branch, so a focus restored before
@@ -29,13 +36,13 @@ pub(crate) fn history_focus_count(repo: &RepoState) -> HistoryFocusCount {
 /// focused remote already covers is not counted twice.
 fn count(
     focus: &HistoryFocusSet,
-    local_branches: usize,
+    local_refs: usize,
     remote_branches: &[RemoteBranch],
 ) -> HistoryFocusCount {
     let focused = focus
         .iter()
         .map(|target| match target {
-            HistoryFocus::LocalBranch { .. } => 1,
+            HistoryFocus::LocalBranch { .. } | HistoryFocus::Tag { .. } => 1,
             HistoryFocus::RemoteBranch { remote, .. } => {
                 usize::from(!focus.contains(&HistoryFocus::Remote {
                     name: remote.clone(),
@@ -49,7 +56,7 @@ fn count(
         .sum();
     HistoryFocusCount {
         focused,
-        total: local_branches + remote_branches.len(),
+        total: local_refs + remote_branches.len(),
     }
 }
 
@@ -126,6 +133,53 @@ mod tests {
             HistoryFocusCount {
                 focused: 4,
                 total: 5
+            }
+        );
+    }
+
+    /// Tags can be focused too, so a focused tag counts as one ref and every
+    /// tag counts towards the total.
+    #[test]
+    fn tags_count_towards_the_focus_and_the_total() {
+        let mut repo = RepoState::new_opening(
+            gitcomet_state::model::RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.branches = gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(vec![
+            gitcomet_core::domain::Branch {
+                name: "main".to_string(),
+                target: CommitId("a".repeat(40).into()),
+                upstream: None,
+                divergence: None,
+            },
+        ]));
+        repo.tags = gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(
+            ["v1.0", "v2.0"]
+                .map(|name| gitcomet_core::domain::Tag {
+                    name: name.to_string(),
+                    target: CommitId("a".repeat(40).into()),
+                })
+                .to_vec(),
+        ));
+        repo.history_state.history_focus = HistoryFocusSet::from_iter([HistoryFocus::tag("v1.0")]);
+
+        assert_eq!(
+            history_focus_count(&repo),
+            HistoryFocusCount {
+                focused: 1,
+                total: 3
+            }
+        );
+
+        // Before the tag list loads, the total still covers the focused tag.
+        repo.tags = gitcomet_state::model::Loadable::NotLoaded;
+        assert_eq!(
+            history_focus_count(&repo),
+            HistoryFocusCount {
+                focused: 1,
+                total: 2
             }
         );
     }

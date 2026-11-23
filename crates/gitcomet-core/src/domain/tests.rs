@@ -718,6 +718,29 @@ mod history_focus_tests {
             "origin/feature"
         );
         assert_eq!(HistoryFocus::remote("origin").label(), "origin");
+
+        assert_eq!(
+            HistoryFocus::tag("v1.0").ref_name().as_deref(),
+            Some("refs/tags/v1.0")
+        );
+        assert_eq!(HistoryFocus::tag("v1.0").label(), "v1.0");
+    }
+
+    /// A tag is covered only by its own entry, never by a branch or remote
+    /// that shares its name.
+    #[test]
+    fn a_tag_is_covered_only_by_itself() {
+        let set = HistoryFocusSet::from_iter([
+            HistoryFocus::tag("v1.0"),
+            HistoryFocus::local_branch("main"),
+            HistoryFocus::remote("origin"),
+        ]);
+        assert!(set.covers(&HistoryFocus::tag("v1.0")));
+        assert!(set.covers_tag("v1.0"));
+        assert!(!set.covers_tag("main"));
+        assert!(!set.covers_tag("origin"));
+        assert!(!set.covers_local_branch("v1.0"));
+        assert!(!set.covers(&HistoryFocus::local_branch("v1.0")));
     }
 
     /// The modes that promise HEAD is the first commit only promise it for a

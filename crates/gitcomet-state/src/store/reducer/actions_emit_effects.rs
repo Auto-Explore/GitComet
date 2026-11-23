@@ -1311,16 +1311,12 @@ pub(super) fn repo_command_finished(
             extra_effects.push(Effect::LoadSubmodules { repo_id });
         }
     }
-    if refresh_tags {
-        repo_state.set_tags(Loadable::NotLoaded);
-        if repo_state.loads_in_flight.request(LoadKind::Tags) {
-            extra_effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
-        }
-    } else if refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded) {
-        repo_state.set_tags(Loadable::Loading);
-        if repo_state.loads_in_flight.request(LoadKind::Tags) {
-            extra_effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
-        }
+    // The loaded list stays until the reload lands. The sidebar lists these
+    // tags, and a reset empties that section and loses its scroll position.
+    let reload_tags = refresh_tags
+        || (refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded));
+    if reload_tags && repo_state.loads_in_flight.request(LoadKind::Tags) {
+        extra_effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
     if refresh_remote_tag_metadata && !matches!(repo_state.remote_tags, Loadable::NotLoaded) {
         repo_state.set_remote_tags(Loadable::Loading);

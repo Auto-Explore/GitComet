@@ -179,6 +179,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
     repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.branches = Loadable::Ready(Arc::new(
         (0..count)
             .map(|ix| gitcomet_core::domain::Branch {
