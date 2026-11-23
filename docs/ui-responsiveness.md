@@ -8,13 +8,17 @@ The live runs used a Ryzen 9 5950X, an NVIDIA GTX 1080 and a private 60 Hz Mutte
 
 | Interaction and clock | Samples | Baseline p50 | Baseline p95 | Changed p50 | Changed p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| F7 and Shift-F7, key handler | 240 key dispatches | 0.032 ms | 2.994 ms | — | — |
-| F7 and Shift-F7, CPU draw | 241 draws | 4.335 ms | 6.881 ms | — | — |
-| Native window activation, request to verified active window | 20 focus switches between two windows | 20.08 ms | 31.39 ms | — | — |
+| F7 and Shift-F7, key handler | 2 pairs of 240 key dispatches | 0.0168 ms | 2.958 ms | 0.0132 ms | 2.060 ms |
+| F7 and Shift-F7, CPU draw | 241 draws in each of four runs | 2.561 ms | 7.560 ms | 2.381 ms | 4.165 ms |
+| Native window activation, request to verified active window | 4 pairs of 20 switches between two windows | 11.53 ms | 12.82 ms | 11.74 ms | 12.95 ms |
 | Insert and render, unwrapped 4 MiB editor | 6 pairs of 50 edits | 0.416 ms | 0.462 ms | 0.429 ms | 0.468 ms |
 | Insert and render, soft-wrapped 4 MiB editor | 6 pairs of 50 edits | 3.126 ms | 3.634 ms | 2.281 ms | 2.451 ms |
 
-The activation clock includes polling for native focus. The harness reports nearest-rank percentiles across the 20 switches in `summary.json` under `window_activation_ms`. The editor numbers are medians of per-run percentiles from paired GPUI test binaries with the same optimized test profile and four-CPU affinity. Each baseline wrapped run materialized the whole document 50 times. The revised editor performed zero whole-document materializations.
+The navigation pairs compared the baseline and the integrated release at `6b838d02d` on the same eight physical cores, reversing run order in the second pair. The table gives medians of per-run percentiles. Draw p95 was 4.44 and 10.68 ms for the two baseline runs and 4.41 and 3.92 ms for the changed runs. The activation clock includes polling for native focus. The harness reports nearest-rank percentiles across the 20 switches in `summary.json` under `window_activation_ms`.
+
+The activation row uses the standard one-second wait after opening both windows. The competing local verification builds were paused during all four pairs, and every run verified all 20 switches. With compilation running, four more pairs gave median per-run p95 of 38.61 ms before and 80.63 ms after. Another reversed-order pair gave 104.32 and 102.24 ms. In that pair, both builds spent about 15 ms on the main thread and another 15 ms waiting to run per draw, averaged over complete one-second process samples. With a three-second wait, the two paired p95 results were 14.51 → 16.15 ms and 36.71 → 14.01 ms.
+
+The editor numbers are medians of per-run percentiles from paired GPUI test binaries with the same optimized test profile and four-CPU affinity. Each baseline wrapped run materialized the whole document 50 times. The revised editor performed zero whole-document materializations.
 
 The merge editor resolves lines from the text snapshot, including when it builds an outline. The file and merge gutters now follow caret reveals on the next frame. In the 400-line file regression, moving to the end used to leave gutter rows 9–41 on screen. The rendered gutter now shows rows 368–400.
 
@@ -30,7 +34,7 @@ The merge editor resolves lines from the text snapshot, including when it builds
 | Transfer a 100,000-entry syntax cache for destruction | 77.95 µs | 0.030 µs | Caller time in an optimized build |
 | Build both split line-to-row maps on 100,000 unchanged lines | 1.205 ms | 0.767 ms | Eight pairs of 200 builds |
 | Four retained split and inline row maps for that file | 6.10 MiB | 1.53 MiB | Array storage on 64-bit Linux |
-| Conflict-marker check before staging, UI handler | 6.006 ms | 0.061 ms | Five runs with a 2.9 MB file |
+| Conflict-marker check before staging, UI handler | 6.006 ms | 0.057 ms | Five runs with a 2.9 MB file |
 | Markdown task toggle, UI handler | 13.729 ms | 0.013 ms | Five runs with a 3.6 MB file |
 
 The older-fetch tests replayed an incoming history prefix against the same revisions used for cold rebuilds. Across three alternating pairs per fixture, the 102,000-commit case fell from 411.42 ms to 11.37 ms, the 2.04-million-commit case from 4,608.01 ms to 69.19 ms, and Chromium from 676.33 ms to 202.93 ms. All nine avoided the full rebuild. The graphless fixtures needed 105 object-header reads each. Chromium used its native commit graph and needed two. Deep insertions fall back after 20,000 previously indexed candidates, whether read from objects or from the commit graph. Tests compare tied-timestamp ordering, merges, stashes and external parent references against a fresh full index.
@@ -45,9 +49,13 @@ The local upstream gix patch targets gitoxide `9abb53183a`. Opening a fresh obje
 
 Visible syntax requests supersede chunks that have scrolled out of view. In the six paired runs, the retained chunk count after scrolling fell from 72 to three. A second window with visible work still gets a turn during continuous scrolling in the first window.
 
+The first text diff and visible image decodes use high-priority background work. Rebuilding a diff with rows already on screen uses normal priority. Saving mergetool window dimensions and UI preferences uses low priority. In the image regression, switching files before a queued SVG decode ran skipped the old decode and displayed the newly selected image.
+
 Warming Chromium syntax after the first window submission sampled 128 regular tracked paths from the index in 0.166 ms on a clean checkout. Those paths identified 15 languages. Compiling their queries took a median 329.6 ms wall time, 320 ms of process CPU and 14.86 MiB of additional resident memory across five fresh processes. Rechecking all 15 then took 1.26 µs. The low-priority worker yields between languages.
 
-Staging actions recheck the current conflict paths before applying an asynchronous marker result. Markdown task edits verify the bound worktree document and original bytes before writing. The table reports time on the input handler. The save acknowledgement still waits for the write.
+Staging actions read conflicted files on a worker. If status is still loading, the worker asks the repository which paths are conflicted. Immediately before staging a selection that passed the initial check, the worker checks the relevant files again. If a file gained conflict markers, the worker leaves the index as it was and the user can retry to review the markers. A new action from the status menu can proceed even if a diff shortcut for the same path is still pending. Markdown task edits verify the bound worktree document and original bytes before writing. The table reports time on the input handler. The save acknowledgement still waits for the write.
+
+Rust extensions that build `Msg::StagePaths` with an explicitly typed `RepoPathList` now pass `paths.into()` in that field. Existing calls that already convert a vector with `.into()` use the same syntax.
 
 “Copy environment details” now includes draw and input percentiles across open windows and the latest 16 foreground stalls lasting at least 200 ms. Static labels and durations stay on the machine. A low-priority task samples the journal every two seconds. Across two 25-second instrumented idle pairs there were zero draws in both builds. Baseline main-thread CPU ranged from 0.12% to 0.26% and the changed build from 0.15% to 0.18%. Process wakeups were about 119/s and 121–122/s respectively with the probe running.
 
@@ -77,7 +85,9 @@ Three release-build runs alternated between two files. Each of 24 inputs selecte
 
 The percentages are medians of per-selection ratios. The larger file spent 60.9% of its time to first row inside the Git child. The application continues using its existing patch backend.
 
-Five alternating Linux startup pairs measured early font registration at 2.151 ms for all 16 faces and 0.172 ms for the selected regular face. Deferred registration took 1.080 ms after submission. The median from spawn to first actual submission was 215.13 ms before and 219.58 ms after on these runs. The startup probe now reports the observed submission. In the five changed runs its milestone arrived 11.0–11.9 ms after submission. Extension startup workflows can open their own first window and get all faces before the workflow runs.
+Five alternating Linux startup pairs measured early font registration at 1.769 ms for all 16 faces and 0.180 ms for the selected regular face in the integrated release. Deferred registration took 0.910 ms after submission. The median from spawn to the first platform submission was 189.11 ms before and 197.61 ms after. An earlier five-pair run gave 215.13 and 219.58 ms. The startup probe records the observed submission. Extension startup workflows can open their own first window and get all faces before the workflow runs.
+
+When the remaining fonts arrive, the application clears retained glyph shapes and widths. A focused diff then uses its selected editor font on the next redraw and reuses the new shape on subsequent draws. The real-text-backend editor test also checks the wrap count and height when a line first painted with the fallback font occupies more rows in Lilex.
 
 The file-history sidebar is created when it first opens. Across 20 fresh processes opening a repository, the reflog shell retained 388 bytes and took a median 5.82 µs to create. Its filter and rows already wait until it opens. The command palette and reveal-commit shell took about 5 µs and 4 µs. The popover host took 116 µs and must subscribe at startup to receive automatic prompts.
 
