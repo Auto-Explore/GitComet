@@ -272,7 +272,11 @@ pub(super) fn coordination_path(common_dir: &Path) -> Result<PathBuf> {
     let identity = ProductIdentity::gitcomet();
     let environment = |key: &str| match key {
         "GITCOMET_PROFILE_ROOT" => is_test_binary().then(|| {
-            let profile = format!("{}-test-profile", identity.directory_name());
+            // Each user's own, where the temporary directory is shared.
+            let user = std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_default();
+            let profile = format!("{}-test-profile-{user}", identity.directory_name());
             std::env::temp_dir().join(profile).into()
         }),
         "XDG_STATE_HOME" => None,
@@ -746,6 +750,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = coordination_path(directory.path()).unwrap();
         assert!(path.starts_with(std::env::temp_dir()), "{}", path.display());
+        // A directory of the user's own: another one's is closed to them.
+        if let Ok(user) = std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
+            assert!(
+                path.components().any(|part| part
+                    .as_os_str()
+                    .to_string_lossy()
+                    .ends_with(&format!("-{user}"))),
+                "{}",
+                path.display()
+            );
+        }
     }
 
     const HOUR: std::time::Duration = std::time::Duration::from_secs(3_600);
