@@ -213,6 +213,8 @@ For a Rust application that needs line-level patch coverage, `patchcov` already 
 
 GitComet measures its own source by comparing the lines LLVM maps in its GUI and headless builds with the lines its native tests exercise. An execution in either configuration covers the line. The coverage command produces a per-crate summary, line-only LCOV, and an offline HTML source view. The contributor guide defines the measurement scope and output paths. [Contributor instructions](../CONTRIBUTING.md#measuring-test-coverage) · [Coverage workflow](../.github/workflows/source-coverage.yml)
 
+On 23 November 2026, **12,073 passing test executions covered 250,362 of 286,845 measurable lines (87.28%)** on x86-64 Linux with the Rust sources at `1c0466380`. That left 36,483 missed lines across the 919 measured files in 18 crates. The GPUI crate accounted for 23,663 of the missed lines and had 85.27% coverage. The terminal UI had the lowest percentage at 71.57%, with 812 missed lines.
+
 For a GitComet diff overlay, **LCOV is the first format I would support**. The existing helper already produces it, and its per-line counts map directly to a gutter. **Cobertura is the next choice** for reports already produced by mixed-language CI. **Full LLVM JSON** earns its place when the UI can show partially covered expressions or distinguish generic instantiations. [LCOV specification][lcov-spec] · [Cobertura DTD][cob-dtd] · [LLVM export][llvm-cov]
 
 [azure]: https://learn.microsoft.com/en-us/azure/devops/pipelines/tasks/reference/publish-code-coverage-results-v2?view=azure-pipelines
