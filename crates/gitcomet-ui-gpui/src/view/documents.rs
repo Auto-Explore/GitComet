@@ -9,7 +9,7 @@ use super::panes::diff::helpers::state::FileImagePreviewAnimationSide;
 use super::panes::diff::preflight_worktree_file_for_editing;
 use super::panes::diff::read_worktree_file_version_for_editing;
 use super::*;
-use crate::kit::{TextInput, TextInputOptions};
+use crate::kit::{TextInput, TextInputOptions, TextInputTab};
 use buffers::{BufferId, BufferSave, DocumentBuffer, DocumentOwner, SaveOrigin};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity, Operation, OperationId, Request};
 use gitcomet_core::text_format::{SideKind, SideTextFormat};
@@ -459,6 +459,7 @@ impl StandaloneBuffer {
                     multiline: true,
                     read_only: initial.is_none(),
                     chromeless: true,
+                    tab: TextInputTab::Insert,
                     ..Default::default()
                 },
                 cx,

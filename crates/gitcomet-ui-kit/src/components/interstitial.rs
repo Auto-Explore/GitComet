@@ -3,8 +3,10 @@
 //! and the call-to-action buttons drawn on it.
 
 use crate::icons::svg_icon;
-use crate::interaction::{ControlInteractionExt, InteractionState, InteractionStyle};
-use crate::theme::{AppTheme, with_alpha};
+use crate::interaction::{
+    ControlInteractionExt, FOCUS_RING_WIDTH_PX, InteractionState, InteractionStyle, inset_outline,
+};
+use crate::theme::{AppTheme, CallToActionColors, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
@@ -56,20 +58,25 @@ pub fn interstitial_cta_button(
         .whitespace_nowrap()
         .child(svg_icon(icon, colors.text, ui_scale.px(14.0)))
         .child(label.into())
-        .control_interaction(
-            InteractionStyle::new(theme)
-                .hover(
-                    StyleRefinement::default()
-                        .bg(colors.background_hover)
-                        .border_color(colors.border_hover),
-                )
-                .pressed(
-                    StyleRefinement::default()
-                        .bg(colors.background_active)
-                        .border_color(colors.border_active),
-                ),
-            InteractionState::default(),
+        .control_interaction(cta_interaction(colors, theme), InteractionState::default())
+}
+
+fn cta_interaction(colors: CallToActionColors, theme: AppTheme) -> InteractionStyle {
+    let hover = StyleRefinement::default()
+        .bg(colors.background_hover)
+        .border_color(colors.border_hover);
+    InteractionStyle::new(theme)
+        .hover(hover.clone())
+        .pressed(
+            StyleRefinement::default()
+                .bg(colors.background_active)
+                .border_color(colors.border_active),
         )
+        .focus(hover)
+        // The theme's ring is the primary fill's own hue, so the ring takes
+        // the label's colour. The border keeps the outer pixel: on the dark
+        // backdrop a ring at the very edge only reads as a smaller button.
+        .focus_ring(inset_outline(colors.text, 1.0 + FOCUS_RING_WIDTH_PX))
 }
 
 /// `backdrop` fills the surface behind the card (the product's artwork);
@@ -155,6 +162,30 @@ mod tests {
                     self.theme,
                     scale,
                 ))
+        }
+    }
+
+    #[test]
+    fn a_focused_call_to_action_rings_in_its_label_colour_inside_its_border() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            for colors in [
+                theme.colors.interstitial.primary,
+                theme.colors.interstitial.secondary,
+            ] {
+                let focus =
+                    cta_interaction(colors, theme).focus_refinement(InteractionState::default());
+                let ring = focus.box_shadow.unwrap()[0].clone();
+                assert!(ring.inset);
+                assert_eq!(ring.color, colors.text.into());
+                assert_eq!(ring.spread_radius, px(3.0));
+                crate::test_support::assert_color_close(
+                    focus
+                        .border_color
+                        .as_ref()
+                        .and_then(crate::test_support::solid_color),
+                    Some(colors.border_hover),
+                );
+            }
         }
     }
 

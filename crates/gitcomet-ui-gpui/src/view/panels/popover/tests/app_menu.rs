@@ -520,3 +520,57 @@ fn app_menu_zoom_in_zooms_only_this_window(cx: &mut gpui::TestAppContext) {
         crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), None);
     });
 }
+
+/// Switching away from the window clears focus and leaves the menu open. Tab
+/// then gives the keyboard back to the menu, not to a control it covers.
+#[gpui::test]
+fn app_menu_takes_the_keyboard_back_on_tab(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_app_menu(cx);
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        window.activate();
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        assert!(window.is_window_active());
+        window.blur(app);
+        let _ = window.draw(app);
+    });
+    let selected = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .context_menu_selected_ix
+        })
+    };
+    let before = selected(cx);
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            host.tab_scope.contains_focused(window, app),
+            "Tab moves focus into the menu's popover, got {:?}",
+            window.focused(app)
+        );
+        assert!(host.is_open());
+    });
+
+    simulate_key_press(cx, "down");
+    assert_ne!(selected(cx), before, "the arrows walk the menu again");
+    // A menu keeps Tab: it walks the selection rather than moving focus.
+    let walked = selected(cx);
+    simulate_key_press(cx, "tab");
+    assert_ne!(selected(cx), walked, "Tab walks the menu");
+    simulate_key_press(cx, "shift-tab");
+    assert_eq!(selected(cx), walked, "Shift-Tab walks back");
+    simulate_key_press(cx, "escape");
+    cx.update(|_window, app| {
+        assert!(!view.read(app).popover_host.read(app).is_open());
+    });
+}

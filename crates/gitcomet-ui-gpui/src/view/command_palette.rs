@@ -1,4 +1,5 @@
 use crate::kit::click::PointerClickExt as _;
+use crate::kit::focus_order::{TabScope, TabScopeExt as _};
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -1147,6 +1148,7 @@ enum PaletteRow {
 
 pub(crate) struct CommandPaletteView {
     pub(crate) query_input: Entity<components::TextInput>,
+    tab_scope: TabScope,
     pub(crate) restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
@@ -1175,6 +1177,8 @@ impl CommandPaletteView {
                 components::TextInputOptions {
                     placeholder: "Search commands…".into(),
                     chromeless: true,
+                    // Tab walks the command list.
+                    tab: components::TextInputTab::Report,
                     ..Default::default()
                 },
                 window,
@@ -1187,6 +1191,7 @@ impl CommandPaletteView {
 
         Self {
             query_input,
+            tab_scope: TabScope::modal(cx),
             restore_focus: None,
             fallback_focus: None,
             root_view,
@@ -1677,6 +1682,7 @@ impl Render for CommandPaletteView {
         };
 
         let palette_body = components::modal_surface(theme)
+            .tab_scope(&self.tab_scope)
             .child(
                 div()
                     .w_full()

@@ -57,7 +57,7 @@ impl GixRepo {
         let may_have_gitlinks = if gitmodules.exists {
             true
         } else {
-            let Ok(index_state) = repo.index_or_empty() else {
+            let Ok(index_state) = current_index(repo) else {
                 return false;
             };
             index_state
@@ -459,9 +459,7 @@ pub(super) fn tree_index_changes(
     walk: &str,
     on_change: impl FnMut(gix::diff::index::ChangeRef<'_, '_>) -> gix::Result<gix::diff::index::Action>,
 ) -> Result<()> {
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let index = current_index(repo)?;
     // Comparing means reading every tree below `tree_id`: most of a first
     // status when nothing is staged, the usual case.
     if index_is_tree(&index, tree_id) {
@@ -676,6 +674,29 @@ fn read_index_trailing_hash(
     (!oid.is_null()).then_some(oid)
 }
 
+/// The index as it is on disk. gix shares one index snapshot between handles
+/// and reloads it only once the file's modification time moves on, so an index
+/// that Git rewrote within the same timestamp tick is still served from the
+/// old snapshot. Its checksum then differs from the file's trailer.
+pub(super) fn current_index(repo: &gix::Repository) -> Result<gix::worktree::Index> {
+    let index = repo
+        .index_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let on_disk = std::fs::File::open(repo.index_path())
+        .ok()
+        .and_then(|mut file| {
+            let len = file.metadata().ok()?.len();
+            read_index_trailing_hash(&mut file, len, repo.object_hash())
+        });
+    if on_disk.is_none() || index.checksum() == on_disk {
+        return Ok(index);
+    }
+    let fresh = repo
+        .open_index()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    Ok(gix::worktree::Index::new(gix::fs::FileSnapshot::new(fresh)))
+}
+
 #[cfg(unix)]
 fn set_index_stat_discriminators(stamp: &mut RepoFileStamp, metadata: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
@@ -768,9 +789,7 @@ fn collect_index_worktree_status_direct(
 ) -> Result<DirectIndexWorktreeStatus> {
     #[cfg(feature = "benchmarks")]
     let timing = crate::status_trace::StageTimer::new("index-snapshot");
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let index = current_index(repo)?;
     let refreshed = stat_refresh
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1796,7 +1815,7 @@ impl GitlinkSelection {
 // Git query, while an empty selection proves there is nothing to supplement.
 fn gitlink_selection(repo: &gix::Repository, staged: &[FileStatus]) -> Option<GitlinkSelection> {
     use gix::index::entry::Flags;
-    let index = repo.index_or_empty().ok()?;
+    let index = current_index(repo).ok()?;
     // Collapsed sparse directories can hide gitlinks. Let Git expand them for
     // the existing complete query instead of treating this as an empty list.
     if index.is_sparse() {

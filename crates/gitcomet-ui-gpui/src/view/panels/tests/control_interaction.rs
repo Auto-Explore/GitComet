@@ -50,11 +50,8 @@ fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAp
             cx.simulate_click(bounds.center(), Modifiers::default());
             leave_controls(cx);
             cx.update(|_, app| assert!(view.read(app).popover_host.read(app).is_open()));
-            assert_ne!(
-                paint(cx, selector),
-                resting,
-                "{selector} must show its open surface"
-            );
+            let open = paint(cx, selector);
+            assert_ne!(open, resting, "{selector} must show its open surface");
             if escape {
                 cx.simulate_keystrokes("escape");
             } else {
@@ -62,6 +59,17 @@ fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAp
             }
             leave_controls(cx);
             cx.update(|_, app| assert!(!view.read(app).popover_host.read(app).is_open()));
+            if escape {
+                // Escape hands keyboard focus back to the button, which shows
+                // it through pointer moves. A press ends it.
+                assert_ne!(
+                    paint(cx, selector),
+                    open,
+                    "{selector} must clear when dismissed"
+                );
+                cx.simulate_click(point(px(2.0), px(2.0)), Modifiers::default());
+                leave_controls(cx);
+            }
             assert_eq!(
                 paint(cx, selector),
                 resting,

@@ -219,7 +219,7 @@ impl TitleBarView {
             brand: None,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
-            app_menu_focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
+            app_menu_focus_handle: crate::kit::focus_order::field(cx),
             repo_picker_open: false,
             repo_tab_actions_enabled,
             repo_picker_toggle_bounds: Rc::new(Cell::new(None)),

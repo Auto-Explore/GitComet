@@ -174,6 +174,8 @@ impl FileHistoryPaneView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Filter commits".into(),
+                    // Tab walks the filtered commits.
+                    tab: components::TextInputTab::Report,
                     ..Default::default()
                 },
                 window,

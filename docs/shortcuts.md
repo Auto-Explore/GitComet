@@ -4,6 +4,7 @@ This file documents the keyboard shortcuts currently wired in the GPUI applicati
 
 Source of truth:
 - `crates/gitcomet-ui-gpui/src/app/bindings.rs`
+- `crates/gitcomet-ui-kit/src/focus_order.rs`
 - `crates/gitcomet-ui-gpui/src/view/command_shortcuts.rs`
 - `crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs`
 - `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
@@ -97,6 +98,21 @@ images are unlinked, each pane has its own zoom controls beneath the image.
 Ctrl/Cmd + scroll over an image changes image zoom, and over a Mermaid diagram
 the diagram's zoom (see [Diagram previews](file-management.md#diagram-previews));
 elsewhere it changes application UI scale.
+
+## Moving between fields
+
+Tab and Shift-Tab move focus as they do in a web browser, on every platform.
+
+| Action | Shortcut | Notes |
+| --- | --- | --- |
+| Next field or control | `Tab` | |
+| Previous field or control | `Shift-Tab` | |
+
+- Tab visits the window's text fields, buttons, check boxes and options in the order they are laid out, and wraps at the end. Inside a dialog or popover (a prompt, a confirmation, an extension's dialog, the shortcut cheat sheet, the Go to dialog) and in the authentication prompt (username, password or passphrase, Confirm, Cancel) it stays inside and wraps at its ends.
+- Tab leaves a text field without typing anything, multi-line fields such as the commit message included.
+- Selectable read-only text, such as commit details, is passed over. A file shown read-only in an editor is still reached, so its text can be selected.
+- While a dialog or popover is open, Tab from outside it (for example after switching back to the window) moves into it.
+- These keep Tab for themselves: the embedded terminal (the shell completes with it); the diff file editor, the Documents editor and the conflict resolver's output, which type a tab character; pickers, the command palette and the Home search, where it selects the next result; and menus, where it moves the selection. In the editors Shift-Tab still moves to the previous field, and so does Tab while the file cannot be edited.
 
 ## Text input shortcuts
 
@@ -210,7 +226,7 @@ These shortcuts apply while a picker's search input has focus.
 
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
-| Previous / next result | `Up`, `Down` | `Up`, `Down` | `Shift-Tab` / `Tab` also navigate. |
+| Previous / next result | `Up`, `Down` | `Up`, `Down` | `Shift-Tab` / `Tab` also navigate, except in a search field that is part of a dialog (Create branch, Add worktree), where they move to the next field. |
 | First / last result | `Cmd-Home`, `Cmd-End` | `Ctrl-Home`, `Ctrl-End` | `Ctrl-Home` / `Ctrl-End` also work on macOS. |
 | Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Moves by one visible page and stops at the first / last result. |
 | Activate selected result | `Enter` | `Enter` | |
@@ -326,7 +342,7 @@ Context-menu keyboard behavior is the same on every platform:
 
 | Action | Shortcut | Notes |
 | --- | --- | --- |
-| Move menu selection | `Up`, `Down` | |
+| Move menu selection | `Up`, `Down`, `Tab`, `Shift-Tab` | |
 | Activate selected menu item | `Enter` | Uses the first enabled item if nothing is selected. |
 | Close the menu | `Escape` | |
 | Activate an inline menu shortcut | Letter or digit shown beside the item | |

@@ -2,6 +2,7 @@ use super::*;
 use crate::view::components::ControlInteractionExt;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::services::InteractiveRebaseAction;
+use gitcomet_ui_kit::focus_order::{self, TabScope};
 use std::rc::Rc;
 
 mod add_repo_menu;
@@ -163,7 +164,8 @@ const DIALOG_900_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(900.0);
 // badge to remain on one line on non-macOS platforms.
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
 
-/// Cancel/submit focus-handle pair shared by every prompt dialog.
+/// A prompt's Cancel and submit buttons, held so the prompt can focus them;
+/// Tab reaches them in the order they are painted.
 pub(super) struct DialogFocus {
     pub(super) cancel: FocusHandle,
     pub(super) submit: FocusHandle,
@@ -172,8 +174,8 @@ pub(super) struct DialogFocus {
 impl DialogFocus {
     fn new(cx: &mut gpui::Context<PopoverHost>) -> Self {
         Self {
-            cancel: cx.focus_handle().tab_index(0).tab_stop(true),
-            submit: cx.focus_handle().tab_index(0).tab_stop(true),
+            cancel: focus_order::field(cx),
+            submit: focus_order::field(cx),
         }
     }
 }
@@ -271,8 +273,10 @@ pub(in super::super) struct PopoverHost {
     /// diff panel or the commit details pane, and only the former should hand
     /// focus back to the diff panel when it closes.
     popover_opened_from_diff_panel: bool,
-    prompt_tab_group_focus_handle: FocusHandle,
-    prompt_tab_wrap_end_focus_handle: FocusHandle,
+    /// Keeps Tab inside the open popover.
+    tab_scope: TabScope,
+    /// Every picker search field made so far.
+    picker_search_inputs: Vec<Entity<components::TextInput>>,
     context_menu_selected_ix: Option<usize>,
     worktree_menu_location: Option<(std::path::PathBuf, bool)>,
     worktree_menu_location_task: Option<gpui::Task<()>>,
@@ -543,7 +547,9 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
     focus_handle: &FocusHandle,
     cx: &mut gpui::Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
-    let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
+    // Callers pass a `focus_order::field`, so Tab reaches the row like any
+    // other control of the popover.
+    let focus_handle = focus_handle.clone();
     div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
