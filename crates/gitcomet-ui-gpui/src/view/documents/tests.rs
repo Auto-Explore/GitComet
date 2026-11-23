@@ -1551,4 +1551,16 @@ fn gutter_wheel_redraws_only_the_document(cx: &mut gpui::TestAppContext) {
         after.0, before.0,
         "a wheel over the line numbers must not re-render the status bar, sidebar or details"
     );
+    cx.update(|window, app| {
+        let input = buffer.read(app).input.clone();
+        input.update(app, |input, cx| {
+            let end = input.text_snapshot().len();
+            input.set_selected_range(end..end, true, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(crate::view::test_support::scheduled_frames_show(
+        cx,
+        "document_gutter_row_399"
+    ));
 }

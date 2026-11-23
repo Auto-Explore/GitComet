@@ -604,9 +604,10 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
     lines.push("fn needle() {}".to_string());
     let contents = format!("{}\n", lines.join("\n"));
     let workdir = seed_editor(&view, cx, 985, "file_editor_search_scroll", &contents);
+    let renderer = super::super::diff_renderer(cx, &view);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).diff_renderer.read(app);
+        let pane = renderer.read(app);
         assert!(
             pane.file_editor_scroll.max_offset().y > px(0.0),
             "the fixture must be taller than the viewport for this to mean anything"
@@ -620,7 +621,7 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).diff_renderer.read(app);
+        let pane = renderer.read(app);
         assert_eq!(pane.file_editor_search_matches.len(), 1);
         // Asserting movement, not a pixel value: `#[gpui::test]` measures every
         // glyph identically, so exact offsets say nothing about the real app.
@@ -630,6 +631,24 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
             pane.file_editor_scroll.offset()
         );
     });
+
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("file_editor_gutter_row_400").is_some());
+    cx.update(|window, app| {
+        let input = renderer.read(app).file_editor_input.clone();
+        input.update(app, |input, cx| {
+            input.set_selected_range(0..0, true, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(crate::view::test_support::scheduled_frames_show(
+        cx,
+        "file_editor_gutter_row_0"
+    ));
 
     let _ = std::fs::remove_dir_all(&workdir);
 }

@@ -258,6 +258,24 @@ pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
+pub(crate) fn scheduled_frames_show(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+) -> bool {
+    let handle = cx.update(|window, _| window.window_handle());
+    let platform = cx.cx.test_window(handle);
+    for _ in 0..8 {
+        if cx.debug_bounds(selector).is_some() {
+            return true;
+        }
+        if !platform.simulate_scheduled_frame() {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    cx.debug_bounds(selector).is_some()
+}
+
 /// Blocks until the store worker has reduced every message dispatched so far.
 ///
 /// GPUI's test executor does not drive the worker thread, so a snapshot read

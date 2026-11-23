@@ -2257,9 +2257,10 @@ impl DiffRenderer {
                         )
                     });
 
-                div()
-                    .id(("file_editor_gutter_row", visual_ix))
-                    .h(row_height)
+                let row = div().id(("file_editor_gutter_row", visual_ix));
+                #[cfg(test)]
+                let row = row.debug_selector(move || format!("file_editor_gutter_row_{visual_ix}"));
+                row.h(row_height)
                     .flex()
                     .flex_row()
                     .items_center()
