@@ -834,6 +834,55 @@ fn checked_out_submodules_are_asked_directly_and_the_rest_through_the_repository
     );
 }
 
+/// Started from a hook, GitComet carries the `GIT_DIR` and `GIT_INDEX_FILE`
+/// of the repository above. Git clears them before it looks into a
+/// submodule, and so must the direct question.
+#[test]
+fn a_checkout_is_asked_without_the_variables_of_the_repository_above() {
+    const NAME: &str = "a_checkout_is_asked_without_the_variables_of_the_repository_above";
+    const ROOT: &str = "GITCOMET_GITLINK_ENV_TEST_ROOT";
+    let Some(root) = std::env::var_os(ROOT).map(std::path::PathBuf::from) else {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        write_file(root, "file.txt", "base\n");
+        git_success(root, &["add", "."]);
+        git_success(root, &["commit", "-qm", "seed"]);
+        let oid = commit_child(root, "child", false);
+        add_gitlink(root, "child", &oid);
+        write_file(&root.join("child"), "tracked.txt", "changed\n");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .env(ROOT, root)
+            .env("GIT_DIR", root.join(".git"))
+            .env("GIT_INDEX_FILE", root.join(".git/index"));
+        gitcomet_core::test_support::child_test::run(&mut command, module_path!(), NAME);
+        return;
+    };
+    let oid = crate::refs::head_oid(&gix::open(root.join("child")).unwrap())
+        .unwrap()
+        .unwrap();
+    let token = CancellationToken::new();
+    let status = super::gitlink_status_output(
+        &root,
+        super::GitlinkAsk::Checkout(Path::new("child")),
+        &token,
+    )
+    .unwrap()
+    .expect("Git answers for the checkout");
+    let status = String::from_utf8(status).unwrap();
+    assert!(
+        status.starts_with(&format!("# branch.oid {oid}\n")),
+        "{status}"
+    );
+    assert!(
+        status
+            .lines()
+            .any(|line| line.starts_with("1 .M") && line.ends_with(" tracked.txt")),
+        "{status}"
+    );
+}
+
 /// Asked in a checkout whose `.git` it does not take for a repository, Git
 /// looks for one above and would answer for the parent.
 #[test]

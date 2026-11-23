@@ -1522,6 +1522,9 @@ fn gitlink_status_output(
             if let Some(above) = checkout.parent() {
                 command.env("GIT_CEILING_DIRECTORIES", above);
             }
+            for name in REPOSITORY_ABOVE_ENV {
+                command.env_remove(name);
+            }
             // What Git runs in a submodule to tell whether it is dirty, and
             // the commit it has checked out.
             command
@@ -1559,6 +1562,25 @@ fn checkout_is_modified(status: &[u8], recorded: &gix::hash::oid) -> bool {
 
 /// Submodule checkouts asked at once: each answer is a short process.
 const GITLINK_CHECKOUTS_AT_ONCE: usize = 8;
+
+/// What Git clears before it looks into a submodule: the variables naming
+/// the repository it runs in (`git rev-parse --local-env-vars`), which a hook
+/// that started GitComet passes on. Config given with `-c` stays.
+const REPOSITORY_ABOVE_ENV: [&str; 13] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
 
 /// The checkouts whose gitlink is modified. Git's status of this repository
 /// would run the same `git status` in each, one after another, after loading
