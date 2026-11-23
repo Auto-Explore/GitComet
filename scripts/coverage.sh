@@ -22,6 +22,9 @@ done
 cargo nextest --version
 cargo llvm-cov --version
 export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
-coverage_env=$(cargo llvm-cov show-env --sh)
+# These two first-party platform libraries are Cargo path dependencies outside the workspace.
+coverage_env=$(cargo llvm-cov show-env --sh \
+  --dep-coverage gitcomet-filesystem-native \
+  --dep-coverage gitcomet-win32-window-utils)
 eval "$coverage_env"
 exec python3 scripts/ci/source_coverage.py
