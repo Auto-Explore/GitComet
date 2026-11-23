@@ -11,51 +11,243 @@
 )]
 
 use super::*;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
 
-/// How far into a worktree file the marker scan reads before giving up. The scan
-/// runs on the UI thread while a click waits on it, and it reads to the end of a
-/// file whose markers are already resolved — the common case — so this is what
-/// bounds that. Big enough for a conflict spanning a whole ordinary source file,
-/// small enough that a handful of them cost milliseconds; past it an unclosed
-/// opener still warns rather than passing as resolved.
 const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
-
-/// Read buffer for the scan. Larger than the 8KB default because the scan is a
-/// straight sequential walk, and the file it walks furthest is the resolved one
-/// it has to read to the end of.
 const SCAN_BUFFER_BYTES: usize = 64 * 1024;
 
-/// Of `paths`, the ones git still reports as conflicted **and** whose worktree
-/// file still contains conflict markers. An empty `paths` means "everything",
-/// matching `Msg::StagePaths`.
-///
-/// Only conflicted paths are read, and an ordinary stage has none, so this costs
-/// no file IO in the common case.
-pub(in crate::view) fn unresolved_conflict_marker_paths(
-    state: &AppState,
-    repo_id: RepoId,
-    paths: &[std::path::PathBuf],
-) -> Vec<std::path::PathBuf> {
-    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
-        return Vec::new();
-    };
-    let Loadable::Ready(status) = &repo.status else {
-        return Vec::new();
-    };
+#[derive(Clone, Default)]
+struct PendingScans(Rc<RefCell<FxHashMap<ScanKey, Rc<()>>>>);
 
-    // Set rather than a scan of `paths` per entry: "stage all" during a large
-    // merge puts every changed path in both lists.
-    let requested: FxHashSet<&std::path::Path> =
-        paths.iter().map(std::path::PathBuf::as_path).collect();
-    let workdir = &repo.spec.workdir;
-    status
-        .unstaged
+impl gpui::Global for PendingScans {}
+
+impl PendingScans {
+    fn current(&self, key: &ScanKey, token: &Rc<()>) -> bool {
+        self.0
+            .borrow()
+            .get(key)
+            .is_some_and(|current| Rc::ptr_eq(current, token))
+    }
+
+    fn remove(&self, key: &ScanKey, token: &Rc<()>) {
+        if self.current(key, token) {
+            self.0.borrow_mut().remove(key);
+        }
+    }
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ScanKey {
+    window: gpui::WindowId,
+    lifetime: gitcomet_state::model::RepoLifetime,
+    paths: Arc<Vec<PathBuf>>,
+}
+
+pub(in crate::view) enum ConflictPaths {
+    Unknown,
+    Known(Vec<PathBuf>),
+}
+
+impl ConflictPaths {
+    fn known(self) -> Option<Vec<PathBuf>> {
+        match self {
+            Self::Known(paths) => Some(paths),
+            Self::Unknown => None,
+        }
+    }
+}
+
+pub(in crate::view) trait StageOwner: Sized + 'static {
+    fn stage_repository(&self) -> Option<&RepoState>;
+    fn live_conflict_paths(&self, shown: &RepoState, paths: &[PathBuf]) -> Option<ConflictPaths>;
+}
+
+fn conflict_paths(repo: &RepoState, paths: &[PathBuf]) -> ConflictPaths {
+    let Some(entries) = repo.worktree_status_entries() else {
+        return ConflictPaths::Unknown;
+    };
+    if !entries.iter().any(|entry| entry.conflict.is_some()) {
+        return ConflictPaths::Known(Vec::new());
+    }
+    let requested: FxHashSet<_> = paths.iter().collect();
+    let conflicts = entries
         .iter()
-        .filter(|entry| entry.conflict.is_some())
-        .filter(|entry| requested.is_empty() || requested.contains(entry.path.as_path()))
-        .filter(|entry| worktree_file_has_conflict_markers(&workdir.join(&entry.path)))
+        .filter(|entry| {
+            entry.conflict.is_some() && (requested.is_empty() || requested.contains(&entry.path))
+        })
         .map(|entry| entry.path.clone())
-        .collect()
+        .collect();
+    ConflictPaths::Known(conflicts)
+}
+
+fn current_repo<'a>(live: &'a AppState, shown: &RepoState) -> Option<&'a RepoState> {
+    live.repos
+        .iter()
+        .find(|repo| repo.id == shown.id && repo.lifetime_id() == shown.lifetime_id())
+}
+
+fn selected_conflicts(
+    store: &AppStore,
+    shown: &RepoState,
+    paths: &[PathBuf],
+) -> Option<ConflictPaths> {
+    let live = store.snapshot();
+    (live.active_repo == Some(shown.id)).then_some(())?;
+    Some(conflict_paths(current_repo(&live, shown)?, paths))
+}
+
+impl StageOwner for GitCometView {
+    fn stage_repository(&self) -> Option<&RepoState> {
+        self.active_repo()
+    }
+    fn live_conflict_paths(&self, shown: &RepoState, paths: &[PathBuf]) -> Option<ConflictPaths> {
+        selected_conflicts(&self.store, shown, paths)
+    }
+}
+
+impl StageOwner for DetailsPaneView {
+    fn stage_repository(&self) -> Option<&RepoState> {
+        self.active_repo()
+    }
+    fn live_conflict_paths(&self, shown: &RepoState, paths: &[PathBuf]) -> Option<ConflictPaths> {
+        selected_conflicts(&self.store, shown, paths)
+    }
+}
+
+impl StageOwner for DiffRenderer {
+    fn stage_repository(&self) -> Option<&RepoState> {
+        self.active_repo()
+    }
+    fn live_conflict_paths(&self, shown: &RepoState, paths: &[PathBuf]) -> Option<ConflictPaths> {
+        let live = self.store.snapshot()?;
+        let repo = current_repo(&live, shown)?;
+        let diff = match self.store.binding {
+            Some(binding) => binding.diff(repo)?,
+            None if live.active_repo == Some(repo.id) => &repo.diff_state,
+            None => return None,
+        };
+        if !self.store.policy.allow_stage
+            || diff.content_preview
+            || diff.diff_target != self.bound_diff_state(shown).diff_target
+        {
+            return None;
+        }
+        Some(conflict_paths(repo, paths))
+    }
+}
+
+pub(in crate::view) fn check<T: StageOwner>(
+    view: &mut T,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+    window: &mut Window,
+    cx: &mut gpui::Context<T>,
+    finish: impl FnOnce(&mut T, Vec<PathBuf>, Vec<PathBuf>, &mut Window, &mut gpui::Context<T>)
+    + 'static,
+) {
+    let Some(repo) = view.stage_repository().filter(|repo| repo.id == repo_id) else {
+        return;
+    };
+    let key = ScanKey {
+        window: window.window_handle().window_id(),
+        lifetime: repo.lifetime_id(),
+        paths: Arc::new(paths),
+    };
+    let pending = cx.default_global::<PendingScans>().clone();
+    if pending.0.borrow().contains_key(&key) {
+        return;
+    }
+    let Some(status) = view.live_conflict_paths(repo, &key.paths) else {
+        return;
+    };
+    let mut conflicts = status
+        .known()
+        .or_else(|| conflict_paths(repo, &key.paths).known())
+        .unwrap_or_default();
+    if conflicts.is_empty() {
+        finish(
+            view,
+            Arc::unwrap_or_clone(key.paths),
+            Vec::new(),
+            window,
+            cx,
+        );
+        return;
+    }
+    let workdir = repo.spec.workdir.clone();
+    let token = Rc::new(());
+    pending.0.borrow_mut().insert(key.clone(), token.clone());
+    let cancel = cx.observe_keystrokes({
+        let pending = pending.clone();
+        let key = key.clone();
+        let token = token.clone();
+        move |_, event, window, _| {
+            if window.window_handle().window_id() == key.window
+                && event.keystroke.key == "escape"
+                && !event.keystroke.modifiers.modified()
+            {
+                pending.remove(&key, &token);
+            }
+        }
+    });
+    let executor = cx.background_executor().clone();
+    cx.spawn_in(window, async move |owner, cx| {
+        let _cancel = cancel;
+        let mut finish = Some(finish);
+        loop {
+            let directory = workdir.clone();
+            let (checked, unresolved) = executor
+                .spawn(async move {
+                    let unresolved = conflicts
+                        .iter()
+                        .filter(|path| worktree_file_has_conflict_markers(&directory.join(path)))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (conflicts, unresolved)
+                })
+                .await;
+            if !pending.current(&key, &token) {
+                return;
+            }
+            let next = cx
+                .update(|window, app| {
+                    owner
+                        .update(app, |view, cx| {
+                            let shown = view.stage_repository()?;
+                            if shown.id != repo_id || shown.lifetime_id() != key.lifetime {
+                                return None;
+                            }
+                            let unresolved = match view.live_conflict_paths(shown, &key.paths)? {
+                                ConflictPaths::Known(current) if current == checked => unresolved,
+                                ConflictPaths::Known(current) if current.is_empty() => Vec::new(),
+                                ConflictPaths::Known(current) => return Some(current),
+                                ConflictPaths::Unknown if unresolved.is_empty() => return None,
+                                ConflictPaths::Unknown => unresolved,
+                            };
+                            finish.take()?(
+                                view,
+                                key.paths.as_ref().clone(),
+                                unresolved,
+                                window,
+                                cx,
+                            );
+                            None
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .ok()
+                .flatten();
+            let Some(next) = next else {
+                break;
+            };
+            conflicts = next;
+        }
+        pending.remove(&key, &token);
+    })
+    .detach();
 }
 
 fn worktree_file_has_conflict_markers(path: &std::path::Path) -> bool {
@@ -72,27 +264,6 @@ fn worktree_file_has_conflict_markers(path: &std::path::Path) -> bool {
         MAX_SCANNED_BYTES,
     )
     .unwrap_or(false)
-}
-
-/// The confirmation to show before staging `paths`, or `None` when nothing about
-/// the stage is unresolved and it can go ahead as issued.
-///
-/// `clear_selection` is passed through to the dialog: callers must resolve
-/// `paths` out of the status row selection *without* consuming it, then hand
-/// that answer over here, so a cancelled dialog leaves the selection standing.
-pub(in crate::view) fn stage_confirm_popover(
-    state: &AppState,
-    repo_id: RepoId,
-    paths: Vec<std::path::PathBuf>,
-    clear_selection: bool,
-) -> Option<PopoverKind> {
-    let unresolved = unresolved_conflict_marker_paths(state, repo_id, &paths);
-    (!unresolved.is_empty()).then_some(PopoverKind::StageConflictMarkersConfirm {
-        repo_id,
-        paths,
-        unresolved,
-        clear_selection,
-    })
 }
 
 /// Anchor for a stage confirmation raised by a keyboard shortcut, which has no

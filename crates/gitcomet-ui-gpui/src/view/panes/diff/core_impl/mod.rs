@@ -1823,40 +1823,6 @@ impl DiffRenderer {
         }
     }
 
-    /// Raise the unresolved-conflict confirmation if staging `paths` would mark
-    /// files resolved while they still contain conflict markers. Returns whether
-    /// the dialog took over, in which case the caller must not stage: the dialog
-    /// dispatches it if the user goes ahead. Unstaging never marks anything
-    /// resolved, so it is left alone.
-    pub(in crate::view) fn confirm_stage_conflict_markers(
-        &mut self,
-        repo_id: RepoId,
-        area: DiffArea,
-        paths: Vec<std::path::PathBuf>,
-        clear_selection: bool,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if area != DiffArea::Unstaged {
-            return false;
-        }
-        let Some(state) = self.input.repository_state() else {
-            return false;
-        };
-        let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-            state,
-            repo_id,
-            paths,
-            clear_selection,
-        ) else {
-            return false;
-        };
-        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-        self.open_popover_at(confirm, anchor, window, cx);
-        cx.notify();
-        true
-    }
-
     pub(in crate::view) fn clear_status_multi_selection(
         &mut self,
         repo_id: RepoId,

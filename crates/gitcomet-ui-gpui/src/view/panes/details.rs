@@ -689,28 +689,56 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        // The row selection is dropped because staging everything makes it
-        // meaningless — but only once the staging is actually going ahead, so a
-        // cancelled confirmation costs the user nothing.
-        if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-            &self.state,
+        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+        self.stage_status_paths(repo_id, paths, true, anchor, window, cx);
+    }
+
+    pub(in crate::view) fn stage_status_paths(
+        &mut self,
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        clear_selection: bool,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let selection = clear_selection.then(|| self.status_multi_selection.get(&repo_id).cloned());
+        crate::view::conflict_markers::check(
+            self,
             repo_id,
-            paths.clone(),
-            true,
-        ) {
-            let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-            self.open_popover_at(confirm, anchor, window, cx);
-            cx.notify();
-            return;
-        }
-        self.clear_status_multi_selection(repo_id);
-        crate::view::status_actions::stage_or_unstage_paths(
-            &self.store,
-            repo_id,
-            DiffArea::Unstaged,
             paths,
+            window,
+            cx,
+            move |this, paths, unresolved, window, cx| {
+                let clear_selection = selection.is_some_and(|before| {
+                    before.as_ref() == this.status_multi_selection.get(&repo_id)
+                });
+                if !unresolved.is_empty() {
+                    this.open_popover_at(
+                        PopoverKind::StageConflictMarkersConfirm {
+                            repo_id,
+                            paths,
+                            unresolved,
+                            clear_selection,
+                        },
+                        anchor,
+                        window,
+                        cx,
+                    );
+                } else {
+                    if clear_selection {
+                        this.clear_status_multi_selection(repo_id);
+                    }
+                    crate::view::status_actions::stage_or_unstage_paths(
+                        &this.store,
+                        repo_id,
+                        DiffArea::Unstaged,
+                        paths,
+                    );
+                }
+                cx.notify();
+            },
         );
-        cx.notify();
     }
 
     pub(in super::super) fn set_date_settings(

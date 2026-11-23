@@ -990,6 +990,7 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
             this.execute_command("stage-all", Some(window), cx)
         });
     });
+    cx.run_until_parked();
     test_support::redraw(cx);
 
     cx.update(|_window, app| {

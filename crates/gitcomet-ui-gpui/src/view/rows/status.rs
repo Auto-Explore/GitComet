@@ -719,21 +719,16 @@ fn status_folder_action(
                 return;
             }
 
-            if area == DiffArea::Unstaged
-                && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &this.state,
+            if area == DiffArea::Unstaged {
+                this.stage_status_paths(repo_id, paths, false, e.position(), window, cx);
+            } else {
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &this.store,
                     repo_id,
-                    paths.clone(),
-                    // No selection was consumed, so cancelling must leave it.
-                    false,
-                )
-            {
-                this.open_popover_at(confirm, e.position(), window, cx);
-                cx.notify();
-                return;
+                    area,
+                    paths,
+                );
             }
-
-            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
             cx.notify();
         })
         .gitcomet_tooltip(theme, format!("{label} this folder").into());
@@ -874,24 +869,19 @@ fn status_row(
             let (paths, used_selection) =
                 this.status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
 
-            if area == DiffArea::Unstaged
-                && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &this.state,
+            if area == DiffArea::Unstaged {
+                this.stage_status_paths(repo_id, paths, used_selection, e.position(), window, cx);
+            } else {
+                if used_selection {
+                    this.clear_status_multi_selection(repo_id);
+                }
+                crate::view::status_actions::stage_or_unstage_paths(
+                    &this.store,
                     repo_id,
-                    paths.clone(),
-                    used_selection,
-                )
-            {
-                this.open_popover_at(confirm, e.position(), window, cx);
-                cx.notify();
-                return;
+                    area,
+                    paths,
+                );
             }
-            if used_selection {
-                this.clear_status_multi_selection(repo_id);
-            }
-
-            crate::view::status_actions::stage_or_unstage_paths(&this.store, repo_id, area, paths);
-
             cx.notify();
         })
         .debug_selector(move || {

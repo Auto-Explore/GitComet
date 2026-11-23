@@ -675,27 +675,15 @@ impl DetailsPaneView {
             if paths.is_empty() {
                 return;
             }
-            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                &this.state,
+            let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
+            this.stage_status_paths(
                 repo_id,
-                paths.clone(),
-                selection.from_explicit_selection,
-            ) {
-                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
-                this.open_popover_at(confirm, anchor, _w, cx);
-                cx.notify();
-                return;
-            }
-            if selection.from_explicit_selection {
-                this.clear_status_multi_selection(repo_id);
-            }
-            crate::view::status_actions::stage_or_unstage_paths(
-                &this.store,
-                repo_id,
-                DiffArea::Unstaged,
                 paths,
+                selection.from_explicit_selection,
+                anchor,
+                _w,
+                cx,
             );
-            cx.notify();
         });
         let button = match debug_selector {
             Some(selector) => button.debug_selector(move || selector.to_string()),
