@@ -511,6 +511,7 @@ impl GixRepo {
         cmd.arg("-c")
             .arg("core.quotePath=false")
             .arg("blame")
+            .arg("--no-textconv")
             .arg("--line-porcelain");
 
         let output = match area {

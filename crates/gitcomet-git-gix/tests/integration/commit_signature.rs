@@ -111,6 +111,16 @@ fn open(repo: &Path) -> std::sync::Arc<dyn GitRepository> {
     GixBackend.open(repo).expect("open repository")
 }
 
+#[cfg(unix)]
+fn in_isolated_verifier_config(test_name: &str) -> bool {
+    gitcomet_core::test_support::child_test::in_child(
+        "GITCOMET_VERIFIER_CONFIG_TEST",
+        module_path!(),
+        test_name,
+        |_| {},
+    )
+}
+
 #[test]
 fn a_trusted_ssh_signature_verifies_and_an_unsigned_commit_earns_no_entry() {
     if !ssh_signing_available() {
@@ -553,7 +563,11 @@ fn verification_forces_utf8_despite_log_output_encoding() {
 #[cfg(unix)]
 #[test]
 fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
-    if !ssh_signing_available() {
+    if !ssh_signing_available()
+        || !in_isolated_verifier_config(
+            "unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad",
+        )
+    {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -575,7 +589,12 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
     ] {
         run_git(
             &fixture.repo,
-            &["config", "gpg.ssh.program", program.to_str().unwrap()],
+            &[
+                "config",
+                "--global",
+                "gpg.ssh.program",
+                program.to_str().unwrap(),
+            ],
         );
         let result = repo
             .verify_commit_signatures(
@@ -594,7 +613,9 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
 #[cfg(unix)]
 #[test]
 fn a_verifier_that_kills_git_costs_only_that_commits_badge() {
-    if !ssh_signing_available() {
+    if !ssh_signing_available()
+        || !in_isolated_verifier_config("a_verifier_that_kills_git_costs_only_that_commits_badge")
+    {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -627,7 +648,12 @@ fn a_verifier_that_kills_git_costs_only_that_commits_badge() {
     );
     run_git(
         &fixture.repo,
-        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+        &[
+            "config",
+            "--global",
+            "gpg.ssh.program",
+            verifier.to_str().unwrap(),
+        ],
     );
     let result = open(&fixture.repo)
         .verify_commit_signatures(
@@ -680,7 +706,9 @@ fn an_ssh_key_absent_from_allowed_signers_is_untrusted() {
 #[cfg(unix)]
 #[test]
 fn signature_verification_runs_in_bounded_batches() {
-    if !ssh_signing_available() {
+    if !ssh_signing_available()
+        || !in_isolated_verifier_config("signature_verification_runs_in_bounded_batches")
+    {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -700,7 +728,12 @@ fn signature_verification_runs_in_bounded_batches() {
     );
     run_git(
         &fixture.repo,
-        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+        &[
+            "config",
+            "--global",
+            "gpg.ssh.program",
+            verifier.to_str().unwrap(),
+        ],
     );
     let result = open(&fixture.repo)
         .verify_commit_signatures(
@@ -736,7 +769,9 @@ fn signature_verification_runs_in_bounded_batches() {
 #[cfg(unix)]
 #[test]
 fn cancellation_stops_a_running_signature_verifier() {
-    if !ssh_signing_available() {
+    if !ssh_signing_available()
+        || !in_isolated_verifier_config("cancellation_stops_a_running_signature_verifier")
+    {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -750,7 +785,12 @@ fn cancellation_stops_a_running_signature_verifier() {
     );
     run_git(
         &fixture.repo,
-        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+        &[
+            "config",
+            "--global",
+            "gpg.ssh.program",
+            verifier.to_str().unwrap(),
+        ],
     );
     let repo = open(&fixture.repo);
     let cancellation = gitcomet_core::services::CancellationToken::new();
@@ -787,7 +827,11 @@ fn cancellation_stops_a_running_signature_verifier() {
 #[cfg(unix)]
 #[test]
 fn a_format_without_a_verifier_is_skipped_without_running_one() {
-    if !ssh_signing_available() {
+    if !ssh_signing_available()
+        || !in_isolated_verifier_config(
+            "a_format_without_a_verifier_is_skipped_without_running_one",
+        )
+    {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -801,7 +845,12 @@ fn a_format_without_a_verifier_is_skipped_without_running_one() {
     );
     run_git(
         &fixture.repo,
-        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+        &[
+            "config",
+            "--global",
+            "gpg.ssh.program",
+            verifier.to_str().unwrap(),
+        ],
     );
     let repo = open(&fixture.repo);
     let ids = [id];
