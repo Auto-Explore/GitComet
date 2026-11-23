@@ -53,9 +53,10 @@ impl SettingsWindowView {
     ) {
         crate::environment::refresh_current(window, cx);
         self.runtime_info.environment = cx.global::<crate::environment::Environment>().0.clone();
+        let summary = crate::environment::summary_for_copy(window, cx);
         crate::clipboard::write_text(
             cx,
-            self.runtime_info.environment.summary(),
+            summary,
             crate::clipboard::CopySource::EnvironmentDetails,
         );
         cx.notify();
