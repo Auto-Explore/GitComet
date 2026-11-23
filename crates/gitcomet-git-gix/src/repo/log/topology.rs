@@ -286,7 +286,7 @@ impl TopologyWalk {
     /// that order. The topology holds parents as rows already, so nothing is
     /// looked up by ID, which an index built from the walk's IDs has to do
     /// for every parent.
-    pub(super) fn index_tables(&self, cancelled: &dyn Fn() -> bool) -> gix::Result<IndexTables> {
+    pub(super) fn index_tables(&self, cancellation: &CancellationToken) -> Result<IndexTables> {
         let topology = &*self.topology;
         let parents_of = |row: u32| {
             &topology.parents[topology.offsets[row as usize] as usize
@@ -296,7 +296,7 @@ impl TopologyWalk {
         for (at, &row) in topology.order.iter().enumerate() {
             place[row as usize] = at as u32;
         }
-        check_cancelled(cancelled())?;
+        cancellation.check_cancelled()?;
         let mut tables = IndexTables {
             ids: Vec::with_capacity(topology.ids.len()),
             parent_offsets: Vec::with_capacity(topology.offsets.len()),
@@ -306,7 +306,7 @@ impl TopologyWalk {
         tables.parent_offsets.push(0);
         for (at, &row) in topology.order.iter().enumerate() {
             if at % 65_536 == 0 {
-                check_cancelled(cancelled())?;
+                cancellation.check_cancelled()?;
             }
             let parents = parents_of(row);
             let stash_shaped = match *parents {
@@ -1040,6 +1040,31 @@ mod tests {
         let waited = flight.waiter.recv().unwrap().unwrap();
         assert!(Arc::ptr_eq(&built, &waited));
         assert_eq!(flight.builds.load(SeqCst), 1);
+    }
+
+    /// A shared index build cancelled meanwhile reaches a requester that is
+    /// still waiting: as a cancellation, not as a failure to show.
+    #[test]
+    fn cancelled_index_tables_report_a_cancellation() {
+        let walk = TopologyWalk {
+            topology: Arc::new(Topology {
+                hash_len: 20,
+                ids: [].into(),
+                offsets: [0].into(),
+                parents: [].into(),
+                times: [].into(),
+                order: [].into(),
+                sorted: Default::default(),
+            }),
+            next: 0,
+        };
+        let token = CancellationToken::new();
+        token.cancel();
+        let error = walk.index_tables(&token).err().expect("cancelled");
+        assert!(matches!(
+            error.kind(),
+            gitcomet_core::error::ErrorKind::Cancelled
+        ));
     }
 
     /// A store invalidation clears the cache under the store's own locks, so

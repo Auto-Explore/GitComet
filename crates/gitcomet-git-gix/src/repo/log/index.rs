@@ -104,13 +104,8 @@ impl GixRepo {
             && matches!(mode, HistoryMode::FullReachable | HistoryMode::AllBranches)
             && let super::LogPagedWalk::CachedDateOrder(topology) = &walk.walk
         {
-            let tables = topology
-                .index_tables(&|| cancellation.is_cancelled())
-                .map_err(|error| crate::repo::object_store::gix_error("gix history index", error))
-                .and_then(|tables| {
-                    cancellation.check_cancelled()?;
-                    Ok(tables)
-                })?;
+            let tables = topology.index_tables(cancellation)?;
+            cancellation.check_cancelled()?;
             drop(walk);
             let rows = (tables.ids.len() / hash_len) as u64;
             on_progress(HistoryIndexProgress {
