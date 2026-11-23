@@ -1,7 +1,8 @@
-use crate::git_cli::run_git;
+use crate::git_cli::{git_cmd, run_git};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitVersion, refresh_git_runtime};
 use gitcomet_core::services::{GitBackend, MAINTENANCE_CHECK_COMMAND};
+use gitcomet_core::test_support::git_fixture::{LinearCommit, import_linear_history};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -177,6 +178,77 @@ fn held_maintenance_lock_is_reported() {
     );
     assert_eq!(pack_count(&repo), packs, "nothing was repacked");
     assert!(lock.exists(), "someone else's lock is left alone");
+}
+
+/// One packed branch of `commits` commits and no commit-graph.
+fn repo_with_linear_history(root: &Path, commits: usize) -> PathBuf {
+    let repo = root.join("repo");
+    init_repo(&repo);
+    run_git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    let messages: Vec<String> = (0..commits).map(|index| format!("c{index}")).collect();
+    import_linear_history(
+        &mut git_cmd(&repo),
+        "main",
+        messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| LinearCommit {
+                author: "Test <test@example.com>",
+                timestamp: 1_600_000_000 + index as i64,
+                message,
+                path: "file.txt",
+                contents: message,
+            }),
+    );
+    repo
+}
+
+fn commit_graph_chain(repo: &Path) -> PathBuf {
+    repo.join(".git/objects/info/commit-graphs/commit-graph-chain")
+}
+
+/// History reads walk every commit outside the commit-graph, so a repository
+/// with thousands of them is offered maintenance, and Start writes the graph.
+#[test]
+fn many_commits_outside_the_commit_graph_are_recommended_then_covered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = repo_with_linear_history(dir.path(), 5_000);
+    let opened = GixBackend.open(&repo).expect("open repo");
+    assert!(!commit_graph_chain(&repo).exists());
+
+    assert!(opened.maintenance_needed().expect("check"));
+    let output = opened.run_maintenance_with_output().expect("maintenance");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(commit_graph_chain(&repo).exists(), "the graph was written");
+    run_git(&repo, &["commit-graph", "verify"]);
+    assert!(!opened.maintenance_needed().expect("check after run"));
+
+    // A few commits on top of a written graph are not worth another run.
+    run_git(&repo, &["checkout", "--quiet", "main"]);
+    run_git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "next"]);
+    assert!(!opened.maintenance_needed().expect("check after a commit"));
+}
+
+#[test]
+fn few_commits_outside_the_commit_graph_are_not_recommended() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = repo_with_linear_history(dir.path(), 4_999);
+    let opened = GixBackend.open(&repo).expect("open repo");
+
+    assert!(!opened.maintenance_needed().expect("check"));
+}
+
+/// Git ignores the commit-graph where `core.commitGraph` is off, so writing
+/// one would never end the recommendation.
+#[test]
+fn a_disabled_commit_graph_is_not_recommended() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = repo_with_linear_history(dir.path(), 5_000);
+    run_git(&repo, &["config", "core.commitGraph", "false"]);
+    let opened = GixBackend.open(&repo).expect("open repo");
+
+    assert!(!opened.maintenance_needed().expect("check"));
 }
 
 #[test]

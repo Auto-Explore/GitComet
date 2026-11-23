@@ -21,11 +21,11 @@ fn resolve(
 /// Explorer "Delete permanently": the one file operation that skips the trash
 /// and the undo journal.
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     prompt: DeletePermanentlyPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let prompt_id = prompt.prompt_id;
     let detail = match prompt.names.len() {
         1 => "1 item will be permanently removed. This cannot be undone.".to_string(),

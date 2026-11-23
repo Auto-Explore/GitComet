@@ -467,7 +467,7 @@ fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppCon
                 + Duration::from_secs(ix.try_into().unwrap_or(0)),
         })
         .collect();
-    repo.log = Loadable::Ready(
+    repo.history_state.log = Loadable::Ready(
         gitcomet_core::domain::LogPage {
             commits,
             next_cursor: None,

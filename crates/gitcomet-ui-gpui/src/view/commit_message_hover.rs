@@ -71,9 +71,8 @@ struct CommitMessageHoverLayout {
 /// does not copy and re-scan the message again.
 ///
 /// The theme is deliberately not part of the key: it feeds the highlight colours,
-/// but `set_theme` already knows when it changes and drops this outright, which
-/// is cheaper than carrying a >2KB [`AppTheme`] here and field-comparing it on
-/// every frame.
+/// but the window's theme generation says when it changes, which is cheaper
+/// than carrying a >2KB [`AppTheme`] here and field-comparing it on every frame.
 struct CommitMessageHoverBody {
     commit_id: CommitId,
     /// Whether the full `%B` body had arrived when this was built. The card
@@ -85,7 +84,8 @@ struct CommitMessageHoverBody {
 }
 
 pub(in crate::view) struct CommitMessageHoverHost {
-    theme: AppTheme,
+    /// The theme generation `body` was highlighted under.
+    body_theme: crate::theme::ThemeGeneration,
     /// Held directly rather than reached through the root view: the root opens
     /// this host inside its own update, so calling back into it from here would
     /// be a re-entrant lease. Used only to dispatch; state is read from
@@ -117,13 +117,9 @@ impl CommitMessageHoverHost {
             .is_some_and(|state| state.source_bounds.contains(&position))
     }
 
-    pub(in crate::view) fn new(
-        theme: AppTheme,
-        store: Arc<AppStore>,
-        ui_model: Entity<AppUiModel>,
-    ) -> Self {
+    pub(in crate::view) fn new(store: Arc<AppStore>, ui_model: Entity<AppUiModel>) -> Self {
         Self {
-            theme,
+            body_theme: Default::default(),
             store,
             ui_model,
             state: None,
@@ -135,14 +131,6 @@ impl CommitMessageHoverHost {
             open_delay: None,
             close_delay: None,
         }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        // The cached body carries theme-coloured highlights, so it is rebuilt
-        // from here rather than by comparing themes on every render.
-        self.body = None;
-        cx.notify();
     }
 
     pub(in crate::view) fn show(
@@ -395,7 +383,11 @@ impl Render for CommitMessageHoverHost {
             return div().into_any_element();
         };
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
+        // The cached body carries theme-coloured highlights.
+        if self.body_theme.changed(cx) {
+            self.body = None;
+        }
         let ui_scale = ui_scale::UiScale::current(cx);
         let loaded = self
             .ui_model
@@ -552,7 +544,7 @@ mod tests {
         cx.update(|cx| {
             let ui_model =
                 cx.new(|cx| AppUiModel::new(store.snapshot(), Arc::downgrade(&store), cx));
-            cx.new(|_cx| CommitMessageHoverHost::new(AppTheme::gitcomet_dark(), store, ui_model))
+            cx.new(|_cx| CommitMessageHoverHost::new(store, ui_model))
         })
     }
 
@@ -648,6 +640,56 @@ mod tests {
                 assert!(!host.is_open(), "a stale open timer must not reopen it");
             })
         });
+    }
+
+    /// Nothing tells the host about a theme: it paints, and rebuilds its
+    /// cached highlights, with whatever its window draws with.
+    #[gpui::test]
+    fn the_card_follows_its_windows_theme(cx: &mut gpui::TestAppContext) {
+        use crate::kit::test_support::{color_close, painted_control_quads, solid_color};
+
+        let (dark, light) = (AppTheme::gitcomet_dark(), AppTheme::gitcomet_light());
+        let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
+        let store = Arc::new(store);
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let ui_model =
+                cx.new(|cx| AppUiModel::new(store.snapshot(), Arc::downgrade(&store), cx));
+            CommitMessageHoverHost::new(store.clone(), ui_model)
+        });
+        let window_id = cx.update(|window, _| window.window_handle().window_id());
+        cx.update(|_, app| {
+            host.update(app, |host, cx| {
+                host.show(state("See https://example.com/fix"), on_row(), cx)
+            })
+        });
+
+        for theme in [dark, light, dark] {
+            cx.update(|_, app| crate::theme::set_window_theme(app, window_id, theme));
+            cx.run_until_parked();
+
+            let fills: Vec<_> = painted_control_quads(cx, "commit_message_hover")
+                .iter()
+                .filter_map(|(fill, _)| solid_color(fill))
+                .collect();
+            assert!(
+                fills
+                    .iter()
+                    .any(|fill| color_close(*fill, theme.colors.surface.raised)),
+                "card fill {fills:?} is not this theme's raised surface"
+            );
+            let link = crate::view::commit_message_text::commit_link_style(theme).color;
+            cx.update(|_, app| {
+                let body = host
+                    .read(app)
+                    .body
+                    .as_ref()
+                    .expect("an open card has a body");
+                assert!(
+                    body.highlights.iter().any(|(_, style)| style.color == link),
+                    "cached highlights kept another theme's link colour"
+                );
+            });
+        }
     }
 
     #[test]

@@ -108,7 +108,7 @@ pub(super) fn panel(
     is_remove: bool,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let width = super::LARGE_PICKER_WIDTH;

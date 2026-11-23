@@ -2080,12 +2080,11 @@ impl DiffRenderer {
             .on_children_prepainted({
                 let editor_scroll = editor_scroll.clone();
                 let gutter_scroll = gutter_scroll.clone();
-                move |_bounds, window, _cx| {
+                move |_bounds, _window, _cx| {
                     let target_y = editor_scroll.offset().y;
                     let base = gutter_scroll.0.borrow().base_handle.clone();
                     if base.offset().y != target_y {
                         base.set_offset(point(px(0.0), target_y));
-                        window.refresh();
                     }
                 }
             })
@@ -2115,17 +2114,17 @@ impl DiffRenderer {
                         // scroll the gutter out of step with it.
                         .on_scroll_wheel({
                             let editor_scroll = editor_scroll.clone();
-                            move |event, window, cx| {
+                            cx.listener(move |_, event: &gpui::ScrollWheelEvent, window, cx| {
                                 let delta = event.delta.pixel_delta(window.line_height());
                                 let offset = editor_scroll.offset();
                                 let max_y = editor_scroll.max_offset().y.max(px(0.0));
                                 let next_y = (offset.y + delta.y).clamp(-max_y, px(0.0));
                                 if next_y != offset.y {
                                     editor_scroll.set_offset(point(offset.x, next_y));
-                                    window.refresh();
+                                    cx.notify();
                                 }
                                 cx.stop_propagation();
-                            }
+                            })
                         })
                         .child(gutter),
                 )

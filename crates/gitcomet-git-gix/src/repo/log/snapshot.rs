@@ -14,7 +14,7 @@ impl GixRepo {
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
         cancellation.check_cancelled()?;
-        let (store, shared) = self.fresh_history_store()?;
+        let (store, shared) = self.current_history_store()?;
         let repo = store.to_thread_local();
         let query = self.resolve_history_query(
             &repo,

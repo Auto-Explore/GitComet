@@ -38,14 +38,14 @@ fn failed_detached_checkout_restores_head_after_unchanged_refresh(scope: LogScop
         let repo = &mut state.repos[0];
         repo.history_state.history_scope = scope;
         repo.set_head_branch(Loadable::Ready("HEAD".into()));
-        let Loadable::Ready(before) = repo.log.clone() else {
+        let Loadable::Ready(before) = repo.history_state.log.clone() else {
             unreachable!()
         };
         let actual_head = before.commits[0].id.clone();
         let rejected_target = before.commits[1].id.clone();
         repo.set_detached_head_commit(Some(actual_head.clone()));
         repo.set_selected_commit(Some(rejected_target.clone()));
-        let rev = repo.log_rev;
+        let rev = repo.history_state.log_rev;
         repo.set_commit_multi_selection(crate::model::CommitMultiSelection {
             commits: vec![rejected_target.clone()].into(),
             anchor: Some(rejected_target.clone()),
@@ -111,8 +111,10 @@ fn failed_detached_checkout_restores_head_after_unchanged_refresh(scope: LogScop
                 Some(&actual_head),
                 "{scope:?}, head_reply_first={head_reply_first}: unchanged history must restore the actual detached HEAD"
             );
-            assert!(matches!(&repo.log, Loadable::Ready(page) if Arc::ptr_eq(page, &before)));
-            assert_eq!(repo.log_rev, rev);
+            assert!(
+                matches!(&repo.history_state.log, Loadable::Ready(page) if Arc::ptr_eq(page, &before))
+            );
+            assert_eq!(repo.history_state.log_rev, rev);
             assert_eq!(repo.history_state.multi_selection, selection);
             assert_eq!(
                 repo.history_state.log_snapshot,
@@ -136,12 +138,12 @@ fn failed_detached_checkout_restores_head_after_unchanged_first_parent_refresh()
 #[test]
 fn unchanged_focus_keeps_the_entire_page_selection_and_revisions() {
     let mut state = complete_state(50_000);
-    let Loadable::Ready(before) = state.repos[0].log.clone() else {
+    let Loadable::Ready(before) = state.repos[0].history_state.log.clone() else {
         unreachable!()
     };
     let selected = before.commits.last().unwrap().id.clone();
     state.repos[0].set_selected_commit(Some(selected.clone()));
-    let rev = state.repos[0].log_rev;
+    let rev = state.repos[0].history_state.log_rev;
     state.repos[0].set_commit_multi_selection(crate::model::CommitMultiSelection {
         commits: vec![selected.clone()].into(),
         anchor: Some(selected),
@@ -158,8 +160,10 @@ fn unchanged_focus_keeps_the_entire_page_selection_and_revisions() {
             Ok(HistoryReadResult::Unchanged),
         );
         let repo = &state.repos[0];
-        assert!(matches!(&repo.log, Loadable::Ready(page) if Arc::ptr_eq(page, &before)));
-        assert_eq!(repo.log_rev, rev);
+        assert!(
+            matches!(&repo.history_state.log, Loadable::Ready(page) if Arc::ptr_eq(page, &before))
+        );
+        assert_eq!(repo.history_state.log_rev, rev);
         assert_eq!(repo.history_state.multi_selection, selection);
         assert_eq!(
             repo.history_state.log_snapshot,
@@ -171,7 +175,7 @@ fn unchanged_focus_keeps_the_entire_page_selection_and_revisions() {
 #[test]
 fn complete_deep_history_keeps_its_root_after_hundreds_of_new_commits() {
     let mut state = complete_state(50_000);
-    let Loadable::Ready(before) = state.repos[0].log.clone() else {
+    let Loadable::Ready(before) = state.repos[0].history_state.log.clone() else {
         unreachable!()
     };
     let selected = before.commits.last().unwrap().id.clone();
@@ -188,7 +192,7 @@ fn complete_deep_history_keeps_its_root_after_hundreds_of_new_commits() {
     let effects = refresh_history(&mut state);
     answer_log(&mut state, &effects, &history);
     assert!(
-        matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history && page.next_cursor.is_none())
+        matches!(&state.repos[0].history_state.log, Loadable::Ready(page) if page.commits == history && page.next_cursor.is_none())
     );
     assert_eq!(state.repos[0].history_state.selected_commit, Some(selected));
 }
@@ -200,8 +204,8 @@ fn failed_or_cancelled_refresh_preserves_ready_history() {
         ErrorKind::Backend("refresh failed".into()),
     ] {
         let mut state = complete_state(6_000);
-        let before = state.repos[0].log.clone();
-        let rev = state.repos[0].log_rev;
+        let before = state.repos[0].history_state.log.clone();
+        let rev = state.repos[0].history_state.log_rev;
         let effects = refresh_history(&mut state);
         reply(
             &mut state,
@@ -209,8 +213,8 @@ fn failed_or_cancelled_refresh_preserves_ready_history() {
             None,
             Err(Error::new(error)),
         );
-        assert_eq!(state.repos[0].log, before);
-        assert_eq!(state.repos[0].log_rev, rev);
+        assert_eq!(state.repos[0].history_state.log, before);
+        assert_eq!(state.repos[0].history_state.log_rev, rev);
         assert!(state.repos[0].loads_in_flight.active_log_seq().is_none());
         assert!(state.repos[0].history_state.log_snapshot.is_some());
     }
@@ -222,8 +226,8 @@ fn late_and_duplicate_replies_cannot_overwrite_a_completed_newer_request() {
     let old = log_effect(&refresh_history(&mut state)).0;
     let new = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
     reply(&mut state, new, None, Ok(HistoryReadResult::Unchanged));
-    let before = state.repos[0].log.clone();
-    let rev = state.repos[0].log_rev;
+    let before = state.repos[0].history_state.log.clone();
+    let rev = state.repos[0].history_state.log_rev;
     for seq in [old, new] {
         assert!(
             reply(
@@ -238,8 +242,8 @@ fn late_and_duplicate_replies_cannot_overwrite_a_completed_newer_request() {
             )
             .is_empty()
         );
-        assert_eq!(state.repos[0].log, before);
-        assert_eq!(state.repos[0].log_rev, rev);
+        assert_eq!(state.repos[0].history_state.log, before);
+        assert_eq!(state.repos[0].history_state.log_rev, rev);
     }
 }
 
@@ -247,15 +251,15 @@ fn late_and_duplicate_replies_cannot_overwrite_a_completed_newer_request() {
 fn invalidated_pagination_refreshes_without_appending_incompatible_rows() {
     let old = commits_named("c", 800);
     let mut state = paginated_repo_state(&old[..600]);
-    let before = state.repos[0].log.clone();
+    let before = state.repos[0].history_state.log.clone();
     let effects = history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) });
     let (seq, _, cursor) = log_effect(&effects);
     let next = reply(&mut state, seq, cursor, Ok(HistoryReadResult::Invalidated));
-    assert_eq!(state.repos[0].log, before);
+    assert_eq!(state.repos[0].history_state.log, before);
     assert!(log_effect(&next).2.is_none());
     let history: Vec<_> = commits_named("new", 401).into_iter().chain(old).collect();
     answer_log(&mut state, &next, &history);
-    let Loadable::Ready(page) = &state.repos[0].log else {
+    let Loadable::Ready(page) = &state.repos[0].history_state.log else {
         unreachable!()
     };
     let ids: FxHashSet<_> = page.commits.iter().map(|c| &c.id).collect();

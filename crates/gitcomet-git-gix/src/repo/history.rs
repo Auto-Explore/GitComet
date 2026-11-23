@@ -198,7 +198,18 @@ const CHERRY_PICK_ALREADY_APPLIED_SENTINEL: &str = "GITCOMET_CHERRY_PICK_ALREADY
 
 impl GixRepo {
     pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
-        let repo = self.reopen_repo()?;
+        // Loose refs are read from disk on every call; this handle also
+        // reloads packed refs rewritten without a newer mtime.
+        let (repo, _) = self.current_history_store()?;
+        let repo = repo.to_thread_local();
+        // Off Unix that stamp is length and mtime only, blind to a same-length
+        // rewrite within one mtime tick, so read packed refs again.
+        #[cfg(not(unix))]
+        if repo.refs.packed_refs_path().is_file() {
+            repo.refs.force_refresh_packed_buffer().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix reload packed-refs: {e}")))
+            })?;
+        }
         gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
 

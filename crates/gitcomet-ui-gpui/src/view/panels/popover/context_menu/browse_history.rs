@@ -17,7 +17,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     for commit_id in &history {
         let sha = commit_id.as_ref().to_string();
         let short = sha.get(0..8).unwrap_or(&sha);
-        let summary = repo.and_then(|r| match &r.log {
+        let summary = repo.and_then(|r| match &r.history_state.log {
             Loadable::Ready(page) => page
                 .commits
                 .iter()

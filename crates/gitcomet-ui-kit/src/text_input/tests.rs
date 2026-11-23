@@ -9,6 +9,7 @@ mod editing_history;
 mod focus_events;
 mod highlighting;
 mod layout;
+mod line_starts;
 mod scrolling;
 mod selection_ime;
 

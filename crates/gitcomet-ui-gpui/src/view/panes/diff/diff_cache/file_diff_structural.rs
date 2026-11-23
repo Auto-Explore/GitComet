@@ -1,7 +1,6 @@
 use super::{
     FileDiffCacheError, IndexedFileDiffSource, PagedFileDiffInlineRows, PagedFileDiffRows,
     StreamedFileDiffSource, build_file_diff_plan_from_document_sources, file_diff_source_plan_text,
-    plan_line_to_inline_row_maps,
 };
 use gitcomet_core::diff_engine::{DiffEngine, DiffEngineFallback, DiffEngineStatus};
 use gitcomet_core::diff_engine::{StructuralDiff, StructuralDiffOutcome};
@@ -87,10 +86,21 @@ pub(super) fn compare(
         }
     }
     if result.diff.is_some() {
-        *old = IndexedFileDiffSource::from_shared(Some(&Arc::from(old_text.as_ref())));
-        *new = IndexedFileDiffSource::from_shared(Some(&Arc::from(new_text.as_ref())));
+        old.keep_compared_text(&old_text);
+        new.keep_compared_text(&new_text);
     }
     Ok(result)
+}
+
+impl IndexedFileDiffSource {
+    /// Rows must show the bytes that were compared. A file can change between
+    /// reads, so a file-backed side is replaced by the text just read; a side
+    /// already in memory is that text.
+    fn keep_compared_text(&mut self, compared: &str) {
+        if self.is_file_backed() {
+            *self = Self::from_shared(Some(&Arc::from(compared)));
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -116,12 +126,13 @@ impl Presentation {
 }
 
 impl StreamedFileDiffSource {
-    pub(super) fn apply_structural(&mut self, diff: StructuralDiff) {
-        let (old_inline, new_inline) = plan_line_to_inline_row_maps(
-            &self.plan,
-            self.old_source.line_count(),
-            self.new_source.line_count(),
-        );
+    /// `old_inline` and `new_inline` are this source's line-to-inline-row maps.
+    pub(super) fn apply_structural(
+        &mut self,
+        diff: StructuralDiff,
+        old_inline: &[Option<usize>],
+        new_inline: &[Option<usize>],
+    ) {
         for row in 0..self.split_len() {
             let source = self.split_row(row).expect("planned split row");
             let old = source
@@ -139,8 +150,8 @@ impl StreamedFileDiffSource {
         }
         self.inline_visual_kinds.fill(DiffLineKind::Context);
         for (changes, rows, kind) in [
-            (&diff.old_changes, &old_inline, DiffLineKind::Remove),
-            (&diff.new_changes, &new_inline, DiffLineKind::Add),
+            (&diff.old_changes, old_inline, DiffLineKind::Remove),
+            (&diff.new_changes, new_inline, DiffLineKind::Add),
         ] {
             for line in changes.keys() {
                 if let Some(Some(row)) = rows.get(*line) {

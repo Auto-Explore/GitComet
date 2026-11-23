@@ -55,8 +55,8 @@ fn find_fixture_repo(commits: Vec<Commit>) -> RepoState {
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
     repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     repo
@@ -649,7 +649,7 @@ fn history_find_over_a_partial_page_is_not_final_while_the_index_builds(
 ) {
     let mut repo = find_fixture_repo(find_fixture_commits());
     let page = Arc::new(log_page(find_fixture_commits(), Some("ffff5555")));
-    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     repo.history_state.log = Loadable::Ready(page);
     let snapshot = HistorySnapshot("history-find-building".into());
     repo.history_state.log_snapshot = Some(snapshot.clone());

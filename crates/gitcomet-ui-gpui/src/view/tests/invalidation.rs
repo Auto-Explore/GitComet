@@ -393,11 +393,25 @@ fn resize_test_shell<'a>(
     Vec<gpui::Bounds<Pixels>>,
     StableCachedViewsTestGuard,
 ) {
+    resize_test_shell_with(cx, view_state_with_active_ready_repo(RepoId(1)), handles)
+}
+
+/// The same shell showing `state`.
+fn resize_test_shell_with<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    state: AppState,
+    handles: &[&'static str],
+) -> (
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    Vec<gpui::Bounds<Pixels>>,
+    StableCachedViewsTestGuard,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
-    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
     cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
     test_support::redraw(cx);
@@ -422,8 +436,18 @@ fn drag_and_probe<T>(
     step: Pixels,
     probe: impl Fn(&mut gpui::VisualTestContext) -> T,
 ) -> (T, T) {
+    drag_by_and_probe(cx, start, gpui::point(step, px(0.0)), probe)
+}
+
+/// The same, moving by `step` on both axes.
+fn drag_by_and_probe<T>(
+    cx: &mut gpui::VisualTestContext,
+    start: gpui::Point<Pixels>,
+    step: gpui::Point<Pixels>,
+    probe: impl Fn(&mut gpui::VisualTestContext) -> T,
+) -> (T, T) {
     let left = gpui::MouseButton::Left;
-    let at = |ix: usize| gpui::point(start.x + step * ix as f32, start.y);
+    let at = |ix: usize| start + gpui::point(step.x * ix as f32, step.y * ix as f32);
     cx.simulate_mouse_down(start, left, gpui::Modifiers::default());
     cx.simulate_mouse_move(at(1), Some(left), gpui::Modifiers::default());
     let before = probe(cx);
@@ -505,6 +529,56 @@ fn history_column_drags_leave_other_cached_views_alone(cx: &mut gpui::TestAppCon
     );
 }
 
+/// A status-section drag is the details pane's own: its moves redraw that
+/// pane and nothing else.
+#[gpui::test]
+fn status_section_drags_leave_other_cached_views_alone(cx: &mut gpui::TestAppContext) {
+    let file = |path: &str| gitcomet_core::domain::FileStatus {
+        path: PathBuf::from(path),
+        kind: gitcomet_core::domain::FileStatusKind::Modified,
+        conflict: None,
+    };
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![file("staged.txt")]),
+            unstaged: Arc::new(vec![file("unstaged.txt")]),
+        }
+        .into(),
+    );
+    let (view, cx, handles, _cache_guard) =
+        resize_test_shell_with(cx, state, &["status_resize_change_tracking_staged"]);
+    let probe = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            let details = root.details_pane.read(app);
+            (
+                (
+                    root.bottom_status_bar.read(app).render_count,
+                    root.sidebar_pane.read(app).render_count,
+                    root.main_pane.read(app).render_count,
+                ),
+                details.render_count,
+                details.change_tracking_height,
+            )
+        })
+    };
+
+    // The press and the release still refresh the window: gpui tracks the
+    // active state of every stateful element that way.
+    let step = gpui::point(px(0.0), px(6.0));
+    let (before, after) = drag_by_and_probe(cx, handles[0].center(), step, probe);
+    assert_ne!(after.2, before.2, "the drag must resize the status section");
+    assert!(
+        after.1 >= before.1 + 7,
+        "every move must redraw the details pane"
+    );
+    assert_eq!(
+        after.0, before.0,
+        "status-section drag moves must not re-render the status bar, sidebar or main pane"
+    );
+}
+
 /// `cargo test -p gitcomet-ui-gpui --lib timing_divider_drag -- --ignored
 /// --nocapture`: mean time per pointer move, frame included, with cached views.
 #[gpui::test]
@@ -567,6 +641,48 @@ fn timing_divider_drag_moves(cx: &mut gpui::TestAppContext) {
         println!(
             "timing divider_drag {id} per_move {per_move:?} width_changes {}",
             widths.len()
+        );
+    }
+}
+
+/// The panes hold no theme and nothing tells them of one. Setting the
+/// window's theme has to redraw them, though they sit behind a cache.
+#[gpui::test]
+fn a_theme_change_redraws_the_cached_panes_with_the_new_theme(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _handles, _cache_guard) = resize_test_shell(cx, &["pane_resize_sidebar"]);
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            [
+                root.bottom_status_bar.read(app).render_count,
+                root.sidebar_pane.read(app).render_count,
+                root.main_pane.read(app).render_count,
+                root.details_pane.read(app).render_count,
+            ]
+        })
+    };
+
+    // Away from the theme the window starts in first: the same theme is no change.
+    let (light, dark) = (AppTheme::gitcomet_light(), AppTheme::gitcomet_dark());
+    let starts_dark = cx.update(|_window, app| AppTheme::current(app).is_dark);
+    for theme in if starts_dark {
+        [light, dark]
+    } else {
+        [dark, light]
+    } {
+        cx.run_until_parked();
+        let before = renders(cx);
+        cx.update(|_window, app| view.update(app, |view, cx| view.set_theme(theme, cx)));
+        cx.run_until_parked();
+        for (before, after) in before.into_iter().zip(renders(cx)) {
+            assert!(after > before, "a pane kept the frame it drew before");
+        }
+        let chrome: gpui::Background = theme.colors.surface.chrome.into();
+        assert!(
+            crate::kit::test_support::painted_control_quads(cx, "action_bar")
+                .iter()
+                .any(|(fill, _)| *fill == chrome),
+            "the action bar did not paint with the window's theme"
         );
     }
 }

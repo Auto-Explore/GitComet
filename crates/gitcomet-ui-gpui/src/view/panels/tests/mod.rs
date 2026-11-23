@@ -757,6 +757,32 @@ pub(super) fn draw_and_drain_test_window(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// The window's diff renderer.
+pub(super) fn diff_renderer(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> gpui::Entity<crate::view::panes::diff::helpers::state::DiffRenderer> {
+    cx.update(|_window, app| view.read(app).diff_renderer.clone())
+}
+
+/// Draws one frame with the details pane `width` wide, as a pane resize does.
+/// The update's flush draws once more only if that frame asked for it.
+pub(super) fn draw_with_details_width(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    width: f32,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_width = gpui::px(width);
+            this.details_render_width = gpui::px(width);
+            cx.notify();
+        });
+        window.refresh();
+        let _ = window.draw(app);
+    });
+}
+
 pub(super) const ALL_DIFF_SCROLL_SYNC_MODES: [DiffScrollSync; 4] = [
     DiffScrollSync::Both,
     DiffScrollSync::Vertical,

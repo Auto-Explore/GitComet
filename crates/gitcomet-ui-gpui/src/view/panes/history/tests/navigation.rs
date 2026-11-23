@@ -371,12 +371,12 @@ fn cached_history_paging_uses_retained_rows_while_loading(cx: &mut gpui::TestApp
     fixture.resize_to_rows(cx, 10.5);
     let mut state = (*fixture.store.snapshot()).clone();
     let repo = &mut state.repos[0];
-    let Loadable::Ready(page) = &repo.log else {
+    let Loadable::Ready(page) = &repo.history_state.log else {
         panic!("loaded fixture")
     };
     repo.history_state.retained_log_while_loading = Some(page.clone());
-    repo.log = Loadable::Loading;
-    repo.log_rev += 1;
+    repo.history_state.log = Loadable::Loading;
+    repo.history_state.log_rev += 1;
     repo.history_state.log = Loadable::Loading;
     repo.history_state.log_rev += 1;
     fixture

@@ -253,6 +253,13 @@ struct DebouncedChange {
     last_event_at: Option<Instant>,
     debounce: Duration,
     max_delay: Duration,
+    /// The shorter wait for a lone working-tree change, and how long nothing
+    /// may have changed before one.
+    lone_change: Option<(Duration, Duration)>,
+    /// The last event of all, flushed or not.
+    last_activity: Option<Instant>,
+    /// Whether the pending changes began after a quiet spell.
+    after_quiet: bool,
 }
 
 impl DebouncedChange {
@@ -263,6 +270,43 @@ impl DebouncedChange {
             last_event_at: None,
             debounce,
             max_delay,
+            lone_change: None,
+            last_activity: None,
+            after_quiet: false,
+        }
+    }
+
+    /// A file saved in an editor is an event or two with nothing before
+    /// them: waiting `debounce` for more only delays the status. Such a
+    /// change waits `wait` when nothing changed for `quiet` before it.
+    fn with_lone_change(mut self, wait: Duration, quiet: Duration) -> Self {
+        self.lone_change = Some((wait, quiet));
+        self
+    }
+
+    fn for_monitor(config: &MonitorConfig) -> Self {
+        let (wait, quiet) = config.lone_change;
+        Self::new(config.debounce, config.max_delay).with_lone_change(wait, quiet)
+    }
+
+    /// How long after the last event the pending changes are flushed.
+    ///
+    /// The shorter wait is for the working tree alone: Git writes its own
+    /// files in steps, and a flush between two of them loads a state that is
+    /// about to change. Events that keep arriving are a tool at work.
+    fn wait(&self) -> Duration {
+        let (Some((wait, _)), Some(first), Some(last), Some(change)) = (
+            self.lone_change,
+            self.first_event_at,
+            self.last_event_at,
+            &self.pending,
+        ) else {
+            return self.debounce;
+        };
+        if self.after_quiet && only_worktree(change) && last.duration_since(first) < wait * 2 {
+            wait.min(self.debounce)
+        } else {
+            self.debounce
         }
     }
 
@@ -271,6 +315,13 @@ impl DebouncedChange {
     }
 
     fn push(&mut self, change: RepoExternalChange, now: Instant) -> Option<RepoExternalChange> {
+        if self.pending.is_none() {
+            self.after_quiet = self.lone_change.is_some_and(|(_, quiet)| {
+                self.last_activity
+                    .is_none_or(|last| now.saturating_duration_since(last) >= quiet)
+            });
+        }
+        self.last_activity = Some(now);
         self.pending = Some(match self.pending.take() {
             Some(pending) => merge_change(pending, change),
             None => change,
@@ -291,7 +342,7 @@ impl DebouncedChange {
 
     fn next_timeout(&self, now: Instant) -> Option<Duration> {
         let (first, last) = (self.first_event_at?, self.last_event_at?);
-        let due_by_debounce = last + self.debounce;
+        let due_by_debounce = last + self.wait();
         let due_by_max = first + self.max_delay;
         let due = if due_by_debounce <= due_by_max {
             due_by_debounce
@@ -301,12 +352,30 @@ impl DebouncedChange {
         Some(due.saturating_duration_since(now))
     }
 
-    fn take_if_due(&mut self, now: Instant) -> Option<RepoExternalChange> {
+    /// The pending changes once they are due. The shorter wait gives way
+    /// while `git_busy`: a checkout holds the index lock from its first file
+    /// until the new index is in place.
+    fn take_due(
+        &mut self,
+        now: Instant,
+        git_busy: impl FnOnce() -> bool,
+    ) -> Option<RepoExternalChange> {
         if !self.is_pending() {
             return None;
         }
-        let timeout = self.next_timeout(now).unwrap_or(Duration::from_secs(0));
-        if timeout.is_zero() { self.take() } else { None }
+        let due = |this: &Self| {
+            this.next_timeout(now)
+                .is_none_or(|timeout| timeout.is_zero())
+        };
+        if self.wait() < self.debounce && due(self) && git_busy() {
+            self.after_quiet = false;
+        }
+        if due(self) { self.take() } else { None }
+    }
+
+    #[cfg(test)]
+    fn take_if_due(&mut self, now: Instant) -> Option<RepoExternalChange> {
+        self.take_due(now, || false)
     }
 
     fn take(&mut self) -> Option<RepoExternalChange> {
@@ -730,6 +799,17 @@ fn resolve_git_dir(workdir: &Path) -> Option<PathBuf> {
 
 fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalChange {
     a.union(b)
+}
+
+/// Whether nothing but working-tree files changed.
+fn only_worktree(change: &RepoExternalChange) -> bool {
+    change.worktree
+        && !(change.index
+            || change.git_state
+            || change.tags
+            || change.large_file_support
+            || change.verification_context
+            || change.text_attributes)
 }
 
 /// Which event kinds the kernel is asked to deliver.

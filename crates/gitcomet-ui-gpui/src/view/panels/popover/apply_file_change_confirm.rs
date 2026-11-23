@@ -11,7 +11,7 @@ pub(super) fn panel(
     target: ApplyChangeTarget,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let actions_disabled = target.paths.is_empty() || !merge_commit_repo_is_ready(repo);
     let revision = gitcomet_core::services::apply_change_revision(&target.source);

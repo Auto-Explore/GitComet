@@ -104,7 +104,7 @@ impl Render for TextInput {
         // former fills short fields, while the latter keeps long fields
         // scrollable.
         let multiline_document_height = multiline.then(|| {
-            let source_rows = self.content.line_starts().len().max(1);
+            let source_rows = self.content.snapshot().line_count();
             let visual_rows = if self.soft_wrap {
                 self.wrap
                     .cache

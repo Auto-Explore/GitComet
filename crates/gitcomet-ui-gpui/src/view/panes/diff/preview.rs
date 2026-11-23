@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reads worktree files for previews and editing"
+)]
+
 use super::file_disk::DiskSurface;
 use super::*;
 use crate::view::documents::disk::{DiskIdentity, DiskStamp, disk_content_hash, disk_stamp};

@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks the terminal's folder on a background task"
+)]
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;
@@ -317,20 +321,13 @@ impl GitCometView {
         let session_seq = self.next_terminal_session_seq;
         self.next_terminal_session_seq = self.next_terminal_session_seq.wrapping_add(1).max(1);
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let theme = self.theme;
 
         let term_lock = spawned.term_lock;
         let pty_sender = spawned.pty_sender.clone();
         let events_rx = spawned.events_rx;
 
         let viewport = cx.new(|cx| {
-            TerminalViewportView::new(
-                theme,
-                focus_handle.clone(),
-                term_lock,
-                pty_sender.clone(),
-                cx,
-            )
+            TerminalViewportView::new(focus_handle.clone(), term_lock, pty_sender.clone(), cx)
         });
 
         Some(TerminalInstance {

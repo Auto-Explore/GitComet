@@ -34,7 +34,7 @@ and recheck the current anchor before publication.
 
 ## Measurements
 
-[Recorded paired backend results](performance/indexed-history-2026-09-11.json)
+The recorded paired backend results
 contain five before/after samples, pinned HEADs, ref digests, commit-graph hashes,
 CPU and profile. These are optimized **test-profile** measurements on a shared
 developer workstation, not dedicated-runner shipping limits.
@@ -61,7 +61,7 @@ These are medians of five runs, each containing ten first-touch and thirty warm
 
 ## Frame and release measurements
 
-[Frame samples](performance/indexed-history-frames-2026-09-11.json) record five
+The frame samples record five
 paired runs at 5,261 frontier lanes and 80 graph pixels, plus one-pair width/scale
 controls. The viewport displays 38 rows with the renderer's bounded overscan.
 
@@ -89,7 +89,7 @@ budgets. Recorded release cases use 100% scale. Earlier probes that configured
 the view scale without applying it to the test window are retained only as
 discarded samples in the JSON.
 
-[Release Criterion results](performance/indexed-history-release-2026-09-11.json)
+The release Criterion results
 include narrow and wide construction, first touch, warm reuse, distant jumps,
 changing selections, SHA-1/SHA-256 IDs, allocations and checkpoint payload bytes.
 The eight 100k/2M phase probes are included in the frame results. At two million
@@ -543,3 +543,234 @@ growth, but do not establish that every process-wide cache or allocator page is
 returned after closing a window. The lifecycle diagnostics ran alongside
 compilation and are excluded from latency acceptance. Their raw captures are
 preserved separately from the 200 paired performance captures.
+
+## Reused repository handle and shared waits (2026-11-21)
+
+History reads used to reopen the repository for every request: a shared range
+block did it twice, and a page, an index build and the author list once each.
+Every reopen parsed all Git config, conditional includes included, and read the
+object store key again. The backend now keeps the handle of its last fresh open
+and reuses it while all of the following hold:
+
+- every config input keeps its stamp: the files a config load read or looked
+  for, and the branch its `onbranch` includes were tested against;
+- the store key read through the handle equals the attached store's: the
+  object directory's identity, the resolved alternates, the replacement refs
+  and the store options;
+- the store was neither rotated by pack-access recovery nor invalidated by
+  maintenance.
+
+Otherwise it reopens and attaches a store as before, so a config, alternates
+or replacement change is seen by the next read. Loose refs, `HEAD`, reftable
+stacks and the shallow file are still read from disk on every request. Packed
+refs are reloaded whenever their stamp changes, because gix by itself reloads
+them only for a newer modification time. The 64-block range reader rotation is
+unchanged and still opens its own store.
+
+`Work::RepositoryReopen` counts every reopen. A warm 256-row shared block read
+went from two to none
+(`a_range_read_reuses_the_repository_while_its_inputs_are_unchanged`), and an
+index build, a page and the author list from three to none. With only
+repository-local config the validation takes 32 µs against 149 µs for one
+reopen; 25 µs of it is the exact store key, which stat stamps could replace at
+the price of missing two changes inside one timestamp tick.
+
+Two waits no longer poll. Range decodes are single-flight per block, so
+different blocks decode in parallel while callers of one block share its
+decode. The date-order topology build is shared by the requests for its tips:
+each leaves on its own cancellation and the build stops when all have left.
+
+## Index grown from the previous one (2026-11-22)
+
+An index is keyed by the exact tips of its walk, so any new commit used to
+rebuild it from the root. When the store still holds a finished index for the
+same unfiltered walk, the build now checks whether the new tips only add
+commits on top of it:
+
+- the added commits are found by walking from the new tips until rows of the
+  held index are reached, at most 20,000 of them;
+- every commit of the held index must still be reached: a tip it was walked
+  from may be gone only if another of its rows has that tip as a parent;
+- every added commit must be at least as new as the held index's first row.
+
+Then date order puts all added commits before that first row and leaves the
+older rows as they are, so the new index is the added rows followed by a
+shifted copy of the held one (`HistoryIndexBuilder::finish_before`). Anything
+else rebuilds as before: a rewritten or deleted tip that takes commits with
+it, a commit dated before the newest row (a fetch of older work), first-parent,
+author-filtered, merge-filtered and shallow walks.
+
+Rows that are in both indexes keep their relative order. Among equal committer
+times a rebuild may order rows differently; both are valid date orders.
+
+Release build, index requested again after one commit on top of `HEAD`:
+
+| Repository | Rebuild | Grown |
+| --- | ---: | ---: |
+| Generated history, 2,040,001 commits | 5.0–6.7 s | 44–76 ms |
+| Chromium, 1,792,921 commits, 39,250 refs | 6.6–11.5 s | 19–66 ms |
+
+Without a commit-graph the first page of a refresh orders the header
+topology, which is cached by tips in the same way and was scanned again from
+every header. It grows by the same rules from the cached topology
+(`Topology::grown`), reading only the added headers; its rows are found through
+an ID-sorted row list made on first use and carried forward.
+
+Release build, through the store: time from asking for a reload after one
+commit on top of `HEAD` until the state holds the new index.
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| git.git, 79,849 commits, no commit-graph | 312–352 ms | 20 ms |
+| Generated history, 2,040,001 commits, no commit-graph | 4.4 s | 50–161 ms |
+| Chromium, 1,792,921 commits, commit-graph | 3.1 s | 80–161 ms |
+
+`Work::HistoryIndexExtend` and `Work::LogTopologyExtend` count grown indexes
+and topologies; `Work::HistoryIndexBuild` and `Work::LogTopologyBuild` count
+rebuilds. The tests in `tests/integration/log/incremental.rs` compare a held
+index and the pages against `git log --all --date-order` across random
+changes, and check date order itself where committer times tie.
+
+## First index from the commit-graph's tables (2026-11-22)
+
+With a commit-graph the paged walk is lazy: it serves the first page in tens
+of milliseconds, but an index build that reads every commit paid its
+per-commit bookkeeping 1.8 million times. The index build now orders the
+whole history in one pass instead (`new_whole_history_walk`): the header
+topology reads parents and committer times from the commit-graph by position
+where the graph holds the commit, and from the object header otherwise. The
+order is the paged walk's, equal timestamps included
+(`indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips`
+runs without a graph, with a whole one and with a partial one). This topology
+belongs to the build alone and is not cached; pages keep the lazy walk.
+
+Release build, first index after opening:
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| Chromium, `HEAD`, 1,792,921 commits | 2.83 s | 0.65 s |
+| Chromium, all branches, 1,820,508 commits | 3.43 s | 0.64 s |
+
+## Commit headers read ahead from the packs (2026-11-22)
+
+Without a commit-graph the header scan learns of a commit from its child, one
+object at a time, which left every other core idle. A pack written by Git
+starts with its commits, so `PackedCommits` (`repo/log/read_ahead.rs`) takes
+the IDs of each pack's leading run of commits from the pack index and reads
+their headers on the decode threads before the scan starts; the scan then
+finds a row by table position, as it does with a commit-graph, and reads only
+what the table lacks (loose objects, small packs, a commit whose parent is
+outside the table). The order does not change.
+
+Where a pack's commits end is found from a sample of 2,048 index entries,
+looked at from the front of the pack. A pack that does not start with a run of
+commits, as one written by `git fast-import` does not, is left to the scan, as
+is any pack or run under 8,192 objects. Every commit in the run is read, also
+those the tips do not reach.
+
+Release build, first page after opening (which is where the scan runs):
+
+| Repository | Before | After |
+| --- | ---: | ---: |
+| git.git, 79,849 commits | 315–342 ms | 62–68 ms |
+| bun, 17,581 of 72,882 packed commits reached | 86–90 ms | 63–67 ms |
+| Chromium with its commit-graph ignored, 1,792,921 commits | 7.3–9.3 s | 1.48 s |
+| Generated history from `git fast-import`, 102,001 commits | 218–237 ms | 210–218 ms |
+
+Through the store, on a clone that borrows git.git's objects: first page 280 →
+60 ms, index in state 355 → 140 ms.
+
+## Stash candidates ruled out by shape (2026-11-22)
+
+A commit with two or three parents may be a stash, and without a commit-graph
+each one's message was read to tell: 59 of the 72 ms of git.git's index build,
+for its 20,000 merges. A stash's second parent is its index, one commit on the
+first parent alone, and a third holds the untracked files and has no parent.
+The walk passes those parents anyway, so `StashShapes` rules a merge out as it
+goes and only a commit of that shape has its message read. The commit-graph
+check this replaces did the same from the graph's tables.
+
+git.git's index build takes 17 ms. A merge whose message reads like a stash's
+is no longer taken for one where there is no commit-graph.
+
+## Index from the topology's rows, graph read front to back (2026-11-22)
+
+Two parts of the whole-history build repeated work it already had:
+
+- The date-ordered topology holds each parent as a row. The build turned
+  every commit into IDs, pushed those, and found each parent's row again by
+  ID. `HistoryIndex::from_rows` now takes the tables as they are, each parent
+  mapped to its place in the order; only the IDs are sorted for lookup. Walks
+  with an author filter, without merges or of merges only build as before.
+- A commit-graph lists commits in the order of their IDs, so following parents
+  through it read a record, the row table and an ID at random for every
+  commit: 255 ns each. `graph_scan` reads the records front to back into one
+  compact array on the decode threads, follows parents through that array
+  alone, and copies the IDs last, again on several threads. Rows are still
+  numbered as they are met, which keeps a commit near its parents for the
+  ordering pass (numbering them in the graph's order made that pass six times
+  slower).
+
+Release build, first index of Chromium at `HEAD`, 1,792,921 commits:
+
+| Step | Before | After |
+| --- | ---: | ---: |
+| Whole build | 0.90 s | 0.22 s |
+| Scan of the commit-graph | 450 ms | 130 ms |
+| Parents found by ID | 270 ms | none |
+
+## Pages from tips far apart take the topology (2026-11-22)
+
+With a commit-graph a page is walked lazily, which starts at once from one tip
+or from tips near each other. Before its first commit that walk counts the
+children of every commit above the lowest tip, about a microsecond each. On
+Chromium's all-branches view, nine tips of which one is old, that took 1.85 s,
+while the whole graph is ordered in a tenth of it. A page now takes the header
+topology when the depth between its tips, by their generations in the graph, is
+more than 4,096 commits and more than an eighth of the deepest tip's. The index
+build shares that topology through the cache, as it does without a
+commit-graph, and the cache keeps it (about 40 bytes a commit) while those are
+the tips.
+
+| Chromium, all branches, 1,922,916 commits | Before | After |
+| --- | ---: | ---: |
+| First page | 1.84–1.97 s | 0.30 s |
+| Index after it | 0.29–0.32 s | 0.12 s |
+
+## Range reader stores last longer beside large pack indexes (2026-11-23)
+
+Range reads go through an object store of their own, re-opened every 64 blocks
+to release the pack pages they map. gix now reads a pack index from end to end
+when a store first loads it, and a new store's lookups map the index again. On
+Chromium, with 1 GB of pack index, that made re-opening cost more than reading:
+44 ms before the first block and about 69 ms at every 64th, against 1.3 ms for
+a block. A store now reads 64 blocks and one more for every megabyte of pack
+index beside it, alternates included, which is 1,037 blocks here and still 64
+for a repository whose pack indexes stay below a megabyte.
+
+| Chromium, range reads of 256 rows | Before | After |
+| --- | ---: | ---: |
+| 200 blocks | 597 ms | 314 ms |
+| 4,000 blocks | 10.9 s | 5.0 s |
+| Peak resident memory over 4,000 blocks | 958 MiB | 1,183 MiB |
+
+The first block still waits 43-47 ms for its store. Reading the first blocks
+through the store everything else uses removes that wait and was measured, but
+it leaves the index pages of those lookups mapped for as long as the repository
+is open: 1,874 MiB at the peak of the same 4,000 blocks.
+
+## Plain rows step without a transition (2026-11-23)
+
+The graph is laid out by replaying every row of the index. Most rows are plain:
+one lane arrives, the commit has one parent, no branch head sits on it and
+nobody paints it. Such a row only moves its lane on to the parent, yet the walk
+built the same transition record for it as for a merge. `GraphWalk::plain_step`
+now does the move alone, and the build and the replay up to a window ask it
+first. `a_plain_row_takes_the_transition_of_the_general_path` and
+`plain_rows_build_the_graph_the_general_path_builds` compare it with the
+general path over mixed histories.
+
+| Chromium, graph layout after the index | Before | After |
+| --- | ---: | ---: |
+| `HEAD`, 1,792,921 rows | 178-190 ms | 50-51 ms |
+| All branches, 1,922,916 rows | 206-212 ms | 88-95 ms |

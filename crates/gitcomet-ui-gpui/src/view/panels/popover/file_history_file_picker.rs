@@ -106,7 +106,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 

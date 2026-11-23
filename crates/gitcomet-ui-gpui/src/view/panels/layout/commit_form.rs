@@ -148,7 +148,7 @@ impl DetailsPaneView {
     }
 
     pub(in crate::view) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let commit_in_flight = self

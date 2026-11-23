@@ -49,7 +49,7 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scrollbar_gutter = super::history_scrollbar_gutter();
         let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
         if manual {
@@ -108,11 +108,11 @@ impl HistoryView {
                 .when(
                     self.loading
                         .initial_skeleton_visible(cx.background_executor().now()),
-                    |body| body.children((0..rows).map(|row| self.history_skeleton_row(row, None))),
+                    |el| el.children((0..rows).map(|ix| self.history_skeleton_row(ix, None, cx))),
                 )
                 .into_any_element()
         } else if count == 0 {
-            match repo.map(|r| &r.log) {
+            match repo.map(|r| &r.history_state.log) {
                 None => {
                     components::empty_state(theme, "History", "No repository.").into_any_element()
                 }
@@ -152,11 +152,11 @@ impl HistoryView {
 
                 state.last_item_size.is_some()
                     && repo.is_some_and(|repo| {
-                        !repo.log_loading_more
+                        !repo.history_state.log_loading_more
                             && !repo.history_state.indexed.loading
                             && repo.history_state.indexed.index.is_none()
                             && matches!(
-                                &repo.log,
+                                &repo.history_state.log,
                                 Loadable::Ready(page) if page.next_cursor.is_some()
                                     && self.history_cache.as_ref().is_some_and(|cache| Arc::ptr_eq(&cache.page, page))
                             )
@@ -292,7 +292,6 @@ impl HistoryView {
                 if handled {
                     cx.stop_propagation();
                     cx.notify();
-                    window.refresh();
                 }
             }))
             .child(
@@ -814,7 +813,7 @@ impl HistoryView {
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scaled_px = ui_scale::scaler(self.ui_scale_percent);
         let ui_scale =
             ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);

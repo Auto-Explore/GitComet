@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let repo = host.state.repos.iter().find(|repo| repo.id == repo_id);
@@ -28,10 +29,12 @@ fn model_for_scope(
                 icon: (spec.mode == current_scope).then_some("icons/check.svg".into()),
                 shortcut: Some(spec.shortcut.into()),
                 disabled: false,
-                action: Box::new(ContextMenuAction::SetHistoryScope {
-                    repo_id,
-                    scope: spec.mode,
-                }),
+                action: Box::new(ContextMenuAction::HistoryFilter(
+                    HistoryFilterMsg::SetScope {
+                        repo_id,
+                        scope: spec.mode,
+                    },
+                )),
             }),
     );
     // Focus is set from a ref's own menu in the sidebar, but it has to be
@@ -52,10 +55,12 @@ fn model_for_scope(
             icon: Some("icons/eye_off.svg".into()),
             shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::SetHistoryFocus {
-                repo_id,
-                focus: gitcomet_core::domain::HistoryFocusSet::default(),
-            }),
+            action: Box::new(ContextMenuAction::HistoryFilter(
+                HistoryFilterMsg::SetFocus {
+                    repo_id,
+                    focus: gitcomet_core::domain::HistoryFocusSet::default(),
+                },
+            )),
         });
     }
     ContextMenuModel::new(items)
@@ -112,7 +117,7 @@ mod tests {
                 if label.as_ref() == "Stop focus"
                     && matches!(
                         **action,
-                        ContextMenuAction::SetHistoryFocus { ref focus, .. } if focus.is_empty()
+                        ContextMenuAction::HistoryFilter(HistoryFilterMsg::SetFocus { ref focus, .. }) if focus.is_empty()
                     )
         )));
     }

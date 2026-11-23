@@ -1,6 +1,7 @@
 use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
 use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 use rustc_hash::FxHasher;
@@ -256,7 +257,6 @@ pub(in super::super) struct ActionBarView {
     canvas_covered: bool,
     store: Arc<AppStore>,
     state: Arc<AppState>,
-    theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
@@ -301,7 +301,6 @@ impl ActionBarView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -328,7 +327,6 @@ impl ActionBarView {
             canvas_covered: false,
             store,
             state,
-            theme,
             _ui_model_subscription: subscription,
             root_view,
             notify_fingerprint,
@@ -336,11 +334,6 @@ impl ActionBarView {
             open_terminal_repo_ids: FxHashSet::default(),
             terminal_button_target: TerminalButtonTarget::default(),
         }
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn set_extension_items(
@@ -447,7 +440,7 @@ impl ActionBarView {
         open: bool,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         let mut group = div()
             .id("repository_view_tabs")
@@ -573,9 +566,9 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     fn open_popover_for_bounds(
@@ -586,9 +579,11 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 }
 
@@ -600,7 +595,7 @@ impl BarItemOwner for ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) -> BarItems {
         let mut items = BarItems::new(cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let density = action_bar_density(
@@ -796,9 +791,7 @@ impl BarItemOwner for ActionBarView {
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_back)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this
-                    .root_view
-                    .update(cx, |root, cx| root.dispatch_global_nav(false, cx));
+                let _ = this.root_view.request(RootRequest::NavigateBack, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -822,7 +815,7 @@ impl BarItemOwner for ActionBarView {
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let _ = this
                     .root_view
-                    .update(cx, |root, cx| root.dispatch_global_nav(true, cx));
+                    .request(RootRequest::NavigateForward, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -1495,7 +1488,7 @@ impl BarItemOwner for ActionBarView {
 impl Render for ActionBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let mut items = self.bar_items(true, window, cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scale = crate::ui_scale::UiScale::current(cx);
         let density =
             action_bar_density(window.viewport_size().width, scale.percent(), theme.metrics);

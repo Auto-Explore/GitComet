@@ -799,13 +799,13 @@ impl StickyRows {
                         .top(px(y) - scroll_offset.y)
                         .w(bounds.size.width)
                         .h(row_height)
-                        .bg(this.theme.colors.surface.panel)
+                        .bg(AppTheme::current(cx).colors.surface.panel)
                         .block_mouse_except_scroll()
                         .flex()
                         .items_center()
                         .px(content_inset)
-                        .text_size(this.theme.ui_text(12.0))
-                        .text_color(this.theme.colors.foreground.primary)
+                        .text_size(AppTheme::current(cx).ui_text(12.0))
+                        .text_color(AppTheme::current(cx).colors.foreground.primary)
                         .child(format!("More pinned items ({count})"))
                         .on_activate(
                             false,
@@ -842,7 +842,7 @@ impl StickyRows {
                     .and_then(|context| context.selected_row.as_ref())
                     .is_some_and(|(row, _)| *row == ix);
                 let background = crate::view::rows::sidebar::sidebar_row_background(
-                    this.theme,
+                    AppTheme::current(cx),
                     if ix < presentation.pins.len() {
                         SidebarRowSurface::Pins
                     } else {
@@ -921,7 +921,7 @@ impl StickyRows {
                             ),
                     );
                 }
-                if is_header && stuck && !this.theme.is_dark {
+                if is_header && stuck && !AppTheme::current(cx).is_dark {
                     let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
                     row = row.child(
                         div()
@@ -932,7 +932,7 @@ impl StickyRows {
                             .h(px(1.0))
                             .when(y > natural_y, |line| line.bottom_0())
                             .when(y < natural_y, |line| line.top_0())
-                            .bg(this.theme.colors.stroke.subtle),
+                            .bg(AppTheme::current(cx).colors.stroke.subtle),
                     );
                 }
                 row.into_any_element()

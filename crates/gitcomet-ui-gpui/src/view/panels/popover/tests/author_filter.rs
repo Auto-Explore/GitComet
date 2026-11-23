@@ -28,7 +28,7 @@ fn repo_with_authors(repo_id: RepoId, log_rev: u64, authors: &[&str]) -> RepoSta
         }
         .into(),
     );
-    repo.log = page.clone();
+    repo.history_state.log = page.clone();
     repo.history_state.log = page;
     repo.history_state.log_rev = log_rev;
     repo

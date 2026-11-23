@@ -4,6 +4,41 @@ use gitcomet_state::model::CloneProgressStage;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
+/// What the open popover was last drawn from: itself, and the state it reads.
+#[derive(Default)]
+pub(super) struct NotifyFingerprint {
+    popover: Option<PopoverKind>,
+    state: u64,
+}
+
+impl NotifyFingerprint {
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Records what is shown now. True when the popover or the state it reads
+    /// differs from the last record, so the popover needs a repaint.
+    pub(super) fn record(
+        &mut self,
+        state: &AppState,
+        popover: &PopoverKind,
+        binding: Option<crate::view::pane_store::DiffBinding>,
+    ) -> bool {
+        let state = notify_fingerprint(state, popover, binding);
+        let same_popover = self.popover.as_ref() == Some(popover);
+        if same_popover && state == self.state {
+            return false;
+        }
+        if !same_popover {
+            self.popover = Some(popover.clone());
+        }
+        self.state = state;
+        true
+    }
+}
+
+/// A hash of the state `popover` reads. The popover itself is compared by
+/// [`NotifyFingerprint`].
 pub(super) fn notify_fingerprint(
     state: &AppState,
     popover: &PopoverKind,
@@ -22,32 +57,6 @@ pub(super) fn notify_fingerprint(
         repo.repository_mode.hash(&mut hasher);
         std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
     }
-    hash_popover_kind(popover, &mut hasher);
-    if matches!(popover, PopoverKind::CommitMenu { .. }) {
-        state.git_log_settings.show_history_tags.hash(&mut hasher);
-    }
-    if matches!(popover, PopoverKind::PullPicker) {
-        state.remote_settings.auto_fetch.enabled.hash(&mut hasher);
-        if let Some(repo) = repo_for_popover(state, popover, binding) {
-            repo.auto_fetch.last_success_at.hash(&mut hasher);
-            repo.auto_fetch.retry_at.hash(&mut hasher);
-            repo.auto_fetch.paused_remotes.hash(&mut hasher);
-            std::mem::discriminant(&repo.auto_fetch.status).hash(&mut hasher);
-            match &repo.auto_fetch.status {
-                gitcomet_state::model::AutoFetchStatus::Failed { at, error } => {
-                    at.hash(&mut hasher);
-                    super::context_menu::pull::auto_fetch_failure_description(error)
-                        .hash(&mut hasher);
-                    super::context_menu::pull::auto_fetch_auth_recovery_hint(error)
-                        .hash(&mut hasher);
-                }
-                gitcomet_state::model::AutoFetchStatus::Succeeded { at } => at.hash(&mut hasher),
-                gitcomet_state::model::AutoFetchStatus::Idle
-                | gitcomet_state::model::AutoFetchStatus::Running => {}
-            }
-        }
-    }
-
     match popover {
         PopoverKind::CloneRepo => match &state.clone {
             None => 0u8.hash(&mut hasher),
@@ -82,36 +91,6 @@ pub(super) fn notify_fingerprint(
                 repo.id.hash(&mut hasher);
                 repo.spec.workdir.hash(&mut hasher);
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
-            }
-        }
-        PopoverKind::RepoTabMenu { .. } => {
-            state.active_repo.hash(&mut hasher);
-            state.repos.len().hash(&mut hasher);
-            for repo in &state.repos {
-                repo.id.hash(&mut hasher);
-            }
-        }
-        PopoverKind::DiffContentModeSettings
-        | PopoverKind::TextFormatMenu { .. }
-        | PopoverKind::CommitFileSortMenu { .. }
-        | PopoverKind::FileListLayoutMenu { .. }
-        | PopoverKind::WebLinkMenu { .. }
-        | PopoverKind::LocalFileLinkMenu { .. }
-        | PopoverKind::CommitShaLinkMenu { .. }
-        | PopoverKind::DiffActionMenu
-        | PopoverKind::MergetoolSettingsMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
-        | PopoverKind::AppMenu
-        | PopoverKind::AddRepoMenu => {
-            // Mostly local UI state; depend only on whether a repo is active/open.
-            state.active_repo.hash(&mut hasher);
-            if let Some(repo) = repo_for_popover(state, popover, binding) {
-                view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
-                // The app menu enables "Open remote in web browser" from them.
-                if matches!(popover, PopoverKind::AppMenu) {
-                    repo.remotes_rev.hash(&mut hasher);
-                }
             }
         }
         PopoverKind::Repo {
@@ -171,9 +150,6 @@ pub(super) fn notify_fingerprint(
                     .and_then(|binding| binding.diff(repo))
                     .unwrap_or(&repo.diff_state);
                 hash_repo_for_popover(repo, diff, popover, &mut hasher);
-                if matches!(popover, PopoverKind::PullPicker | PopoverKind::PushPicker) {
-                    hash_large_file_picker_entries(state, repo, &mut hasher);
-                }
             } else {
                 state.active_repo.hash(&mut hasher);
             }
@@ -181,19 +157,6 @@ pub(super) fn notify_fingerprint(
     }
 
     hasher.finish()
-}
-
-/// Pull and Push list LFS and git-annex entries built from the support
-/// summary, the installed tools, the settings and the running pull or push.
-fn hash_large_file_picker_entries(state: &AppState, repo: &RepoState, hasher: &mut FxHasher) {
-    let settings = &state.large_file_settings;
-    repo.annex_takes_over_pull_push(settings).hash(hasher);
-    settings.annex_sync_content.hash(hasher);
-    repo.large_file_support_rev.hash(hasher);
-    state.large_file_tools.git_lfs.is_not_found().hash(hasher);
-    state.large_file_tools.git_annex.is_not_found().hash(hasher);
-    (repo.push_in_flight > 0).hash(hasher);
-    (repo.worktree_pull_in_flight > 0).hash(hasher);
 }
 
 fn repo_for_popover<'a>(
@@ -328,14 +291,9 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::UpstreamPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
-        | PopoverKind::BranchMenu { .. }
-        | PopoverKind::BranchSectionMenu { .. }
-        // The group menu's branch count and the pinned menu's "Unpin all (N)"
-        // both read the live branch lists, so a refresh landing while the menu
-        // is up has to repaint it rather than leave a stale count.
-        | PopoverKind::BranchGroupMenu { .. }
+        // The pinned list's "Unpin all (N)" reads the live branch lists, so a
+        // refresh landing while it is up has to repaint it.
         | PopoverKind::SidebarPinnedOverflow { .. }
-        | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -348,27 +306,11 @@ fn hash_repo_for_popover<H: Hasher>(
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
             repo.ref_metadata_rev.hash(hasher);
-            // A branch's menu offers its worktree once the worktree list knows it.
-            repo.worktrees_rev.hash(hasher);
-        }
-
-        // Its toggle label reads `expanded_dirs` and its disabled state reads
-        // `search_query`. "Locate file in explorer" is a global action that
-        // rewrites both without any click on the tree, so the menu has to
-        // repaint when it lands rather than keep a label that is now a lie.
-        PopoverKind::FileBrowserFolderMenu { .. } => {
-            repo.file_browser.file_browser_rev.hash(hasher);
-        }
-
-        // Its check marks read `show_hidden` / `show_ignored`; the menu stays
-        // open while they toggle.
-        PopoverKind::ExplorerSettingsMenu { .. } => {
-            repo.file_browser.file_browser_rev.hash(hasher);
         }
 
         // File counts come from the lists' files, and Apply follows the busy
         // state. Collapse state is view-local and only changes by closing it.
-        PopoverKind::FileListFolderMenu { .. } | PopoverKind::DiscardFolderChangesConfirm { .. } => {
+        PopoverKind::DiscardFolderChangesConfirm { .. } => {
             repo.history_rewrite_busy().hash(hasher);
             repo.history_state.commit_details_rev.hash(hasher);
             repo.history_state.range_files_rev.hash(hasher);
@@ -426,9 +368,7 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.stashes_rev.hash(hasher);
             repo.status_cache_rev().hash(hasher);
         }
-        PopoverKind::StashDropConfirm { .. }
-        | PopoverKind::StashMenu { .. }
-        | PopoverKind::StashPickerPrompt { .. } => {
+        PopoverKind::StashDropConfirm { .. } | PopoverKind::StashPickerPrompt { .. } => {
             repo.stashes_rev.hash(hasher);
         }
         PopoverKind::FileHistoryFilePicker { .. } => {
@@ -437,9 +377,7 @@ fn hash_repo_for_popover<H: Hasher>(
             diff.diff_target_rev.hash(hasher);
         }
 
-        PopoverKind::DiffHunkMenu { .. }
-        | PopoverKind::DiffEditorMenu { .. }
-        | PopoverKind::DiscardChangesConfirm { .. } => {
+        PopoverKind::DiscardChangesConfirm { .. } => {
             diff.diff_rev.hash(hasher);
             if let Some(t) = diff.diff_target.as_ref() {
                 view_fingerprint::hash_diff_target(t, hasher)
@@ -458,47 +396,20 @@ fn hash_repo_for_popover<H: Hasher>(
             }
         }
 
-        PopoverKind::HistoryBranchFilter { .. } => {
-            repo.history_state.history_scope.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-        }
-
         PopoverKind::HistoryAuthorFilter { .. } => {
             repo.history_state.history_author_filter.hash(hasher);
             repo.history_state.history_scope.hash(hasher);
             repo.history_state.authors.rev.hash(hasher);
             repo.load_epoch.hash(hasher);
             repo.history_state.log_rev.hash(hasher);
-            repo.log_rev.hash(hasher);
         }
 
-        PopoverKind::PullPicker
-        | PopoverKind::PushPicker
-        | PopoverKind::PullReconcilePrompt { .. }
-        | PopoverKind::ForcePushConfirm { .. } => {
+        PopoverKind::PullReconcilePrompt { .. } | PopoverKind::ForcePushConfirm { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             hash_pending_force_push_lease(repo, hasher);
-        }
-
-        PopoverKind::PreviousCommitMessagesMenu { .. } => {
-            repo.recent_commit_messages_rev.hash(hasher);
-        }
-
-        PopoverKind::RepoTabMenu { .. } => {
-            repo.id.hash(hasher);
-        }
-
-        PopoverKind::CommitOptionsMenu { .. } => {
-            repo.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.merge_message_rev.hash(hasher);
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
         }
 
         // The squash prompt tracks the message preview plus everything that
@@ -509,35 +420,6 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.log_rev.hash(hasher);
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
-        }
-
-        PopoverKind::CommitMenu { .. } => {
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-            repo.remotes_rev.hash(hasher);
-            repo.remote_tags_rev.hash(hasher);
-            repo.status_rev.hash(hasher);
-            repo.history_state.selected_commit_rev.hash(hasher);
-            repo.history_state.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.worktrees_rev.hash(hasher);
-        }
-        PopoverKind::FileHistoryCommitMenu { .. } => {
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remote_branches_rev.hash(hasher);
-            repo.tags_rev.hash(hasher);
-            repo.history_state.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.history_rewrite_busy().hash(hasher);
-            repo.navigation.comparison_mark.hash(hasher);
-        }
-        PopoverKind::TagMenu { .. } => {
-            repo.tags_rev.hash(hasher);
-            repo.remotes_rev.hash(hasher);
-            repo.remote_tags_rev.hash(hasher);
         }
 
         PopoverKind::HookActivity { .. } => {
@@ -565,21 +447,6 @@ fn hash_repo_for_popover<H: Hasher>(
         // The buttons follow the repo's busy state.
         PopoverKind::ApplyFileChangeConfirm { .. }
         | PopoverKind::InteractiveCherryPickConfirm { .. } => {
-            repo.history_rewrite_busy().hash(hasher);
-        }
-
-        // "Apply change" follows the repo's busy state.
-        PopoverKind::CommitFileMenu { .. } => {
-            repo.history_rewrite_busy().hash(hasher);
-        }
-        // Foreign-file actions follow the selected checkout and scan membership.
-        PopoverKind::WorktreeFileMenu { .. } => {
-            repo.worktree_dirty_rev.hash(hasher);
-            repo.history_state.worktree_selection_rev.hash(hasher);
-        }
-        // The submodule flag of a row comes from the loaded file list.
-        PopoverKind::CommitRangeFileMenu { .. } => {
-            repo.history_state.range_files_rev.hash(hasher);
             repo.history_rewrite_busy().hash(hasher);
         }
 
@@ -636,9 +503,36 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::KeyboardShortcuts
         | PopoverKind::Hosted { .. }
-        | PopoverKind::CommitPrompt { .. } => {}
+        | PopoverKind::CommitPrompt { .. }
+        // A menu repaints when its model changes, whatever state that read.
+        | PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu,
+            ..
+        }
+        | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchSectionMenu { .. }
+        | PopoverKind::BranchGroupMenu { .. }
+        | PopoverKind::SidebarAncestorMenu { .. }
+        | PopoverKind::FileBrowserFolderMenu { .. }
+        | PopoverKind::FileListFolderMenu { .. }
+        | PopoverKind::StashMenu { .. }
+        | PopoverKind::DiffHunkMenu { .. }
+        | PopoverKind::DiffEditorMenu { .. }
+        | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::PullPicker
+        | PopoverKind::PushPicker
+        | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
+        | PopoverKind::CommitOptionsMenu { .. }
+        | PopoverKind::CommitMenu { .. }
+        | PopoverKind::FileHistoryCommitMenu { .. }
+        | PopoverKind::TagMenu { .. }
+        | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::WorktreeFileMenu { .. }
+        | PopoverKind::CommitRangeFileMenu { .. }
+        | PopoverKind::ExplorerSettingsMenu { .. } => {}
         PopoverKind::Repo {
-            kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
+            kind: RepoPopoverKind::DisableBareModeConfirm,
             ..
         } => {
             match &repo.bare_mode_conversion {
@@ -667,728 +561,10 @@ fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
     }
 }
 
-fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
-    // The variant comes first, so no two kinds share a hash domain.
-    std::mem::discriminant(kind).hash(hasher);
-    match kind {
-        PopoverKind::RepoPicker { scope } => {
-            scope.hash(hasher);
-        }
-        PopoverKind::AddRepoMenu => {}
-        PopoverKind::BranchPicker { purpose } => {
-            (*purpose as u8).hash(hasher);
-        }
-        PopoverKind::UpstreamPicker { repo_id, branch } => {
-            repo_id.hash(hasher);
-            branch.hash(hasher);
-        }
-        PopoverKind::CreateBranchFromRefPrompt {
-            repo_id,
-            target,
-            source_selectable,
-            name_prefix,
-        } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-            source_selectable.hash(hasher);
-            name_prefix.hash(hasher);
-        }
-        PopoverKind::RenameBranchPrompt {
-            repo_id,
-            name,
-            is_current_branch,
-        } => {
-            repo_id.hash(hasher);
-            name.hash(hasher);
-            is_current_branch.hash(hasher);
-        }
-        PopoverKind::CheckoutRemoteBranchPrompt {
-            repo_id,
-            remote,
-            branch,
-        } => {
-            repo_id.hash(hasher);
-            remote.hash(hasher);
-            branch.hash(hasher);
-        }
-        PopoverKind::StashPrompt => {}
-        PopoverKind::StashDropConfirm {
-            repo_id,
-            index,
-            message,
-        } => {
-            repo_id.hash(hasher);
-            index.hash(hasher);
-            message.hash(hasher);
-        }
-        PopoverKind::StashMenu {
-            repo_id,
-            index,
-            message,
-        } => {
-            repo_id.hash(hasher);
-            index.hash(hasher);
-            message.hash(hasher);
-        }
-        PopoverKind::CloneRepo => {}
-        PopoverKind::Hosted { id, .. } => {
-            id.hash(hasher);
-        }
-        PopoverKind::ChangeTrackingSettings => {}
-        PopoverKind::UiScalePicker => {}
-        PopoverKind::DiffContentModeSettings => {}
-        PopoverKind::TextFormatMenu { section } => {
-            section.hash(hasher);
-        }
-        PopoverKind::CommitFileSortMenu { list } => {
-            list.hash(hasher);
-        }
-        PopoverKind::FileListLayoutMenu { repo_id, list } => {
-            repo_id.hash(hasher);
-            list.hash(hasher);
-        }
-        PopoverKind::WebLinkMenu {
-            url,
-            load_remote_image_url,
-        } => {
-            url.hash(hasher);
-            load_remote_image_url.hash(hasher);
-        }
-        PopoverKind::LocalFileLinkMenu {
-            repo_id,
-            source,
-            path,
-            missing,
-            load_remote_image_url,
-        } => {
-            repo_id.hash(hasher);
-            source.hash(hasher);
-            path.hash(hasher);
-            missing.hash(hasher);
-            load_remote_image_url.hash(hasher);
-        }
-        PopoverKind::CommitShaLinkMenu { repo_id, commit_id } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-        }
-        PopoverKind::DiffActionMenu => {}
-        PopoverKind::MergetoolSettingsMenu => {}
-        PopoverKind::CommitOptionsMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::RepoTabMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
-
-        PopoverKind::ResetPrompt {
-            repo_id,
-            target,
-            mode,
-        } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-            hash_reset_mode(*mode, hasher);
-        }
-        PopoverKind::SquashPrompt { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::CreateTagPrompt { repo_id, target } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-        }
-        PopoverKind::Repo { repo_id, kind } => {
-            hash_repo_popover_kind(*repo_id, kind, hasher);
-        }
-
-        PopoverKind::PushSetUpstreamPrompt {
-            repo_id,
-            remote,
-            configure_only_for,
-        } => {
-            repo_id.hash(hasher);
-            remote.hash(hasher);
-            configure_only_for.hash(hasher);
-        }
-        PopoverKind::ForcePushConfirm { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-        }
-        PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-        }
-        PopoverKind::ApplyFileChangeConfirm { repo_id, target } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-        }
-        PopoverKind::InteractiveCherryPickConfirm { repo_id, entries } => {
-            repo_id.hash(hasher);
-            entries.len().hash(hasher);
-            for entry in entries {
-                entry.commit_id.hash(hasher);
-                std::mem::discriminant(&entry.action).hash(hasher);
-            }
-        }
-        PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-        }
-        PopoverKind::BranchExistsPrompt {
-            repo_id,
-            name,
-            target,
-            operation,
-        } => {
-            repo_id.hash(hasher);
-            name.hash(hasher);
-            target.hash(hasher);
-            operation.hash(hasher);
-        }
-        PopoverKind::ForceDeleteBranchConfirm(prompt) => prompt.hash(hasher),
-        PopoverKind::ForceRemoveWorktreeConfirm(prompt) => prompt.hash(hasher),
-        PopoverKind::DiscardChangesConfirm {
-            repo_id,
-            area,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            hash_diff_area(*area, hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::FileListFolderMenu {
-            repo_id,
-            list,
-            key,
-            chain,
-            collapsed,
-            apply_source,
-        } => {
-            repo_id.hash(hasher);
-            list.hash(hasher);
-            key.hash(hasher);
-            chain.hash(hasher);
-            collapsed.hash(hasher);
-            apply_source.hash(hasher);
-        }
-        PopoverKind::DiscardFolderChangesConfirm {
-            repo_id,
-            section,
-            folder,
-        } => {
-            repo_id.hash(hasher);
-            (*section as u8).hash(hasher);
-            folder.hash(hasher);
-        }
-        PopoverKind::AddToGitignorePrompt {
-            repo_id,
-            area,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            hash_diff_area(*area, hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::StageConflictMarkersConfirm {
-            repo_id,
-            paths,
-            unresolved,
-            clear_selection,
-        } => {
-            repo_id.hash(hasher);
-            paths.hash(hasher);
-            unresolved.hash(hasher);
-            clear_selection.hash(hasher);
-        }
-        PopoverKind::PullReconcilePrompt { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::PullPicker => {}
-        PopoverKind::PushPicker => {}
-        PopoverKind::AppMenu => {}
-        PopoverKind::TerminalShutdownConfirm(prompt) => {
-            prompt.action.hash(hasher);
-            prompt.summary.terminal_count.hash(hasher);
-            prompt.summary.running_command_count.hash(hasher);
-            prompt.summary.repo_names.hash(hasher);
-        }
-        PopoverKind::CloseGuardConfirm(prompt) => {
-            prompt.action.hash(hasher);
-            prompt.reasons.hash(hasher);
-        }
-        PopoverKind::UnsavedFileEditsConfirm(prompt) => {
-            prompt.action.hash(hasher);
-            prompt.waiting_for_writes.hash(hasher);
-            prompt.files.hash(hasher);
-        }
-        PopoverKind::FilesystemConflict(prompt) => {
-            prompt.prompt_id.hash(hasher);
-            prompt.destination.hash(hasher);
-            prompt.can_merge.hash(hasher);
-            prompt.remaining.hash(hasher);
-            prompt.in_directory_merge.hash(hasher);
-        }
-        PopoverKind::DeletePermanentlyConfirm(prompt) => {
-            prompt.prompt_id.hash(hasher);
-            prompt.names.hash(hasher);
-        }
-        PopoverKind::FilesystemUnsavedEditsConfirm(prompt) => {
-            prompt.prompt_id.hash(hasher);
-            prompt.files.hash(hasher);
-        }
-        PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
-            repo_id.hash(hasher);
-            src_ix.hash(hasher);
-        }
-        PopoverKind::DiffEditorMenu {
-            repo_id,
-            area,
-            path,
-            hunks_count,
-            lines_count,
-            context_actions,
-            ..
-        } => {
-            repo_id.hash(hasher);
-            hash_diff_area(*area, hasher);
-            path.hash(hasher);
-            hunks_count.hash(hasher);
-            lines_count.hash(hasher);
-            context_actions.hash(hasher);
-        }
-        PopoverKind::ConflictResolverInputRowMenu {
-            line_label,
-            line_target,
-            chunk_label,
-            chunk_target,
-        } => {
-            line_label.hash(hasher);
-            line_target.hash(hasher);
-            chunk_label.hash(hasher);
-            chunk_target.hash(hasher);
-        }
-        PopoverKind::ConflictResolverChunkMenu {
-            conflict_ix,
-            has_base,
-            is_three_way,
-            selected_choices,
-            output_line_ix,
-            split_selection_rows,
-            join_previous_region,
-            join_next_region,
-            alignment_marked_columns,
-            has_manual_alignments,
-            output_is_protected,
-        } => {
-            conflict_ix.hash(hasher);
-            has_base.hash(hasher);
-            is_three_way.hash(hasher);
-            selected_choices.hash(hasher);
-            output_line_ix.hash(hasher);
-            split_selection_rows.hash(hasher);
-            join_previous_region.hash(hasher);
-            join_next_region.hash(hasher);
-            alignment_marked_columns.hash(hasher);
-            has_manual_alignments.hash(hasher);
-            output_is_protected.hash(hasher);
-        }
-        PopoverKind::ConflictResolverOutputMenu {
-            cursor_line,
-            selected_text,
-            has_source_a,
-            has_source_b,
-            has_source_c,
-            is_three_way,
-        } => {
-            cursor_line.hash(hasher);
-            selected_text.hash(hasher);
-            has_source_a.hash(hasher);
-            has_source_b.hash(hasher);
-            has_source_c.hash(hasher);
-            is_three_way.hash(hasher);
-        }
-        PopoverKind::CommitMenu {
-            repo_id,
-            commit_id,
-            refs,
-        } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-            refs.hash(hasher);
-        }
-        PopoverKind::StatusFileMenu {
-            repo_id,
-            area,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            hash_diff_area(*area, hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::StatusConflictMenu {
-            repo_id,
-            area,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            hash_diff_area(*area, hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::BranchMenu { repo_id, target } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-        }
-        PopoverKind::BranchSectionMenu { repo_id, section } => {
-            repo_id.hash(hasher);
-            hash_branch_section(*section, hasher);
-        }
-        PopoverKind::CommitFileMenu {
-            repo_id,
-            commit_id,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::WorktreeFileMenu {
-            repo_id,
-            worktree_path,
-            target,
-        } => {
-            std::mem::discriminant(kind).hash(hasher);
-            repo_id.hash(hasher);
-            worktree_path.hash(hasher);
-            view_fingerprint::hash_diff_target(target, hasher);
-        }
-        PopoverKind::CommitRangeFileMenu {
-            repo_id,
-            from_commit_id,
-            to_commit_id,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            from_commit_id.hash(hasher);
-            to_commit_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::FileBrowserFileMenu { repo_id, path } => {
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::ExplorerSettingsMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::BranchGroupMenu {
-            repo_id,
-            section,
-            remote,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            (*section as u8).hash(hasher);
-            remote.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::SidebarPinnedOverflow { repo_id, bottom } => {
-            "sidebar_pin_overflow".hash(hasher);
-            repo_id.hash(hasher);
-            bottom.hash(hasher);
-        }
-        PopoverKind::SidebarAncestorMenu { repo_id, section } => {
-            "sidebar_ancestors".hash(hasher);
-            repo_id.hash(hasher);
-            hash_branch_section(*section, hasher);
-        }
-        PopoverKind::DeleteBranchesConfirm {
-            repo_id,
-            section,
-            remote,
-            group_label,
-            names,
-        } => {
-            repo_id.hash(hasher);
-            (*section as u8).hash(hasher);
-            remote.hash(hasher);
-            group_label.hash(hasher);
-            names.hash(hasher);
-        }
-        PopoverKind::BrowseHistoryMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::SubmoduleInnerDiffMenu {
-            repo_id,
-            submodule_repo_path,
-            target,
-        } => {
-            repo_id.hash(hasher);
-            submodule_repo_path.hash(hasher);
-            view_fingerprint::hash_diff_target(target, hasher);
-        }
-        PopoverKind::TagMenu {
-            repo_id,
-            commit_id,
-            name,
-        } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-            name.hash(hasher);
-        }
-        PopoverKind::HistoryBranchFilter { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::HistoryAuthorFilter { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::TerminalMenu {
-            repo_id,
-            session_seq,
-            context,
-        } => {
-            repo_id.hash(hasher);
-            session_seq.hash(hasher);
-            context.hash(hasher);
-        }
-        PopoverKind::MergeAbortConfirm { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::CommitPrompt { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::FileHistoryFilePicker { repo_id } => {
-            repo_id.hash(hasher);
-        }
-        PopoverKind::StashPickerPrompt { repo_id, purpose } => {
-            repo_id.hash(hasher);
-            (*purpose as u8).hash(hasher);
-        }
-        PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
-            repo_id.hash(hasher);
-            onto.hash(hasher);
-        }
-        PopoverKind::RebaseReword {
-            ix,
-            original_action,
-            original_message,
-        } => {
-            ix.hash(hasher);
-            (*original_action as u8).hash(hasher);
-            original_message.hash(hasher);
-        }
-        PopoverKind::InteractiveRebaseActionMenu {
-            ix,
-            can_squash,
-            can_drop,
-        } => {
-            ix.hash(hasher);
-            can_squash.hash(hasher);
-            can_drop.hash(hasher);
-            can_squash.hash(hasher);
-        }
-        PopoverKind::InteractiveRebaseAutosquashMenu => {}
-        PopoverKind::ReflogEntryMenu {
-            repo_id,
-            target,
-            selector,
-        } => {
-            repo_id.hash(hasher);
-            target.hash(hasher);
-            selector.hash(hasher);
-        }
-        PopoverKind::FileHistoryCommitMenu {
-            repo_id,
-            commit_id,
-            path,
-        } => {
-            repo_id.hash(hasher);
-            commit_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::HookActivity {
-            repo_id,
-            operation_id,
-        } => {
-            repo_id.hash(hasher);
-            operation_id.hash(hasher);
-        }
-        PopoverKind::ErrorDetails { toast_id } => {
-            toast_id.hash(hasher);
-        }
-        PopoverKind::KeyboardShortcuts => {}
-    }
-}
-
-fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, hasher: &mut H) {
-    match kind {
-        RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm => {
-            std::mem::discriminant(kind).hash(hasher);
-            repo_id.hash(hasher);
-        }
-        RepoPopoverKind::Remote(remote_kind) => match remote_kind {
-            RemotePopoverKind::AddPrompt => {
-                9u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            RemotePopoverKind::EditUrlPrompt { name, kind } => {
-                13u8.hash(hasher);
-                repo_id.hash(hasher);
-                name.hash(hasher);
-                hash_remote_url_kind(*kind, hasher);
-            }
-            RemotePopoverKind::RemoveConfirm { name } => {
-                14u8.hash(hasher);
-                repo_id.hash(hasher);
-                name.hash(hasher);
-            }
-            RemotePopoverKind::Menu { name } => {
-                15u8.hash(hasher);
-                repo_id.hash(hasher);
-                name.hash(hasher);
-            }
-            RemotePopoverKind::DeleteBranchConfirm { remote, branch } => {
-                33u8.hash(hasher);
-                repo_id.hash(hasher);
-                remote.hash(hasher);
-                branch.hash(hasher);
-            }
-            RemotePopoverKind::OpenInBrowserMenu => {
-                108u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-        },
-        RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
-            WorktreePopoverKind::SectionMenu => {
-                16u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            WorktreePopoverKind::Menu { path, branch } => {
-                17u8.hash(hasher);
-                repo_id.hash(hasher);
-                path.hash(hasher);
-                branch.hash(hasher);
-            }
-            WorktreePopoverKind::AddPrompt => {
-                20u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            WorktreePopoverKind::OpenPicker => {
-                21u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            WorktreePopoverKind::RemovePicker => {
-                22u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            WorktreePopoverKind::BadgePicker => {
-                36u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            WorktreePopoverKind::RemoveConfirm { path, branch } => {
-                23u8.hash(hasher);
-                repo_id.hash(hasher);
-                path.hash(hasher);
-                branch.hash(hasher);
-            }
-            WorktreePopoverKind::CommitMenu { commit_id } => {
-                37u8.hash(hasher);
-                repo_id.hash(hasher);
-                commit_id.hash(hasher);
-            }
-        },
-        RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
-            SubmodulePopoverKind::SectionMenu => {
-                18u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            SubmodulePopoverKind::Menu { path } => {
-                19u8.hash(hasher);
-                repo_id.hash(hasher);
-                path.hash(hasher);
-            }
-            SubmodulePopoverKind::AddPrompt => {
-                24u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            SubmodulePopoverKind::ChangePointerPrompt { path } => {
-                29u8.hash(hasher);
-                repo_id.hash(hasher);
-                path.hash(hasher);
-            }
-            SubmodulePopoverKind::TrustConfirm => {
-                28u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            SubmodulePopoverKind::OpenPicker => {
-                25u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            SubmodulePopoverKind::RemovePicker => {
-                26u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            SubmodulePopoverKind::RemoveConfirm { path } => {
-                27u8.hash(hasher);
-                repo_id.hash(hasher);
-                path.hash(hasher);
-            }
-        },
-        RepoPopoverKind::Annex(annex_kind) => {
-            90u8.hash(hasher);
-            repo_id.hash(hasher);
-            annex_kind.hash(hasher);
-        }
-    }
-}
-
-fn hash_diff_area<H: Hasher>(area: DiffArea, hasher: &mut H) {
-    match area {
-        DiffArea::Staged => 0u8.hash(hasher),
-        DiffArea::Unstaged => 1u8.hash(hasher),
-    }
-}
-
-fn hash_branch_section<H: Hasher>(section: BranchSection, hasher: &mut H) {
-    match section {
-        BranchSection::Local => 0u8.hash(hasher),
-        BranchSection::Remote => 1u8.hash(hasher),
-    }
-}
-
-fn hash_remote_url_kind<H: Hasher>(kind: RemoteUrlKind, hasher: &mut H) {
-    match kind {
-        RemoteUrlKind::Fetch => 0u8.hash(hasher),
-        RemoteUrlKind::Push => 1u8.hash(hasher),
-    }
-}
-
-fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
-    match mode {
-        ResetMode::Soft => 0u8.hash(hasher),
-        ResetMode::Mixed => 1u8.hash(hasher),
-        ResetMode::Hard => 2u8.hash(hasher),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{Branch, CommitId, Upstream};
-    use std::sync::Arc;
-
-    fn hash_kind(kind: PopoverKind) -> u64 {
-        let mut hasher = FxHasher::default();
-        hash_popover_kind(&kind, &mut hasher);
-        hasher.finish()
-    }
+    use gitcomet_core::domain::CommitId;
 
     fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
         gitcomet_core::services::ForcePushLease {
@@ -1402,97 +578,6 @@ mod tests {
 
     /// Kinds without fields hash nothing but their identity, so two sharing a
     /// tag would look identical to the host's notify gate.
-    #[test]
-    fn kinds_without_fields_hash_apart() {
-        let kinds = [
-            PopoverKind::StashPrompt,
-            PopoverKind::CloneRepo,
-            PopoverKind::PullPicker,
-            PopoverKind::PushPicker,
-            PopoverKind::AppMenu,
-            PopoverKind::AddRepoMenu,
-            PopoverKind::DiffActionMenu,
-            PopoverKind::MergetoolSettingsMenu,
-            PopoverKind::DiffContentModeSettings,
-            PopoverKind::ChangeTrackingSettings,
-            PopoverKind::UiScalePicker,
-            PopoverKind::InteractiveRebaseAutosquashMenu,
-        ];
-        let hashes: rustc_hash::FxHashSet<u64> = kinds.iter().cloned().map(hash_kind).collect();
-        assert_eq!(hashes.len(), kinds.len(), "{kinds:?}");
-    }
-
-    /// Two tags on one commit open different menus; hashing alike would leave
-    /// the first tag's actions up when the second is right-clicked.
-    #[test]
-    fn tag_menus_on_one_commit_hash_their_tag() {
-        let menu = |name: Option<&str>| PopoverKind::TagMenu {
-            repo_id: RepoId(7),
-            commit_id: CommitId("1111111111111111111111111111111111111111".into()),
-            name: name.map(str::to_owned),
-        };
-        assert_eq!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.0"))));
-        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(Some("v1.1"))));
-        assert_ne!(hash_kind(menu(Some("v1.0"))), hash_kind(menu(None)));
-    }
-
-    #[test]
-    fn local_file_link_menus_hash_their_path_and_presence() {
-        let menu = |path: &str, missing: bool| PopoverKind::LocalFileLinkMenu {
-            repo_id: RepoId(7),
-            source: LocalFileLinkSource::Version(
-                gitcomet_core::domain::FileSource::WorkingDirectory,
-            ),
-            path: std::path::PathBuf::from(path),
-            missing,
-            load_remote_image_url: None,
-        };
-        assert_eq!(
-            hash_kind(menu("docs/a.md", false)),
-            hash_kind(menu("docs/a.md", false))
-        );
-        assert_ne!(
-            hash_kind(menu("docs/a.md", false)),
-            hash_kind(menu("docs/b.md", false))
-        );
-        assert_ne!(
-            hash_kind(menu("docs/a.md", false)),
-            hash_kind(menu("docs/a.md", true))
-        );
-    }
-
-    #[test]
-    fn revert_and_cherry_pick_confirms_hash_differently() {
-        let repo_id = RepoId(7);
-        let commit_id = CommitId("deadbeef".into());
-        assert_ne!(
-            hash_kind(PopoverKind::RevertCommitConfirm {
-                repo_id,
-                commit_id: commit_id.clone(),
-            }),
-            hash_kind(PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }),
-        );
-    }
-
-    #[test]
-    fn grouped_repo_popover_hash_changes_with_nested_payload() {
-        let repo_id = RepoId(7);
-        let hash_origin = hash_kind(PopoverKind::remote(
-            repo_id,
-            RemotePopoverKind::Menu {
-                name: "origin".to_string(),
-            },
-        ));
-        let hash_upstream = hash_kind(PopoverKind::remote(
-            repo_id,
-            RemotePopoverKind::Menu {
-                name: "upstream".to_string(),
-            },
-        ));
-
-        assert_ne!(hash_origin, hash_upstream);
-    }
-
     #[test]
     fn grouped_repo_popover_resolves_explicit_repo_id() {
         let repo_id = RepoId(42);
@@ -1515,10 +600,9 @@ mod tests {
         assert_eq!(resolved.id, repo_id);
     }
 
-    /// The branch menus add "Open worktree" once the worktree list names the
-    /// branch; the Add dialog refuses an existing name.
+    /// The Add dialog refuses a branch name that already exists.
     #[test]
-    fn worktree_aware_popovers_repaint_when_their_lists_change() {
+    fn the_worktree_add_prompt_repaints_when_branches_change() {
         let repo_id = RepoId(9);
         let mut state = AppState {
             active_repo: Some(repo_id),
@@ -1530,275 +614,10 @@ mod tests {
                 workdir: std::env::temp_dir().join("gitcomet_worktree_menu_fingerprint"),
             },
         ));
-        let changes = |popover: PopoverKind, bump: fn(&mut RepoState)| {
-            let mut state = state.clone();
-            let before = notify_fingerprint(&state, &popover, None);
-            bump(&mut state.repos[0]);
-            before != notify_fingerprint(&state, &popover, None)
-        };
-        let bump_worktrees: fn(&mut RepoState) =
-            |repo| repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
-        let bump_branches: fn(&mut RepoState) =
-            |repo| repo.branches_rev = repo.branches_rev.wrapping_add(1);
-
-        assert!(changes(
-            PopoverKind::BranchMenu {
-                repo_id,
-                target: crate::view::BranchMenuTarget::Local {
-                    name: "main".to_string(),
-                },
-            },
-            bump_worktrees,
-        ));
-        assert!(changes(
-            PopoverKind::CommitMenu {
-                repo_id,
-                commit_id: CommitId("deadbeef".into()),
-                refs: CommitMenuRefs::All,
-            },
-            bump_worktrees,
-        ));
-        assert!(changes(
-            PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
-            bump_branches,
-        ));
-    }
-
-    #[test]
-    fn pull_picker_fingerprint_changes_when_branches_rev_changes() {
-        let repo_id = RepoId(9);
-        let mut repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_pull_picker_fingerprint"),
-            },
-        );
-        repo.head_branch = Loadable::Ready("main".to_string());
-        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
-            name: "main".to_string(),
-            target: CommitId("deadbeef".into()),
-            upstream: Some(Upstream {
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-            }),
-            divergence: None,
-        }]));
-
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        let popover = PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt);
+        let before = notify_fingerprint(&state, &popover, None);
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-
-        assert_ne!(before, after);
-    }
-
-    #[test]
-    fn pull_picker_fingerprint_changes_between_failed_snapshots_without_a_running_snapshot() {
-        use gitcomet_state::model::AutoFetchStatus;
-        let at = std::time::UNIX_EPOCH;
-        let failed = |at, message: &str| AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
-                message.into(),
-            )),
-        };
-        let repo_id = RepoId(9);
-        let mut repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_pull_picker_failed_fetch_fingerprint"),
-            },
-        );
-        repo.auto_fetch.last_success_at = Some(at);
-        repo.auto_fetch.status = failed(at, "network disconnected");
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            repos: vec![repo],
-            ..AppState::test_default()
-        };
-        state.remote_settings.auto_fetch.enabled = true;
-        let first = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        state.repos[0].auto_fetch.status = failed(at, "authentication required");
-        let second = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(first, second);
-        state.repos[0].auto_fetch.status = failed(
-            at + std::time::Duration::from_secs(60),
-            "authentication required",
-        );
-        assert_ne!(
-            second,
-            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
-        );
-        let failure = gitcomet_core::error::GitFailure::new(
-            "git fetch --all",
-            gitcomet_core::error::GitFailureId::CommandFailed,
-            Some(128),
-            Vec::new(),
-            Vec::new(),
-            Some("authentication required".into()),
-        );
-        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
-                failure.clone(),
-            )),
-        };
-        let without_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
-            at,
-            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
-                failure.with_auth_outcome(gitcomet_core::auth::AuthOutcome::NeedsInput(
-                    gitcomet_core::auth::AuthChallenge::from_prompt(
-                        gitcomet_core::auth::GitAuthKind::UsernamePassword,
-                        "Password for test remote:",
-                    ),
-                )),
-            )),
-        };
-        let with_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(without_auth_hint, with_auth_hint);
-        state.repos[0].auto_fetch.retry_at = Some(at + std::time::Duration::from_secs(3600));
-        let retrying = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
-        assert_ne!(with_auth_hint, retrying);
-        state.repos[0].auto_fetch.paused_remotes = vec!["origin".into()];
-        assert_ne!(
-            retrying,
-            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
-        );
-    }
-
-    #[test]
-    fn explorer_settings_menu_fingerprint_changes_when_file_browser_rev_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_explorer_settings_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let kind = PopoverKind::ExplorerSettingsMenu { repo_id };
-        let before = notify_fingerprint(&state, &kind, None);
-        state.repos[0].file_browser.show_ignored = true;
-        state.repos[0].file_browser.bump_rev();
-        let after = notify_fingerprint(&state, &kind, None);
-
-        assert_ne!(before, after, "the check marks read the visibility flags");
-        assert_ne!(
-            hash_kind(kind),
-            hash_kind(PopoverKind::BrowseHistoryMenu { repo_id }),
-        );
-    }
-
-    #[test]
-    fn pull_and_push_picker_fingerprints_follow_annex_takeover() {
-        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
-            let repo_id = RepoId(9);
-            let mut repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: "/tmp/repo".into(),
-                },
-            );
-            repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
-            let mut state = AppState {
-                active_repo: Some(repo_id),
-                repos: vec![repo],
-                ..AppState::test_default()
-            };
-            let before = notify_fingerprint(&state, &popover, None);
-            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
-            support.annex.uuid = Some("u".into());
-            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
-            let detected = notify_fingerprint(&state, &popover, None);
-            assert_eq!(
-                before, detected,
-                "unknown support already protects the adjusted branch"
-            );
-            state.repos[0].large_file_support = Loadable::Ready(Arc::default());
-            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
-            state.repos[0].large_file_support = Loadable::Loading;
-            state.large_file_settings.annex_pull_push = false;
-            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
-        }
-    }
-
-    /// The LFS and git-annex entries under Pull and Push come from the support
-    /// summary, the installed tools and the running pull or push. An open
-    /// menu must repaint when any of them changes.
-    #[test]
-    fn pull_and_push_picker_fingerprints_follow_large_file_entries() {
-        use gitcomet_core::large_file_tools::ToolAvailability;
-        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
-            let repo_id = RepoId(9);
-            let repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: "/tmp/repo".into(),
-                },
-            );
-            let mut state = AppState {
-                active_repo: Some(repo_id),
-                repos: vec![repo],
-                ..AppState::test_default()
-            };
-            let mut previous = notify_fingerprint(&state, &popover, None);
-            let mut assert_changed = |state: &AppState, what: &str| {
-                let next = notify_fingerprint(state, &popover, None);
-                assert_ne!(previous, next, "{popover:?}: {what}");
-                previous = next;
-            };
-
-            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
-            support.annex.uuid = Some("u".into());
-            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
-            state.repos[0].large_file_support_rev += 1;
-            assert_changed(&state, "support loaded");
-            state.large_file_tools.git_annex = ToolAvailability::NotFound {
-                detail: String::new(),
-            };
-            assert_changed(&state, "git-annex missing");
-            state.large_file_tools.git_lfs = ToolAvailability::NotFound {
-                detail: String::new(),
-            };
-            assert_changed(&state, "git-lfs missing");
-            state.repos[0].push_in_flight = 1;
-            assert_changed(&state, "push started");
-            state.repos[0].worktree_pull_in_flight = 1;
-            assert_changed(&state, "pull started");
-        }
-    }
-
-    #[test]
-    fn app_menu_fingerprint_changes_when_the_active_repos_remotes_change() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_app_menu_remotes_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
-        state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
-
-        assert_ne!(before, after, "the Open remote row reads the remotes");
+        assert_ne!(before, notify_fingerprint(&state, &popover, None));
     }
 
     #[test]
@@ -1824,94 +643,40 @@ mod tests {
         assert_ne!(before, after, "the picker's rows are the remotes");
     }
 
+    /// A different popover over the same state is a repaint: the popover is
+    /// compared itself, so no field of it can be left out of a hash.
     #[test]
-    fn remote_picker_fingerprints_differ_per_repository() {
+    fn a_different_popover_over_the_same_state_is_recorded_as_changed() {
         let state = AppState::test_default();
-        let picker = |repo_id| {
-            notify_fingerprint(
-                &state,
-                &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
-                None,
+        let menu = |name: &str| {
+            PopoverKind::remote(
+                RepoId(9),
+                RemotePopoverKind::Menu {
+                    name: name.to_string(),
+                },
             )
         };
-        assert_ne!(picker(RepoId(1)), picker(RepoId(2)));
-    }
+        let mut shown = NotifyFingerprint::default();
 
-    #[test]
-    fn remote_picker_and_remote_menu_fingerprints_differ() {
-        let repo_id = RepoId(9);
-        let state = AppState::test_default();
-        let picker = notify_fingerprint(
+        assert!(shown.record(&state, &menu("origin"), None));
+        assert!(!shown.record(&state, &menu("origin"), None));
+        assert!(shown.record(&state, &menu("upstream"), None));
+        assert!(shown.record(
             &state,
-            &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
-            None,
-        );
-        let menu = notify_fingerprint(
+            &PopoverKind::remote(RepoId(9), RemotePopoverKind::OpenInBrowserMenu),
+            None
+        ));
+        assert!(shown.record(
             &state,
-            &PopoverKind::remote(
-                repo_id,
-                RemotePopoverKind::Menu {
-                    name: "origin".to_string(),
-                },
-            ),
-            None,
-        );
-        assert_ne!(picker, menu);
-    }
-
-    #[test]
-    fn commit_options_fingerprint_changes_when_amend_availability_revisions_change() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_commit_options_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let popover = PopoverKind::CommitOptionsMenu { repo_id };
-        let before = notify_fingerprint(&state, &popover, None);
-
-        state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
-        let after_head_branch = notify_fingerprint(&state, &popover, None);
-        assert_ne!(before, after_head_branch);
-
-        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        assert_ne!(
-            after_head_branch,
-            notify_fingerprint(&state, &popover, None)
-        );
-    }
-
-    #[test]
-    fn commit_menu_fingerprint_changes_when_history_tag_visibility_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_commit_menu_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let popover = PopoverKind::CommitMenu {
-            repo_id,
-            commit_id: CommitId("deadbeef".into()),
-            refs: CommitMenuRefs::All,
-        };
-        let before = notify_fingerprint(&state, &popover, None);
-        state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;
-
-        assert_ne!(before, notify_fingerprint(&state, &popover, None));
+            &PopoverKind::remote(RepoId(2), RemotePopoverKind::OpenInBrowserMenu),
+            None
+        ));
+        shown.clear();
+        assert!(shown.record(
+            &state,
+            &PopoverKind::remote(RepoId(2), RemotePopoverKind::OpenInBrowserMenu),
+            None
+        ));
     }
 
     #[test]
@@ -1932,28 +697,6 @@ mod tests {
         let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
         state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
         let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
-
-        assert_ne!(before, after);
-    }
-
-    #[test]
-    fn push_picker_fingerprint_changes_when_pending_lease_changes() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_push_picker_lease_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let before = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
-        state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
-        let after = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
 
         assert_ne!(before, after);
     }

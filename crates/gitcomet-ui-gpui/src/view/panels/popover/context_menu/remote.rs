@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::permalink;
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
@@ -7,7 +8,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         .and_then(|repo| repo.remotes.ready())
         .and_then(|remotes| remotes.iter().find(|remote| remote.name == name))
         .and_then(|remote| remote.url.as_deref());
-    let web_url = remote_url.and_then(crate::view::permalink::remote_web_url);
+    let web_url = remote_url.and_then(permalink::remote_web_url);
 
     let mut items = vec![ContextMenuItem::Header("Remote".into())];
     items.push(ContextMenuItem::Label(name.to_owned().into()));

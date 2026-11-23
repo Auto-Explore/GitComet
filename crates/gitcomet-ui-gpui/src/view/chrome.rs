@@ -20,6 +20,7 @@ use crate::kit::window_chrome::{
     window_top_left_corner,
 };
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 
 use crate::theme::mix_rgba;
 use std::cell::Cell;
@@ -48,7 +49,6 @@ pub(in crate::view) enum TitleBarMode {
 pub(super) struct TitleBarView {
     mode: TitleBarMode,
     brand: Option<gpui::AnyView>,
-    theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
@@ -209,13 +209,11 @@ pub(in crate::view) fn workspace_row_tint(
 
 impl TitleBarView {
     pub(super) fn new(
-        theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         repo_tab_actions_enabled: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
-            theme,
             root_view,
             mode: TitleBarMode::Standard,
             brand: None,
@@ -258,11 +256,6 @@ impl TitleBarView {
         self.title_drag_state.is_move_armed()
     }
 
-    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     pub(super) fn set_app_menu_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
         if self.app_menu_open == open {
             return;
@@ -303,9 +296,9 @@ impl TitleBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     fn open_popover_for_bounds(
@@ -316,15 +309,17 @@ impl TitleBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 }
 
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let is_macos = cfg!(target_os = "macos");
         let repo_tab_actions_enabled =
             self.mode == TitleBarMode::Standard && self.repo_tab_actions_enabled;

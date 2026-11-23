@@ -816,6 +816,77 @@ fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::T
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// The header reads the width its probe measured in the last frame, so the
+/// frame that measures a new width still draws the old one. That measurement
+/// must ask for the next frame: tests draw a window at each update only when it
+/// asked for one, as the app does.
+#[gpui::test]
+fn a_measured_width_change_redraws_the_details_pane_by_itself(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(64);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_header_measured",
+        std::process::id()
+    ));
+    let a = std::path::PathBuf::from("a.txt");
+    let b = std::path::PathBuf::from("b.txt");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.open = gitcomet_state::model::Loadable::Ready(());
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: std::sync::Arc::new(Vec::new()),
+                    unstaged: std::sync::Arc::new(
+                        [&a, &b]
+                            .map(|path| gitcomet_core::domain::FileStatus {
+                                path: path.clone(),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            })
+                            .to_vec(),
+                    ),
+                }
+                .into(),
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![a.clone(), b.clone()],
+                        unstaged_anchor: Some(a.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+    let button_width = |cx: &mut gpui::VisualTestContext| {
+        cx.debug_bounds("stage_selected_button")
+            .expect("the Stage (n) button is drawn")
+            .size
+            .width
+    };
+    draw_with_details_width(cx, &view, 700.0);
+    draw_and_drain_test_window(cx);
+    let wide = button_width(cx);
+
+    draw_with_details_width(cx, &view, 300.0);
+    let narrow = button_width(cx);
+    assert!(
+        narrow < wide,
+        "the frame after the resize must use the measured width (wide={wide:?}, narrow={narrow:?})"
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// Menu-opening chips across the workspace: click targets that stayed fixed
 /// pills while Comfortable grew everything around them. The title bar is the
 /// deliberate exception -- it shares its row with OS window controls that never

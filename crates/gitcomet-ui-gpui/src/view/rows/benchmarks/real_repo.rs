@@ -733,9 +733,8 @@ fn build_real_repo_state(
             resume_token: None,
         }),
     });
-    repo.log = Loadable::Ready(Arc::clone(&log_page));
+    repo.history_state.log = Loadable::Ready(Arc::clone(&log_page));
     repo.history_state.log = Loadable::Ready(log_page);
-    repo.log_rev = 1;
     repo.history_state.log_rev = 1;
     repo
 }

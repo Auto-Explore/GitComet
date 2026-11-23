@@ -5,7 +5,7 @@ pub(super) fn panel(
     _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let can_submit = this.can_submit_remote_add(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 

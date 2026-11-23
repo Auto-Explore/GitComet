@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
+
 use crate::msg::RepoCommandEffect;
 use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
@@ -22,6 +24,7 @@ mod filesystem;
 mod git_hook_activity;
 mod git_operations;
 mod history_authors;
+mod history_filter;
 mod history_find;
 #[cfg(test)]
 mod history_selection_ack_tests;
@@ -46,7 +49,9 @@ mod util;
 mod worktree_removal;
 
 use crate::model::{AppState, ComparisonSource, Loadable, RepoId};
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, WorktreeSaveBaseline};
+use crate::msg::{
+    ConflictRegionChoice, Effect, Msg, NavHistory, RepoPath, ViewNavigation, WorktreeSaveBaseline,
+};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -237,146 +242,7 @@ fn begin_head_changing_local_action(state: &mut AppState, repo_id: RepoId) {
 }
 
 pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
-    matches!(
-        msg,
-        Msg::OpenRepo(_)
-            | Msg::PreviewDisableBareMode { .. }
-            | Msg::DisableBareMode { .. }
-            | Msg::OpenRepoFromExternalDrop(_)
-            | Msg::RestoreSession { .. }
-            | Msg::ReloadRepo { .. }
-            | Msg::RepoActivated { .. }
-            | Msg::RepoExternallyChanged { .. }
-            | Msg::SetHistoryScope { .. }
-            | Msg::SetHistoryAuthorFilter { .. }
-            | Msg::SetHistoryFocus { .. }
-            | Msg::ToggleHistoryFocus { .. }
-            | Msg::FocusHistoryRefs { .. }
-            | Msg::LoadMoreHistory { .. }
-            | Msg::SelectCommit { .. }
-            | Msg::CompareCommitRange { .. }
-            | Msg::CompareWithOptions { .. }
-            | Msg::CompareWithMarked { .. }
-            | Msg::CompareWithWorkingTree { .. }
-            | Msg::SelectDiff { .. }
-            | Msg::SetTextOverride { .. }
-            | Msg::SelectConflictDiff { .. }
-            | Msg::SelectWorktreeUncommitted { .. }
-            | Msg::LoadStashes { .. }
-            | Msg::LoadConflictFile { .. }
-            | Msg::LoadReflog { .. }
-            | Msg::LoadRecentCommitMessages { .. }
-            | Msg::PreviewTagPush { .. }
-            | Msg::LoadHoverCommitMessage { .. }
-            | Msg::ResolveCommitLookup { .. }
-            | Msg::LoadFileHistory { .. }
-            | Msg::LoadBlame { .. }
-            | Msg::LoadWorktrees { .. }
-            | Msg::LoadWorktreeDirty { .. }
-            | Msg::LoadRefMetadata { .. }
-            | Msg::LoadSubmodules { .. }
-            | Msg::LoadSubmodule { .. }
-            | Msg::LoadTags { .. }
-            | Msg::LoadRemoteTags { .. }
-            | Msg::RefreshBranches { .. }
-            | Msg::LoadFileBrowser { .. }
-            | Msg::OpenFileContent { .. }
-            | Msg::OpenFileEditor { .. }
-            | Msg::OpenFileAtCommitParent { .. }
-            | Msg::OpenFileAtCommit { .. }
-            | Msg::ShowFileChangesAtCommit { .. }
-            | Msg::BrowseRepositoryAtCommit { .. }
-            | Msg::RevealCommit { .. }
-            | Msg::ResetBrowseToLive { .. }
-            | Msg::ViewerNavBack { .. }
-            | Msg::ViewerNavForward { .. }
-            | Msg::GlobalNavBack { .. }
-            | Msg::GlobalNavForward { .. }
-            | Msg::StageHunk { .. }
-            | Msg::ApplyPreparedDiffPatch { .. }
-            | Msg::UnstageHunk { .. }
-            | Msg::ApplyWorktreePatch { .. }
-            | Msg::CheckoutBranch { .. }
-            | Msg::CheckoutRemoteBranch { .. }
-            | Msg::CheckoutCommit { .. }
-            | Msg::CherryPickCommit { .. }
-            | Msg::RevertCommit { .. }
-            | Msg::ApplyFileChange { .. }
-            | Msg::CreateBranch { .. }
-            | Msg::CreateBranchAndCheckout { .. }
-            | Msg::RenameBranch { .. }
-            | Msg::DeleteBranch { .. }
-            | Msg::ForceDeleteBranch { .. }
-            | Msg::DeleteBranches { .. }
-            | Msg::CloneRepo { .. }
-            | Msg::ExportPatch { .. }
-            | Msg::ApplyPatch { .. }
-            | Msg::AddWorktree { .. }
-            | Msg::RemoveWorktree { .. }
-            | Msg::ForceRemoveWorktree { .. }
-            | Msg::AddSubmodule { .. }
-            | Msg::UpdateSubmodules { .. }
-            | Msg::ChangeSubmodulePointer { .. }
-            | Msg::RemoveSubmodule { .. }
-            | Msg::StagePath { .. }
-            | Msg::StagePaths { .. }
-            | Msg::UnstagePath { .. }
-            | Msg::UnstagePaths { .. }
-            | Msg::DiscardWorktreeChangesPath { .. }
-            | Msg::DiscardWorktreeChangesPaths { .. }
-            | Msg::SaveWorktreeFile { .. }
-            | Msg::AppendGitignorePatterns { .. }
-            | Msg::RunLargeFileCommand { .. }
-            | Msg::AppendGitattributesRule { .. }
-            | Msg::Commit { .. }
-            | Msg::SafePushAfterCommit { .. }
-            | Msg::Fetch(crate::msg::FetchMsg::All { .. })
-            | Msg::Fetch(crate::msg::FetchMsg::Remote { .. })
-            | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
-            | Msg::PruneMergedBranches { .. }
-            | Msg::PruneLocalTags { .. }
-            | Msg::StartRepoMaintenance { .. }
-            | Msg::Pull { .. }
-            | Msg::PullBranch { .. }
-            | Msg::MergeRef { .. }
-            | Msg::SquashRef { .. }
-            | Msg::PushWithTags { .. }
-            | Msg::Push { .. }
-            | Msg::PushAfterCommit { .. }
-            | Msg::ForcePush { .. }
-            | Msg::ForcePushWithLease { .. }
-            | Msg::PushSetUpstream { .. }
-            | Msg::SetUpstreamBranch { .. }
-            | Msg::UnsetUpstreamBranch { .. }
-            | Msg::DeleteRemoteBranch { .. }
-            | Msg::DeleteRemoteBranches { .. }
-            | Msg::Reset { .. }
-            | Msg::PrepareSquash { .. }
-            | Msg::SquashCommits { .. }
-            | Msg::RewordCommit { .. }
-            | Msg::ContinueRewordCommit { .. }
-            | Msg::Rebase { .. }
-            | Msg::RebaseContinue { .. }
-            | Msg::RebaseAbort { .. }
-            | Msg::InteractiveRebase { .. }
-            | Msg::InteractiveCherryPick { .. }
-            | Msg::MergeAbort { .. }
-            | Msg::CreateTag { .. }
-            | Msg::DeleteTag { .. }
-            | Msg::PushTag { .. }
-            | Msg::DeleteRemoteTag { .. }
-            | Msg::AddRemote { .. }
-            | Msg::RemoveRemote { .. }
-            | Msg::SetRemoteUrl { .. }
-            | Msg::CheckoutConflictSide { .. }
-            | Msg::AcceptConflictDeletion { .. }
-            | Msg::CheckoutConflictBase { .. }
-            | Msg::LaunchMergetool { .. }
-            | Msg::Stash { .. }
-            | Msg::ApplyStash { .. }
-            | Msg::PopStash { .. }
-            | Msg::DropStash { .. }
-    )
+    msg.class().requires_git
 }
 
 #[cfg(test)]
@@ -639,10 +505,11 @@ fn refuse_for_repository_requirement(
     state: &mut AppState,
     msg: &Msg,
 ) -> bool {
-    let Some((repo_id, requirement)) = msg.repository_requirement() else {
+    let class = msg.class();
+    let Some((repo_id, requirement)) = class.repository else {
         return false;
     };
-    let converting = msg_requires_available_git(msg)
+    let converting = class.requires_git
         && state
             .repos
             .iter()
@@ -750,32 +617,6 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     }
 }
 
-/// A back/forward history the user steps through.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NavHistory {
-    /// The global history across the main view.
-    Main,
-    /// The file viewer's own history of versions, kept apart so it does not
-    /// pollute the global one.
-    Viewer,
-}
-
-/// How a message moves its repository's main view.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ViewNavigation {
-    /// The user goes to a view: a new global back/forward step, and a request
-    /// for the repository's canvas.
-    Step,
-    /// The user asks for the canvas, and the selection folds into the current
-    /// step.
-    Request,
-    /// The user's Back or Forward through a history.
-    Replay(NavHistory, crate::model::ViewNavDir),
-    /// A view asked for earlier arrives: its step, but the ask already
-    /// counted.
-    Resolved,
-}
-
 impl ViewNavigation {
     fn pushes(self) -> bool {
         matches!(self, Self::Step | Self::Resolved)
@@ -804,46 +645,7 @@ impl ViewNavigation {
 /// How `msg` moves which repository's main view, as opposed to a background
 /// change folded into the current step.
 fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
-    use crate::model::ViewNavDir::{Back, Forward};
-    let navigation = match msg {
-        Msg::SelectDiff { repo_id, .. }
-        | Msg::SelectConflictDiff { repo_id, .. }
-        | Msg::SelectCommit { repo_id, .. }
-        // Selecting a linked-worktree row is a destination like any other
-        // history selection; it just is not a commit.
-        | Msg::SelectWorktreeUncommitted { repo_id, .. }
-        | Msg::CompareCommitRange { repo_id, .. }
-        | Msg::CompareWithOptions { repo_id, .. }
-        | Msg::CompareWithMarked { repo_id, .. }
-        | Msg::CompareWithWorkingTree { repo_id, .. }
-        | Msg::OpenFileContent { repo_id, .. }
-        | Msg::OpenFileEditor { repo_id, .. }
-        // Leaving the editor is a destination of its own, so Back returns to
-        // the editor rather than skipping past it to whatever preceded it.
-        | Msg::ExitDiffEditMode { repo_id, .. }
-        | Msg::OpenFileAtCommit { repo_id, .. }
-        | Msg::ShowFileChangesAtCommit { repo_id, .. }
-        | Msg::BrowseRepositoryAtCommit { repo_id, .. }
-        | Msg::ResetBrowseToLive { repo_id, .. }
-        | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
-        | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => (*repo_id, ViewNavigation::Step),
-        Msg::GlobalNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Back)),
-        Msg::GlobalNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Forward)),
-        Msg::ViewerNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Back)),
-        Msg::ViewerNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Forward)),
-        Msg::SelectCommitMulti { repo_id, .. }
-        | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
-            repo_id, ..
-        })
-        | Msg::RevealCommit { repo_id, .. } => (*repo_id, ViewNavigation::Request),
-        // A reveal moves the main view when its reference resolves, not when
-        // it is asked for; a stale or failed answer moves nothing.
-        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { repo_id, .. }) => {
-            (*repo_id, ViewNavigation::Resolved)
-        }
-        _ => return None,
-    };
-    Some(navigation)
+    msg.class().navigation
 }
 
 /// Sync the active repo's global navigation history against the current
@@ -1120,23 +922,7 @@ fn reduce_inner(
             repository_preferences::update(state, repo_id, update)
         }
         Msg::ApplyRepositoryPreferences(snapshot) => repository_preferences::apply(state, snapshot),
-        Msg::SetHistoryScope { repo_id, scope } => {
-            external_and_history::set_history_scope(state, repo_id, scope)
-        }
-        Msg::SetHistoryFocus { repo_id, focus } => {
-            external_and_history::set_history_focus(state, repo_id, focus)
-        }
-        Msg::ToggleHistoryFocus { repo_id, target } => {
-            external_and_history::toggle_history_focus(state, repo_id, target)
-        }
-        Msg::FocusHistoryRefs {
-            repo_id,
-            targets,
-            focused,
-        } => external_and_history::focus_history_refs(state, repo_id, &targets, focused),
-        Msg::SetHistoryAuthorFilter { repo_id, author } => {
-            external_and_history::set_history_author_filter(state, repo_id, author)
-        }
+        Msg::HistoryFilter(message) => history_filter::reduce(state, message),
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit {
             repo_id, commit_id, ..

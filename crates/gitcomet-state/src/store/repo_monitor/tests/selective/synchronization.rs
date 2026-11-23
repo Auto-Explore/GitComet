@@ -100,6 +100,9 @@ fn drain_waits_for_debounce_and_publishes_before_all_acknowledgements() {
         &root,
         MonitorConfig {
             debounce,
+            // The first change would wait less; what matters here is that a
+            // Drain does not cut the wait short.
+            lone_change: (debounce, Duration::ZERO),
             ..Default::default()
         },
     );
@@ -179,6 +182,33 @@ fn drain_finishes_rescan_before_acknowledging() {
     );
 }
 
+/// A checkout holds the index lock while it writes the working tree: a lone
+/// change seen then is part of it, and waits the full debounce.
+#[test]
+fn a_lone_change_under_the_index_lock_waits_the_debounce() {
+    let (_temp, root) = repository();
+    let debounce = Duration::from_millis(250);
+    let (monitor, _callbacks) = injected_monitor(
+        &root,
+        MonitorConfig {
+            debounce,
+            ..Default::default()
+        },
+    );
+    monitor.drain_delivered();
+    fs::write(root.join(".git/index.lock"), "").unwrap();
+    let started = Instant::now();
+    monitor
+        .tx
+        .send(content_event(root.join("checked-out.txt")))
+        .unwrap();
+    monitor.refresh_delivered();
+    assert!(
+        started.elapsed() >= debounce,
+        "flushed under the index lock"
+    );
+}
+
 #[test]
 fn drain_stop_cancels_pending_acknowledgements() {
     let (_temp, root) = repository();
@@ -187,6 +217,9 @@ fn drain_stop_cancels_pending_acknowledgements() {
         MonitorConfig {
             debounce: Duration::from_secs(60),
             max_delay: Duration::from_secs(60),
+            // A lone change would otherwise flush after 50 ms, before Stop
+            // arrives on a busy machine.
+            lone_change: (Duration::from_secs(60), Duration::ZERO),
             ..Default::default()
         },
     );

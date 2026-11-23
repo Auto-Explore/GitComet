@@ -486,7 +486,7 @@ impl SidebarPaneView {
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let row_height = sidebar_list_row_height(theme, ui_scale_percent);
         let icon_muted = with_alpha(
             theme.colors.foreground.secondary,

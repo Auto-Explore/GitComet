@@ -5,6 +5,7 @@ use super::{
 };
 use crate::util::{
     git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_background_output,
+    run_git_parsed_stdout_cancellable,
 };
 use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
@@ -16,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 mod cancellation;
+mod scan;
 mod worker_limit;
 
 #[cfg(test)]
@@ -141,12 +143,17 @@ impl GixRepo {
         // This walk retains clean-file stats in memory immediately instead
         // of hashing touched-but-unchanged files again on the second scan.
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(
-            &repo,
-            &self.stat_refreshed_index,
-            &mut unstaged,
-            cancellation,
-        )?;
+        let query = gitlink_query(&repo, may_have_gitlinks, &staged);
+        let (direct, gitlinks) =
+            walk_beside_gitlink_query(&self.spec.workdir, query, cancellation, || {
+                collect_index_worktree_status_direct(
+                    &repo,
+                    &self.stat_refreshed_index,
+                    &mut unstaged,
+                    cancellation,
+                )
+            });
+        let direct = direct?;
         cancellation.check_cancelled()?;
 
         #[cfg(feature = "benchmarks")]
@@ -164,13 +171,11 @@ impl GixRepo {
 
         cancellation.check_cancelled()?;
         finalize_status(
-            &self.spec.workdir,
             &repo,
-            may_have_gitlinks,
+            gitlinks,
             staged,
             unstaged,
             direct.has_conflicted_unstaged,
-            cancellation,
         )
     }
 
@@ -186,12 +191,17 @@ impl GixRepo {
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(
-            &repo,
-            &self.stat_refreshed_index,
-            &mut unstaged,
-            cancellation,
-        )?;
+        let query = gitlink_query(&repo, may_have_gitlinks, &[]);
+        let (direct, gitlinks) =
+            walk_beside_gitlink_query(&self.spec.workdir, query, cancellation, || {
+                collect_index_worktree_status_direct(
+                    &repo,
+                    &self.stat_refreshed_index,
+                    &mut unstaged,
+                    cancellation,
+                )
+            });
+        let direct = direct?;
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
@@ -202,16 +212,8 @@ impl GixRepo {
             cancellation.check_cancelled()?;
         }
 
-        if may_have_gitlinks {
-            supplement_gitlink_status_from_porcelain(
-                &self.spec.workdir,
-                &repo,
-                &mut Vec::new(),
-                &mut unstaged,
-                cancellation,
-            )?;
-            cancellation.check_cancelled()?;
-        }
+        apply_gitlink_outputs(gitlinks, &mut Vec::new(), &mut unstaged)?;
+        cancellation.check_cancelled()?;
 
         sort_and_dedup_status_entries(&mut unstaged);
         Ok(unstaged)
@@ -245,16 +247,16 @@ impl GixRepo {
         let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
         let mut staged = collect_staged_status_from_tree_index(&repo, &head_tree_id)?;
         cancellation.check_cancelled()?;
-        if self.may_have_gitlink_status_supplement(&repo, &index_stamp) {
-            supplement_gitlink_status_from_porcelain(
-                &self.spec.workdir,
-                &repo,
-                &mut staged,
-                &mut Vec::new(),
-                cancellation,
-            )?;
-            cancellation.check_cancelled()?;
-        }
+        let mut query = gitlink_query(
+            &repo,
+            self.may_have_gitlink_status_supplement(&repo, &index_stamp),
+            &staged,
+        );
+        // A checkout asked directly has nothing staged, by its selection.
+        query.checkouts.clear();
+        let gitlinks = run_gitlink_query(&self.spec.workdir, query, cancellation);
+        apply_gitlink_outputs(gitlinks, &mut staged, &mut Vec::new())?;
+        cancellation.check_cancelled()?;
         sort_and_dedup_status_entries(&mut staged);
         remove_conflicted_paths_from_staged(
             &mut staged,
@@ -348,13 +350,11 @@ fn should_supplement_unmerged_conflicts(
 }
 
 fn finalize_status(
-    workdir: &Path,
     repo: &gix::Repository,
-    may_have_gitlinks: bool,
+    gitlinks: GitlinkOutputs,
     mut staged: Vec<FileStatus>,
     mut unstaged: Vec<FileStatus>,
     has_conflicted_unstaged: bool,
-    cancellation: &CancellationToken,
 ) -> Result<RepoStatus> {
     // Some platforms may omit certain unmerged shapes (notably stage-1-only both-deleted
     // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
@@ -367,19 +367,7 @@ fn finalize_status(
         apply_unmerged_conflicts(repo, &mut unstaged)?;
     }
 
-    // Only shell out for gitlink/submodule status when the repo is likely to contain submodules
-    // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
-    // case.
-    if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(
-            workdir,
-            repo,
-            &mut staged,
-            &mut unstaged,
-            cancellation,
-        )?;
-    }
-    cancellation.check_cancelled()?;
+    apply_gitlink_outputs(gitlinks, &mut staged, &mut unstaged)?;
 
     sort_and_dedup_status_entries(&mut staged);
     sort_and_dedup_status_entries(&mut unstaged);
@@ -470,11 +458,38 @@ pub(super) fn tree_index_changes(
     repo: &gix::Repository,
     tree_id: &gix::ObjectId,
     walk: &str,
+    on_change: impl FnMut(gix::diff::index::ChangeRef<'_, '_>) -> gix::Result<gix::diff::index::Action>,
+) -> Result<()> {
+    let index = current_index(repo)?;
+    // Comparing means reading every tree below `tree_id`: most of a first
+    // status when nothing is staged, the usual case.
+    if index_is_tree(&index, tree_id) {
+        return Ok(());
+    }
+    compare_tree_with_index(repo, tree_id, &index, walk, on_change)
+}
+
+/// Whether the index holds exactly the tree `tree_id`, by the root of the
+/// trees it caches. Git drops that root when an entry is added, removed,
+/// changed, conflicted or only intended to be added, and trusts it likewise.
+fn index_is_tree(index: &gix::index::State, tree_id: &gix::hash::oid) -> bool {
+    index.tree().is_some_and(|root| {
+        root.id == tree_id
+            && root
+                .num_entries
+                .is_some_and(|entries| entries as usize == index.entries().len())
+    })
+}
+
+fn compare_tree_with_index(
+    repo: &gix::Repository,
+    tree_id: &gix::hash::oid,
+    index: &gix::index::State,
+    walk: &str,
     mut on_change: impl FnMut(
         gix::diff::index::ChangeRef<'_, '_>,
     ) -> gix::Result<gix::diff::index::Action>,
 ) -> Result<()> {
-    let index = current_index(repo)?;
     // Without an on-disk index there can be no staged rename. Avoid gix's
     // diff-cache fallback to its files-only HEAD reader.
     let renames = if repo.try_index().map_err(crate::refs::failure)?.is_none() {
@@ -485,7 +500,7 @@ pub(super) fn tree_index_changes(
     let mut pathspec = whole_repository_pathspec(repo)?;
     repo.tree_index_status(
         tree_id,
-        &index,
+        index,
         Some(&mut pathspec),
         renames,
         |change, _, _| on_change(change),
@@ -668,6 +683,15 @@ pub(super) fn current_index(repo: &gix::Repository) -> Result<gix::worktree::Ind
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    index_as_on_disk(repo, index)
+}
+
+/// `index` from gix's shared snapshot, or the file again where Git has
+/// rewritten it since; see [`current_index`].
+pub(super) fn index_as_on_disk(
+    repo: &gix::Repository,
+    index: gix::worktree::Index,
+) -> Result<gix::worktree::Index> {
     let on_disk = std::fs::File::open(repo.index_path())
         .ok()
         .and_then(|mut file| {
@@ -1024,11 +1048,10 @@ where
     drop(timing);
     #[cfg(feature = "benchmarks")]
     let timing = crate::status_trace::StageTimer::new("native-walk");
-    let outcome = gix::status::plumbing::index_as_worktree_with_renames(
+    let outcome = scan::index_as_worktree_with_untracked(
         index,
         workdir,
         &mut collector,
-        gix::status::plumbing::index_as_worktree::traits::FastEq,
         submodule,
         repo.objects
             .clone()
@@ -1045,20 +1068,15 @@ where
                 ignore_case_index_lookup: accelerate_lookup.as_ref(),
             },
         },
-        gix::status::plumbing::index_as_worktree_with_renames::Options {
-            sorting: None,
+        gix::status::plumbing::index_as_worktree::Options {
+            fs: fs_caps,
+            thread_limit,
             fscache,
-            tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
-                fs: fs_caps,
-                thread_limit,
-                fscache,
-                stat: repo.stat_options().map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
-                })?,
-            },
-            dirwalk: Some(dirwalk_options.into()),
-            rewrites: None,
+            stat: repo.stat_options().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
+            })?,
         },
+        dirwalk_options.into(),
     )
     .map_err(|e| {
         if cancellation.is_cancelled() {
@@ -1449,98 +1467,462 @@ fn apply_porcelain_v2_gitlink_status_record(
     Ok(())
 }
 
-fn gitlink_status_command(workdir: &Path) -> std::process::Command {
-    let mut command = git_workdir_cmd_for(workdir);
-    crate::util::disable_fsmonitor(&mut command);
-    command
-        .arg("--no-optional-locks")
-        .arg("status")
-        .arg("--porcelain=v2")
-        .arg("-z")
-        .arg("--ignore-submodules=none");
-    command
+/// Queries Git runs at once for gitlink status, and the paths one must have
+/// to be worth its process: each loads the whole index before it starts.
+const GITLINK_QUERIES_MAX: usize = 8;
+const GITLINK_QUERY_PATHS_MIN: usize = 8;
+
+/// Deals `paths` into the queries that `workers` threads run at once. Git
+/// looks into each checked-out submodule in turn, which for a few hundred of
+/// them takes seconds in one query. Paths are dealt in turn so that
+/// neighbours, often one vendor directory's large checkouts, are shared out.
+fn gitlink_queries(paths: Vec<PathBuf>, workers: usize) -> Vec<Vec<PathBuf>> {
+    let count = workers
+        .min(GITLINK_QUERIES_MAX)
+        .min(paths.len() / GITLINK_QUERY_PATHS_MIN)
+        .max(1);
+    let mut queries = vec![Vec::with_capacity(paths.len().div_ceil(count)); count];
+    for (path, query) in paths.into_iter().zip((0..count).cycle()) {
+        queries[query].push(path);
+    }
+    queries
 }
 
-fn supplement_gitlink_status_from_porcelain(
+/// Whose `git status` to read.
+enum GitlinkAsk<'a> {
+    /// This repository's, for all of it or for `paths`.
+    Repository(Option<Vec<PathBuf>>),
+    /// That of the submodule checked out at this path.
+    Checkout(&'a Path),
+}
+
+const GITLINK_STATUS: &str = "git status --porcelain=v2";
+
+/// What one `git status` printed. `None` when Git could not say: the
+/// supplement is best-effort parity glue on top of the primary gix status,
+/// which then stands as it is.
+fn gitlink_status_output(
     workdir: &Path,
-    repo: &gix::Repository,
-    staged: &mut Vec<FileStatus>,
-    unstaged: &mut Vec<FileStatus>,
+    ask: GitlinkAsk<'_>,
     cancellation: &CancellationToken,
-) -> Result<()> {
+) -> Result<Option<Vec<u8>>> {
     cancellation.check_cancelled()?;
-    let mut command = gitlink_status_command(workdir);
-    if let Some(paths) = gitlink_status_paths(repo, staged) {
-        if paths.is_empty() {
-            return Ok(());
-        }
-        push_literal_paths(&mut command, paths);
+    let command = gitlink_status_command(workdir, ask);
+    match run_git_background_output(command, GITLINK_STATUS, cancellation) {
+        Ok(output) => Ok(output.status.success().then_some(output.stdout)),
+        // Also when the subprocess itself times out.
+        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(None),
+        Err(err) => Err(err),
     }
-    let output = match run_git_background_output(command, "git status --porcelain=v2", cancellation)
-    {
-        Ok(output) => output,
-        // Gitlink supplementation is best-effort parity glue on top of the primary
-        // gix status result. If the subprocess itself times out, keep the base status.
-        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => return Ok(()),
-        Err(err) => return Err(err),
+}
+
+/// Whether the submodule checked out at `path` makes its gitlink modified,
+/// from its status read as Git prints it: a checkout can hold any number of
+/// changed files, and none of them is kept. Unanswered counts as unchanged,
+/// as with [`gitlink_status_output`].
+fn checkout_modified(
+    workdir: &Path,
+    path: &Path,
+    recorded: gix::ObjectId,
+    cancellation: &CancellationToken,
+) -> Result<bool> {
+    cancellation.check_cancelled()?;
+    let command = gitlink_status_command(workdir, GitlinkAsk::Checkout(path));
+    let read = move |stdout| {
+        checkout_is_modified(std::io::BufReader::new(stdout), &recorded).map_err(Error::from)
+    };
+    match run_git_parsed_stdout_cancellable(command, GITLINK_STATUS, false, cancellation, read) {
+        Err(err) if matches!(err.kind(), ErrorKind::Git(_)) => Ok(false),
+        result => result,
+    }
+}
+
+fn gitlink_status_command(workdir: &Path, ask: GitlinkAsk<'_>) -> std::process::Command {
+    match ask {
+        GitlinkAsk::Repository(paths) => {
+            let mut command = git_workdir_cmd_for(workdir);
+            crate::util::disable_fsmonitor(&mut command);
+            // Untracked files here are gix's to find, and preparing to look
+            // for them costs Git as much as the rest of a query for a few
+            // paths. Told not to ignore anything in submodules, Git still
+            // counts the untracked files inside them.
+            command
+                .arg("--no-optional-locks")
+                .arg("status")
+                .arg("--porcelain=v2")
+                .arg("-z")
+                .arg("--untracked-files=no")
+                .arg("--ignore-submodules=none");
+            if let Some(paths) = paths {
+                push_literal_paths(&mut command, paths);
+            }
+            command
+        }
+        GitlinkAsk::Checkout(path) => {
+            let checkout = workdir.join(path);
+            let mut command = git_workdir_cmd_for(&checkout);
+            crate::util::disable_fsmonitor(&mut command);
+            // Git answers for this checkout or not at all, never for a
+            // repository above it.
+            if let Some(above) = checkout.parent() {
+                command.env("GIT_CEILING_DIRECTORIES", above);
+            }
+            for name in REPOSITORY_ABOVE_ENV {
+                command.env_remove(name);
+            }
+            // What Git runs in a submodule to tell whether it is dirty, and
+            // the commit it has checked out.
+            command
+                .arg("--no-optional-locks")
+                .arg("status")
+                .arg("--porcelain=2")
+                .arg("--branch")
+                .arg("--no-ahead-behind");
+            command
+        }
+    }
+}
+
+/// Whether a submodule's own status makes its gitlink modified, as Git
+/// decides it: another commit is checked out than `recorded`, or anything in
+/// it is changed, conflicted or untracked. An unborn HEAD matches any commit.
+/// Reads `status` to its end either way, so that Git finishes.
+fn checkout_is_modified(
+    status: impl std::io::BufRead,
+    recorded: &gix::hash::oid,
+) -> std::io::Result<bool> {
+    let mut modified = false;
+    for line in status.split(b'\n') {
+        let line = line?;
+        modified = modified
+            || match line.first() {
+                Some(b'1' | b'2' | b'u' | b'?') => true,
+                Some(b'#') => line
+                    .strip_prefix(b"# branch.oid ")
+                    .and_then(|head| gix::ObjectId::from_hex(head).ok())
+                    .is_some_and(|head| head != recorded),
+                _ => false,
+            };
+    }
+    Ok(modified)
+}
+
+/// Submodule checkouts asked at once: each answer is a short process.
+const GITLINK_CHECKOUTS_AT_ONCE: usize = 8;
+
+/// What Git clears before it looks into a submodule: the variables naming
+/// the repository it runs in (`git rev-parse --local-env-vars`), which a hook
+/// that started GitComet passes on. Config given with `-c` stays.
+const REPOSITORY_ABOVE_ENV: [&str; 13] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// The checkouts whose gitlink is modified. Git's status of this repository
+/// would run the same `git status` in each, one after another, after loading
+/// this repository's whole index in every query.
+fn modified_checkouts(
+    workdir: &Path,
+    checkouts: &[(PathBuf, gix::ObjectId)],
+    cancellation: &CancellationToken,
+) -> Result<Vec<PathBuf>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let check = || -> Result<Vec<PathBuf>> {
+        let mut modified = Vec::new();
+        while let Some((path, recorded)) =
+            checkouts.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        {
+            if checkout_modified(workdir, path, *recorded, cancellation)? {
+                modified.push(path.clone());
+            }
+        }
+        Ok(modified)
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(GITLINK_CHECKOUTS_AT_ONCE)
+        .min(checkouts.len());
+    std::thread::scope(|scope| {
+        let helpers: Vec<_> = (1..workers)
+            .map(|_| scope.spawn(crate::command_trace::for_helper(&check)))
+            .collect();
+        let mut modified = check();
+        for helper in helpers {
+            let (more, commands) = helper
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            commands.adopt();
+            match (&mut modified, more) {
+                (Ok(modified), Ok(more)) => modified.extend(more),
+                (Ok(_), Err(error)) => modified = Err(error),
+                (Err(_), _) => {}
+            }
+        }
+        modified
+    })
+}
+
+/// What to ask Git about gitlinks. Chosen on the thread that holds the
+/// repository, so that the asking can run beside the worktree walk.
+struct GitlinkQuery {
+    /// Checked-out submodules to ask directly, with the commit the index
+    /// records for each.
+    checkouts: Vec<(PathBuf, gix::ObjectId)>,
+    repository: RepositoryQuery,
+}
+
+/// What to ask this repository's own `git status`.
+enum RepositoryQuery {
+    Nothing,
+    Everything,
+    Paths(Vec<Vec<PathBuf>>),
+}
+
+impl GitlinkQuery {
+    const NOTHING: Self = Self {
+        checkouts: Vec::new(),
+        repository: RepositoryQuery::Nothing,
     };
 
-    if !output.status.success() {
-        return Ok(());
+    fn is_nothing(&self) -> bool {
+        self.checkouts.is_empty() && matches!(self.repository, RepositoryQuery::Nothing)
     }
+}
 
-    let mut records = output.stdout.split(|b| *b == 0).peekable();
-    while let Some(record) = records.next() {
-        if record.is_empty() {
-            continue;
+/// Asks nothing unless the repository may have gitlinks: that spares the
+/// common case a `git status` subprocess on every refresh.
+fn gitlink_query(
+    repo: &gix::Repository,
+    may_have_gitlinks: bool,
+    staged: &[FileStatus],
+) -> GitlinkQuery {
+    if !may_have_gitlinks {
+        return GitlinkQuery::NOTHING;
+    }
+    let Some(GitlinkSelection { checkouts, paths }) = gitlink_selection(repo, staged) else {
+        return GitlinkQuery {
+            checkouts: Vec::new(),
+            repository: RepositoryQuery::Everything,
+        };
+    };
+    let repository = if paths.is_empty() {
+        RepositoryQuery::Nothing
+    } else {
+        let workers = std::thread::available_parallelism().map_or(1, usize::from);
+        RepositoryQuery::Paths(gitlink_queries(paths, workers))
+    };
+    GitlinkQuery {
+        checkouts,
+        repository,
+    }
+}
+
+struct GitlinkOutputs {
+    /// What each query of this repository printed.
+    records: Vec<Result<Option<Vec<u8>>>>,
+    /// The checkouts asked directly whose gitlink is modified.
+    modified: Result<Vec<PathBuf>>,
+}
+
+impl GitlinkOutputs {
+    const NOTHING: Self = Self {
+        records: Vec::new(),
+        modified: Ok(Vec::new()),
+    };
+}
+
+fn run_gitlink_query(
+    workdir: &Path,
+    query: GitlinkQuery,
+    cancellation: &CancellationToken,
+) -> GitlinkOutputs {
+    let GitlinkQuery {
+        checkouts,
+        repository,
+    } = query;
+    if matches!(repository, RepositoryQuery::Nothing) {
+        return GitlinkOutputs {
+            records: Vec::new(),
+            modified: modified_checkouts(workdir, &checkouts, cancellation),
+        };
+    }
+    let (modified, records) = beside(
+        || run_repository_query(workdir, repository, cancellation),
+        || modified_checkouts(workdir, &checkouts, cancellation),
+    );
+    GitlinkOutputs { records, modified }
+}
+
+fn run_repository_query(
+    workdir: &Path,
+    query: RepositoryQuery,
+    cancellation: &CancellationToken,
+) -> Vec<Result<Option<Vec<u8>>>> {
+    let ask = |paths| gitlink_status_output(workdir, GitlinkAsk::Repository(paths), cancellation);
+    match query {
+        RepositoryQuery::Nothing => Vec::new(),
+        RepositoryQuery::Everything => vec![ask(None)],
+        RepositoryQuery::Paths(queries) => {
+            let mut queries = queries.into_iter();
+            let first = queries.next();
+            std::thread::scope(|scope| {
+                let others: Vec<_> = queries
+                    .map(|paths| scope.spawn(crate::command_trace::for_helper(|| ask(Some(paths)))))
+                    .collect();
+                let mut outputs = vec![ask(first)];
+                for other in others {
+                    let (output, commands) = other
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                    commands.adopt();
+                    outputs.push(output);
+                }
+                outputs
+            })
         }
-        match record[0] {
-            b'1' => {
-                let _ = apply_porcelain_v2_gitlink_status_record(record, staged, unstaged);
+    }
+}
+
+/// Runs `walk` here while Git answers `query` on another thread. Neither
+/// needs anything from the other, and with many checked-out submodules each
+/// takes as long as the other.
+fn walk_beside_gitlink_query<W>(
+    workdir: &Path,
+    query: GitlinkQuery,
+    cancellation: &CancellationToken,
+    walk: impl FnOnce() -> W,
+) -> (W, GitlinkOutputs) {
+    if query.is_nothing() {
+        return (walk(), GitlinkOutputs::NOTHING);
+    }
+    beside(|| run_gitlink_query(workdir, query, cancellation), walk)
+}
+
+/// Runs `here` on this thread while `there` runs on another.
+fn beside<A: Send, W>(there: impl FnOnce() -> A + Send, here: impl FnOnce() -> W) -> (W, A) {
+    std::thread::scope(|scope| {
+        let there = scope.spawn(crate::command_trace::for_helper(there));
+        let here = here();
+        #[cfg(feature = "benchmarks")]
+        let _timing = crate::status_trace::StageTimer::new("gitlink-query-wait");
+        let (there, commands) = there
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        commands.adopt();
+        (here, there)
+    })
+}
+
+fn apply_gitlink_outputs(
+    outputs: GitlinkOutputs,
+    staged: &mut Vec<FileStatus>,
+    unstaged: &mut Vec<FileStatus>,
+) -> Result<()> {
+    for path in outputs.modified? {
+        push_status_entry(unstaged, path, FileStatusKind::Modified);
+    }
+    for output in outputs.records {
+        let Some(output) = output? else {
+            continue;
+        };
+        let mut records = output.split(|b| *b == 0).peekable();
+        while let Some(record) = records.next() {
+            if record.is_empty() {
+                continue;
             }
-            b'2' => {
-                // Rename/copy records carry an additional NUL-separated path.
-                let _ = records.next();
+            match record[0] {
+                b'1' => {
+                    let _ = apply_porcelain_v2_gitlink_status_record(record, staged, unstaged);
+                }
+                b'2' => {
+                    // Rename/copy records carry an additional NUL-separated path.
+                    let _ = records.next();
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
     Ok(())
 }
 
-// Restrict only the supplemental Git query; gix remains responsible for ordinary
-// paths. None means the selection is uncertain and requires a full Git query,
-// while Some(empty) proves there is nothing left to supplement.
-fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option<Vec<PathBuf>> {
+/// The gitlinks whose status has to be asked for, by who answers.
+#[derive(Debug, Default, PartialEq)]
+struct GitlinkSelection {
+    /// Checked-out submodules with nothing staged, and the commit the index
+    /// records for each. Their own `git status` settles them.
+    checkouts: Vec<(PathBuf, gix::ObjectId)>,
+    /// Paths only Git's status of this repository settles.
+    paths: Vec<PathBuf>,
+}
+
+#[cfg(test)]
+impl GitlinkSelection {
+    /// Every path asked about, whoever answers.
+    fn asked(self) -> Vec<PathBuf> {
+        let mut asked = self.paths;
+        asked.extend(self.checkouts.into_iter().map(|(path, _)| path));
+        asked.sort_unstable();
+        asked
+    }
+}
+
+// Restrict only the supplemental Git queries; gix remains responsible for
+// ordinary paths. None means the selection is uncertain and requires a full
+// Git query, while an empty selection proves there is nothing to supplement.
+fn gitlink_selection(repo: &gix::Repository, staged: &[FileStatus]) -> Option<GitlinkSelection> {
+    use gix::index::entry::Flags;
     let index = current_index(repo).ok()?;
     // Collapsed sparse directories can hide gitlinks. Let Git expand them for
     // the existing complete query instead of treating this as an empty list.
     if index.is_sparse() {
         return None;
     }
-    let mut paths = Vec::new();
+    let mut selection = GitlinkSelection::default();
     for entry in index.entries() {
         if entry.mode == gix::index::entry::Mode::COMMIT {
             let path = path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?;
-            // An unchanged gitlink with an empty checkout has no child status
-            // to inspect. Recheck the filesystem each time: initializing the
-            // child must restore the Git query without an index rewrite.
-            if entry.stage_raw() == 0
-                && !entry.flags.intersects(
-                    gix::index::entry::Flags::SKIP_WORKTREE
-                        | gix::index::entry::Flags::INTENT_TO_ADD,
-                )
+            // Recheck the filesystem each time: initializing the child must
+            // change who is asked without an index rewrite.
+            let checkout = if entry.stage_raw() == 0
+                && !entry
+                    .flags
+                    .intersects(Flags::SKIP_WORKTREE | Flags::INTENT_TO_ADD)
                 && !staged
                     .iter()
                     .any(|change| change.path.starts_with(&path) || path.starts_with(&change.path))
-                && repo
-                    .workdir()
-                    .is_some_and(|workdir| is_empty_gitlink_checkout(workdir, &path))
             {
-                continue;
+                repo.workdir()
+                    .map_or(GitlinkCheckout::Uncertain, |workdir| {
+                        gitlink_checkout(workdir, &path)
+                    })
+            } else {
+                GitlinkCheckout::Uncertain
+            };
+            match checkout {
+                // An unchanged gitlink with an empty checkout has no child
+                // status to inspect.
+                GitlinkCheckout::Empty => {}
+                // Git does not look into a checkout it is told to assume
+                // unchanged; leave that rule to Git.
+                GitlinkCheckout::Repository if !entry.flags.contains(Flags::ASSUME_VALID) => {
+                    selection.checkouts.push((path, entry.id));
+                }
+                GitlinkCheckout::Repository | GitlinkCheckout::Uncertain => {
+                    selection.paths.push(path);
+                }
             }
-            paths.push(path);
         }
     }
     // Deleted/replaced gitlinks are absent from the index. Check only the
@@ -1556,60 +1938,92 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
                 .ok()?
                 .is_some_and(|entry| entry.mode().is_commit())
             {
-                paths.push(entry.path.clone());
+                selection.paths.push(entry.path.clone());
             }
         }
     }
-    paths.sort_unstable();
-    paths.dedup();
+    selection.paths.sort_unstable();
+    selection.paths.dedup();
     // Leave room for the executable, workdir, options and Windows quoting in
     // CreateProcess's 32K command line. Large selections keep the full query.
-    let bytes: usize = paths
+    let bytes: usize = selection
+        .paths
         .iter()
         .map(|path| path.as_os_str().len() * 2 + 3)
         .sum();
-    (bytes < 16_000).then_some(paths)
+    (bytes < 16_000).then_some(selection)
 }
 
-fn is_empty_gitlink_checkout(workdir: &Path, path: &Path) -> bool {
+/// What stands where the index has a gitlink.
+enum GitlinkCheckout {
+    /// An empty directory: nothing is checked out.
+    Empty,
+    /// A directory holding a repository of its own.
+    Repository,
+    /// Anything else; Git is asked through this repository.
+    Uncertain,
+}
+
+fn gitlink_checkout(workdir: &Path, path: &Path) -> GitlinkCheckout {
+    use GitlinkCheckout::{Empty, Repository, Uncertain};
     if path.as_os_str().is_empty() {
-        return false;
+        return Uncertain;
     }
     let mut absolute = workdir.to_path_buf();
     let mut components = path.components().peekable();
     while let Some(component) = components.next() {
         let std::path::Component::Normal(name) = component else {
-            return false;
+            return Uncertain;
         };
         absolute.push(name);
         // Do not follow symlinks/junctions in the checkout or its ancestors.
         // Missing paths, replacements and unreadable metadata stay with Git.
-        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
-            return false;
-        };
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return false;
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt as _;
-            // FILE_ATTRIBUTE_REPARSE_POINT also covers junctions and other
-            // redirects which need not be exposed as Rust symlink types.
-            if metadata.file_attributes() & 0x400 != 0 {
-                return false;
-            }
+        if !is_plain_directory(&absolute) {
+            return Uncertain;
         }
         if components.peek().is_some() {
             // A nested repository boundary makes this layout uncertain.
             match std::fs::symlink_metadata(absolute.join(".git")) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                _ => return false,
+                _ => return Uncertain,
             }
         }
     }
-    // Even a broken .git file, another hidden file, or an enumeration error
-    // retains the existing query. Only a positively empty directory is safe.
-    std::fs::read_dir(absolute).is_ok_and(|mut entries| entries.next().is_none())
+    // Even another hidden file or an enumeration error retains the query
+    // through this repository. Only a positively empty directory is safe.
+    match std::fs::read_dir(&absolute).map(|mut entries| entries.next().is_none()) {
+        Ok(true) => return Empty,
+        Ok(false) => {}
+        Err(_) => return Uncertain,
+    }
+    // Git asked in the checkout must find its repository there, and looks
+    // above it for one when `.git` is not what it takes for a repository.
+    let git = absolute.join(".git");
+    let is_repository = match std::fs::symlink_metadata(&git) {
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => is_plain_directory(&git) && crate::refs::is_git_directory(&git),
+        Err(_) => false,
+    };
+    if is_repository { Repository } else { Uncertain }
+}
+
+fn is_plain_directory(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        // FILE_ATTRIBUTE_REPARSE_POINT also covers junctions and other
+        // redirects which need not be exposed as Rust symlink types.
+        if metadata.file_attributes() & 0x400 != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

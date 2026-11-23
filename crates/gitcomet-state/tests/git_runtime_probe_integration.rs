@@ -3,6 +3,10 @@
 //! binary a concurrent test could see the probe script — or, when exec'ing the
 //! freshly written script hits ETXTBSY, an unavailable runtime that makes the
 //! reducer drop Git-backed messages.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests use the clock and the disk directly"
+)]
 
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{

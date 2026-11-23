@@ -94,6 +94,9 @@ pub fn restrict_scroll_to_vertical_axis<E: gpui::Styled>(mut element: E) -> E {
 }
 
 #[cfg(test)]
+mod paint_listener_tests;
+
+#[cfg(test)]
 mod version_contract {
     #[test]
     fn workspace_gpui_dependencies_share_revision() {

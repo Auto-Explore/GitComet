@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     target: String,
     mode: ResetMode,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let mode_label = match mode {
         ResetMode::Soft => "--soft",
         ResetMode::Mixed => "--mixed",

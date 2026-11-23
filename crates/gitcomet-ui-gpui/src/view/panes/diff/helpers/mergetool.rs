@@ -1,6 +1,11 @@
 //! Focused-mergetool mode: exit codes, conflict load strategy, and saving
 //! the resolved output.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "writes the focused mergetool's merged output"
+)]
+
 use super::*;
 use crate::view::conflict_resolver::ConflictSegment;
 

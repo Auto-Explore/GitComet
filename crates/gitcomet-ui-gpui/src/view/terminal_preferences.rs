@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "launches the external terminal")]
+
 use gitcomet_state::session;
 use std::env;
 use std::ffi::OsString;

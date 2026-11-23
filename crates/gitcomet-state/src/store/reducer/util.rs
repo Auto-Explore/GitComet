@@ -888,7 +888,7 @@ pub(super) fn refresh_log_request(repo_state: &RepoState) -> crate::model::Pendi
 }
 
 pub(super) fn refresh_log_limit(repo_state: &RepoState) -> usize {
-    match &repo_state.log {
+    match &repo_state.history_state.log {
         Loadable::Ready(page) => DEFAULT_LOG_PAGE_SIZE.max(page.commits.len()),
         _ => DEFAULT_LOG_PAGE_SIZE,
     }

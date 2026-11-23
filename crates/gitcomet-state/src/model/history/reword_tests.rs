@@ -134,7 +134,7 @@ fn reword_position_reuses_the_walk_across_unrelated_updates_and_snapshots() {
         );
     }
 
-    repo.log_rev += 1;
+    repo.history_state.log_rev += 1;
     assert_eq!(
         repo.first_parent_position_from_head(&id(2)),
         FirstParentPosition::NotFound
@@ -201,7 +201,7 @@ fn reword_position_invalidates_when_a_page_is_replaced_or_unavailable() {
     let mut repo = repo();
     repo.prepare_commit_reword_position();
     // Pointer identity also catches replacement without an accompanying revision.
-    repo.log = Loadable::Ready(page(&[(4, &[3, 1]), (3, &[2]), (2, &[1]), (1, &[])]));
+    repo.history_state.log = Loadable::Ready(page(&[(4, &[3, 1]), (3, &[2]), (2, &[1]), (1, &[])]));
     assert_eq!(
         repo.first_parent_position_from_head(&id(2)),
         FirstParentPosition::NotFound
@@ -212,7 +212,7 @@ fn reword_position_invalidates_when_a_page_is_replaced_or_unavailable() {
         FirstParentPosition::BelowMerge
     );
 
-    repo.log = Loadable::Loading;
+    repo.history_state.log = Loadable::Loading;
     assert_eq!(
         repo.first_parent_position_from_head(&id(2)),
         FirstParentPosition::NotFound

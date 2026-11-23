@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "disk identity checks for open documents"
+)]
+
 use gpui::SharedString;
 use rustc_hash::FxHasher;
 use std::path::Path;

@@ -8,7 +8,7 @@ pub(super) fn panel(
     branch: Option<String>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let delete_branch = this.worktree_remove_delete_branch;
 
     let mut dialog = ConfirmDialog::new("Remove worktree", DIALOG_420_WIDTH)

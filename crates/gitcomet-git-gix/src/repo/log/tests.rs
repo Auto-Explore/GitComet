@@ -8,7 +8,7 @@ use std::fs;
 mod tracking;
 
 /// Runs git in `workdir` with `input` on its stdin; it must succeed.
-fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
+pub(super) fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
     use std::io::Write as _;
     let mut child = git_command()
         .arg("-C")
@@ -2524,4 +2524,219 @@ fn timing_all_branches_tips_hidden_refs() {
             cold.as_secs_f64() * 1e3
         );
     }
+}
+
+/// `names[i]` is the file's name in commit `i`; a changed name is a rename
+/// that also edits the file. Returns the commit ids, oldest first.
+fn renamed_file_history(workdir: &Path, names: &[&str]) -> Vec<CommitId> {
+    init_test_repo(workdir);
+    let mut ids = Vec::new();
+    for (ix, name) in names.iter().enumerate() {
+        if let Some(previous) = ix.checked_sub(1).map(|ix| names[ix])
+            && previous != *name
+        {
+            if let Some(parent) = Path::new(name).parent() {
+                std::fs::create_dir_all(workdir.join(parent)).expect("rename target directory");
+            }
+            git_success(workdir, &["mv", previous, name]);
+        }
+        // Long enough that one changed line still reads as a rename.
+        let body: String = (0..40)
+            .map(|line| format!("line {line} {}\n", if line == ix % 40 { ix } else { 0 }))
+            .collect();
+        commit_file(workdir, name, &body, &format!("change {ix}"));
+        ids.push(CommitId(
+            git_stdout(workdir, &["rev-parse", "HEAD"]).trim().into(),
+        ));
+    }
+    ids
+}
+
+fn follow_walks(run: impl FnOnce()) -> usize {
+    let ((), commands) = crate::command_trace::capture(run);
+    commands
+        .iter()
+        .filter(|command| command.label == "git log --follow --name-status")
+        .count()
+}
+
+const RENAMED_NAMES: [&str; 9] = [
+    "a.txt", "a.txt", "b/b.txt", "b/b.txt", "c.txt", "c.txt", "a.txt", "a.txt", "d/d.txt",
+];
+
+#[test]
+fn a_followed_file_resolves_to_its_name_in_every_commit() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ids = renamed_file_history(tmp.path(), &RENAMED_NAMES);
+    let repo = open_repo(tmp.path());
+    // Twice: answered by a walk, then from what the walk left behind.
+    for _ in 0..2 {
+        for (id, name) in ids.iter().zip(RENAMED_NAMES) {
+            assert_eq!(
+                repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), id)
+                    .expect("resolve"),
+                Some(PathBuf::from(name)),
+                "at {id:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn selecting_commits_under_older_names_walks_the_renames_once() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ids = renamed_file_history(tmp.path(), &RENAMED_NAMES);
+    let repo = open_repo(tmp.path());
+    let resolve = |ix: usize| {
+        repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), &ids[ix])
+            .expect("resolve")
+    };
+
+    assert_eq!(follow_walks(|| drop(resolve(2))), 1);
+    assert_eq!(
+        follow_walks(|| {
+            for ix in [0, 2, 3, 4, 5, 6, 2] {
+                resolve(ix);
+            }
+        }),
+        0,
+        "the first walk already read every commit's name"
+    );
+}
+
+#[test]
+fn a_new_commit_walks_the_renames_again() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ids = renamed_file_history(tmp.path(), &RENAMED_NAMES);
+    let repo = open_repo(tmp.path());
+    let resolve = |path: &str, id: &CommitId| {
+        repo.resolve_file_path_at_commit_impl(Path::new(path), id)
+            .expect("resolve")
+    };
+    assert_eq!(follow_walks(|| drop(resolve("d/d.txt", &ids[2]))), 1);
+
+    git_success(tmp.path(), &["mv", "d/d.txt", "e.txt"]);
+    git_success(tmp.path(), &["commit", "-m", "rename again"]);
+    let mut resolved = None;
+    assert_eq!(
+        follow_walks(|| resolved = resolve("e.txt", &ids[8])),
+        1,
+        "HEAD moved, so the names are read again"
+    );
+    assert_eq!(resolved, Some(PathBuf::from("d/d.txt")));
+    assert_eq!(follow_walks(|| drop(resolve("e.txt", &ids[2]))), 0);
+}
+
+/// A fetch that deepens a shallow clone leaves `HEAD` where it was, and the
+/// commits it brings have names of their own.
+#[test]
+fn an_unshallowed_history_walks_the_renames_again() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let ids = renamed_file_history(&source, &RENAMED_NAMES);
+    let clone = tmp.path().join("clone");
+    let url = format!("file://{}", source.display());
+    git_success(
+        tmp.path(),
+        &["clone", "-q", "--depth", "3", &url, clone.to_str().unwrap()],
+    );
+    let repo = open_repo(&clone);
+    let resolve = |ix: usize| {
+        repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), &ids[ix])
+            .expect("resolve")
+    };
+    assert_eq!(resolve(6), Some(PathBuf::from("a.txt")));
+
+    git_success(&clone, &["fetch", "-q", "--unshallow"]);
+    assert_eq!(resolve(0), Some(PathBuf::from("a.txt")));
+    assert_eq!(resolve(2), Some(PathBuf::from("b/b.txt")));
+}
+
+/// A replace ref changes the history `git log` walks with `HEAD` and the
+/// shallow boundary as they were.
+#[test]
+fn a_replaced_history_walks_the_renames_again() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ids = renamed_file_history(tmp.path(), &RENAMED_NAMES);
+    let repo = open_repo(tmp.path());
+    let resolve = |ix: usize| {
+        repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), &ids[ix])
+            .expect("resolve")
+    };
+    assert_eq!(resolve(0), Some(PathBuf::from("a.txt")));
+
+    // History now starts at the fifth commit.
+    git_success(tmp.path(), &["replace", "--graft", ids[4].as_ref()]);
+    assert_eq!(resolve(0), None);
+    assert_eq!(resolve(4), Some(PathBuf::from("c.txt")));
+}
+
+#[test]
+fn followed_names_keep_each_commits_first_status_line() {
+    let (one, two, three) = ("1".repeat(40), "2".repeat(40), "3".repeat(40));
+    let names = FollowedNames::parse(&format!(
+        "\u{1e}{one}\n\nR090\told.txt\tnew.txt\n\u{1e}{two}\n\nM\told.txt\nM\tother.txt\n\u{1e}{three}\n"
+    ));
+    assert_eq!(names.commits(), 2);
+    assert_eq!(names.status_line(&one), Some("R090\told.txt\tnew.txt"));
+    assert_eq!(names.status_line(&two), Some("M\told.txt"));
+    assert_eq!(
+        names.status_line(&three),
+        None,
+        "a record without a status line"
+    );
+    assert_eq!(names.status_line("not an id"), None);
+}
+
+#[test]
+fn tips_lie_far_apart_by_depth_and_by_its_share_of_the_history() {
+    let far = |generations: &[u32]| walk::generations_lie_far_apart(generations.iter().copied());
+    // No tip in the graph, one, and tips at the same depth.
+    assert!(!far(&[]));
+    assert!(!far(&[1_800_000]));
+    assert!(!far(&[1_800_000, 1_800_000]));
+    // A release branch cut ten thousand commits ago in a long history.
+    assert!(!far(&[1_800_000, 1_790_000, 1_799_990]));
+    // One old branch among them.
+    assert!(far(&[1_800_000, 1_790_000, 600_000]));
+    // A short history: far only when thousands of commits lie between.
+    assert!(!far(&[3_000, 10]));
+    assert!(far(&[6_000, 1_000]));
+}
+
+#[test]
+fn stash_shapes_rule_out_what_the_walk_shows_to_be_a_merge() {
+    let id = |byte: u8| gix::ObjectId::from_bytes_or_panic(&[byte; 20]);
+    let walk: &[(u8, &[u8])] = &[
+        // A stash with untracked files: its index on the base, a root.
+        (1, &[2, 3, 4]),
+        // A merge of a branch that has more than one commit.
+        (5, &[2, 6]),
+        // An octopus of two one-commit branches: the third is no root.
+        (7, &[2, 8, 9]),
+        // A merge whose second parent the walk never reaches.
+        (10, &[2, 11]),
+        // A stash without untracked files.
+        (12, &[2, 13]),
+        (13, &[2]),
+        (9, &[2]),
+        (8, &[2]),
+        (6, &[14]),
+        (4, &[]),
+        (3, &[2]),
+        (2, &[14]),
+        (14, &[]),
+    ];
+    let mut shapes = index::StashShapes::default();
+    for &(commit, parents) in walk {
+        let parents: Vec<_> = parents.iter().map(|&parent| id(parent)).collect();
+        shapes.visit(id(commit), &parents);
+    }
+    let ruled_out: Vec<u8> = walk
+        .iter()
+        .map(|&(commit, _)| commit)
+        .filter(|&commit| shapes.rules_out(&id(commit)))
+        .collect();
+    assert_eq!(ruled_out, [5, 7]);
 }

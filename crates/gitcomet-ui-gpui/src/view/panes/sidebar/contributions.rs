@@ -150,7 +150,7 @@ impl SidebarPaneView {
         div()
             .id(("sidebar_contribution_header", section))
             .h(crate::view::rows::sidebar::sidebar_list_row_height(
-                self.theme,
+                AppTheme::current(cx),
                 crate::ui_scale::current(cx).percent,
             ))
             .px_2()
@@ -158,12 +158,12 @@ impl SidebarPaneView {
             .items_center()
             .gap_2()
             // Sized like the built-in section headers and rows.
-            .text_size(self.theme.ui_text(14.0))
+            .text_size(AppTheme::current(cx).ui_text(14.0))
             .font_weight(gpui::FontWeight::MEDIUM)
             .child(if collapsed { "▸" } else { "▾" })
             .child(title)
             .control_interaction(
-                controls::InteractionStyle::new(self.theme),
+                controls::InteractionStyle::new(AppTheme::current(cx)),
                 controls::InteractionState::default(),
             )
             .on_activate(
@@ -205,21 +205,21 @@ impl SidebarPaneView {
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
             .h(crate::view::rows::sidebar::sidebar_list_row_height(
-                self.theme,
+                AppTheme::current(cx),
                 crate::ui_scale::current(cx).percent,
             ))
             .px_2()
             .flex()
             .items_center()
             .gap_2()
-            .text_size(self.theme.ui_text(14.0))
+            .text_size(AppTheme::current(cx).ui_text(14.0))
             .when_some(data.icon.clone(), |row, icon| {
                 // `svg()` is a mask in the text colour; without one it paints nothing.
                 row.child(
                     gpui::svg()
                         .path(icon)
                         .size_4()
-                        .text_color(self.theme.colors.foreground.secondary),
+                        .text_color(AppTheme::current(cx).colors.foreground.secondary),
                 )
             })
             .child(div().flex_1().overflow_hidden().child(data.label.clone()))
@@ -230,7 +230,7 @@ impl SidebarPaneView {
                 ))
             })
             .control_interaction(
-                controls::InteractionStyle::new(self.theme),
+                controls::InteractionStyle::new(AppTheme::current(cx)),
                 controls::InteractionState::default(),
             )
             .on_activate(

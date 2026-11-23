@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests use the clock and the disk directly"
+)]
+
 use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
 use gitcomet_state::model::{AppState, RepoId, RepoState};
 use gitcomet_state::session::{self, ExternalCodeEditorSetting, UiSession, UiSettings};

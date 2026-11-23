@@ -450,10 +450,16 @@ impl<'r> RefsView<'r> {
                 self.files()?.prefixed(prefix.as_bstr())
             }
             .map_err(failure)?;
+            // One snapshot per walk, as gix's own peeling iterator keeps.
+            let packed = self.repo.refs.cached_packed_buffer().map_err(failure)?;
             return Ok(RefIter::Files {
                 iter: Box::new(iter),
-                // One snapshot per walk, as gix's own peeling iterator keeps.
-                packed: self.repo.refs.cached_packed_buffer().map_err(failure)?,
+                records_peeled: files::packed_refs_record_peeled(
+                    self.repo,
+                    packed.as_ref(),
+                    prefix,
+                ),
+                packed,
                 peel: false,
             });
         }
@@ -516,6 +522,9 @@ pub(crate) enum RefIter<'v, 'r> {
     Files {
         iter: Box<gix::reference::iter::Iter<'v, 'r>>,
         packed: Option<gix::refs::file::packed::SharedBufferSnapshot>,
+        /// The packed-refs file records the peeled object of each annotated
+        /// tag among these refs, so an entry without one is none.
+        records_peeled: bool,
         peel: bool,
     },
     Reftable {
@@ -527,9 +536,15 @@ pub(crate) enum RefIter<'v, 'r> {
 impl<'v, 'r> RefIter<'v, 'r> {
     pub fn peeled(self) -> Self {
         match self {
-            Self::Files { iter, packed, .. } => Self::Files {
+            Self::Files {
                 iter,
                 packed,
+                records_peeled,
+                ..
+            } => Self::Files {
+                iter,
+                packed,
+                records_peeled,
                 peel: true,
             },
             Self::Reftable { iter, view, .. } => Self::Reftable {
@@ -544,7 +559,12 @@ impl<'r> Iterator for RefIter<'_, 'r> {
     type Item = Result<Reference<'r>>;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Files { iter, packed, peel } => loop {
+            Self::Files {
+                iter,
+                packed,
+                records_peeled,
+                peel,
+            } => loop {
                 let mut reference = match iter.next()? {
                     Ok(reference) => Reference::from_gix(reference),
                     Err(error) => return Some(Err(failure(error))),
@@ -560,7 +580,16 @@ impl<'r> Iterator for RefIter<'_, 'r> {
                         Err(error) => return Some(Err(failure(error))),
                     }
                 }
-                if *peel && let Err(error) = reference.inner.peel_to_id_packed(packed) {
+                // gix reads the whole object a ref names to see whether it
+                // is a tag. Where the packed-refs file says it is none, as
+                // Git takes it to, there is nothing to read.
+                if *peel
+                    && !(*records_peeled
+                        && packed.is_some_and(|packed| {
+                            files::packed_entry_is_no_tag(packed, &reference.inner.inner)
+                        }))
+                    && let Err(error) = reference.inner.peel_to_id_packed(packed)
+                {
                     return Some(Err(failure(error)));
                 }
                 return Some(Ok(reference));
@@ -588,6 +617,12 @@ impl<'r> Iterator for RefIter<'_, 'r> {
             Self::Reftable { iter, .. } => (0, iter.size_hint().1),
         }
     }
+}
+
+/// Whether Git takes the directory `dir` for a Git directory. Both ref
+/// backends keep a `HEAD` file and a `refs` directory there for that test.
+pub(crate) fn is_git_directory(dir: &std::path::Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("refs").is_dir() && dir.join("objects").is_dir()
 }
 
 pub(crate) fn head_oid(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {

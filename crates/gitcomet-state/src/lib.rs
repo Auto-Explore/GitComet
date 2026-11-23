@@ -1,8 +1,12 @@
+// `clippy.toml` bans ambient time, disk and process calls; only `store::reducer` enforces it.
+#![allow(clippy::disallowed_methods)]
+
 #[cfg(feature = "benchmarks")]
 pub mod benchmarks;
 pub mod diff_session;
 pub mod explorer;
 pub mod history_authors;
+pub mod history_filter;
 pub mod history_find;
 pub mod indexed_history;
 pub mod model;

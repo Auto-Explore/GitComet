@@ -959,6 +959,75 @@ fn tag_rows_sort_versions_newest_first_without_overflow() {
     assert!(pos("nightly") < pos("beta"));
 }
 
+/// The tag order as first written, comparing two names run by run.
+fn cmp_tag_names_newest_first(a: &str, b: &str) -> Ordering {
+    fn runs(s: &str) -> impl Iterator<Item = &str> {
+        let mut rest = s;
+        std::iter::from_fn(move || {
+            let first = rest.chars().next()?;
+            let digit = first.is_ascii_digit();
+            let end = rest
+                .find(|c: char| c.is_ascii_digit() != digit)
+                .unwrap_or(rest.len());
+            let (run, tail) = rest.split_at(end);
+            rest = tail;
+            Some(run)
+        })
+    }
+    let is_num = |s: &str| s.as_bytes()[0].is_ascii_digit();
+    let mut left = runs(a);
+    let mut right = runs(b);
+    let ordering = loop {
+        match (left.next(), right.next()) {
+            (None, None) => break Ordering::Equal,
+            (None, Some(_)) => break Ordering::Less,
+            (Some(_), None) => break Ordering::Greater,
+            (Some(l), Some(r)) => {
+                let ordering = if is_num(l) && is_num(r) {
+                    let (l, r) = (l.trim_start_matches('0'), r.trim_start_matches('0'));
+                    l.len().cmp(&r.len()).then_with(|| l.cmp(r))
+                } else {
+                    l.cmp(r)
+                };
+                if ordering != Ordering::Equal {
+                    break ordering;
+                }
+            }
+        }
+    };
+    ordering.reverse()
+}
+
+#[test]
+fn tag_rows_take_the_order_of_comparing_names_run_by_run() {
+    // Digits with leading zeros, text below and above the digits, and a
+    // character of several bytes.
+    let alphabet = [
+        "0", "0", "1", "2", "9", "10", "v", "a", ".", "-", "+", "!", "~", "é",
+    ];
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut below = |limit: usize| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) as usize % limit
+    };
+    for _ in 0..200 {
+        let tags: Vec<_> = (0..40)
+            .map(|_| {
+                let name: String = (0..1 + below(6))
+                    .map(|_| alphabet[below(alphabet.len())])
+                    .collect();
+                tag(&name)
+            })
+            .collect();
+        let mut expected: Vec<_> = tags.iter().map(|tag| tag.name.clone()).collect();
+        expected.sort_by(|a, b| cmp_tag_names_newest_first(a, b));
+        let rows = tag_rows_for(Loadable::Ready(Arc::new(tags)));
+        assert_eq!(tag_names(&rows), expected);
+    }
+}
+
 #[test]
 fn tag_rows_come_after_the_stash_rows() {
     let rows = tag_rows_for(Loadable::Ready(Arc::new(vec![tag("v1")])));

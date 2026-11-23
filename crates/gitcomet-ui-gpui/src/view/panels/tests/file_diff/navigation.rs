@@ -1168,3 +1168,5 @@ fn collapsed_diff_split_hunk_with_two_change_runs_has_two_stops(cx: &mut gpui::T
         DiffViewMode::Split,
     );
 }
+
+mod invalidation;

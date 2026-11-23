@@ -80,7 +80,6 @@ fn setup(cx: &mut gpui::TestAppContext) -> (Fixture, &mut gpui::VisualTestContex
                 store,
                 model.clone(),
                 FileHistoryPaneInit {
-                    theme: AppTheme::gitcomet_dark(),
                     root_view: WeakEntity::new_invalid(),
                 },
                 window,

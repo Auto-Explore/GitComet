@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::permalink;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
@@ -53,7 +54,7 @@ fn multi_cherry_pick_plan(
         // Never silently cherry-pick just the loaded part of a selection.
         return None;
     }
-    let Loadable::Ready(page) = &repo.log else {
+    let Loadable::Ready(page) = &repo.history_state.log else {
         return None;
     };
 
@@ -80,7 +81,6 @@ fn multi_cherry_pick_plan(
         &remote_branches,
         stashes,
         &page.commits,
-        this.theme,
     );
     // Use reversed page order as the stable oldest-first baseline. Before the
     // editor becomes available, the repository-backed setup load follows the
@@ -131,7 +131,7 @@ fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bo
     if head == *commit_id {
         return true;
     }
-    let Loadable::Ready(page) = &repo.log else {
+    let Loadable::Ready(page) = &repo.history_state.log else {
         return false;
     };
     let mut by_id: FxHashMap<CommitId, &Commit> = FxHashMap::default();
@@ -235,7 +235,7 @@ fn model_with_header(
             {
                 return Some(format!("{} — {}", commit.author, commit.summary));
             }
-            match &r.log {
+            match &r.history_state.log {
                 Loadable::Ready(page) => page
                     .commits
                     .iter()
@@ -384,7 +384,7 @@ fn model_with_header(
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| match &repo.remotes {
-            Loadable::Ready(remotes) => crate::view::permalink::commit_permalink(remotes, &sha),
+            Loadable::Ready(remotes) => permalink::commit_permalink(remotes, &sha),
             _ => None,
         })
     {
@@ -563,7 +563,7 @@ fn model_with_header(
             .filter(|repo| repo.id == repo_id)
             .and_then(|repo| {
                 let head = repo.head_commit_id()?;
-                match &repo.log {
+                match &repo.history_state.log {
                     Loadable::Ready(page) => gitcomet_core::squash::linear_first_parent_distance(
                         &page.commits,
                         &head,
@@ -693,7 +693,7 @@ mod tests {
 
     fn with_log(mut repo: RepoState, head: &str, commits: Vec<Commit>) -> RepoState {
         repo.detached_head_commit = Some(CommitId(head.into()));
-        repo.log = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits,
             next_cursor: None,
         }));

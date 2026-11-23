@@ -155,7 +155,6 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let PopoverHostInit {
-            theme,
             root_view,
             root_view_mode,
             tooltip_host,
@@ -204,14 +203,7 @@ impl PopoverHost {
                     .is_interacting(hook_activity::TextSection::Hooks, cx)
                 && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
-            let selected_action = this
-                .popover
-                .as_ref()
-                .and_then(|kind| this.context_menu_model(kind, cx))
-                .and_then(|model| {
-                    this.context_menu_selected_ix
-                        .and_then(|ix| context_menu::selection_key(&model, ix))
-                });
+            let shown_menu = this.open_menu_model(cx);
             let next_state = Arc::clone(&model.read(cx).state);
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
                 next_state
@@ -223,23 +215,7 @@ impl PopoverHost {
             this.state = next_state;
             this.sync_bare_mode_confirmation(cx);
             this.close_working_tree_prompt_in_bare_mode(cx);
-            if let Some(selected_action) = selected_action
-                && let Some(model) = this
-                    .popover
-                    .as_ref()
-                    .and_then(|kind| this.context_menu_model(kind, cx))
-            {
-                this.context_menu_selected_ix = model
-                    .items
-                    .iter()
-                    .enumerate()
-                    .find_map(|(ix, _)| {
-                        context_menu::selection_key(&model, ix)
-                            .filter(|key| *key == selected_action)
-                            .map(|_| ix)
-                    })
-                    .or_else(|| model.first_selectable());
-            }
+            this.follow_open_menu(shown_menu, cx);
             this.sync_tag_push_previews(cx);
             if matches!(
                 this.popover,
@@ -291,10 +267,10 @@ impl PopoverHost {
                 return;
             };
 
-            let next_fingerprint =
-                fingerprint::notify_fingerprint(&this.state, popover, this.store.binding);
-            if next_fingerprint != this.notify_fingerprint {
-                this.notify_fingerprint = next_fingerprint;
+            if this
+                .notify_fingerprint
+                .record(&this.state, popover, this.store.binding)
+            {
                 cx.notify();
             }
         });
@@ -834,7 +810,6 @@ impl PopoverHost {
             main_pane,
             extension_dialog: None,
             state,
-            theme,
             theme_mode,
             date_time_format,
             timezone,
@@ -862,7 +837,7 @@ impl PopoverHost {
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
             _prompt_input_subscriptions: prompt_input_subscriptions,
-            notify_fingerprint: 0,
+            notify_fingerprint: fingerprint::NotifyFingerprint::default(),
             root_view,
             root_view_mode,
             extension_editor_available: false,
@@ -1043,11 +1018,6 @@ impl PopoverHost {
             rebase_reword_description_input,
             rebase_reword_description_scroll,
         }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn is_kind_open(&self, kind: &PopoverKind) -> bool {
@@ -1343,6 +1313,31 @@ impl PopoverHost {
         }
     }
 
+    fn open_menu_model(&self, cx: &gpui::Context<Self>) -> Option<ContextMenuModel> {
+        self.popover
+            .as_ref()
+            .and_then(|kind| self.context_menu_model(kind, cx))
+    }
+
+    /// After new state: repaints the open menu when its model differs from
+    /// `shown`, and keeps the keyboard selection on the same action.
+    fn follow_open_menu(&mut self, shown: Option<ContextMenuModel>, cx: &mut gpui::Context<Self>) {
+        let menu = self.open_menu_model(cx);
+        if menu == shown {
+            return;
+        }
+        cx.notify();
+        let selected = shown.and_then(|shown| {
+            self.context_menu_selected_ix
+                .and_then(|ix| context_menu::selection_key(&shown, ix))
+        });
+        if let (Some(selected), Some(menu)) = (selected, menu) {
+            self.context_menu_selected_ix = (0..menu.items.len())
+                .find(|ix| context_menu::selection_key(&menu, *ix).as_ref() == Some(&selected))
+                .or_else(|| menu.first_selectable());
+        }
+    }
+
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         self.close_popover_with_resolution(false, cx);
     }
@@ -1416,7 +1411,7 @@ impl PopoverHost {
         self.menu_invoker_focus = None;
         self.focus_return = None;
         self.markdown_image_approval = None;
-        self.notify_fingerprint = 0;
+        self.notify_fingerprint.clear();
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
         let root_view = self.root_view.clone();
@@ -2434,8 +2429,8 @@ impl PopoverHost {
             self.popover = Some(kind);
         }
         if let Some(popover) = self.popover.as_ref() {
-            self.notify_fingerprint =
-                fingerprint::notify_fingerprint(&self.state, popover, self.store.binding);
+            self.notify_fingerprint
+                .record(&self.state, popover, self.store.binding);
         }
         self.sync_titlebar_app_menu_state(cx);
         cx.notify();

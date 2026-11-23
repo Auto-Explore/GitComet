@@ -1,8 +1,9 @@
 use self::cache::{
-    AllBranchesTipsCacheEntry, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT,
-    LOG_PAGE_CACHE_ROW_LIMIT, LOG_PAGED_TOPO_WALK_CACHE_LIMIT, LOG_PAGED_WALK_CACHE_LIMIT,
-    LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry, LogPageCacheKey,
-    LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter, LogPagedWalkState,
+    AllBranchesTipsCacheEntry, FOLLOWED_NAMES_CACHE_COMMIT_LIMIT, FOLLOWED_NAMES_CACHE_LIMIT,
+    FollowedNames, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT, LOG_PAGE_CACHE_ROW_LIMIT,
+    LOG_PAGED_TOPO_WALK_CACHE_LIMIT, LOG_PAGED_WALK_CACHE_LIMIT, LogFileFollowCacheEntry,
+    LogFileFollowCacheKey, LogPageCacheEntry, LogPageCacheKey, LogPageSeed, LogPagedWalk,
+    LogPagedWalkCacheEntry, LogPagedWalkFilter, LogPagedWalkState,
 };
 use super::history::gix_head_id_or_none;
 use super::{GixRepo, ShallowSnapshot, bstr_to_arc_str, object_id_from_commit_id, oid_to_arc_str};
@@ -29,7 +30,9 @@ mod authors;
 pub(in crate::repo) mod cache;
 mod commit_stats;
 mod decode;
+mod extend;
 mod index;
+mod read_ahead;
 mod reflog;
 mod repo_impl;
 mod snapshot;
@@ -38,6 +41,7 @@ mod walk;
 
 pub(super) use commit_stats::*;
 pub(super) use decode::*;
+pub(super) use extend::extend_history_index;
 pub(super) use index::HistoryQuery;
 pub(super) use reflog::*;
 pub(super) use topology::TopologyCache;

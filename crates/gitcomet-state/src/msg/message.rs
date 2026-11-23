@@ -475,36 +475,7 @@ pub enum Msg {
         update: crate::model::RepositoryPreferenceUpdate,
     },
     ApplyRepositoryPreferences(crate::model::RepositoryPreferencesSnapshot),
-    SetHistoryScope {
-        repo_id: RepoId,
-        scope: LogScope,
-    },
-    /// Restricts the history to commits authored by `author` (case-insensitive
-    /// match on the author name). `None` clears the filter.
-    SetHistoryAuthorFilter {
-        repo_id: RepoId,
-        author: Option<String>,
-    },
-    /// Focuses the history on a set of refs: the walk is reseeded from them, so
-    /// only the commits they reach remain. An empty set clears the focus.
-    SetHistoryFocus {
-        repo_id: RepoId,
-        focus: HistoryFocusSet,
-    },
-    /// Focuses `target`, or unfocuses it when the focus already covers it. The
-    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
-    /// they send.
-    ToggleHistoryFocus {
-        repo_id: RepoId,
-        target: HistoryFocus,
-    },
-    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
-    /// group's menu entries and eye send this with the group's members.
-    FocusHistoryRefs {
-        repo_id: RepoId,
-        targets: Vec<HistoryFocus>,
-        focused: bool,
-    },
+    HistoryFilter(crate::history_filter::HistoryFilterMsg),
     LoadMoreHistory {
         repo_id: RepoId,
     },

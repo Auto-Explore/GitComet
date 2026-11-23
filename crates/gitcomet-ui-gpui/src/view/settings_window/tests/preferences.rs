@@ -1138,7 +1138,8 @@ fn graph_gradient_toggle_updates_every_main_window(cx: &mut gpui::TestAppContext
                 );
                 let history = root.main_pane.read(app).history_view.read(app);
                 assert_eq!(history.history_show_graph_gradient, enabled);
-                assert_eq!(history.theme.graph_fade_opacity, opacity);
+                let theme = AppTheme::for_window(app, root.window_handle.window_id()).unwrap();
+                assert_eq!(theme.graph_fade_opacity, opacity);
                 assert!(history.history_show_graph);
             }
         });

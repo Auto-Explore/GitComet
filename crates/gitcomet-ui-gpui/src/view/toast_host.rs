@@ -2,6 +2,7 @@ use super::operation_progress::{
     MAINTENANCE_RECOMMENDATION_TEXT, MaintenanceRecommendation, OperationProgress,
 };
 use super::*;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_state::model::SubmoduleAddProgressState;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,7 +12,6 @@ struct HookProgressToast {
 }
 
 pub(super) struct ToastHost {
-    theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
@@ -218,9 +218,8 @@ fn submodule_add_progress_url_label(url: &str) -> String {
 }
 
 impl ToastHost {
-    pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
+    pub(super) fn new(root_view: WeakEntity<GitCometView>) -> Self {
         Self {
-            theme,
             root_view,
             toasts: Vec::new(),
             next_toast_id: 1,
@@ -236,11 +235,6 @@ impl ToastHost {
             #[cfg(any(test, feature = "benchmarks"))]
             render_count: 0,
         }
-    }
-
-    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(super) fn push_toast(
@@ -336,13 +330,11 @@ impl ToastHost {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_centered(
-                        PopoverKind::ErrorDetails { toast_id: id },
-                        window,
-                        cx,
-                    );
-                });
+                let _ = root_view.request(
+                    RootRequest::open_centered(PopoverKind::ErrorDetails { toast_id: id }),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -727,16 +719,14 @@ impl ToastHost {
                 let window_handle = window.window_handle();
                 cx.defer(move |cx| {
                     let _ = window_handle.update(cx, |_, window, cx| {
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.open_popover_centered(
-                                PopoverKind::HookActivity {
-                                    repo_id,
-                                    operation_id: Some(operation_id),
-                                },
-                                window,
-                                cx,
-                            );
-                        });
+                        let _ = root_view.request(
+                            RootRequest::open_centered(PopoverKind::HookActivity {
+                                repo_id,
+                                operation_id: Some(operation_id),
+                            }),
+                            Some(window),
+                            cx,
+                        );
                     });
                 });
                 self.remove_toast(id, cx);
@@ -853,10 +843,10 @@ impl ToastHost {
 
     fn render_progress_shell(
         &self,
+        theme: AppTheme,
         ui_scale: crate::ui_scale::UiScale,
         content: impl IntoElement,
     ) -> AnyElement {
-        let theme = self.theme;
         let shell_bg = with_alpha(
             theme.colors.surface.raised,
             if theme.is_dark { 0.96 } else { 0.98 },
@@ -884,7 +874,7 @@ impl ToastHost {
         op: CloneOpState,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
         let percent = op.progress.percent.min(100);
@@ -908,10 +898,11 @@ impl ToastHost {
             ));
         }
         let abort_button = abort_button.on_click(theme, cx, move |_this, _e, _w, cx| {
-            let _ = root_view.update(cx, |root, _cx| {
-                root.store
-                    .dispatch(Msg::AbortCloneRepo { dest: dest.clone() });
-            });
+            let _ = root_view.request(
+                RootRequest::dispatch(Msg::AbortCloneRepo { dest: dest.clone() }),
+                None,
+                cx,
+            );
         });
 
         let content = div()
@@ -977,16 +968,17 @@ impl ToastHost {
             ))
             .child(div().pt_1().child(abort_button));
 
-        self.render_progress_shell(ui_scale, content)
+        self.render_progress_shell(theme, ui_scale, content)
     }
 
     fn render_submodule_add_progress_toast(
         &self,
         ix: u64,
-        ui_scale: crate::ui_scale::UiScale,
         progress: &SubmoduleAddProgressState,
+        cx: &mut App,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
+        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let spinner_color = crate::view::clone_progress::clone_progress_loading_color(theme);
         let content = div().w_full().flex().flex_col().gap_2().child(
             div()
@@ -1024,7 +1016,7 @@ impl ToastHost {
                         ),
                 ),
         );
-        self.render_progress_shell(ui_scale, content)
+        self.render_progress_shell(theme, ui_scale, content)
     }
 
     fn render_maintenance_recommendation(
@@ -1032,7 +1024,7 @@ impl ToastHost {
         recommendation: &MaintenanceRecommendation,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let repo_id = recommendation.repo_id;
         let dispatch = |msg: fn(RepoId) -> Msg| {
@@ -1041,7 +1033,7 @@ impl ToastHost {
                   _e: &ClickEvent,
                   _w: &mut Window,
                   cx: &mut gpui::Context<Self>| {
-                let _ = root_view.update(cx, |root, _cx| root.store.dispatch(msg(repo_id)));
+                let _ = root_view.request(RootRequest::dispatch(msg(repo_id)), None, cx);
             }
         };
         let start = components::Button::new(format!("maintenance_start_{}", repo_id.0), "Start")
@@ -1103,7 +1095,7 @@ impl ToastHost {
                     .child(start)
                     .child(later),
             );
-        self.render_progress_shell(ui_scale, content)
+        self.render_progress_shell(theme, ui_scale, content)
     }
 
     fn render_operation_progress_toast(
@@ -1112,7 +1104,7 @@ impl ToastHost {
         now: std::time::SystemTime,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let operation_id = progress.operation_id;
         let repo_id = progress.repo_id;
@@ -1130,16 +1122,14 @@ impl ToastHost {
             let window_handle = window.window_handle();
             cx.defer(move |cx| {
                 let _ = window_handle.update(cx, |_, window, cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.open_popover_centered(
-                            PopoverKind::HookActivity {
-                                repo_id,
-                                operation_id: Some(operation_id),
-                            },
-                            window,
-                            cx,
-                        );
-                    });
+                    let _ = root_view.request(
+                        RootRequest::open_centered(PopoverKind::HookActivity {
+                            repo_id,
+                            operation_id: Some(operation_id),
+                        }),
+                        Some(window),
+                        cx,
+                    );
                 });
             });
         })
@@ -1158,12 +1148,14 @@ impl ToastHost {
         .borderless()
         .disabled(progress.cancelling)
         .on_click(theme, cx, move |_this, _e, _w, cx| {
-            let _ = root_view.update(cx, |root, _cx| {
-                root.store.dispatch(Msg::CancelGitOperation {
+            let _ = root_view.request(
+                RootRequest::dispatch(Msg::CancelGitOperation {
                     repo_id,
                     operation_id,
-                });
-            });
+                }),
+                None,
+                cx,
+            );
         })
         .debug_selector(move || format!("operation_progress_stop_{}", operation_id.0));
 
@@ -1262,7 +1254,7 @@ impl ToastHost {
                     .child(stop_button),
             );
 
-        self.render_progress_shell(ui_scale, content)
+        self.render_progress_shell(theme, ui_scale, content)
     }
 
     fn render_hook_progress_toast(
@@ -1270,7 +1262,7 @@ impl ToastHost {
         progress: &[HookProgressToast],
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let latest = progress
             .iter()
             .max_by_key(|progress| progress.operation.time)
@@ -1297,16 +1289,14 @@ impl ToastHost {
                     let window_handle = window.window_handle();
                     cx.defer(move |cx| {
                         let _ = window_handle.update(cx, |_, window, cx| {
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.open_popover_centered(
-                                    PopoverKind::HookActivity {
-                                        repo_id,
-                                        operation_id: Some(operation_id),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            });
+                            let _ = root_view.request(
+                                RootRequest::open_centered(PopoverKind::HookActivity {
+                                    repo_id,
+                                    operation_id: Some(operation_id),
+                                }),
+                                Some(window),
+                                cx,
+                            );
                         });
                     });
                 })
@@ -1533,7 +1523,7 @@ impl Render for ToastHost {
             .filter(|progress| shows_hook_progress(progress))
             .cloned()
             .collect::<Vec<_>>();
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
@@ -1542,13 +1532,7 @@ impl Render for ToastHost {
             progress_toasts.push(self.render_clone_progress_toast(progress, cx));
         }
         progress_toasts.extend(self.submodule_add_progress.iter().enumerate().map(
-            |(ix, progress)| {
-                self.render_submodule_add_progress_toast(
-                    ix as u64,
-                    crate::ui_scale::UiScale::current(cx).with_appearance(self.theme.metrics),
-                    progress,
-                )
-            },
+            |(ix, progress)| self.render_submodule_add_progress_toast(ix as u64, progress, cx),
         ));
         if !hook_progress.is_empty() {
             progress_toasts.push(self.render_hook_progress_toast(&hook_progress, cx));
@@ -1760,8 +1744,7 @@ mod tests {
     fn expiring_toasts_fade_out_then_leave(cx: &mut gpui::TestAppContext) {
         let host = cx.update(|app| {
             app.new(|cx| {
-                let mut host =
-                    ToastHost::new(AppTheme::gitcomet_dark(), gpui::WeakEntity::new_invalid());
+                let mut host = ToastHost::new(gpui::WeakEntity::new_invalid());
                 // Only the live runtime gives toasts a TTL.
                 crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
                     host.push_toast(components::ToastKind::Success, "Saved".into(), cx)
@@ -2287,7 +2270,7 @@ mod tests {
         let dark = AppTheme::gitcomet_dark();
 
         let (host, cx) = cx.add_window_view(|_, cx| {
-            let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
+            let mut host = ToastHost::new(gpui::WeakEntity::new_invalid());
             host.push_survey_toast(
                 "survey-id",
                 "Survey",

@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
@@ -246,7 +247,7 @@ pub(super) fn apply(
         }
     };
     this.store
-        .dispatch(Msg::SetHistoryAuthorFilter { repo_id, author });
+        .dispatch(HistoryFilterMsg::SetAuthorFilter { repo_id, author });
     this.close_popover(cx);
 }
 
@@ -269,7 +270,7 @@ pub(super) fn panel(
             },
         ));
     }
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);

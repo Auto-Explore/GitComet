@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "checks whether a submodule is checked out while its menu is built"
+)]
 use super::*;
 use gitcomet_core::domain::SubmoduleStatus;
 

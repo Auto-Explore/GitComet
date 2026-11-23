@@ -685,7 +685,7 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
         let selected_commit_id = self
@@ -1103,7 +1103,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
         self.sync_interactive_commit_editor_states();

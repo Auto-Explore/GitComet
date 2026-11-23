@@ -25,7 +25,7 @@ pub(super) fn panel(
     path: Option<std::path::PathBuf>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let pane = this.details_pane.read(cx);
     let selection = pane
         .status_multi_selection

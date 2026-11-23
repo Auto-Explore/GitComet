@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "resolves a document's local links and pictures in the checkout"
+)]
 use super::*;
 use crate::kit::interaction as controls;
 pub(in crate::view) use crate::view::markdown_preview::markdown_preview_row_marker;

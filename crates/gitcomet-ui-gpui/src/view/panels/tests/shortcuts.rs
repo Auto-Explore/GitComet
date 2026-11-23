@@ -439,7 +439,7 @@ pub(super) fn shortcut_fixture_repo(
     repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-    repo.log = Loadable::Ready(
+    repo.history_state.log = Loadable::Ready(
         gitcomet_core::domain::LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: commit_id.clone(),
@@ -644,7 +644,7 @@ fn author_filter_repo_with_authors(repo_id: RepoId, authors: &[&str]) -> RepoSta
         }
         .into(),
     );
-    repo.log = log_page.clone();
+    repo.history_state.log = log_page.clone();
     repo.history_state.log = log_page;
     repo
 }

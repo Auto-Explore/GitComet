@@ -14,9 +14,9 @@ pub(super) struct MaintenanceRecommendation {
     pub(super) repo_name: String,
 }
 
-pub(super) const MAINTENANCE_RECOMMENDATION_TEXT: &str = "Git recommends running maintenance on \
-     this repository. It repacks objects so Git stays fast; large repositories can take several \
-     minutes.";
+pub(super) const MAINTENANCE_RECOMMENDATION_TEXT: &str = "This repository would benefit from \
+     maintenance. It repacks objects and indexes commits so Git and history stay fast; large \
+     repositories can take several minutes.";
 
 /// What the card shows of one running operation; compared on every state
 /// apply, so it leaves out the operation's output buffer.

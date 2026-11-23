@@ -172,7 +172,7 @@ impl DetailsPaneView {
         find_matches: &[std::ops::Range<usize>],
         cx: &mut gpui::Context<Self>,
     ) {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let highlights = crate::text_runs::overlay_highlights(
             commit_message_summary_highlights(message, theme, &[]),
             find_matches,

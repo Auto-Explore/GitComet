@@ -157,12 +157,12 @@ impl EntityInputHandler for TextInput {
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
-                let mut ix = starts.partition_point(|&s| s <= offset);
+                let mut ix = starts.lines_starting_through(offset);
                 if ix == 0 {
                     ix = 1;
                 }
                 let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
-                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let start = starts.line_start(line_ix).unwrap_or(0);
                 let local = offset.saturating_sub(start).min(lines[line_ix].len());
                 (
                     line_ix,
@@ -215,7 +215,7 @@ impl EntityInputHandler for TextInput {
                 let line = lines.get(line_ix)?;
                 let local_x = local.x + self.layout.scroll_x;
                 let idx = line.index_for_x(local_x).unwrap_or(line.len());
-                let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
+                let doc_offset = starts.line_start(line_ix).unwrap_or(0) + idx;
                 Some(self.offset_to_utf16(doc_offset))
             }
             TextInputLayout::TruncatedSingleLine(line) => Some(self.offset_to_utf16(
@@ -233,7 +233,7 @@ impl EntityInputHandler for TextInput {
                 let idx = line
                     .closest_index_for_position(point(local.x, local_y), line_height)
                     .unwrap_or_else(|ix| ix);
-                let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
+                let doc_offset = starts.line_start(line_ix).unwrap_or(0) + idx;
                 Some(self.offset_to_utf16(doc_offset))
             }
         }

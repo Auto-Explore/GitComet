@@ -401,7 +401,7 @@ impl DetailsPaneView {
         }
         let current = self.review_current_row(list, &data);
         let row = current.unwrap_or(0);
-        let step = self.file_list_page_rows(repo_id, list).unwrap_or(1);
+        let step = self.file_list_page_rows(repo_id, list, cx).unwrap_or(1);
         let next = match key.key.as_str() {
             "up" => Some(row.saturating_sub(1)),
             "down" => Some(if current.is_some() {
@@ -557,7 +557,7 @@ impl DetailsPaneView {
         let height = match list {
             FileListId::Status(_) => crate::view::rows::status::status_row_height(self.ui_scale()),
             _ => crate::view::rows::sidebar::sidebar_list_row_height(
-                self.theme,
+                AppTheme::current(cx),
                 self.ui_scale_percent,
             ),
         };

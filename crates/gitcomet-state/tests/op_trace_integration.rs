@@ -1,5 +1,9 @@
 //! Lives in its own test binary because it enables the process-global
 //! operation trace, which switches every store dispatch to the traced path.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests use the clock and the disk directly"
+)]
 
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::op_trace::{self, Record, Stage};

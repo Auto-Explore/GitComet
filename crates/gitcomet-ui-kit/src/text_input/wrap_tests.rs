@@ -1142,3 +1142,56 @@ fn wrap_edit_that_keeps_every_row_count_requests_no_extra_frame(cx: &mut gpui::T
         "{kept_rows} kept, {changed_rows} changed"
     );
 }
+
+/// A wrapped frame still flattens the text it wraps, but finds its rows through
+/// the rope: an edit builds no line-start array beside the flattened copy.
+#[gpui::test]
+fn wrapped_frames_after_edits_do_not_build_a_line_index(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    // Rows that wrap, in a document large enough for the background estimate.
+    let text = ("word ".repeat(30) + "\n").repeat(TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD * 2);
+    let input = seed_wrapped_input(&view, cx, &text);
+    cx.run_until_parked();
+    draw_frame(cx);
+
+    let middle = text.len() / 2;
+    let edits = [
+        (middle..middle, "x"),
+        (middle..middle, "\n"),
+        (middle..middle + 200, ""),
+        (0..0, "é日本🙂 "),
+        (usize::MAX..usize::MAX, "\nlast row"),
+    ];
+    for (range, new_text) in edits {
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.replace_utf8_range(range.clone(), new_text, cx);
+            });
+        });
+        for _ in 0..3 {
+            draw_frame(cx);
+        }
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                assert!(
+                    !input.content.snapshot().is_line_index_built(),
+                    "replacing {range:?} with {new_text:?}"
+                );
+                // The caret the frame painted is on the row hit-testing finds.
+                let cursor = input.cursor_offset();
+                let caret = input
+                    .caret_point_for_hit_testing(cursor)
+                    .expect("the caret's row is shaped");
+                assert_eq!(input.index_for_position(caret), cursor);
+                let caret_utf16 = input.offset_to_utf16(cursor);
+                let bounds = input.layout.bounds.expect("the frame recorded its bounds");
+                assert!(
+                    input
+                        .bounds_for_range(caret_utf16..caret_utf16, bounds, window, cx)
+                        .is_some()
+                );
+            });
+        });
+    }
+}

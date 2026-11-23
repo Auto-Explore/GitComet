@@ -32,7 +32,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
                     workdir: workdir.clone(),
                 },
             );
-            repo.log = Loadable::Ready(
+            repo.history_state.log = Loadable::Ready(
                 gitcomet_core::domain::LogPage {
                     commits: vec![gitcomet_core::domain::Commit {
                         id: commit_id.clone(),
@@ -143,7 +143,7 @@ fn tag_menu_with_name_is_scoped_to_that_tag(cx: &mut gpui::TestAppContext) {
                     workdir: workdir.clone(),
                 },
             );
-            repo.log = Loadable::Ready(
+            repo.history_state.log = Loadable::Ready(
                 gitcomet_core::domain::LogPage {
                     commits: vec![gitcomet_core::domain::Commit {
                         id: commit_id.clone(),

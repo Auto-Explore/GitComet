@@ -78,13 +78,7 @@ fn test_viewport(
 ) -> (Entity<TerminalViewportView>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|_window, cx| {
         let focus = cx.focus_handle();
-        let mut view = TerminalViewportView::with_backend(
-            AppTheme::gitcomet_dark(),
-            focus,
-            Some(term_lock),
-            None,
-            cx,
-        );
+        let mut view = TerminalViewportView::with_backend(focus, Some(term_lock), None, cx);
         view.viewport_bounds = Some(test_viewport_bounds());
         view.layout_cache = Some(test_layout_cache());
         view
@@ -429,13 +423,7 @@ fn the_grid_stops_short_of_the_scrollbar_gutter(cx: &mut gpui::TestAppContext) {
     let term_lock = test_term_with_lines(3);
     let (view, cx) = cx.add_window_view(|_window, cx| {
         let focus = cx.focus_handle();
-        TerminalViewportView::with_backend(
-            AppTheme::gitcomet_dark(),
-            focus,
-            Some(term_lock),
-            None,
-            cx,
-        )
+        TerminalViewportView::with_backend(focus, Some(term_lock), None, cx)
     });
     cx.run_until_parked();
 
@@ -838,6 +826,46 @@ fn a_busy_parser_does_not_block_paint_or_scrollbar_reads(cx: &mut gpui::TestAppC
                 .is_empty()
         );
     });
+}
+
+/// The layout and row caches hold the theme's colours, so a new window theme
+/// rebuilds both. Nothing tells the viewport about the change.
+#[gpui::test]
+fn a_window_theme_change_rebuilds_the_cached_layout_and_rows(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = test_viewport(test_term_with_lines(3), cx);
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    let paint = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                let state =
+                    view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+                let layout = view
+                    .layout_cache
+                    .clone()
+                    .expect("a paint caches its layout");
+                (state.terminal_bg, layout.base_style.color)
+            })
+        })
+    };
+    paint(cx);
+
+    for theme in [AppTheme::gitcomet_light(), AppTheme::gitcomet_dark()] {
+        // In one update, so the repaint the change asks for has not run yet.
+        cx.update(|window, app| {
+            gitcomet_ui_kit::theme::set_window_theme(app, window_id, theme);
+            view.update(app, |view, cx| {
+                assert!(view.render_cache.viewport_key.is_some());
+                view.terminal_layout_snapshot(window, cx);
+                assert_eq!(
+                    view.render_cache.viewport_key, None,
+                    "rows shaped under the old theme must be rebuilt"
+                );
+            })
+        });
+        let palette = TerminalAnsiPalette::from_theme(theme);
+        let text: gpui::Hsla = palette.foreground.into_color();
+        assert_eq!(paint(cx), (palette.background, text));
+    }
 }
 
 /// The shell completes with Tab: with the terminal focused, the focus-order

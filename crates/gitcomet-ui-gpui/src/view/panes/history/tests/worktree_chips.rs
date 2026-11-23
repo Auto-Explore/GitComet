@@ -87,8 +87,8 @@ fn mount<'a>(
     repo.head_branch_rev = 1;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
     repo.branches_rev = 1;
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     let mut worktrees = vec![worktree(worktree_path("main"), Some("tip"), Some("main"))];

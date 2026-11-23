@@ -92,6 +92,7 @@ impl GraphCheckpoint {
     }
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(in crate::view) struct GraphTransition {
     pub paint: GraphRow,
     /// Overrides to the preceding row's outgoing lanes, including whiskers.
@@ -99,6 +100,13 @@ pub(in crate::view) struct GraphTransition {
     /// Only changed outgoing columns; holes and births update labels and spans.
     pub next: SmallVec<[(usize, LanePaint); 4]>,
     pub next_len: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Sends every row down the general path, for a test to compare with.
+    pub(in crate::view) static PLAIN_STEPS_OFF: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 #[derive(Debug)]
@@ -245,10 +253,12 @@ impl GraphWalk {
         head: bool,
         materialize: bool,
     ) -> GraphTransition {
-        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::GraphTransition);
         if materialize {
             gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintRow);
+        } else if !head && let Some(transition) = self.plain_transition(row, parents, merge) {
+            return transition;
         }
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::GraphTransition);
         let mut hits = self.targets.get(&(row as u32)).cloned().unwrap_or_default();
         hits.sort_unstable();
         let had_hits = !hits.is_empty();
@@ -290,30 +300,11 @@ impl GraphWalk {
             self.lanes[node].unwrap().color
         };
         let reserved_id = self.main.filter(|_| self.reserved);
-        let mut lanes_now = LanePaints::new();
-        if materialize {
-            let len = self.lanes.len().max(fork.map_or(0, |(col, _)| col + 1));
-            lanes_now.reserve(len);
-            for col in 0..len {
-                lanes_now.push(self.lanes.get(col).copied().flatten().map_or(
-                    LanePaint::HOLE,
-                    |lane| {
-                        LanePaint::lane(
-                            lane.color,
-                            lane.born != row
-                                && !(self.pending
-                                    && self.main_target == Some(row)
-                                    && self.main == Some(lane.id)),
-                            false,
-                        )
-                        .with_reserved(reserved_id == Some(lane.id))
-                    },
-                ));
-            }
-            if let Some((col, color)) = fork {
-                lanes_now[col] = LanePaint::lane(color, false, false);
-            }
-        }
+        let lanes_now = if materialize {
+            self.lanes_now(row, fork, reserved_id)
+        } else {
+            LanePaints::new()
+        };
         let pos = hits.iter().position(|&col| col == node).unwrap();
         hits.swap(0, pos);
         let mut joins = GraphEdges::new();
@@ -437,6 +428,101 @@ impl GraphWalk {
             next_len: self.lanes.len(),
         }
     }
+
+    /// The lanes as they arrive at `row`, beside the lane a branch head
+    /// there forks off.
+    fn lanes_now(
+        &self,
+        row: usize,
+        fork: Option<(usize, LaneColorIx)>,
+        reserved_id: Option<u32>,
+    ) -> LanePaints {
+        let len = self.lanes.len().max(fork.map_or(0, |(col, _)| col + 1));
+        let mut lanes_now = LanePaints::with_capacity(len);
+        for col in 0..len {
+            lanes_now.push(self.lanes.get(col).copied().flatten().map_or(
+                LanePaint::HOLE,
+                |lane| {
+                    LanePaint::lane(
+                        lane.color,
+                        lane.born != row
+                            && !(self.pending
+                                && self.main_target == Some(row)
+                                && self.main == Some(lane.id)),
+                        false,
+                    )
+                    .with_reserved(reserved_id == Some(lane.id))
+                },
+            ));
+        }
+        if let Some((col, color)) = fork {
+            lanes_now[col] = LanePaint::lane(color, false, false);
+        }
+        lanes_now
+    }
+
+    /// [`Self::plain_step`] as the transition the general path gives the row.
+    fn plain_transition(
+        &mut self,
+        row: usize,
+        parents: &[usize],
+        merge: bool,
+    ) -> Option<GraphTransition> {
+        let (col, color) = self.plain_step(row, parents)?;
+        // The lane was born at an earlier row, and is not the reserved main
+        // lane: that one is met at its own row alone.
+        let lane = LanePaint::lane(color, false, false);
+        Some(GraphTransition {
+            paint: GraphRow {
+                lanes_now: LanePaints::new(),
+                lanes_next: LanePaints::new(),
+                joins_in: GraphEdges::new(),
+                edges_out: GraphEdges::new(),
+                node_col: lane_col(col),
+                node_color_ix: color,
+                is_merge: merge,
+                from_node_cols: FromNodeCols::new(),
+            },
+            now: SmallVec::new(),
+            next: SmallVec::from_slice(&[(col, lane)]),
+            next_len: self.lanes.len(),
+        })
+    }
+
+    /// The whole transition of a plain row: one lane arrives at it and it
+    /// has one parent, so the lane moves on to the parent, in its column and
+    /// colour, which are returned. Not for a row that is painted or a branch
+    /// head. Most rows of a history are plain, and the general path spends
+    /// several times as long on one. `None`, with nothing changed, for any
+    /// other row.
+    pub fn plain_step(&mut self, row: usize, parents: &[usize]) -> Option<(usize, LaneColorIx)> {
+        let &[parent] = parents else {
+            return None;
+        };
+        let &[col] = self.targets.get(&(row as u32))?.as_slice() else {
+            return None;
+        };
+        #[cfg(test)]
+        if PLAIN_STEPS_OFF.get() {
+            return None;
+        }
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::GraphTransition);
+        let lane = self.lanes[col].as_mut().unwrap();
+        lane.target = parent as u32;
+        let color = lane.color;
+        self.targets.remove(&(row as u32));
+        self.targets.entry(parent as u32).or_default().push(col);
+        // No edge joins the main lane here, so its reservation ends only at
+        // its own row.
+        self.reserved &= self.main_target != Some(row);
+        self.pending = false;
+        Some((col, color))
+    }
+
+    /// The columns of the frontier after the last row.
+    pub fn width(&self) -> usize {
+        self.lanes.len()
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +591,84 @@ mod tests {
             let actual = walk.step(row, &parents, parents.len() > 1, row % 11 == 0);
             assert_eq!(actual, expected, "row={row}");
         }
+    }
+
+    /// A row's parents, whether it hides a parent and whether it is a branch
+    /// head, from a history of mostly plain rows with every other kind among
+    /// them.
+    fn mixed_row(
+        random: &mut u64,
+        row: usize,
+        count: usize,
+        width: usize,
+    ) -> (SmallVec<[usize; 4]>, bool, bool) {
+        let mut below = |limit: usize| {
+            *random ^= *random << 13;
+            *random ^= *random >> 7;
+            *random ^= *random << 17;
+            (*random >> 11) as usize % limit
+        };
+        let wanted = match below(20) {
+            0 => 0,
+            1 | 2 => 2,
+            3 => 3,
+            _ => 1,
+        };
+        let mut parents: SmallVec<[usize; 4]> = SmallVec::new();
+        for _ in 0..wanted {
+            let parent = row + 1 + below(width);
+            if parent < count && !parents.contains(&parent) {
+                parents.push(parent);
+            }
+        }
+        let merge = parents.len() > 1 || below(10) == 0;
+        (parents, merge, below(10) == 0)
+    }
+
+    #[test]
+    fn a_plain_row_takes_the_transition_of_the_general_path() {
+        let (mut plain, mut plain_first, mut plain_at_main, mut all) = (0, 0, 0, 0);
+        for seed in 1..=6u64 {
+            for (width, main) in [(1, None), (2, Some(0)), (6, Some(7)), (40, Some(301))] {
+                let count = 3_000;
+                let mut random = (seed * 8 + width as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                let mut walk = GraphWalk::new(main);
+                let mut general = GraphWalk::new(main);
+                for row in 0..count {
+                    let (parents, merge, head) = mixed_row(&mut random, row, count, width);
+                    // Painted rows among the others, as a window is among
+                    // the rows replayed up to it.
+                    let materialize = (row + seed as usize).is_multiple_of(5);
+                    assert_eq!(
+                        format!("{:?}", walk.checkpoint()),
+                        format!("{:?}", general.checkpoint()),
+                        "seed={seed} width={width} row={row}"
+                    );
+                    assert_eq!(walk.targets.len(), general.targets.len());
+                    if row % 256 == 0 {
+                        walk = walk.checkpoint().restore();
+                        general = general.checkpoint().restore();
+                    }
+                    all += 1;
+                    if !materialize && !head {
+                        let mut probe = walk.checkpoint().restore();
+                        if probe.plain_step(row, &parents).is_some() {
+                            plain += 1;
+                            plain_first += usize::from(row == 0);
+                            plain_at_main += usize::from(main == Some(row));
+                        }
+                    }
+                    let actual = walk.transition(row, &parents, merge, head, materialize);
+                    PLAIN_STEPS_OFF.set(true);
+                    let expected = general.transition(row, &parents, merge, head, materialize);
+                    PLAIN_STEPS_OFF.set(false);
+                    assert_eq!(actual, expected, "seed={seed} width={width} row={row}");
+                }
+            }
+        }
+        assert!(plain * 3 > all, "{plain} of {all} rows were plain");
+        // Where the walk's own flags change.
+        assert!(plain_first > 0 && plain_at_main > 0);
     }
 
     #[test]

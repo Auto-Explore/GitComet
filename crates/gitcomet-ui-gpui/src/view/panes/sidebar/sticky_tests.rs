@@ -693,7 +693,7 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
     let mut state = fixture(4);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
     repo.history_state.selected_commit = Some(CommitId("a".into()));
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("a".into()),
             parent_ids: Default::default(),
@@ -726,7 +726,7 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
     });
     cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
     test_support::redraw(cx);
-    let theme = cx.update(|_, app| pane.read(app).theme);
+    let theme = cx.update(|_, app| AppTheme::current(app));
     let selected_bg = crate::view::selected_branch_row_bg(theme).into();
     for target in [
         BranchMenuTarget::local("shared/topic-000001"),
@@ -921,7 +921,7 @@ fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
     let mut state = fixture(1_000);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
     repo.history_state.selected_commit = Some(CommitId("a".into()));
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("a".into()),
             parent_ids: Default::default(),
@@ -1239,7 +1239,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
                 let handle = pane.branches_scroll.0.borrow();
                 let offset = handle.base_handle.offset().y;
                 assert_ne!(offset, px(-1_000.0));
-                let row_height = sidebar_list_row_height(pane.theme, scale);
+                let row_height = sidebar_list_row_height(AppTheme::current(app), scale);
                 let natural_top = handle.base_handle.bounds().top() + offset + row_height * ix;
                 (offset, natural_top)
             });
@@ -1315,7 +1315,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
             .item
             .height;
         window.viewport_size().height - viewport_height
-            + sidebar_list_row_height(pane.theme, ui_scale::current(app).percent) * 7.25
+            + sidebar_list_row_height(AppTheme::current(app), ui_scale::current(app).percent) * 7.25
     });
     cx.simulate_resize(gpui::size(px(1000.0), compact_height));
     test_support::redraw(cx);
@@ -1577,7 +1577,7 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
         window.viewport_size().height - size.item.height
     });
     let h = cx.update(|_, app| {
-        sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+        sidebar_list_row_height(AppTheme::current(app), ui_scale::current(app).percent)
     });
     for (slots, expected) in [(7.25, 6), (6.5, 0), (12.0, 7)] {
         cx.simulate_resize(gpui::size(px(1000.0), chrome + h * slots));
@@ -1819,7 +1819,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                 });
             });
             test_support::redraw(cx);
-            let theme = cx.update(|_, app| pane.read(app).theme);
+            let theme = cx.update(|_, app| AppTheme::current(app));
             assert!(
                 paint(cx, "pinned_branch_row_81_0")
                     .iter()

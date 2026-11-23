@@ -251,7 +251,7 @@ pub(super) fn prompt_summary(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
     this.sync_tag_push_previews(cx);
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let (text, tooltip_text) = this
         .tag_push_requests(cx)
         .and_then(|(repo_id, requests)| {

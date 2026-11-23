@@ -719,7 +719,7 @@ impl HighlightState {
 pub(super) struct LayoutState {
     pub(super) scroll_x: Pixels,
     pub(super) last: Option<TextInputLayout>,
-    pub(super) line_starts: Option<Arc<[usize]>>,
+    pub(super) line_starts: Option<LineStarts>,
     pub(super) bounds: Option<Bounds<Pixels>>,
     /// The vertical scroll handle's offset `bounds` was laid out with. Read in
     /// prepaint: a mirror or a sibling's caret reveal can move a shared handle

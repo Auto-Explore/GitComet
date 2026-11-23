@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::panels::popover::picker_nav::{
     PickerNavKeys, PickerNavOutcome, handle_picker_nav,
 };
@@ -126,7 +127,6 @@ pub(in crate::view) enum FileHistoryMode {
 }
 
 pub(in crate::view) struct FileHistoryPaneInit {
-    pub(in crate::view) theme: AppTheme,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
 }
 
@@ -135,7 +135,6 @@ pub(in crate::view) struct FileHistoryPaneInit {
 pub(in crate::view) struct FileHistoryPaneView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
-    theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
     row_prefs: FileHistoryRowPrefs,
     pub(in crate::view) target: Option<(RepoId, std::path::PathBuf)>,
@@ -168,7 +167,7 @@ impl FileHistoryPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let FileHistoryPaneInit { theme, root_view } = init;
+        let FileHistoryPaneInit { root_view } = init;
         let preferences = ui_model.read(cx).preferences.clone();
         let state = Arc::clone(&ui_model.read(cx).state);
         let search_input = cx.new(|cx| {
@@ -198,7 +197,6 @@ impl FileHistoryPaneView {
         Self {
             store,
             state,
-            theme,
             root_view,
             row_prefs: FileHistoryRowPrefs {
                 format: preferences.appearance.date_time_format,
@@ -224,13 +222,6 @@ impl FileHistoryPaneView {
             #[cfg(test)]
             sent: Vec::new(),
             _subscriptions: vec![model_subscription, input_subscription],
-        }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        if self.theme != theme {
-            self.theme = theme;
-            cx.notify();
         }
     }
 
@@ -626,9 +617,11 @@ impl FileHistoryPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverAt(kind.into(), anchor),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -644,7 +637,7 @@ impl FileHistoryPaneView {
 
 impl Render for FileHistoryPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale.percent());
         let Some((_, path)) = self.target.clone() else {

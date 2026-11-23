@@ -228,7 +228,7 @@ pub(super) fn panel(
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let blocked = this.worktree_add_request(repo_id, cx).err();
     let can_submit = blocked.is_none();
     let (refused, checked_out_at) = match blocked {

@@ -223,7 +223,7 @@ impl DetailsPaneView {
             return Vec::new();
         };
 
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = this.ui_scale_percent;
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
@@ -489,7 +489,7 @@ impl DetailsPaneView {
         let inputs = this.cached_worktree_file_inputs(repo_id, worktree_dirty_rev, summary);
         let files = &inputs.files;
 
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = this.ui_scale_percent;
         let active_menu = this.active_context_menu_invoker.clone();
         let file_rows =
@@ -640,7 +640,7 @@ impl DetailsPaneView {
         };
         let files = files.clone();
 
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = this.ui_scale_percent;
         let repo_id = repo.id;
         // A merge-base comparison's file diffs start at the resolved base.

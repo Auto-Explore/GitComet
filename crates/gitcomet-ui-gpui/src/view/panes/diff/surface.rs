@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "decides from what sits at a path whether a file preview applies"
+)]
 use super::*;
 
 #[cfg(test)]

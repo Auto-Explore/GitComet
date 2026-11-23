@@ -71,7 +71,6 @@ fn picker_item(entry: &PickerEntry, query: &str) -> components::PickerPromptItem
 }
 
 pub(crate) struct DocumentPicker {
-    theme: AppTheme,
     root: WeakEntity<GitCometView>,
     documents: WeakEntity<DocumentsView>,
     recents: Entity<RecentDocumentList>,
@@ -92,7 +91,6 @@ pub(crate) struct DocumentPicker {
 
 impl DocumentPicker {
     pub(in crate::view) fn new(
-        theme: AppTheme,
         root: WeakEntity<GitCometView>,
         documents: &Entity<DocumentsView>,
         status_bar: gpui::EntityId,
@@ -129,7 +127,6 @@ impl DocumentPicker {
             }),
         ];
         Self {
-            theme,
             root,
             documents: documents.downgrade(),
             recents,
@@ -145,11 +142,6 @@ impl DocumentPicker {
             restore_focus: None,
             _subscriptions: subscriptions,
         }
-    }
-
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn is_open(&self) -> bool {
@@ -323,7 +315,7 @@ impl DocumentPicker {
     }
 
     fn render_footer(&self, has_unsaved: bool, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale::current(cx).percent);
         div()
             .w_full()
@@ -370,7 +362,7 @@ impl DocumentPicker {
         position: gpui::Point<Pixels>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         gpui::anchored()
             .position(position)
             .snap_to_window()
@@ -413,7 +405,7 @@ impl Render for DocumentPicker {
         if !self.open {
             return div().into_any_element();
         }
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let entries = self.entries(cx);

@@ -589,7 +589,8 @@ fn review_enter_escape_restores_each_pane_and_keeps_graph_selection(cx: &mut gpu
         .expect("selected file outline");
     let row_height = cx.update(|_, app| {
         let pane = view.read(app).details_pane.read(app);
-        crate::view::rows::sidebar::sidebar_list_row_height(pane.theme, pane.ui_scale_percent)
+        let theme = AppTheme::current(app);
+        crate::view::rows::sidebar::sidebar_list_row_height(theme, pane.ui_scale_percent)
     });
     assert_eq!(
         outline.size.height, row_height,

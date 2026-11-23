@@ -1,4 +1,5 @@
 use super::*;
+use crate::history_filter::HistoryFilterMsg;
 
 fn repo_state_for_focus_tests() -> AppState {
     let mut state = AppState::test_default();
@@ -37,10 +38,10 @@ fn toggling_a_focus_restarts_the_walk_and_persists_it() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ToggleHistoryFocus {
+        Msg::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             repo_id: RepoId(1),
             target: target.clone(),
-        },
+        }),
     );
 
     assert_eq!(state.repos[0].history_state.history_focus, expected);
@@ -82,10 +83,10 @@ fn toggling_a_focused_ref_again_removes_just_that_ref() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ToggleHistoryFocus {
+        Msg::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             repo_id: RepoId(1),
             target: feature,
-        },
+        }),
     );
 
     assert_eq!(
@@ -111,11 +112,11 @@ fn focusing_a_groups_refs_adds_them_all_in_one_step() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::FocusHistoryRefs {
+        Msg::HistoryFilter(HistoryFilterMsg::FocusRefs {
             repo_id: RepoId(1),
             targets: vec![feat_a.clone(), feat_b.clone()],
             focused: true,
-        },
+        }),
     );
     let expected = HistoryFocusSet::from_iter([main.clone(), feat_a.clone(), feat_b.clone()]);
     assert_eq!(state.repos[0].history_state.history_focus, expected);
@@ -135,11 +136,11 @@ fn focusing_a_groups_refs_adds_them_all_in_one_step() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::FocusHistoryRefs {
+        Msg::HistoryFilter(HistoryFilterMsg::FocusRefs {
             repo_id: RepoId(1),
             targets: vec![feat_a, feat_b],
             focused: false,
-        },
+        }),
     );
     assert_eq!(
         state.repos[0].history_state.history_focus,
@@ -171,10 +172,10 @@ fn toggling_a_branch_its_focused_remote_covers_unfocuses_just_that_branch() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ToggleHistoryFocus {
+        Msg::HistoryFilter(HistoryFilterMsg::ToggleFocus {
             repo_id: RepoId(1),
             target: gitcomet_core::domain::HistoryFocus::remote_branch("origin", "feature"),
-        },
+        }),
     );
 
     assert_eq!(
@@ -200,10 +201,10 @@ fn setting_the_focus_already_in_effect_changes_nothing() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryFocus {
+        Msg::HistoryFilter(HistoryFilterMsg::SetFocus {
             repo_id: RepoId(1),
             focus,
-        },
+        }),
     );
 
     assert!(effects.is_empty(), "expected no effects, got {effects:?}");
@@ -224,10 +225,10 @@ fn clearing_the_focus_set_restarts_the_unfocused_walk() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::SetHistoryFocus {
+        Msg::HistoryFilter(HistoryFilterMsg::SetFocus {
             repo_id: RepoId(1),
             focus: HistoryFocusSet::default(),
-        },
+        }),
     );
 
     assert!(state.repos[0].history_state.history_focus.is_empty());

@@ -99,7 +99,6 @@ pub(in crate::view) fn build_history_page_graph<'a>(
     remote_branches: &'a [RemoteBranch],
     stashes: &'a [StashEntry],
     commits: &'a [Commit],
-    theme: AppTheme,
 ) -> HistoryPageGraph<'a> {
     let stash_analysis = analyze_history_stashes(commits, stashes);
     let stash_helper_ids = stash_analysis.stash_helper_ids;
@@ -115,14 +114,13 @@ pub(in crate::view) fn build_history_page_graph<'a>(
     );
     let branch_heads = graph_branch_heads(history_scope, branches, remote_branches);
     let rows = if stash_helper_ids.is_empty() {
-        history_graph::compute_graph(commits, theme, branch_heads, head_target).into()
+        history_graph::compute_graph_lanes(commits, branch_heads, head_target).into()
     } else {
         let visible_commit_refs = visible_indices
             .iter()
             .map(|ix| &commits[ix])
             .collect::<Vec<_>>();
-        history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
-            .into()
+        history_graph::compute_graph_lanes(&visible_commit_refs, branch_heads, head_target).into()
     };
     HistoryPageGraph {
         stash_tips: stash_analysis.stash_tips,
@@ -135,7 +133,7 @@ pub(in crate::view) fn build_history_page_graph<'a>(
 pub(super) fn build_history_base_cache(
     request: HistoryBaseCacheRequest,
     page: &LogPage,
-    theme: AppTheme,
+    _theme: AppTheme,
     head_branch: Option<&str>,
     branches: &[Branch],
     remote_branches: &[RemoteBranch],
@@ -155,7 +153,6 @@ pub(super) fn build_history_base_cache(
         remote_branches,
         stashes,
         &page.commits,
-        theme,
     );
     let has_stash_tips = !stash_tips.is_empty();
     let mut author_cache: FxHashMap<&str, HistoryAuthorVm> =

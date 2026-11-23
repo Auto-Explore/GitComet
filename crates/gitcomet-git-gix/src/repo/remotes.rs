@@ -1075,7 +1075,8 @@ impl GixRepo {
         // Fetch and prune run through the Git CLI, outside gix. Reopen the
         // repository so this refresh cannot reuse a packed-refs snapshot from
         // before the command and resurrect already-pruned tracking branches in
-        // the UI.
+        // the UI. The open object store looks again for new packs when a tip
+        // is missing.
         let repo = self.reopen_repo()?;
         let refs = crate::refs::view(&repo).map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)

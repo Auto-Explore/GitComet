@@ -18,7 +18,7 @@ use crate::model::{
     RepoId, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
-use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
@@ -387,241 +387,7 @@ pub(super) fn repo_externally_changed(
     effects
 }
 
-/// Reloads the first page after the user changed *what* the history shows —
-/// its scope or its author filter. The caller has already applied the change to
-/// `repo_state`; this holds the previous page on screen while the new walk runs,
-/// drops any pagination in progress, and persists the change. `persist` is given
-/// the repository's workdir.
-fn restart_history_load(
-    state: &mut AppState,
-    repo_ix: usize,
-    persist: impl FnOnce(std::path::PathBuf) -> Effect,
-) -> Vec<Effect> {
-    let repo_state = &mut state.repos[repo_ix];
-    repo_state.retain_log_while_loading();
-    repo_state.set_log(Loadable::Loading);
-    repo_state.set_log_loading_more(false);
-    // Any count on screen belongs to the walk being replaced.
-    repo_state.set_log_scan_progress(None);
-
-    let mut effects = vec![persist(repo_state.spec.workdir.clone())];
-    let request = super::util::first_page_log_request(repo_state);
-    effects.extend(super::util::request_log_effect(repo_state, request));
-    effects
-}
-
-pub(super) fn set_history_scope(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    scope: LogScope,
-) -> Vec<Effect> {
-    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    let shared_key = state.repos[repo_ix]
-        .shared_preferences
-        .as_ref()
-        .map(|snapshot| snapshot.key.clone());
-    if state.repos[repo_ix].history_state.history_scope == scope {
-        // Another tab's choice may still be queued. Every explicit shared
-        // selection must reach the queue, even when this tab needs no reload.
-        return shared_key
-            .map(|key| {
-                Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
-                    repo_id,
-                    key,
-                    update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
-                })
-            })
-            .into_iter()
-            .collect();
-    }
-    state.repos[repo_ix].set_log_scope(scope);
-
-    restart_history_load(state, repo_ix, |workdir| match shared_key {
-        Some(key) => Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
-            repo_id,
-            key,
-            update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
-        }),
-        None => Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
-            repo_id: Some(repo_id),
-            workdir,
-            mode: scope,
-            action: "updating history mode",
-        }),
-    })
-}
-
-pub(super) fn set_history_author_filter(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    author: Option<String>,
-) -> Vec<Effect> {
-    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if state.repos[repo_ix].history_state.history_author_filter == author {
-        return Vec::new();
-    }
-    state.repos[repo_ix].set_history_author_filter(author.clone());
-
-    restart_history_load(state, repo_ix, |workdir| {
-        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
-            repo_id: Some(repo_id),
-            workdir,
-            author,
-            action: "updating history author filter",
-        })
-    })
-}
-
-pub(super) fn set_history_focus(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    focus: gitcomet_core::domain::HistoryFocusSet,
-) -> Vec<Effect> {
-    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if state.repos[repo_ix].history_state.history_focus == focus {
-        return Vec::new();
-    }
-    state.repos[repo_ix].set_history_focus(focus.clone());
-
-    restart_history_load(state, repo_ix, |workdir| {
-        Effect::Persistence(PersistenceEffect::PersistRepoHistoryFocus {
-            repo_id: Some(repo_id),
-            workdir,
-            focus,
-            action: "updating history focus",
-        })
-    })
-}
-
-/// Focuses `target`, or unfocuses it when the focus already covers it. Every
-/// per-ref menu entry and sidebar eye goes through this, so the same click that
-/// focused a ref is the one that unfocuses it.
-///
-/// Covers, not contains: a branch under a focused remote reads as focused, so
-/// clicking it takes it out rather than adding an entry the remote already
-/// implies.
-pub(super) fn toggle_history_focus(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    target: gitcomet_core::domain::HistoryFocus,
-) -> Vec<Effect> {
-    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    let focused = !repo.history_state.history_focus.covers(&target);
-    focus_history_refs(state, repo_id, &[target], focused)
-}
-
-/// Focuses or unfocuses every one of `targets` at once — a branch group's
-/// members, or a single ref from [`toggle_history_focus`].
-pub(super) fn focus_history_refs(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    targets: &[gitcomet_core::domain::HistoryFocus],
-    focused: bool,
-) -> Vec<Effect> {
-    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    // Unfocusing one branch of a focused remote replaces the remote with its
-    // other branches, which only the loaded remote-branch list can name.
-    let focus = repo
-        .history_state
-        .history_focus
-        .with_refs_focused(targets, focused, |remote| match &repo.remote_branches {
-            Loadable::Ready(branches) => branches
-                .iter()
-                .filter(|branch| branch.remote == remote)
-                .map(|branch| branch.name.clone())
-                .collect(),
-            _ => Vec::new(),
-        });
-    set_history_focus(state, repo_id, focus)
-}
-
-/// Which ref list just loaded, and so which focus targets it can speak for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FocusRefList {
-    LocalBranches,
-    RemoteBranches,
-    Remotes,
-    Tags,
-}
-
-/// Clears focus targets whose refs have gone away.
-///
-/// A focused branch can be deleted or renamed locally, and a remote branch can
-/// vanish under a pruning fetch. A focus pointing at nothing seeds no tips, so
-/// the history would simply go empty; dropping such a target as soon as the ref
-/// list that would contain it says it is gone restores the normal walk instead.
-///
-/// Absence is only evidence of deletion under two conditions, because clearing a
-/// focus the user set is not something to guess at:
-///
-/// - the list that just loaded is the one that governs the target, so a remote
-///   list arriving says nothing about a local branch; and
-/// - that list loaded successfully. A list still loading or one that failed says
-///   nothing, but a successful empty list does: removing the last remote or
-///   pruning the last remote-tracking branch leaves exactly that. Reloads go
-///   through `Loading`, and a remote-branch list caught mid-fetch is held back
-///   before it gets here, so an empty `Ready` is never a transient.
-pub(super) fn clear_missing_history_focus(
-    state: &mut AppState,
-    repo_id: crate::model::RepoId,
-    loaded: FocusRefList,
-) -> Vec<Effect> {
-    use gitcomet_core::domain::HistoryFocus;
-
-    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    let focus = repo.history_state.history_focus.clone();
-    if focus.is_empty() {
-        return Vec::new();
-    }
-    /// `Some(list)` only when it loaded successfully; see above.
-    fn conclusive<T>(list: &Loadable<std::sync::Arc<Vec<T>>>) -> Option<&[T]> {
-        list.ready().map(|list| list.as_slice())
-    }
-    let kept = focus.retaining(|target| match (target, loaded) {
-        (HistoryFocus::LocalBranch { name }, FocusRefList::LocalBranches) => {
-            match conclusive(&repo.branches) {
-                Some(branches) => branches.iter().any(|branch| branch.name == name.as_ref()),
-                None => true,
-            }
-        }
-        (HistoryFocus::RemoteBranch { remote, branch }, FocusRefList::RemoteBranches) => {
-            match conclusive(&repo.remote_branches) {
-                Some(branches) => branches.iter().any(|candidate| {
-                    candidate.remote == remote.as_ref() && candidate.name == branch.as_ref()
-                }),
-                None => true,
-            }
-        }
-        (HistoryFocus::Remote { name }, FocusRefList::Remotes) => match conclusive(&repo.remotes) {
-            Some(remotes) => remotes.iter().any(|remote| remote.name == name.as_ref()),
-            None => true,
-        },
-        (HistoryFocus::Tag { name }, FocusRefList::Tags) => match conclusive(&repo.tags) {
-            Some(tags) => tags.iter().any(|tag| tag.name == name.as_ref()),
-            None => true,
-        },
-        // This list does not govern this target.
-        _ => true,
-    });
-    if kept == focus {
-        return Vec::new();
-    }
-    // Only the vanished refs drop out; the rest of the focus stands.
-    set_history_focus(state, repo_id, kept)
-}
-
+/// Asks for the shown history's next page, if it has one and no load is on its way.
 pub(super) fn load_more_history(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
@@ -634,7 +400,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     }
 
-    let Loadable::Ready(page) = &repo_state.log else {
+    let Loadable::Ready(page) = &repo_state.history_state.log else {
         return Vec::new();
     };
     let Some(cursor) = page.next_cursor.clone() else {
@@ -835,7 +601,7 @@ pub(super) fn log_chunk_loaded(
     };
     if !repo_state.loads_in_flight.is_active_log_reply(seq)
         || repo_state.loads_in_flight.active_log_is_load_more()
-        || !repo_state.log.is_loading()
+        || !repo_state.history_state.log.is_loading()
     {
         return Vec::new();
     }
@@ -907,11 +673,9 @@ pub(super) fn log_loaded(
                 return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
-                if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
-                    // Drop the history_state copy first so the Arc's refcount
-                    // goes to 1 and make_mut can mutate in-place instead of
-                    // deep-cloning the entire commit list.
-                    repo_state.history_state.log = Loadable::NotLoaded;
+                if is_load_more && let Loadable::Ready(existing) = &mut repo_state.history_state.log
+                {
+                    // In place, unless a published snapshot still shares the page.
                     let existing = Arc::make_mut(existing);
                     // A page the backend still holds in its cache is copied
                     // once here; a freshly walked page is moved.
@@ -919,9 +683,7 @@ pub(super) fn log_loaded(
                     reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
-                    // Re-share the updated Arc with history_state.
-                    repo_state.history_state.log = repo_state.log.clone();
-                    repo_state.bump_log_revs();
+                    repo_state.bump_log_rev();
                 } else if !is_load_more {
                     // Slack for later appends only when the page is ours alone;
                     // a cache-shared page would have to be copied to get it.
@@ -940,7 +702,7 @@ pub(super) fn log_loaded(
                     return finish_log_load(repo_state, seq);
                 }
                 let failed = error_loadable(inputs, repo_state, &e);
-                if !matches!(repo_state.log, Loadable::Ready(_)) {
+                if !matches!(repo_state.history_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(failed);
                 }
                 return finish_log_load(repo_state, seq);
@@ -960,7 +722,7 @@ pub(super) fn log_loaded(
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
             && repo_state.history_state.indexed.index.is_none()
-            && let Loadable::Ready(page) = &repo_state.log
+            && let Loadable::Ready(page) = &repo_state.history_state.log
         {
             // One set over the page: the selection can hold thousands of ids
             // and the page tens of thousands of commits, so a scan per id was
@@ -995,7 +757,7 @@ pub(super) fn log_loaded(
 fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, scope: LogScope) {
     if repo_state.history_state.history_focus.head_is_first(scope)
         && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
-        && let Loadable::Ready(page) = &repo_state.log
+        && let Loadable::Ready(page) = &repo_state.history_state.log
     {
         repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
     }

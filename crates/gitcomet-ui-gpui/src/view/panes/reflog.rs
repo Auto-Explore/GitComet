@@ -3,6 +3,7 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::ReflogEntry;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -77,7 +78,6 @@ pub(in super::super) struct ReflogPanelState {
 /// Everything the pane needs that isn't the store or the state model. Grouped
 /// like [`DetailsPaneInit`] so the constructor keeps a readable signature.
 pub(in super::super) struct ReflogPaneInit {
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
 }
 
@@ -90,7 +90,6 @@ pub(in super::super) struct ReflogPaneInit {
 pub(in super::super) struct ReflogPaneView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
-    theme: AppTheme,
     ui_scale_percent: u32,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
@@ -110,7 +109,7 @@ impl ReflogPaneView {
         init: ReflogPaneInit,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let ReflogPaneInit { theme, root_view } = init;
+        let ReflogPaneInit { root_view } = init;
         let preferences = ui_model.read(cx).preferences.clone();
         let ui_scale_percent = preferences.appearance.ui_scale_percent;
         let date_time_format = preferences.appearance.date_time_format;
@@ -133,7 +132,6 @@ impl ReflogPaneView {
         let mut this = Self {
             store,
             state,
-            theme,
             ui_scale_percent,
             date_time_format,
             timezone,
@@ -247,14 +245,6 @@ impl ReflogPaneView {
                 root.on_reflog_panel_closed(repo_id, cx);
             });
         });
-        cx.notify();
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        if self.theme == theme {
-            return;
-        }
-        self.theme = theme;
         cx.notify();
     }
 
@@ -411,7 +401,7 @@ impl ReflogPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = UiScale::from_percent(this.ui_scale_percent).with_appearance(theme.metrics);
         let now = SystemTime::now();
 
@@ -618,9 +608,8 @@ impl ReflogPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }
@@ -761,7 +750,7 @@ impl ReflogPaneView {
 
 impl Render for ReflogPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let container = div()
             .flex()
             .flex_col()
@@ -1101,7 +1090,6 @@ mod view_tests {
                     store,
                     ui_model,
                     ReflogPaneInit {
-                        theme: AppTheme::gitcomet_dark(),
                         root_view: gpui::WeakEntity::new_invalid(),
                     },
                     cx,
@@ -1365,7 +1353,7 @@ mod view_tests {
         cx: &mut gpui::TestAppContext,
     ) {
         gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-        let (pane, _repo_id, cx) = open_pane(cx, reflog_entries(20));
+        let (_pane, _repo_id, cx) = open_pane(cx, reflog_entries(20));
         cx.simulate_resize(gpui::size(px(495.0), px(400.0)));
 
         for font_size in [14, 20, 24] {
@@ -1373,9 +1361,13 @@ mod view_tests {
                 ui_font_size_px: font_size,
                 ..Default::default()
             };
-            cx.update(|_, app| app.set_global(metrics));
-            pane.update(cx, |pane, cx| {
-                pane.set_theme(AppTheme::gitcomet_dark().with_appearance(metrics), cx)
+            cx.update(|window, app| {
+                app.set_global(metrics);
+                crate::theme::set_window_theme(
+                    app,
+                    window.window_handle().window_id(),
+                    AppTheme::gitcomet_dark().with_appearance(metrics),
+                );
             });
             crate::test_support::refresh_and_draw(cx);
             crate::test_support::refresh_and_draw(cx);

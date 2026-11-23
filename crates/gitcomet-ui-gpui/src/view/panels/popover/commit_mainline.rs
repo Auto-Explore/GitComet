@@ -24,10 +24,13 @@ fn find_commit<'a>(
     repo: &'a RepoState,
     commit_id: &CommitId,
 ) -> Option<&'a gitcomet_core::domain::Commit> {
-    [repo.log.ready(), repo.history_state.file_history.ready()]
-        .into_iter()
-        .flatten()
-        .find_map(|page| page.commits.iter().find(|commit| commit.id == *commit_id))
+    [
+        repo.history_state.log.ready(),
+        repo.history_state.file_history.ready(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|page| page.commits.iter().find(|commit| commit.id == *commit_id))
 }
 
 pub(super) fn commit_summary(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> String {
@@ -245,7 +248,7 @@ mod tests {
             },
         );
         // First-parent history keeps only the parent the walk followed.
-        repo.log = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![commit(&merge, &["aaaa"])],
             next_cursor: None,
         }));

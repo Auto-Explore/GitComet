@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 /// The refs the repository's history is currently focused on.
 pub(super) fn active_focus(host: &PopoverHost, repo_id: RepoId) -> HistoryFocusSet {
@@ -52,6 +53,8 @@ pub(super) fn labeled_entry(
         ),
         shortcut: None,
         disabled: false,
-        action: Box::new(ContextMenuAction::ToggleHistoryFocus { repo_id, target }),
+        action: Box::new(ContextMenuAction::HistoryFilter(
+            HistoryFilterMsg::ToggleFocus { repo_id, target },
+        )),
     }
 }

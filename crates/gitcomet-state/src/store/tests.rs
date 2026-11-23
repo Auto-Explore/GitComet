@@ -150,6 +150,29 @@ fn app_store_clone_dispatches_restore_and_close_paths() {
 }
 
 #[test]
+fn app_store_dispatch_converts_its_argument_into_a_message() {
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (store, event_rx) = AppStore::new_test(backend);
+
+    store.dispatch(crate::msg::InternalMsg::SessionPersistFailed {
+        repo_id: None,
+        action: "testing dispatch",
+        error: "disk full".to_string(),
+    });
+    wait_for_state_changed(&event_rx);
+
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot
+            .notifications
+            .iter()
+            .any(|notification| notification.message.contains("testing dispatch")),
+        "{:?}",
+        snapshot.notifications
+    );
+}
+
+#[test]
 fn app_store_open_repo_effect_propagates_open_error_into_state() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
     let (store, event_rx) = AppStore::new_test(backend);

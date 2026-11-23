@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::permalink;
 
 use crate::kit::components::secondary_shortcut;
 
@@ -245,11 +246,9 @@ pub(super) fn model(
     if let Some(permalink) = source.tip().and_then(|tip| {
         let repo = this.state.repos.iter().find(|repo| repo.id == repo_id)?;
         match &repo.remotes {
-            Loadable::Ready(remotes) => crate::view::permalink::file_permalink(
-                remotes,
-                tip.as_ref(),
-                &path.display().to_string(),
-            ),
+            Loadable::Ready(remotes) => {
+                permalink::file_permalink(remotes, tip.as_ref(), &path.display().to_string())
+            }
             _ => None,
         }
     }) {

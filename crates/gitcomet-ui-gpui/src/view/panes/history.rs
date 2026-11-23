@@ -8,6 +8,8 @@ use crate::view::caches::{
     build_history_visible_indices, history_ref_items_from_displayed_refs,
     history_worktree_chips_by_head, next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
@@ -529,7 +531,6 @@ fn decide_pending_history_reveal(
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: DateTimeFormat,
@@ -770,7 +771,6 @@ impl HistoryView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.repository_mode.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
@@ -806,7 +806,6 @@ impl HistoryView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         ui_scale_percent: u32,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
@@ -939,7 +938,6 @@ impl HistoryView {
             history_annotations,
             store: store.into(),
             state,
-            theme,
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
             date_time_format,
@@ -1087,7 +1085,7 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn display_log_page_for_repo(repo: &RepoState) -> Option<Arc<LogPage>> {
-        match &repo.log {
+        match &repo.history_state.log {
             Loadable::Ready(page) => Some(Arc::clone(page)),
             Loadable::Loading => repo
                 .history_state
@@ -1099,7 +1097,7 @@ impl HistoryView {
     }
 
     fn live_log_page_has_more_for_repo(repo: &RepoState) -> Option<bool> {
-        match &repo.log {
+        match &repo.history_state.log {
             Loadable::Ready(page) => Some(page.next_cursor.is_some()),
             Loadable::Loading | Loadable::NotLoaded | Loadable::Error(_) => None,
         }
@@ -1407,11 +1405,6 @@ impl HistoryView {
         }
     }
 
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     pub(in super::super) fn set_appearance_metrics(
         &mut self,
         metrics: crate::appearance::Appearance,
@@ -1617,9 +1610,8 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }
@@ -1639,16 +1631,16 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.popover_host
-                        .update(cx, |host, _| host.set_hosted_menu(id, items));
-                    root.open_popover_at(
-                        PopoverKind::Hosted { id, menu: true }.invoked_by(invoker),
+                let _ = root_view.request(
+                    RootRequest::OpenHostedMenu {
+                        id,
+                        items,
+                        invoker,
                         anchor,
-                        window,
-                        cx,
-                    );
-                });
+                    },
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -1665,9 +1657,11 @@ impl HistoryView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -1712,7 +1706,7 @@ impl HistoryView {
             };
 
             let current_scope = repo.history_state.history_scope;
-            let log_rev = repo.log_rev;
+            let log_rev = repo.history_state.log_rev;
             let stashes_rev = repo.stashes_rev;
             let log_loading_more = repo.history_state.log_loading_more;
             let display_page = Self::display_log_page_for_repo(repo);
@@ -1774,14 +1768,14 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         if decision.clear_focus {
-            self.store.dispatch(Msg::SetHistoryFocus {
+            self.store.dispatch(HistoryFilterMsg::SetFocus {
                 repo_id: pending.repo_id,
                 focus: Default::default(),
             });
             return;
         }
         if let Some(scope) = decision.set_scope {
-            self.store.dispatch(Msg::SetHistoryScope {
+            self.store.dispatch(HistoryFilterMsg::SetScope {
                 repo_id: pending.repo_id,
                 scope,
             });
@@ -2315,7 +2309,7 @@ impl HistoryView {
         let seq = self.history_cache_seq;
         self.history_cache_inflight = Some(request_for_task.clone());
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
 
         cx.spawn(
             async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
