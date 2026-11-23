@@ -88,6 +88,11 @@ pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path
 /// the worktree; without them git writes refreshed stat data to the index.
 pub(crate) fn push_read_only_diff_flags(cmd: &mut Command) {
     cmd.args(["--no-optional-locks", "-c", "diff.autoRefreshIndex=false"]);
+    disable_fsmonitor(cmd);
+}
+
+pub(crate) fn disable_fsmonitor(cmd: &mut Command) {
+    cmd.args(["-c", "core.fsmonitor=false"]);
 }
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {

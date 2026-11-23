@@ -226,6 +226,7 @@ pub(super) fn git_range_numstat_counts(
 /// Untracked, not ignored files in the working tree.
 fn untracked_paths(workdir: &Path, cancellation: &CancellationToken) -> Result<Vec<PathBuf>> {
     let mut command = git_workdir_cmd_for(workdir);
+    crate::util::disable_fsmonitor(&mut command);
     command
         .arg("--no-optional-locks")
         .arg("ls-files")
@@ -268,6 +269,7 @@ pub(super) fn intent_to_add_index(
     let copy = tempfile::NamedTempFile::new().ok()?.into_temp_path();
     std::fs::copy(index, &copy).ok()?;
     let mut command = git_workdir_cmd_for(workdir);
+    crate::util::disable_fsmonitor(&mut command);
     command
         .env("GIT_INDEX_FILE", &copy)
         .args(["add", "--intent-to-add"]);

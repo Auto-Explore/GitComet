@@ -1449,6 +1449,18 @@ fn apply_porcelain_v2_gitlink_status_record(
     Ok(())
 }
 
+fn gitlink_status_command(workdir: &Path) -> std::process::Command {
+    let mut command = git_workdir_cmd_for(workdir);
+    crate::util::disable_fsmonitor(&mut command);
+    command
+        .arg("--no-optional-locks")
+        .arg("status")
+        .arg("--porcelain=v2")
+        .arg("-z")
+        .arg("--ignore-submodules=none");
+    command
+}
+
 fn supplement_gitlink_status_from_porcelain(
     workdir: &Path,
     repo: &gix::Repository,
@@ -1457,13 +1469,7 @@ fn supplement_gitlink_status_from_porcelain(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     cancellation.check_cancelled()?;
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("status")
-        .arg("--porcelain=v2")
-        .arg("-z")
-        .arg("--ignore-submodules=none");
+    let mut command = gitlink_status_command(workdir);
     if let Some(paths) = gitlink_status_paths(repo, staged) {
         if paths.is_empty() {
             return Ok(());

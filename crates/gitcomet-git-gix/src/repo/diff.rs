@@ -128,9 +128,7 @@ impl GixRepo {
             .arg("-c")
             .arg("diff.dstPrefix=b/");
         cmd.arg("--no-pager");
-        if matches!(target, DiffTarget::WorkingTree { .. }) {
-            push_read_only_diff_flags(&mut cmd);
-        }
+        push_read_only_diff_flags(&mut cmd);
         let subcommand = match target {
             DiffTarget::Commit { .. } => "show",
             DiffTarget::WorkingTree { .. } | DiffTarget::CommitRange { .. } => "diff",
