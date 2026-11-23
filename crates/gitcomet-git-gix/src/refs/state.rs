@@ -122,6 +122,15 @@ pub(crate) fn submodules(
     repo.submodules().map_err(failure)
 }
 
+pub(crate) fn modules_snapshot(
+    repo: &gix::Repository,
+) -> Result<Option<gix::submodule::ModulesSnapshot>> {
+    if !has_modules(repo)? {
+        return Ok(None);
+    }
+    repo.modules().map_err(failure)
+}
+
 pub(crate) fn submodule_state(submodule: &gix::Submodule<'_>) -> Result<gix::submodule::State> {
     submodule.state().map_err(failure)
 }
