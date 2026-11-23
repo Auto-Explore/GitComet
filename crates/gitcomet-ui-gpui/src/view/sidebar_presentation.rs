@@ -84,16 +84,13 @@ struct SidebarProjection {
 impl SidebarPresentationCache {
     pub(in crate::view) fn active_worktree_badges_fingerprint(
         &mut self,
-        state: &AppState,
+        repo: Option<&RepoState>,
+        repos: &[RepoState],
     ) -> (usize, u64) {
-        let Some(repo) = state
-            .repos
-            .iter()
-            .find(|repo| Some(repo.id) == state.active_repo)
-        else {
+        let Some(repo) = repo else {
             return (0, 0);
         };
-        worktree_badges_cached(&mut self.worktree_badges, repo, &state.repos).active_fingerprint
+        worktree_badges_cached(&mut self.worktree_badges, repo, repos).active_fingerprint
     }
 }
 

@@ -18,6 +18,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_renderer: Entity<DiffRenderer>,
     pub(in crate::view) history_view: Entity<HistoryView>,
     state: Arc<AppState>,
+    active_repo_index: ActiveRepoIndex,
     store: Arc<AppStore>,
     root_view: WeakEntity<GitCometView>,
     view_mode: GitCometViewMode,
@@ -70,8 +71,8 @@ impl MainPaneView {
         });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = model.read(cx).state.clone();
-            let changed =
-                Self::notify_fingerprint_for(&this.state) != Self::notify_fingerprint_for(&next);
+            let changed = Self::fingerprint_with_repo(&this.state, this.active_repo())
+                != Self::fingerprint_with_repo(&next, this.active_repo_index.get(&next));
             if this.state.active_repo != next.active_repo {
                 this.history_view.update(cx, |history, _| {
                     history
@@ -80,7 +81,10 @@ impl MainPaneView {
                 });
             }
             let diff_changed = this.diff_renderer.update(cx, |pane, cx| {
-                pane.apply_input(DiffPaneInput::selected(next.clone()), cx)
+                pane.apply_input(
+                    DiffPaneInput::selected_with_index(next.clone(), &this.active_repo_index),
+                    cx,
+                )
             });
             this.state = next;
             this.sync_interactive_commit_editor_states();
@@ -92,6 +96,7 @@ impl MainPaneView {
             diff_renderer,
             history_view,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             store,
             root_view,
             view_mode,
@@ -103,14 +108,16 @@ impl MainPaneView {
         }
     }
 
+    #[cfg(test)]
     fn notify_fingerprint_for(state: &AppState) -> u64 {
+        Self::fingerprint_with_repo(state, ActiveRepoIndex::default().get(state))
+    }
+
+    fn fingerprint_with_repo(state: &AppState, repo: Option<&RepoState>) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = rustc_hash::FxHasher::default();
         state.active_repo.hash(&mut hasher);
-        if let Some(repo) = state
-            .active_repo
-            .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
-        {
+        if let Some(repo) = repo {
             match &repo.interactive_rebase_setup {
                 Some(setup) => {
                     1u8.hash(&mut hasher);
@@ -158,8 +165,7 @@ impl MainPaneView {
         self.state.active_repo
     }
     pub(in crate::view) fn active_repo(&self) -> Option<&RepoState> {
-        let id = self.active_repo_id()?;
-        self.state.repos.iter().find(|repo| repo.id == id)
+        self.active_repo_index.get(&self.state)
     }
     pub(in crate::view) fn active_content(&self, cx: &App) -> MainPaneContent {
         if self.diff_renderer.read(cx).rendered_diff_target().is_some() {

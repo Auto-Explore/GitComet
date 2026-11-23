@@ -227,6 +227,36 @@ fn dirty(path: &str, head: &str) -> WorktreeDirtySummary {
 }
 
 #[gpui::test]
+fn pagination_uses_the_laid_out_viewport(cx: &mut gpui::TestAppContext) {
+    let (view, cx, state, store) = mount(cx, Arc::new(log_page(commits(600), Some("c599"))));
+    let before = state.repos[0].loads_in_flight.clone();
+    cx.draw(
+        point(px(0.0), px(0.0)),
+        gpui::AvailableSpace::min_size(),
+        |window, app| {
+            let history = view.read(app).main_pane.read(app).history_view.clone();
+            history.update(app, |history, cx| {
+                let handle = history.history_scroll.0.borrow().base_handle.clone();
+                handle.set_offset(point(px(0.0), -handle.max_offset().y));
+                let _ = history.render(window, cx);
+            });
+            store
+                .barrier_for_test()
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+            assert_eq!(store.snapshot().repos[0].loads_in_flight, before);
+            div()
+        },
+    );
+    scroll(cx, &view, None);
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    assert_ne!(store.snapshot().repos[0].loads_in_flight, before);
+}
+
+#[gpui::test]
 fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui::TestAppContext) {
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits(600), None)));
     scroll(cx, &view, None);

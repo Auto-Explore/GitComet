@@ -1125,17 +1125,28 @@ fn opening_repository_satisfies_initial_window_activation_refresh() {
     let state = view_state_with_active_ready_repo(repo_id);
     let mut recent = FxHashMap::default();
     let now = Instant::now();
-    note_opened_repos_for_activation(&AppState::test_default(), &state, &mut recent, now);
+    note_activation(&AppState::test_default(), &state, &mut recent, now);
     assert!(repo_activation_msg(&state, &mut recent, now).is_none());
 
     // Unrelated snapshots must not postpone a genuine later focus refresh.
-    note_opened_repos_for_activation(&state, &state, &mut recent, now + REPO_ACTIVATION_THROTTLE);
+    note_activation(&state, &state, &mut recent, now + REPO_ACTIVATION_THROTTLE);
     assert!(repo_activation_msg(&state, &mut recent, now + REPO_ACTIVATION_THROTTLE).is_some());
-    note_opened_repos_for_activation(&state, &AppState::test_default(), &mut recent, now);
+    note_activation(&state, &AppState::test_default(), &mut recent, now);
     assert!(
         recent.is_empty(),
         "closed repository IDs must not accumulate"
     );
+}
+
+fn note_activation(
+    prev: &AppState,
+    next: &AppState,
+    recent: &mut FxHashMap<RepoId, Instant>,
+    now: Instant,
+) {
+    let previous = prev.repos.iter().map(|repo| (repo.id, repo)).collect();
+    let open = next.repos.iter().map(|repo| repo.id).collect();
+    note_opened_repos_for_activation(&previous, next, &open, recent, now);
 }
 
 #[test]
@@ -1145,10 +1156,10 @@ fn opening_repository_does_not_throttle_focus_until_its_load_starts() {
     state.repos[0].open = Loadable::Loading;
     let mut recent = FxHashMap::default();
     let now = Instant::now();
-    note_opened_repos_for_activation(&AppState::test_default(), &state, &mut recent, now);
+    note_activation(&AppState::test_default(), &state, &mut recent, now);
     assert!(recent.is_empty());
     let ready = view_state_with_active_ready_repo(repo_id);
-    note_opened_repos_for_activation(&state, &ready, &mut recent, now);
+    note_activation(&state, &ready, &mut recent, now);
     assert!(repo_activation_msg(&ready, &mut recent, now).is_none());
 }
 

@@ -74,6 +74,7 @@ pub(in super::super) struct DetailsPaneView {
     >,
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
+    pub(in super::super) active_repo_index: ActiveRepoIndex,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
@@ -312,12 +313,15 @@ impl Element for StatusSectionResizeTracker {
 }
 
 impl DetailsPaneView {
+    #[cfg(test)]
     fn notify_fingerprint(state: &AppState) -> u64 {
+        Self::fingerprint_with_repo(state, ActiveRepoIndex::default().get(state))
+    }
+
+    fn fingerprint_with_repo(state: &AppState, repo: Option<&RepoState>) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
-        if let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
-        {
+        if let Some(repo) = repo {
             repo.worktree_status_cache_rev().hash(&mut hasher);
             repo.repository_mode.hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
@@ -377,6 +381,23 @@ impl DetailsPaneView {
         hasher.finish()
     }
 
+    fn observe_model(&mut self, model: Entity<AppUiModel>, cx: &mut gpui::Context<Self>) {
+        let next = Arc::clone(&model.read(cx).state);
+        let next_fingerprint =
+            Self::fingerprint_with_repo(&next, self.active_repo_index.get(&next));
+        if self.advance_pending_commits(&next, cx) {
+            cx.notify();
+        }
+        if next_fingerprint == self.notify_fingerprint {
+            self.state = next;
+            return;
+        }
+
+        self.notify_fingerprint = next_fingerprint;
+        self.apply_state_snapshot(next, cx);
+        cx.notify();
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -402,22 +423,9 @@ impl DetailsPaneView {
         let timezone = preferences.appearance.timezone;
         let show_timezone = preferences.appearance.show_timezone;
         let state = Arc::clone(&ui_model.read(cx).state);
-        let initial_fingerprint = Self::notify_fingerprint(&state);
-        let subscription = cx.observe(&ui_model, |this, model, cx| {
-            let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = Self::notify_fingerprint(&next);
-            if this.advance_pending_commits(&next, cx) {
-                cx.notify();
-            }
-            if next_fingerprint == this.notify_fingerprint {
-                this.state = next;
-                return;
-            }
-
-            this.notify_fingerprint = next_fingerprint;
-            this.apply_state_snapshot(next, cx);
-            cx.notify();
-        });
+        let initial_fingerprint =
+            Self::fingerprint_with_repo(&state, ui_model.read(cx).active_repo_index.get(&state));
+        let subscription = cx.observe(&ui_model, Self::observe_model);
 
         let commit_message_scroll = ScrollHandle::new();
         let commit_scroll = ScrollHandle::new();
@@ -556,6 +564,7 @@ impl DetailsPaneView {
         let mut pane = Self {
             store,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             change_tracking_view,
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
@@ -1132,8 +1141,7 @@ impl DetailsPaneView {
     }
 
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {

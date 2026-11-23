@@ -361,6 +361,7 @@ pub(in super::super) struct SidebarPaneView {
     contributions: Option<contributions::SidebarContributions>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
+    active_repo_index: ActiveRepoIndex,
     pub(in crate::view) sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
     documents: crate::view::documents::buffers::DocumentOwner,
@@ -458,17 +459,24 @@ struct SidebarNotifyFingerprint {
 impl SidebarNotifyFingerprint {
     #[cfg(test)]
     fn from_state(state: &AppState) -> Self {
-        Self::from_state_with_cache(state, &mut SidebarPresentationCache::default())
+        Self::from_state_with_cache(
+            state,
+            ActiveRepoIndex::default().get(state),
+            &mut SidebarPresentationCache::default(),
+        )
     }
 
-    fn from_state_with_cache(state: &AppState, cache: &mut SidebarPresentationCache) -> Self {
+    fn from_state_with_cache(
+        state: &AppState,
+        repo: Option<&RepoState>,
+        cache: &mut SidebarPresentationCache,
+    ) -> Self {
         let active_repo_id = state.active_repo;
-        let repo = active_repo_id.and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id));
         let repo_fingerprint = repo.map(BranchSidebarFingerprint::from_repo);
         let (open_repo_workdirs_count, open_repo_workdirs_hash) =
             open_repo_workdirs_fingerprint(state);
         let (active_worktree_badges_count, active_worktree_badges_hash) =
-            cache.active_worktree_badges_fingerprint(state);
+            cache.active_worktree_badges_fingerprint(repo, &state.repos);
         let file_browser_rev = repo.map(|r| r.file_browser.file_browser_rev).unwrap_or(0);
         let diff_target_rev = repo.map(|r| r.diff_state.diff_target_rev).unwrap_or(0);
         let status_revs = repo
@@ -515,12 +523,14 @@ impl SidebarPaneView {
         let mut sidebar_presentation_cache = SidebarPresentationCache::default();
         let initial_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
             &state,
+            ui_model.read(cx).active_repo_index.get(&state),
             &mut sidebar_presentation_cache,
         );
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
                 &next,
+                this.active_repo_index.get(&next),
                 &mut this.sidebar_presentation_cache,
             );
             let should_notify = next_fingerprint != this.notify_fingerprint;
@@ -668,6 +678,7 @@ impl SidebarPaneView {
             contributions: contributions::SidebarContributions::new(cx),
             store,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             sidebar_focus: cx.focus_handle().tab_stop(true),
             _ui_model_subscription: subscription,
             documents,
@@ -845,8 +856,7 @@ impl SidebarPaneView {
     }
 
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     pub(in super::super) fn open_repo_for_workdir(

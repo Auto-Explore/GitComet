@@ -865,8 +865,8 @@ fn merge_view_target_requires_an_unstaged_conflict() {
     let normal = state_with_active_diff("src/normal.rs", FileStatusKind::Modified);
     let merge = state_with_active_diff("src/conflict.rs", FileStatusKind::Conflicted);
 
-    assert!(active_merge_view_target(&normal).is_none());
-    assert!(active_merge_view_target(&merge).is_some());
+    assert!(active_merge_view_target(&normal.repos[0]).is_none());
+    assert!(active_merge_view_target(&merge.repos[0]).is_some());
 }
 
 #[test]

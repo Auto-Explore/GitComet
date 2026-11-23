@@ -7,6 +7,7 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) struct RepositoryBinding {
     repo_id: RepoId,
+    position: usize,
     lifetime: RepoLifetime,
     session: Option<DiffViewId>,
 }
@@ -15,8 +16,8 @@ impl RepositoryBinding {
     fn repository(self, state: &AppState) -> Option<&RepoState> {
         let repo = state
             .repos
-            .iter()
-            .find(|repo| repo.id == self.repo_id && repo.lifetime_id() == self.lifetime)?;
+            .get(self.position)
+            .filter(|repo| repo.id == self.repo_id && repo.lifetime_id() == self.lifetime)?;
         if self
             .session
             .is_some_and(|view| !repo.diff_sessions.contains_key(&view))
@@ -52,27 +53,30 @@ pub(in crate::view) enum DiffPaneInput {
 }
 
 impl DiffPaneInput {
+    #[cfg(test)]
     pub fn selected(state: Arc<AppState>) -> Self {
-        let binding = state.active_repo.and_then(|id| {
-            state
-                .repos
-                .iter()
-                .find(|repo| repo.id == id)
-                .map(|repo| RepositoryBinding {
-                    repo_id: repo.id,
-                    lifetime: repo.lifetime_id(),
-                    session: None,
-                })
+        Self::selected_with_index(state, &Default::default())
+    }
+
+    pub fn selected_with_index(state: Arc<AppState>, index: &crate::view::ActiveRepoIndex) -> Self {
+        let binding = index.position(&state).map(|position| RepositoryBinding {
+            repo_id: state.repos[position].id,
+            position,
+            lifetime: state.repos[position].lifetime_id(),
+            session: None,
         });
         Self::Repository { state, binding }
     }
 
     pub fn session(state: Arc<AppState>, binding: crate::view::pane_store::DiffBinding) -> Self {
-        let checked = binding.repository(&state).map(|repo| RepositoryBinding {
-            repo_id: repo.id,
-            lifetime: repo.lifetime_id(),
-            session: Some(binding.view),
-        });
+        let checked = binding
+            .repository_with_index(&state)
+            .map(|(position, repo)| RepositoryBinding {
+                repo_id: repo.id,
+                position,
+                lifetime: repo.lifetime_id(),
+                session: Some(binding.view),
+            });
         Self::Repository {
             state,
             binding: checked,

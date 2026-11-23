@@ -819,7 +819,10 @@ impl GitCometView {
         );
         let diff_renderer = cx.new(|cx| {
             DiffRenderer::new(
-                super::panes::diff::input::DiffPaneInput::selected(initial_state.clone()),
+                super::panes::diff::input::DiffPaneInput::selected_with_index(
+                    initial_state.clone(),
+                    &ui_model.read(cx).active_repo_index,
+                ),
                 &ui_preferences,
                 diff_environment.services.clone(),
                 DiffRendererInit {
@@ -1174,6 +1177,10 @@ impl GitCometView {
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
+            repositories: WindowRepositories {
+                active: ui_model.read(cx).active_repo_index.clone(),
+                registered_workdirs: Default::default(),
+            },
             window_handle: window.window_handle(),
             ui_model,
             store,
@@ -1241,7 +1248,6 @@ impl GitCometView {
             splash_backdrop_image: splash::load_splash_backdrop_image(initial_theme.is_dark),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
-            synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
             workspace_persist_seq: 0,
             #[cfg(test)]
@@ -1850,8 +1856,7 @@ impl GitCometView {
     }
 
     pub(super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|repo| repo.id == repo_id)
+        self.repositories.active.get(&self.state)
     }
 
     pub(super) fn drive_focused_mergetool_bootstrap(&mut self) {

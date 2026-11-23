@@ -810,6 +810,7 @@ impl PopoverHost {
             main_pane,
             extension_dialog: None,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             theme_mode,
             date_time_format,
             timezone,
@@ -2444,8 +2445,7 @@ impl PopoverHost {
         if let Some(binding) = self.store.binding {
             return binding.repository(&self.state);
         }
-        let repo_id = self.state.active_repo?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     pub(super) fn bound_diff_state<'a>(

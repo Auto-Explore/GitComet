@@ -136,36 +136,6 @@ impl HistoryView {
             .track_scroll(&self.history_scroll)
             .on_scroll_wheel(cx.listener(Self::history_wheel));
             let list = restrict_scroll_to_vertical_axis(list);
-            let should_load_more = {
-                let state = self.history_scroll.0.borrow();
-                let scroll_handle = state.base_handle.clone();
-                // The scroll handle still describes the previous layout here.
-                // Use the rows this frame will lay out, and do not paginate a
-                // newer source while its graph is still being built.
-                let viewport = state
-                    .last_item_size
-                    .map(|size| size.item.height)
-                    .unwrap_or(px(0.0));
-                let content = crate::view::rows::history_row_height(self.ui_scale()) * count as f32;
-                let max_offset = (content - viewport).max(px(0.0));
-                let should_load_by_scroll = -scroll_handle.offset().y + px(240.0) >= max_offset;
-
-                state.last_item_size.is_some()
-                    && repo.is_some_and(|repo| {
-                        !repo.history_state.log_loading_more
-                            && !repo.history_state.indexed.loading
-                            && repo.history_state.indexed.index.is_none()
-                            && matches!(
-                                &repo.history_state.log,
-                                Loadable::Ready(page) if page.next_cursor.is_some()
-                                    && self.history_cache.as_ref().is_some_and(|cache| Arc::ptr_eq(&cache.page, page))
-                            )
-                    })
-                    && should_load_by_scroll
-            };
-            if should_load_more && let Some(repo_id) = self.active_repo_id() {
-                self.store.dispatch(Msg::LoadMoreHistory { repo_id });
-            }
             div()
                 .id("history_main_scroll_container")
                 .relative()
@@ -175,7 +145,29 @@ impl HistoryView {
                         .h_full()
                         .min_h(px(0.0))
                         .pr(scrollbar_gutter)
-                        .child(list),
+                        .child(list)
+                        .when_some(self.next_history_page(), |wrapper, (repo_id, page)| {
+                            let page = Arc::clone(page);
+                            let view = cx.weak_entity();
+                            let scroll = self.history_scroll.clone();
+                            wrapper.on_children_prepainted(move |_, _, cx| {
+                                let state = scroll.0.borrow();
+                                let Some(size) = state.last_item_size else {
+                                    return;
+                                };
+                                let remaining = size.contents.height - size.item.height
+                                    + state.base_handle.offset().y;
+                                if remaining <= px(240.0) {
+                                    let weak = view.clone();
+                                    let page = Arc::clone(&page);
+                                    cx.defer(move |cx| {
+                                        let _ = weak.update(cx, |view, _| {
+                                            view.load_next_history_page(repo_id, &page)
+                                        });
+                                    });
+                                }
+                            })
+                        }),
                 )
                 .child({
                     let mut scrollbar = components::Scrollbar::new(

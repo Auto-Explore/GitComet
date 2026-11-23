@@ -257,6 +257,7 @@ pub(in super::super) struct ActionBarView {
     canvas_covered: bool,
     store: Arc<AppStore>,
     state: Arc<AppState>,
+    active_repo_index: ActiveRepoIndex,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
@@ -266,13 +267,16 @@ pub(in super::super) struct ActionBarView {
 }
 
 impl ActionBarView {
+    #[cfg(test)]
     fn notify_fingerprint(state: &AppState) -> u64 {
+        Self::fingerprint_with_repo(state, ActiveRepoIndex::default().get(state))
+    }
+
+    fn fingerprint_with_repo(state: &AppState, repo: Option<&RepoState>) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
-        if let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
-        {
+        if let Some(repo) = repo {
             repo.open_rev.hash(&mut hasher);
             repo.repository_mode.hash(&mut hasher);
             std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
@@ -305,10 +309,12 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
-        let notify_fingerprint = Self::notify_fingerprint(&state);
+        let notify_fingerprint =
+            Self::fingerprint_with_repo(&state, ui_model.read(cx).active_repo_index.get(&state));
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = Self::notify_fingerprint(&next);
+            let next_fingerprint =
+                Self::fingerprint_with_repo(&next, this.active_repo_index.get(&next));
 
             this.state = next;
             if next_fingerprint != this.notify_fingerprint {
@@ -327,6 +333,7 @@ impl ActionBarView {
             canvas_covered: false,
             store,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             _ui_model_subscription: subscription,
             root_view,
             notify_fingerprint,
@@ -554,8 +561,7 @@ impl ActionBarView {
     }
 
     fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     fn open_popover_at(

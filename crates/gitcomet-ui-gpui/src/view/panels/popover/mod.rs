@@ -187,6 +187,7 @@ pub(in super::super) struct PopoverHost {
     main_pane: Entity<MainPaneView>,
     extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
+    active_repo_index: ActiveRepoIndex,
     theme_mode: ThemeMode,
     date_time_format: DateTimeFormat,
     timezone: Timezone,

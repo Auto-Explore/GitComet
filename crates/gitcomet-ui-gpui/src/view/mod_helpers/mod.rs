@@ -973,9 +973,15 @@ pub(super) struct FocusedDiffPane {
     pub(super) labels: [SharedString; 2],
 }
 
+pub(super) struct WindowRepositories {
+    pub(super) active: ActiveRepoIndex,
+    pub(super) registered_workdirs: Arc<[std::path::PathBuf]>,
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
+    pub(super) repositories: WindowRepositories,
     pub(super) window_handle: gpui::AnyWindowHandle,
     pub(super) ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
@@ -1057,9 +1063,6 @@ pub struct GitCometView {
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
-    /// Workdirs last published to the window registry; rebuilt only when the
-    /// repo list changes rather than collected on every store snapshot.
-    pub(super) synced_repo_paths: std::sync::Arc<[std::path::PathBuf]>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) workspace_persist_seq: u64,
     #[cfg(test)]

@@ -17,6 +17,40 @@ pub(super) struct PresentedHistory {
 }
 
 impl HistoryView {
+    pub(super) fn next_history_page(&self) -> Option<(RepoId, &Arc<LogPage>)> {
+        let repo = self.active_repo()?;
+        let history = &repo.history_state;
+        let Loadable::Ready(page) = &history.log else {
+            return None;
+        };
+        if history.log_loading_more
+            || repo.loads_in_flight.log_in_flight()
+            || history.indexed.loading
+            || history.indexed.index.is_some()
+            || page.next_cursor.is_none()
+        {
+            return None;
+        }
+        self.history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request.repo_id == repo.id && Arc::ptr_eq(&cache.page, page))
+            .map(|_| (repo.id, page))
+    }
+
+    pub(super) fn load_next_history_page(&mut self, repo_id: RepoId, page: &Arc<LogPage>) {
+        if !self
+            .next_history_page()
+            .is_some_and(|(id, current)| id == repo_id && Arc::ptr_eq(current, page))
+        {
+            return;
+        }
+        let snapshot = Arc::downgrade(&self.state);
+        if !self.last_page_request.ptr_eq(&snapshot) {
+            self.last_page_request = snapshot;
+            self.store.dispatch(Msg::LoadMoreHistory { repo_id });
+        }
+    }
+
     pub(super) fn sync_history_viewport(
         &mut self,
         plan: &HistoryListPlan,

@@ -214,26 +214,18 @@ fn repo_activation_msg(
 /// toward the focus throttle too: the compositor's initial activation can
 /// arrive after RepoOpened and otherwise queues the same work a second time.
 fn note_opened_repos_for_activation(
-    previous: &AppState,
+    previous: &FxHashMap<RepoId, &RepoState>,
     next: &AppState,
+    open_ids: &FxHashSet<RepoId>,
     last_activation_dispatch: &mut FxHashMap<RepoId, Instant>,
     now: Instant,
 ) {
-    if previous.repos.len() == next.repos.len()
-        && previous.repos.iter().zip(&next.repos).all(|(old, new)| {
-            old.id == new.id
-                && matches!(old.open, Loadable::Ready(_)) == matches!(new.open, Loadable::Ready(_))
-        })
-    {
-        return;
-    }
-    last_activation_dispatch.retain(|id, _| next.repos.iter().any(|repo| repo.id == *id));
+    last_activation_dispatch.retain(|id, _| open_ids.contains(id));
     for repo in &next.repos {
         if matches!(repo.open, Loadable::Ready(_))
             && !previous
-                .repos
-                .iter()
-                .any(|old| old.id == repo.id && matches!(old.open, Loadable::Ready(_)))
+                .get(&repo.id)
+                .is_some_and(|old| matches!(old.open, Loadable::Ready(_)))
         {
             last_activation_dispatch.insert(repo.id, now);
         }
@@ -354,7 +346,7 @@ pub(crate) use update_check::{
 mod user_survey;
 use gitcomet_core::word_diff;
 
-use app_model::AppUiModel;
+use app_model::{ActiveRepoIndex, AppUiModel};
 use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
     HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
@@ -742,25 +734,18 @@ impl Element for UiScaleScrollCapture {
     }
 }
 
-fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
-    let repo_id = state.active_repo?;
-    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
-    Some((repo_id, repo.diff_state.diff_target.clone()?))
-}
-
-fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
-    let (repo_id, target) = active_diff_target(state)?;
-    let DiffTarget::WorkingTree { path, area, .. } = &target else {
+fn active_merge_view_target(repo: &RepoState) -> Option<&DiffTarget> {
+    let target = repo.diff_state.diff_target.as_ref()?;
+    let DiffTarget::WorkingTree { path, area, .. } = target else {
         return None;
     };
     if *area != DiffArea::Unstaged {
         return None;
     }
 
-    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
     repo.status_entry_for_path(DiffArea::Unstaged, path)
         .filter(|entry| entry.kind == FileStatusKind::Conflicted && entry.conflict.is_some())?;
-    Some((repo_id, target))
+    Some(target)
 }
 
 #[cfg(test)]

@@ -3,6 +3,248 @@
 use super::*;
 
 #[gpui::test]
+fn store_publications_apply_the_latest_snapshot_once_per_frame(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let source = Arc::new(store.clone());
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (send, receive) = smol::channel::bounded(1);
+    let applications = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (_poller, _subscription) = cx.update(|window, app| {
+        let model = view.read(app).ui_model.clone();
+        let count = applications.clone();
+        let subscription = app.observe(&model, move |_, _| count.set(count.get() + 1));
+        let poller = view.update(app, |_, cx| {
+            crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+                Poller::start(source.clone(), receive, model.downgrade(), window, cx)
+            })
+        });
+        (poller, subscription)
+    });
+
+    let publish = |revision: u64, cx: &mut gpui::VisualTestContext| {
+        let mut state = AppState {
+            repo_open_failure_revision: revision,
+            ..AppState::test_default()
+        };
+        for warning in 1..=revision.min(4) {
+            state.push_notification(gitcomet_state::model::AppNotification {
+                time: std::time::SystemTime::UNIX_EPOCH,
+                kind: gitcomet_state::model::AppNotificationKind::Warning,
+                message: format!("Warning {warning}"),
+            });
+        }
+        source.replace_snapshot_for_test(Arc::new(state));
+        let _ = send.try_send(StoreEvent::StateChanged);
+        cx.run_until_parked();
+    };
+    publish(1, cx);
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    for revision in 2..=4 {
+        publish(revision, cx);
+    }
+    assert_eq!(
+        applications.get(),
+        1,
+        "the first idle publication is prompt"
+    );
+    cx.update(|window, app| {
+        assert_eq!(view.read(app).state.repo_open_failure_revision, 1);
+        window.simulate_next_frame(app);
+        assert_eq!(view.read(app).state.repo_open_failure_revision, 1);
+    });
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 2);
+    cx.update(|_, app| {
+        let view = view.read(app);
+        assert_eq!(view.state.repo_open_failure_revision, 4);
+        let warnings: Vec<_> = view
+            .toast_host
+            .read(app)
+            .toasts_for_tests(app)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect();
+        assert_eq!(
+            warnings,
+            ["Warning 1", "Warning 2", "Warning 3", "Warning 4"]
+        );
+    });
+
+    publish(5, cx);
+    assert_eq!(applications.get(), 2);
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 3);
+    cx.update(|_, app| assert_eq!(view.read(app).state.repo_open_failure_revision, 5));
+
+    for (latest, count) in [(7, 4), (9, 5)] {
+        publish(latest - 1, cx);
+        publish(latest, cx);
+        cx.executor().advance_clock(Duration::from_millis(251));
+        cx.run_until_parked();
+        assert_eq!(
+            applications.get(),
+            count,
+            "a hidden window must drain its burst"
+        );
+        cx.update(|_, app| assert_eq!(view.read(app).state.repo_open_failure_revision, latest));
+    }
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(
+        applications.get(),
+        5,
+        "an idle window replayed a hidden publication"
+    );
+    publish(10, cx);
+    publish(11, cx);
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 6);
+    cx.update(|_, app| assert_eq!(view.read(app).state.repo_open_failure_revision, 11));
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 6);
+    publish(12, cx);
+    source.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(42))));
+    let _ = send.try_send(StoreEvent::StateChanged);
+    cx.run_until_parked();
+    assert_eq!(
+        applications.get(),
+        7,
+        "switching tabs preempts the idle batch"
+    );
+    cx.update(|_, app| assert_eq!(view.read(app).state.active_repo, Some(RepoId(42))));
+    source.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(43))));
+    let _ = send.try_send(StoreEvent::StateChanged);
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 7, "the next switch waits for a frame");
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+    assert_eq!(applications.get(), 8);
+    cx.update(|_, app| assert_eq!(view.read(app).state.active_repo, Some(RepoId(43))));
+}
+
+#[gpui::test]
+fn active_repository_lookup_handles_reordered_and_lagging_panes(cx: &mut gpui::TestAppContext) {
+    let mut first = view_state_with_active_ready_repo(RepoId(1));
+    let second = view_state_with_active_ready_repo(RepoId(2));
+    first.repos.extend(second.repos);
+    first.active_repo = Some(RepoId(2));
+    let first = Arc::new(first);
+    let mut reordered = (*first).clone();
+    reordered.repos.swap(0, 1);
+    let mut missing = reordered.clone();
+    missing.repos.remove(0);
+    let model = cx.new(|cx| AppUiModel::new(first.clone(), Default::default(), cx));
+    cx.update(|app| {
+        let slot = model.read(app).active_repo_index.clone();
+        assert_eq!(slot.position(&first), Some(1));
+        model.update(app, |model, cx| {
+            model.set_state(Arc::new(reordered.clone()), cx)
+        });
+        assert_eq!(slot.position(&reordered), Some(0));
+        assert_eq!(slot.get(&first).map(|r| r.id), Some(RepoId(2)));
+        assert!(slot.get(&missing).is_none());
+        missing.active_repo = None;
+        assert!(slot.get(&missing).is_none());
+    });
+}
+
+#[gpui::test]
+fn matching_selected_commit_details_end_the_idle_batch(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let source = Arc::new(store.clone());
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (send, receive) = smol::channel::bounded(1);
+    let _poller = cx.update(|window, app| {
+        let model = view.read(app).ui_model.downgrade();
+        view.update(app, |_, cx| {
+            crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+                Poller::start(source.clone(), receive, model, window, cx)
+            })
+        })
+    });
+    let publish = |state: &AppState, cx: &mut gpui::VisualTestContext| {
+        let snapshot = Arc::new(state.clone());
+        source.replace_snapshot_for_test(snapshot.clone());
+        let _ = send.try_send(StoreEvent::StateChanged);
+        cx.run_until_parked();
+        cx.update(|_, app| Arc::ptr_eq(&snapshot, &view.read(app).state))
+    };
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state
+        .repos
+        .extend(view_state_with_active_ready_repo(RepoId(2)).repos);
+    assert!(publish(&state, cx));
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+
+    let first = Arc::new(gitcomet_core::domain::CommitDetails {
+        id: CommitId("first".into()),
+        message: String::new(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: String::new(),
+        committed_at_unix: 0,
+        parent_ids: Vec::new(),
+        files: Vec::new(),
+    });
+    let second = Arc::new(gitcomet_core::domain::CommitDetails {
+        id: CommitId("second".into()),
+        ..(*first).clone()
+    });
+    state.repos[0].history_state.selected_commit = Some(first.id.clone());
+    state.repos[0].history_state.commit_details = Loadable::Loading;
+    assert!(!publish(&state, cx));
+    state.repos[1].history_state.selected_commit = Some(first.id.clone());
+    state.repos[1].history_state.commit_details = Loadable::Ready(first.clone());
+    assert!(!publish(&state, cx), "another repository is ready");
+    state.repos[0].history_state.commit_details = Loadable::Ready(second.clone());
+    assert!(
+        !publish(&state, cx),
+        "stale details do not match the selection"
+    );
+    state.repos[0].history_state.commit_details = Loadable::Ready(first);
+    assert!(
+        publish(&state, cx),
+        "the selected details are ready before the idle deadline"
+    );
+    assert!(!publish(&state, cx), "the frame slot has been used");
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+
+    assert!(!publish(&state, cx), "unchanged ready details still batch");
+    state.repos[0].history_state.selected_commit = Some(second.id.clone());
+    state.repos[0].history_state.commit_details = Loadable::Loading;
+    assert!(!publish(&state, cx));
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert!(matches!(
+            view.read(app).state.repos[0].history_state.commit_details,
+            Loadable::Loading
+        ))
+    });
+    cx.update(|window, app| window.simulate_next_frame(app));
+    cx.run_until_parked();
+    state.repos[0].history_state.commit_details = Loadable::Ready(second);
+    assert!(
+        publish(&state, cx),
+        "the loaded details replace the visible loading state"
+    );
+}
+
+#[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =

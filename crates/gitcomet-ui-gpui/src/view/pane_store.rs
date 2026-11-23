@@ -13,7 +13,14 @@ pub(crate) struct DiffBinding {
 
 impl DiffBinding {
     pub(in crate::view) fn repository(self, state: &AppState) -> Option<&RepoState> {
-        state.repos.iter().find(|repo| {
+        self.repository_with_index(state).map(|(_, repo)| repo)
+    }
+
+    pub(in crate::view) fn repository_with_index(
+        self,
+        state: &AppState,
+    ) -> Option<(usize, &RepoState)> {
+        state.repos.iter().enumerate().find(|(_, repo)| {
             repo.id == self.repo_id
                 && repo.lifetime() == self.lifetime
                 && repo.diff_sessions.contains_key(&self.view)
