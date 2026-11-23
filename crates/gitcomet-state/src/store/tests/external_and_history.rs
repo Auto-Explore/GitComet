@@ -3182,11 +3182,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
     let Loadable::Ready(repo_log) = &repo_state.history_state.log else {
         panic!("expected repo log ready");
     };
-    let Loadable::Ready(history_log) = &repo_state.history_state.log else {
-        panic!("expected history log ready");
-    };
 
-    assert!(Arc::ptr_eq(repo_log, history_log));
     assert_eq!(repo_log.commits.len(), 2);
     assert_eq!(repo_log.commits[1].id.as_ref(), "c2");
     assert_eq!(
@@ -3374,10 +3370,6 @@ fn log_loaded_bumps_log_rev() {
 
     assert!(
         state.repos[0].history_state.log_rev > log_before,
-        "repo log_rev should bump after LogLoaded"
-    );
-    assert!(
-        state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after LogLoaded"
     );
 }
@@ -3549,10 +3541,6 @@ fn set_history_scope_bumps_log_rev() {
         }),
     );
 
-    assert!(
-        state.repos[0].history_state.log_rev > log_before,
-        "repo log_rev should bump after SetHistoryScope"
-    );
     assert!(
         state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after SetHistoryScope"
