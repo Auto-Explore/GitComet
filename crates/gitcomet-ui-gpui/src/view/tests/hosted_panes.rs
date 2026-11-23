@@ -2898,12 +2898,13 @@ fn snapshot_markdown_images_resolve_relative_and_absolute_document_paths(
                 .expect("snapshot document image root");
             let resolved =
                 crate::view::rows::markdown_preview_image_source(Some(&root), "picture.svg");
-            let Some(crate::view::rows::MarkdownPreviewImageSource::File(resolved)) = resolved
+            let Some(crate::view::rows::MarkdownPreviewImageSource::File { workdir, relative }) =
+                resolved
             else {
                 panic!("local snapshot image should resolve");
             };
             assert_eq!(
-                resolved.canonicalize().unwrap(),
+                workdir.join(relative.as_ref()).canonicalize().unwrap(),
                 picture.canonicalize().unwrap()
             );
             assert!(

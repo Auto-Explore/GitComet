@@ -24,7 +24,7 @@ pub(in crate::view) struct WorktreeMarkdownPreview {
     pub(in crate::view) layout: rows::MarkdownDocumentLayoutCache,
     /// Pictures still decoding that already have someone waiting to repaint
     /// the pane when they finish.
-    pub(in crate::view) image_waits: FxHashSet<gpui::Resource>,
+    pub(in crate::view) image_waits: FxHashSet<crate::view::rows::MarkdownPreviewImageSource>,
 }
 
 impl Default for WorktreeMarkdownPreview {

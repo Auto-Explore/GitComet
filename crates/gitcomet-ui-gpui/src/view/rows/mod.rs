@@ -1220,20 +1220,22 @@ pub(in crate::view) use self::conflict_resolver::{
 };
 pub(in crate::view) use self::diff::blame_presentation::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
-#[cfg(test)]
-pub(in crate::view) use self::history::take_markdown_image_stats_for_tests;
 pub(in crate::view) use self::history::{
-    MarkdownDrawnPictures, MarkdownImageRoot, MarkdownPictureContext, MarkdownPreviewHoveredLink,
-    MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
-    MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
-    markdown_preview_alert_label, markdown_preview_document_path, markdown_preview_flow_image,
-    markdown_preview_highlighted_text, markdown_preview_image_source,
-    markdown_preview_inline_image, markdown_preview_justify, markdown_preview_local_link_missing,
-    markdown_preview_local_link_target, markdown_preview_marker_label,
-    markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
-    markdown_preview_row_background, markdown_preview_row_extent,
+    MAX_MARKDOWN_IMAGE_BYTES, MarkdownDrawnPictures, MarkdownImageAsset, MarkdownImageRoot,
+    MarkdownPictureContext, MarkdownPreviewHoveredLink, MarkdownPreviewImageSource,
+    MarkdownPreviewPictureSizes, MarkdownPreviewQuery, MarkdownPreviewRevealRequest,
+    MarkdownRemoteImageAccess, markdown_preview_alert_bar_color, markdown_preview_alert_label,
+    markdown_preview_document_path, markdown_preview_flow_image, markdown_preview_highlighted_text,
+    markdown_preview_image_location, markdown_preview_inline_image, markdown_preview_justify,
+    markdown_preview_local_link_missing, markdown_preview_local_link_target,
+    markdown_preview_marker_label, markdown_preview_remote_image_url,
+    markdown_preview_reveal_offset_y, markdown_preview_row_background, markdown_preview_row_extent,
     markdown_preview_styled_row_with_query, markdown_preview_task_checkbox,
     percent_decode_link_path, worktree_markdown_preview_bar_color,
+};
+#[cfg(test)]
+pub(in crate::view) use self::history::{
+    markdown_preview_image_source, take_markdown_image_stats_for_tests,
 };
 #[cfg(test)]
 pub(in crate::view) use self::markdown_document::markdown_block_estimate_for_tests;
