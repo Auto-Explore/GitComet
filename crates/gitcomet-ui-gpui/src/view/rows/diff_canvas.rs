@@ -247,6 +247,7 @@ pub(super) enum StreamedDiffTextSyntaxSource {
         mode: rows::DiffSyntaxMode,
     },
     Prepared {
+        viewport: gitcomet_syntax::PreparedSyntaxViewportRequest,
         document_text: Arc<str>,
         line_starts: Arc<[usize]>,
         document: rows::PreparedDiffSyntaxDocument,

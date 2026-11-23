@@ -52,9 +52,26 @@ pub(crate) struct PreparedSyntaxChunkBuildRequest {
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedSyntaxChunkBuildResult {
     pub(crate) chunk_key: PreparedSyntaxChunkKey,
-    pub(crate) chunk_tokens: Option<Vec<Arc<[SyntaxToken]>>>,
-    pub(crate) chunk_build_ms: u64,
+    pub(crate) built: Option<BuiltChunk>,
     pub(crate) thread_id: std::thread::ThreadId,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BuiltChunk {
+    pub(crate) tokens: Option<Vec<Arc<[SyntaxToken]>>>,
+    pub(crate) milliseconds: u64,
+}
+
+impl PreparedSyntaxChunkBuildResult {
+    pub(super) fn share_built_chunk(&self) {
+        if let Some(built) = &self.built {
+            merge_shared_prepared_document_chunk(
+                self.chunk_key.cache_key,
+                self.chunk_key.chunk_ix,
+                built.tokens.clone(),
+            );
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -365,7 +382,7 @@ pub(crate) fn merge_shared_prepared_document_chunk(
 }
 
 pub(crate) struct PreparedSyntaxChunkWorker {
-    pub(crate) sender: mpsc::Sender<PreparedSyntaxChunkBuildRequest>,
+    pub(super) sender: mpsc::Sender<ChunkCommand>,
     pub(crate) receiver: Mutex<mpsc::Receiver<PreparedSyntaxChunkBuildResult>>,
     pub(crate) deferred_results: Mutex<VecDeque<PreparedSyntaxChunkBuildResult>>,
 }
@@ -374,21 +391,38 @@ pub(crate) fn syntax_chunk_worker() -> Option<&'static PreparedSyntaxChunkWorker
     pub(crate) static WORKER: OnceLock<Option<PreparedSyntaxChunkWorker>> = OnceLock::new();
     WORKER
         .get_or_init(|| {
-            let (request_tx, request_rx) = mpsc::channel::<PreparedSyntaxChunkBuildRequest>();
+            let (request_tx, request_rx) = mpsc::channel::<ChunkCommand>();
             let (result_tx, result_rx) = mpsc::channel::<PreparedSyntaxChunkBuildResult>();
             let builder = std::thread::Builder::new().name("gitcomet-syntax-chunks".to_string());
             let _handle = builder
                 .spawn(move || {
-                    while let Ok(request) = request_rx.recv() {
-                        let (chunk_tokens, chunk_build_ms) = build_line_token_chunk_for_state(
-                            request.tree_state.as_ref(),
-                            request.line_count,
-                            request.chunk_key.chunk_ix,
-                        );
+                    let mut queue = ChunkQueue::default();
+                    loop {
+                        // Keep serving work even when producers continuously send subscriptions.
+                        for command in request_rx.try_iter().take(256) {
+                            queue.apply(command);
+                        }
+                        let Some((request, wanted)) = queue.take() else {
+                            let Ok(command) = request_rx.recv() else {
+                                break;
+                            };
+                            queue.apply(command);
+                            continue;
+                        };
+                        let built = wanted.then(|| {
+                            let (tokens, milliseconds) = build_line_token_chunk_for_state(
+                                request.tree_state.as_ref(),
+                                request.line_count,
+                                request.chunk_key.chunk_ix,
+                            );
+                            BuiltChunk {
+                                tokens,
+                                milliseconds,
+                            }
+                        });
                         let _ = result_tx.send(PreparedSyntaxChunkBuildResult {
                             chunk_key: request.chunk_key,
-                            chunk_tokens,
-                            chunk_build_ms,
+                            built,
                             thread_id: request.thread_id,
                         });
                     }

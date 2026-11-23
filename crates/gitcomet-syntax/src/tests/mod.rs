@@ -180,7 +180,10 @@ fn incremental_reparse_leaves_one_document_in_the_injection_cache() {
     }
 }
 
-fn prepare_test_document(language: DiffSyntaxLanguage, text: &str) -> PreparedSyntaxDocument {
+pub(crate) fn prepare_test_document(
+    language: DiffSyntaxLanguage,
+    text: &str,
+) -> PreparedSyntaxDocument {
     let input = treesitter_document_input_from_text(text);
     match prepare_treesitter_document_with_budget_reuse_text(
         language,

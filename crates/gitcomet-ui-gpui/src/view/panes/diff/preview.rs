@@ -696,6 +696,7 @@ impl DiffRenderer {
     /// still needs to set identity fields (path, loadable state, syntax
     /// language) separately.
     pub(in crate::view) fn reset_worktree_preview_source_state(&mut self) {
+        self.viewport_syntax.preview = Default::default();
         self.worktree_preview_source_path = None;
         self.worktree_preview_decode_key = None;
         self.worktree_preview_text_format = None;

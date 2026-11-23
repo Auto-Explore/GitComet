@@ -35,6 +35,7 @@ pub(in crate::view) fn worktree_preview_streamed_spec(
         let syntax = match (language, prepared_syntax_source) {
             (Some(language), Some(prepared_syntax_source)) => {
                 diff_canvas::StreamedDiffTextSyntaxSource::Prepared {
+                    viewport: gitcomet_syntax::PreparedSyntaxViewportRequest::current(),
                     document_text: Arc::clone(&prepared_syntax_source.document_text),
                     line_starts: Arc::clone(&prepared_syntax_source.line_starts),
                     document: prepared_syntax_source.document,
@@ -62,12 +63,24 @@ pub(in crate::view) fn worktree_preview_streamed_spec(
 }
 
 impl DiffRenderer {
+    fn sync_worktree_preview_segment_cache(&mut self) -> Option<usize> {
+        let path = self.worktree_preview_path.as_ref()?;
+        let line_count = self.worktree_preview_line_count()?;
+        if self.worktree_preview_segments_cache_path.as_ref() != Some(path) {
+            self.worktree_preview_segments_cache_path = Some(path.clone());
+            self.worktree_preview_syntax_language = diff_syntax_language_for_path(path);
+            self.worktree_preview_segments_cache.clear();
+        }
+        Some(line_count)
+    }
+
     pub(in crate::view) fn render_worktree_preview_rows(
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.preview.begin();
         let tab_width = this.display_tab_width;
 
         let min_width = this.diff_horizontal_content_width();
@@ -79,22 +92,9 @@ impl DiffRenderer {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let theme = this.theme;
-        let Some(path) = this.worktree_preview_path.as_ref() else {
+        let Some(line_count) = this.sync_worktree_preview_segment_cache() else {
             return Vec::new();
         };
-        let Some(line_count) = this.worktree_preview_line_count() else {
-            return Vec::new();
-        };
-
-        let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
-            Some(p) => p != path,
-            None => true,
-        };
-        if should_clear_cache {
-            this.worktree_preview_segments_cache_path = Some(path.clone());
-            this.worktree_preview_syntax_language = diff_syntax_language_for_path(path);
-            this.worktree_preview_segments_cache.clear();
-        }
 
         let language = this.worktree_preview_syntax_language;
         let syntax_document = this.worktree_preview_syntax_document_for_render(cx);

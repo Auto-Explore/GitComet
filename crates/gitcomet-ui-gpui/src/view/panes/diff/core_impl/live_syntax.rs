@@ -25,7 +25,12 @@ impl DiffRenderer {
             self.live_syntax_background_gate_for_tests.clone()
         };
         cx.spawn(async move |view: gpui::WeakEntity<Self>, cx| {
-            let output = crate::ui_runtime::background_compute(compute).await;
+            let output = crate::ui_runtime::background_compute_with_priority(
+                cx.background_executor(),
+                gpui::Priority::High,
+                compute,
+            )
+            .await;
             // Hold completed output so edits and destruction race the adoption,
             // rather than merely delaying when computation starts.
             #[cfg(test)]
@@ -132,7 +137,7 @@ impl DiffRenderer {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.syntax_chunk_poll_task.is_some() {
+        if self.viewport_syntax.poll.is_some() {
             return;
         }
 
@@ -140,7 +145,7 @@ impl DiffRenderer {
             while self.apply_prepared_syntax_chunk_updates(cx) {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            self.syntax_chunk_poll_task = None;
+            self.viewport_syntax.poll = None;
             return;
         }
 
@@ -157,7 +162,7 @@ impl DiffRenderer {
                 smol::Timer::after(std::time::Duration::from_millis(16)).await;
             },
         );
-        self.syntax_chunk_poll_task = Some(task);
+        self.viewport_syntax.poll = Some(task);
     }
 
     pub(super) fn apply_prepared_syntax_chunk_updates(
@@ -204,7 +209,7 @@ impl DiffRenderer {
 
         let pending = rows::has_pending_prepared_diff_syntax_chunk_builds();
         if !pending {
-            self.syntax_chunk_poll_task = None;
+            self.viewport_syntax.poll = None;
         }
         pending
     }
@@ -700,11 +705,12 @@ impl DiffRenderer {
                         None,
                     )
                 };
-                let parsed = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(prepare_document).await
-                } else {
-                    prepare_document()
-                };
+                let parsed = crate::ui_runtime::background_compute_with_priority(
+                    cx.background_executor(),
+                    gpui::Priority::High,
+                    prepare_document,
+                )
+                .await;
 
                 let _ = view.update(cx, |this, cx| {
                     // Stale: the source changed while we were parsing. That

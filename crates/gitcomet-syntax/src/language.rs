@@ -942,6 +942,11 @@ pub(super) fn request_highlight_spec_warmup(language: DiffSyntaxLanguage) {
     }
 }
 
+/// Compile this language's process-wide highlight queries on a background caller.
+pub fn warm_highlight_spec(language: DiffSyntaxLanguage) {
+    let _ = tree_sitter_highlight_spec(language);
+}
+
 pub(super) fn tree_sitter_highlight_spec(
     language: DiffSyntaxLanguage,
 ) -> Option<&'static TreesitterHighlightSpec> {

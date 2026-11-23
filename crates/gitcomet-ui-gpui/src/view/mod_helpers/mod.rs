@@ -978,6 +978,14 @@ pub(super) struct WindowRepositories {
     pub(super) registered_workdirs: Arc<[std::path::PathBuf]>,
 }
 
+#[derive(Default)]
+pub(super) struct WindowStartupWork {
+    pub(super) initial_frame_complete: bool,
+    pub(super) syntax_warmups:
+        FxHashMap<RepoId, (gitcomet_state::model::RepoLifetime, gpui::Task<()>)>,
+    pub(super) large_file_tools: super::large_file_tools_probe::LargeFileToolsProbeOwner,
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -1075,8 +1083,7 @@ pub struct GitCometView {
     pub(super) signing_tools_probe_seq: u64,
     pub(super) signing_tools_probe_in_flight: bool,
     pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
-    /// Background `git lfs` / `git annex` detection; rerun after a Git change.
-    pub(super) large_file_tools_probe: super::large_file_tools_probe::LargeFileToolsProbeOwner,
+    pub(super) startup_work: WindowStartupWork,
     pub(super) _large_file_tools_window_closed: gpui::Subscription,
     #[cfg(test)]
     pub(super) large_file_tools_detector_for_test:

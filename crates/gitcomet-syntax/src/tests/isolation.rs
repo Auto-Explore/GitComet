@@ -61,8 +61,10 @@ fn reset_rejects_late_chunk_results_and_document_seeds() {
             cache_key: old.cache_key,
             chunk_ix: 0,
         },
-        chunk_tokens: None,
-        chunk_build_ms: 0,
+        built: Some(BuiltChunk {
+            tokens: None,
+            milliseconds: 0,
+        }),
         thread_id: std::thread::current().id(),
     };
     assert!(should_apply_chunk_build_result(

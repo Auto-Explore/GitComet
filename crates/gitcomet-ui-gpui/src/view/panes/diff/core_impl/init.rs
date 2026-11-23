@@ -471,7 +471,7 @@ impl DiffRenderer {
             file_diff_cache_inflight_signature: 0,
             file_diff_syntax_generation: 0,
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
-            syntax_chunk_poll_task: None,
+            viewport_syntax: Default::default(),
             prepared_syntax_documents: FxHashMap::default(),
             prepared_syntax_document_insert_sequence: 0,
             file_diff_syntax_availability: [None; 2],

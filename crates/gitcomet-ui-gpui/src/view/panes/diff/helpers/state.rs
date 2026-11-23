@@ -115,6 +115,27 @@ pub(in crate::view) enum PreparedSyntaxViewMode {
     WorktreePreview,
 }
 
+#[derive(Default)]
+pub(in crate::view) struct ViewportSyntax {
+    pub(in crate::view) file: FileSyntaxViewports,
+    pub(in crate::view) preview: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) conflict: ConflictSyntaxViewports,
+    pub(in crate::view) poll: Option<gpui::Task<()>>,
+}
+
+#[derive(Default)]
+pub(in crate::view) struct ConflictSyntaxViewports {
+    pub(in crate::view) columns: ThreeWaySides<gitcomet_syntax::PreparedSyntaxViewport>,
+    pub(in crate::view) compare: gitcomet_syntax::PreparedSyntaxViewport,
+}
+
+#[derive(Default)]
+pub(in crate::view) struct FileSyntaxViewports {
+    pub(in crate::view) inline: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) old: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) new: gitcomet_syntax::PreparedSyntaxViewport,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) struct PreparedSyntaxDocumentKey {
     pub(in crate::view) repo_id: DiffSourceId,
@@ -843,7 +864,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) file_diff_syntax_availability: [Option<bool>; 2],
     pub(in crate::view) file_diff_resident_syntax_inflight: bool,
-    pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
+    pub(in crate::view) viewport_syntax: ViewportSyntax,
     pub(in crate::view) prepared_syntax_documents:
         FxHashMap<PreparedSyntaxDocumentKey, CachedPreparedSyntaxDocument>,
     pub(in crate::view) prepared_syntax_document_insert_sequence: u64,

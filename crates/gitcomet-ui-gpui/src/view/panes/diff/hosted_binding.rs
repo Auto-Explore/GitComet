@@ -622,6 +622,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.file.inline.begin();
         Self::render_projected(this, range, None, window, cx)
     }
     pub(in crate::view) fn render_projected_left(
@@ -630,6 +631,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.file.old.begin();
         Self::render_projected(this, range, Some(DiffLineSide::Old), window, cx)
     }
     pub(in crate::view) fn render_projected_right(
@@ -638,6 +640,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.file.new.begin();
         Self::render_projected(this, range, Some(DiffLineSide::New), window, cx)
     }
     fn render_projected(

@@ -2004,6 +2004,11 @@ impl GitRepository for GixRepo {
         self.list_worktree_files_impl()
     }
 
+    fn sample_tracked_file_paths(&self, limit: std::num::NonZeroUsize) -> Result<Vec<PathBuf>> {
+        let _operation = self.operation_lease()?;
+        self.sample_tracked_file_paths_impl(limit)
+    }
+
     fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {
         let _operation = self.operation_lease()?;
         self.list_tree_files_at_commit_impl(commit_id)

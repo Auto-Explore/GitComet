@@ -9,6 +9,32 @@ use std::sync::atomic::AtomicBool;
 use super::GixRepo;
 
 impl GixRepo {
+    pub(super) fn sample_tracked_file_paths_impl(
+        &self,
+        limit: std::num::NonZeroUsize,
+    ) -> Result<Vec<PathBuf>> {
+        use gix::index::entry::Mode;
+        let repo = self.repo();
+        let Some(index) = repo
+            .try_index()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?
+        else {
+            return Ok(Vec::new());
+        };
+        let entries = index.entries();
+        let stride = entries.len().div_ceil(limit.get()).max(1);
+        Ok(entries
+            .iter()
+            .step_by(stride)
+            .filter(|entry| matches!(entry.mode, Mode::FILE | Mode::FILE_EXECUTABLE))
+            .filter_map(|entry| {
+                gix::path::from_bstr(entry.path(&index))
+                    .ok()
+                    .map(|path| path.into_owned())
+            })
+            .collect())
+    }
+
     pub(super) fn list_worktree_files_impl(&self) -> Result<Vec<FileEntry>> {
         let repo = self.repo();
         let index = repo
@@ -287,6 +313,24 @@ mod tests {
         write_file(workdir, path, contents);
         git_success(workdir, &["add", path]);
         git_success(workdir, &["commit", "-m", message]);
+    }
+
+    #[test]
+    fn tracked_sample_is_bounded_and_spans_the_index_in_a_clean_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        for path in ["a.c", "b.c", "c.c", "d.rs", "e.rs", "f.rs"] {
+            write_file(workdir, path, "");
+        }
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-m", "tracked languages"]);
+        let repo = open_repo(workdir);
+        let limit = std::num::NonZeroUsize::new(2).unwrap();
+        assert_eq!(
+            repo.sample_tracked_file_paths_impl(limit).unwrap(),
+            [Path::new("a.c"), Path::new("d.rs")]
+        );
     }
 
     #[test]

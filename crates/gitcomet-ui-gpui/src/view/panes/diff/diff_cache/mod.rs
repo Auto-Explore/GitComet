@@ -274,6 +274,7 @@ impl DiffRenderer {
 
 impl DiffRenderer {
     pub(in crate::view) fn advance_file_diff_syntax_generation(&mut self) {
+        self.viewport_syntax.file = Default::default();
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_pair_syntax_text.clear();
         self.file_diff_click_syntax_inflight.clear();

@@ -345,6 +345,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.base.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Base, window, cx)
     }
 
@@ -354,6 +355,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.ours.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Ours, window, cx)
     }
 
@@ -363,6 +365,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.theirs.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
@@ -439,6 +442,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.ours.begin();
         Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Ours, window, cx)
     }
 
@@ -448,6 +452,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.theirs.begin();
         Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Theirs, window, cx)
     }
 
@@ -1774,6 +1779,7 @@ impl DiffRenderer {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.compare.begin();
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();

@@ -1262,7 +1262,7 @@ impl GitCometView {
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
             signing_tools_probe_cancellation: Default::default(),
-            large_file_tools_probe: Default::default(),
+            startup_work: Default::default(),
             _large_file_tools_window_closed: large_file_tools_window_closed,
             #[cfg(test)]
             large_file_tools_detector_for_test: None,
@@ -1381,7 +1381,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
-        view.schedule_large_file_tools_after_initial_frame(window, cx);
+        view.schedule_after_initial_frame(window, cx);
 
         view.sync_workspace_and_registry(cx);
         if view.is_home_screen_active() {
@@ -1857,6 +1857,27 @@ impl GitCometView {
 
     pub(super) fn active_repo(&self) -> Option<&RepoState> {
         self.repositories.active.get(&self.state)
+    }
+
+    fn schedule_after_initial_frame(&self, window: &mut Window, cx: &gpui::Context<Self>) {
+        let view = cx.weak_entity();
+        // GPUI draws once while opening a window without presenting it. Its
+        // next-frame callbacks run before that platform frame's presentation,
+        // so one callback would still compete with the first submitted frame.
+        // A second callback leaves that platform presentation attempt free to
+        // finish, even when startup is slow. This is not a GPU completion fence:
+        // a lost device or stale atlas can still require a later presentation.
+        window.on_next_frame(move |window, _cx| {
+            window.on_next_frame(move |_window, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.startup_work.initial_frame_complete = true;
+                    // Read the current snapshot/runtime: preferences or a
+                    // Settings result may have changed while frames were pending.
+                    view.refresh_large_file_tools(cx);
+                    view.warm_active_repository_syntax(cx);
+                });
+            });
+        });
     }
 
     pub(super) fn drive_focused_mergetool_bootstrap(&mut self) {

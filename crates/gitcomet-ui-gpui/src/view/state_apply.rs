@@ -758,8 +758,12 @@ impl GitCometView {
         self.drive_submodule_diff_bootstrap();
 
         if workspace_membership_changed {
+            self.startup_work
+                .syntax_warmups
+                .retain(|id, _| open_ids.contains(id));
             self.sync_workspace_and_registry(cx);
         }
+        self.warm_active_repository_syntax(cx);
 
         git_runtime_changed
             || prev_annex_rail != annex_rail

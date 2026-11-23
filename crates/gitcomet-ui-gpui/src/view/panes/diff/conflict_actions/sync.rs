@@ -296,6 +296,7 @@ impl DiffRenderer {
             );
         self.conflict_three_way_prepared_syntax_documents = three_way_prepared_docs;
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
+        self.viewport_syntax.conflict = Default::default();
         let shared_path = gitcomet_state::msg::RepoPath::from(path.clone());
 
         // Build state with core/shared fields; mode-dependent visible state

@@ -18,6 +18,7 @@ impl DiffRenderer {
             return;
         }
         self.conflict_resolver.view_mode = view_mode;
+        self.viewport_syntax.conflict.columns = Default::default();
         self.set_mergetool_view_three_way_and_persist(
             view_mode == ConflictResolverViewMode::ThreeWay,
             cx,

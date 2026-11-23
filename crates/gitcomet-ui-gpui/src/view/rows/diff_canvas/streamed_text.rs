@@ -488,6 +488,7 @@ fn streamed_diff_text_relative_prepared_highlights(
     slice_range: &Range<usize>,
 ) -> Option<PreparedDocumentByteRangeHighlights> {
     let StreamedDiffTextSyntaxSource::Prepared {
+        viewport,
         document_text,
         line_starts,
         document,
@@ -510,6 +511,7 @@ fn streamed_diff_text_relative_prepared_highlights(
         return Some(PreparedDocumentByteRangeHighlights::default());
     }
 
+    let _syntax_pass = viewport.enter();
     rows::request_syntax_highlights_for_prepared_document_byte_range(
         theme,
         document_text.as_ref(),

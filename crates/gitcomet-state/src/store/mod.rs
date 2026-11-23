@@ -1366,13 +1366,22 @@ impl AppStore {
         Arc::clone(&state)
     }
 
+    /// Get this lifetime's currently open backend. Waits for the store worker.
+    pub fn attached_repository(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+    ) -> Option<Arc<dyn GitRepository>> {
+        self.msg_tx.repository(repo_id, lifetime)
+    }
+
     /// Reads a backend handle for this repository lifetime on a worker thread.
     /// This waits for the store worker; do not call from the UI thread or a reducer.
     /// An old handle never resolves to a reopened repository with the same id.
     /// A parked tab is read through a handle opened for the caller, which
     /// leaves the tab parked.
     pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
-        self.msg_tx.repository(repo_id, lifetime).or_else(|| {
+        self.attached_repository(repo_id, lifetime).or_else(|| {
             let workdir = self
                 .snapshot()
                 .repos

@@ -847,6 +847,7 @@ impl DiffRenderer {
         self.conflict_resolved_outline_stash = None;
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
+        self.viewport_syntax.conflict = Default::default();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_three_way_query_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
@@ -904,6 +905,7 @@ impl DiffRenderer {
         }
 
         self.diff_view = next;
+        self.viewport_syntax.file = Default::default();
         // Inline keys styled segments by `row_ix` while split keys them by
         // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
         // the same `split_left`/`split_right` epochs, so the two key spaces
@@ -1018,6 +1020,7 @@ impl DiffRenderer {
         }
 
         self.diff_content_mode = next;
+        self.viewport_syntax.file = Default::default();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.clear_diff_text_style_caches();
