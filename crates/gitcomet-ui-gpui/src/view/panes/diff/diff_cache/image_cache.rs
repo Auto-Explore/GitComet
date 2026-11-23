@@ -165,7 +165,7 @@ fn decode_file_image_diff_bytes(
     match format {
         gpui::ImageFormat::Svg => {
             if let Some(path) = cached_path {
-                *path = Some(cached_image_diff_path(bytes, "svg")?);
+                *path = cached_normalized_svg(&svg::parse(bytes).ok()?);
             }
             None
         }
@@ -552,9 +552,11 @@ fn decode_file_image_diff_preview_side(
                 };
             }
             DecodedImageDiffPreview {
+                cached_path: source
+                    .as_ref()
+                    .and_then(|source| cached_normalized_svg(source.svg()?)),
                 source,
                 render: None,
-                cached_path: cached_image_diff_path(bytes, "svg"),
             }
         }
         _ => DecodedImageDiffPreview {
@@ -573,9 +575,10 @@ fn file_image_diff_signature(file: &gitcomet_core::domain::FileDiffImage) -> u64
     hasher.finish()
 }
 
-fn cached_image_diff_path(bytes: &[u8], extension: &str) -> Option<std::path::PathBuf> {
+fn cached_normalized_svg(tree: &resvg::usvg::Tree) -> Option<std::path::PathBuf> {
+    let normalized = tree.to_string(&resvg::usvg::WriteOptions::default());
     cleanup_image_diff_cache_startup_once();
-    image_diff_cache_path(&image_diff_cache_dir().ok()?, bytes, extension).ok()
+    image_diff_cache_path(&image_diff_cache_dir().ok()?, normalized.as_bytes(), "svg").ok()
 }
 
 /// Content-addressed cache file, written once and reused on later rebuilds.

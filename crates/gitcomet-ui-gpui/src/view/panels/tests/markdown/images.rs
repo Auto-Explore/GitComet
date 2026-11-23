@@ -725,6 +725,43 @@ fn an_svg_root_background_is_painted_under_the_picture(cx: &mut gpui::TestAppCon
     fixture.cleanup();
 }
 
+#[gpui::test]
+fn a_markdown_svg_with_an_external_image_uses_the_fallback(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(9_432),
+        "markdown_svg_external_image",
+        "![chart](chart.svg)\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/chart.svg"),
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><image href="not-in-the-document.png" width="40" height="20"/></svg>"#,
+    )
+    .unwrap();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let source = crate::view::rows::MarkdownPreviewImageSource::File {
+            workdir: Arc::from(fixture.workdir.as_path()),
+            relative: Arc::from(std::path::Path::new("docs/chart.svg")),
+        };
+        let result = window
+            .get_asset::<crate::view::rows::MarkdownImageAsset>(&source, app)
+            .expect("preview checked the SVG");
+        assert!(matches!(result, Err(gpui::ImageCacheError::Asset(_))));
+    });
+    fixture.cleanup();
+}
+
 fn diff_scroll_offset_y(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,

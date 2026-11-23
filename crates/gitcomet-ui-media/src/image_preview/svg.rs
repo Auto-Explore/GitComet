@@ -1,5 +1,6 @@
 //! Font resolution and rasterization shared by bounded previews and detail tiles.
 use resvg::{tiny_skia, usvg};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 // Filters need a whole-image canvas and can allocate additional intermediate
@@ -19,9 +20,16 @@ static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     Arc::new(fonts)
 });
 
-static OPTIONS: LazyLock<usvg::Options<'static>> = LazyLock::new(|| {
+static OPTIONS: LazyLock<usvg::Options<'static>> =
+    LazyLock::new(|| svg_options(Box::new(|_, _| None)));
+
+fn svg_options(resolve_string: usvg::ImageHrefStringResolverFn<'_>) -> usvg::Options<'_> {
     let select_font = usvg::FontResolver::default_font_selector();
     usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string,
+            ..Default::default()
+        },
         font_resolver: usvg::FontResolver {
             select_font: Box::new(move |font, fonts| {
                 // As in GPUI, defer the font scan until a document contains text.
@@ -40,10 +48,20 @@ static OPTIONS: LazyLock<usvg::Options<'static>> = LazyLock::new(|| {
         },
         ..Default::default()
     }
-});
+}
 
 pub fn parse(bytes: &[u8]) -> Result<usvg::Tree, usvg::Error> {
     usvg::Tree::from_data(bytes, &OPTIONS)
+}
+
+pub fn requests_external_images(bytes: &[u8]) -> Result<bool, usvg::Error> {
+    let external = AtomicBool::new(false);
+    let options = svg_options(Box::new(|_, _| {
+        external.store(true, Ordering::Relaxed);
+        None
+    }));
+    usvg::Tree::from_data(bytes, &options)?;
+    Ok(external.load(Ordering::Relaxed))
 }
 
 /// Opaque RGBA in global device-pixel coordinates.

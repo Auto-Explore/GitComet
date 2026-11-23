@@ -361,6 +361,7 @@ impl DiffRenderer {
                             .into_any_element()
                     } else if self.file_image_diff_cache_failed {
                         components::empty_state(theme, "Diff", "Preview unavailable.")
+                            .debug_selector(|| "image_preview_unavailable".into())
                             .into_any_element()
                     } else {
                         use crate::view::image_preview::Input;
