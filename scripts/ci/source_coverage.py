@@ -1,5 +1,6 @@
 """Measure Rust lines in the shipped GitComet binaries hit by the native test suites."""
 
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -180,6 +181,22 @@ def lock_build(lock):
         raise RuntimeError("another coverage run owns this checkout's instrumented build") from error
 
 
+def publish_reports(staged, output):
+    output.mkdir(exist_ok=True)
+    previous = staged.parent / "previous"
+    previous.mkdir()
+    with ExitStack() as rollback:
+        for name in ("html", "lcov.info", "summary.md"):
+            destination = output / name
+            if destination.exists():
+                backup = previous / name
+                destination.replace(backup)
+                rollback.callback(backup.replace, destination)
+            (staged / name).replace(destination)
+            rollback.callback(destination.replace, staged / name)
+        rollback.pop_all()
+
+
 def main():
     TARGET.mkdir(exist_ok=True)
     output = TARGET / "llvm-cov"
@@ -193,15 +210,7 @@ def main():
             subprocess.run(["genhtml", "--quiet", "--no-function-coverage", "--legend",
                             "--title", "GitComet source line coverage", "--output-directory",
                             report / "html", report / "lcov.info"], check=True, cwd=ROOT)
-            previous = work / "previous"
-            if output.exists():
-                output.rename(previous)
-            try:
-                report.rename(output)
-            except OSError:
-                if previous.exists():
-                    previous.rename(output)
-                raise
+            publish_reports(report, output)
         print((output / "summary.md").read_text(encoding="utf-8"))
         print(f"LCOV: {output / 'lcov.info'}\nHTML: {output / 'html/index.html'}")
 

@@ -41,5 +41,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gitcomet-linux-source-coverage
-          path: target/llvm-cov/
+          path: |
+            target/llvm-cov/summary.md
+            target/llvm-cov/lcov.info
+            target/llvm-cov/html/
           if-no-files-found: error

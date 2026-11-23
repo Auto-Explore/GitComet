@@ -81,3 +81,25 @@ class ProductLineCoverageTests(unittest.TestCase):
                 (raw / "ff-pool_0.profraw").touch()
                 with self.assertRaisesRegex(ValueError, "outside its Cargo executable inventory"):
                     coverage.test_traces(root, raw, binaries)
+
+    def test_publishing_preserves_other_reports_and_restores_the_last_success_on_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "llvm-cov"
+            output.mkdir()
+            (output / "baseline.info").write_text("saved baseline")
+            for attempt in ("first", "incomplete"):
+                staged = root / attempt / "report"
+                staged.mkdir(parents=True)
+                (staged / "html").mkdir()
+                (staged / "html/index.html").write_text(attempt)
+                (staged / "lcov.info").write_text(attempt)
+                if attempt == "first":
+                    (staged / "summary.md").write_text(attempt)
+                    coverage.publish_reports(staged, output)
+                else:
+                    with self.assertRaises(FileNotFoundError):
+                        coverage.publish_reports(staged, output)
+            for name in ("html/index.html", "lcov.info", "summary.md"):
+                self.assertEqual((output / name).read_text(), "first")
+            self.assertEqual((output / "baseline.info").read_text(), "saved baseline")
