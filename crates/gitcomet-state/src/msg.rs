@@ -13,6 +13,7 @@ mod repo_external_change;
 mod repo_path;
 mod repo_path_list;
 mod repository_requirement;
+mod stage;
 mod status;
 mod store_event;
 
@@ -37,6 +38,7 @@ pub(crate) use repo_command_kind::worktree_checkout_label;
 pub use repo_external_change::{ChangedPaths, MAX_CHANGED_PATHS, RepoExternalChange};
 pub use repo_path::RepoPath;
 pub use repo_path_list::RepoPathList;
+pub use stage::{StageGuard, StageRequest, StageSelection, conflicted_stage_paths};
 pub use store_event::StoreEvent;
 
 mod fetch;

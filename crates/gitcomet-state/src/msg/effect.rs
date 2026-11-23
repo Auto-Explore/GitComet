@@ -320,13 +320,9 @@ pub enum Effect {
         auth: Option<StagedGitAuth>,
     },
 
-    StagePath {
+    Stage {
         repo_id: RepoId,
-        path: PathBuf,
-    },
-    StagePaths {
-        repo_id: RepoId,
-        paths: RepoPathList,
+        request: super::StageRequest,
     },
     UnstagePath {
         repo_id: RepoId,
@@ -453,8 +449,7 @@ impl Effect {
             | Self::ForceDeleteBranch { .. }
             | Self::DeleteBranches { .. }
             | Self::CloneRepo { .. }
-            | Self::StagePath { .. }
-            | Self::StagePaths { .. }
+            | Self::Stage { .. }
             | Self::UnstagePath { .. }
             | Self::UnstagePaths { .. }
             | Self::DiscardWorktreeChangesPath { .. }

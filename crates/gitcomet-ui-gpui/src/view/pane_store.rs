@@ -79,6 +79,12 @@ fn bound_worktree(state: &AppState, binding: DiffBinding) -> Option<std::path::P
 }
 
 impl PaneStore {
+    pub(in crate::view) fn stage_status_store(&self) -> Option<Arc<AppStore>> {
+        self.store
+            .upgrade()
+            .filter(|_| !self.read_only && self.policy.allow_stage)
+    }
+
     pub fn repository(
         &self,
         repo_id: RepoId,

@@ -52,17 +52,21 @@ impl GitCometView {
                 this,
                 repo_id,
                 paths,
+                crate::view::conflict_markers::StageIntent::Command { offer_confirmation },
                 window,
                 cx,
-                move |this, paths, unresolved, window, cx| {
-                    if unresolved.is_empty() {
-                        crate::view::status_actions::stage_or_unstage_paths(
+                move |this, paths, check, window, cx| {
+                    if let crate::view::conflict_markers::MarkerCheck::Clear(guard) = check {
+                        crate::view::status_actions::stage_checked(
                             &this.store,
                             repo_id,
-                            DiffArea::Unstaged,
-                            paths,
+                            gitcomet_state::msg::StageSelection::Paths(paths.into()),
+                            guard,
                         );
-                    } else if offer_confirmation {
+                    } else if let crate::view::conflict_markers::MarkerCheck::Marked(unresolved) =
+                        check
+                        && offer_confirmation
+                    {
                         this.open_popover_centered(
                             PopoverKind::StageConflictMarkersConfirm {
                                 repo_id,

@@ -2548,16 +2548,16 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::StagePath {
+            Effect::Stage {
                 repo_id,
-                path: PathBuf::from("tracked.txt"),
+                request: crate::msg::StageRequest::path(PathBuf::from("tracked.txt")),
             },
             1,
         ),
         (
-            Effect::StagePaths {
+            Effect::Stage {
                 repo_id,
-                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
+                request: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
             },
             1,
         ),

@@ -7,7 +7,7 @@ clock-calls gitcomet-git-gix 57 -
 clock-calls gitcomet-state 56 -
 clock-calls gitcomet-ui-gpui 85 -
 diff-renderer-refs gitcomet-ui-gpui 1662 -
-enum-variants gitcomet-state::Effect 74 -
+enum-variants gitcomet-state::Effect 73 -
 enum-variants gitcomet-state::InternalMsg 81 -
 enum-variants gitcomet-state::Msg 233 -
 fn-lines crates/gitcomet-conflict-resolver/src/projection.rs::from_segments 662 -

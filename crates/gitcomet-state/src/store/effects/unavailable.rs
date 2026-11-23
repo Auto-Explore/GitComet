@@ -524,11 +524,8 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::DeleteBranches { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranches, runtime, &send)
         }
-        Effect::StagePath { repo_id, .. } => {
-            send_repo_action_unavailable(repo_id, RepoActionKind::StagePath, runtime, &send)
-        }
-        Effect::StagePaths { repo_id, .. } => {
-            send_repo_action_unavailable(repo_id, RepoActionKind::StagePaths, runtime, &send)
+        Effect::Stage { repo_id, request } => {
+            send_repo_action_unavailable(repo_id, request.selection.action(), runtime, &send)
         }
         Effect::UnstagePath { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::UnstagePath, runtime, &send)

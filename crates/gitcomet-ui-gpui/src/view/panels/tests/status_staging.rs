@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod fixture;
 mod line_keys;
+mod marker_handoff;
 mod next_file_advance;
 use fixture::{clean_repository_template, restore_repository};
 

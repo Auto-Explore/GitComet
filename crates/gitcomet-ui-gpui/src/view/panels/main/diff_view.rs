@@ -183,6 +183,7 @@ impl DiffRenderer {
         if diff_state.content_preview {
             return false;
         }
+        let target_revision = diff_state.diff_target_rev;
         let Some(diff_target) = diff_state.diff_target.clone() else {
             return false;
         };
@@ -198,13 +199,15 @@ impl DiffRenderer {
         let paths = selected.unwrap_or_else(|| vec![path.clone()]);
         let finish = move |this: &mut Self,
                            paths: Vec<std::path::PathBuf>,
-                           unresolved: Vec<std::path::PathBuf>,
+                           check: crate::view::conflict_markers::MarkerCheck,
                            window: &mut Window,
                            cx: &mut gpui::Context<Self>| {
             let Some(repo) = this.active_repo() else {
                 return;
             };
-            if this.bound_diff_state(repo).diff_target.as_ref() != Some(&diff_target) {
+            if this.bound_diff_state(repo).diff_target.as_ref() != Some(&diff_target)
+                || this.bound_diff_state(repo).diff_target_rev != target_revision
+            {
                 return;
             }
             let status_ready =
@@ -230,54 +233,74 @@ impl DiffRenderer {
                 } else {
                     this.status_single_selection_for_shortcut(repo_id, area, &path, cx)
                 };
-            if !unresolved.is_empty() {
-                let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-                this.open_popover_at(
-                    PopoverKind::StageConflictMarkersConfirm {
-                        repo_id,
-                        paths,
-                        unresolved,
-                        clear_selection,
-                    },
-                    anchor,
-                    window,
-                    cx,
-                );
-                cx.notify();
-                return;
-            }
+            let guard = match check {
+                crate::view::conflict_markers::MarkerCheck::Clear(guard) => guard,
+                crate::view::conflict_markers::MarkerCheck::Marked(unresolved) => {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                    this.open_popover_at(
+                        PopoverKind::StageConflictMarkersConfirm {
+                            repo_id,
+                            paths,
+                            unresolved,
+                            clear_selection,
+                        },
+                        anchor,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                    return;
+                }
+            };
             if clear_selection {
                 this.clear_status_selection_for_shortcut(repo_id, cx);
             }
-            if multi {
-                crate::view::status_actions::stage_or_unstage_paths(
-                    &this.store,
-                    repo_id,
-                    area,
-                    paths,
-                );
+            let selection = if multi {
+                gitcomet_state::msg::StageSelection::Paths(paths.into())
             } else {
-                this.store.dispatch(match area {
-                    DiffArea::Unstaged => Msg::StagePath { repo_id, path },
-                    DiffArea::Staged => Msg::UnstagePath { repo_id, path },
-                });
-                if status_ready {
-                    if let Some(next_path) = next_path {
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::working_tree(next_path, area),
-                        });
-                    } else {
-                        this.clear_diff_selection_or_exit(repo_id, cx);
-                    }
+                gitcomet_state::msg::StageSelection::Path(path)
+            };
+            crate::view::status_actions::toggle_checked_stage(
+                &this.store,
+                repo_id,
+                area,
+                selection,
+                guard,
+            );
+            if !multi && status_ready {
+                if let Some(next_path) = next_path {
+                    this.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::working_tree(next_path, area),
+                    });
+                } else {
+                    this.clear_diff_selection_or_exit(repo_id, cx);
                 }
             }
             this.rebuild_diff_cache(cx);
         };
         if area == DiffArea::Unstaged {
-            crate::view::conflict_markers::check(self, repo_id, paths, window, cx, finish);
+            crate::view::conflict_markers::check(
+                self,
+                repo_id,
+                paths,
+                crate::view::conflict_markers::StageIntent::Diff {
+                    target_revision,
+                    multi,
+                    consumes_selection,
+                },
+                window,
+                cx,
+                finish,
+            );
         } else {
-            finish(self, paths, Vec::new(), window, cx);
+            finish(
+                self,
+                paths,
+                crate::view::conflict_markers::MarkerCheck::Clear(None),
+                window,
+                cx,
+            );
         }
         true
     }

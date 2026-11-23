@@ -33,6 +33,7 @@ pub use autosolve::{
     try_autosolve_merge_plan, try_autosolve_merged_text,
 };
 pub use history::{HistoryAutosolveOptions, history_merge_region};
+pub use marker_parse::worktree_file_has_conflict_markers;
 pub use marker_parse::{
     ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
     ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_ranges_bytes,

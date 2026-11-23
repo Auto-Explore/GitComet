@@ -966,7 +966,7 @@ pub enum Msg {
     },
     StagePaths {
         repo_id: RepoId,
-        paths: RepoPathList,
+        paths: super::StageRequest,
     },
     UnstagePath {
         repo_id: RepoId,

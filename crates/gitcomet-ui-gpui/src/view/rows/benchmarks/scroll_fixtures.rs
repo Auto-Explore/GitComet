@@ -1043,7 +1043,7 @@ fn record_keyboard_stage_unstage_toggle_effects(
     for effect in effects {
         *total_effects = total_effects.saturating_add(1);
         match effect {
-            Effect::StagePath { .. } | Effect::StagePaths { .. } => {
+            Effect::Stage { .. } => {
                 *stage_effect_count = stage_effect_count.saturating_add(1);
             }
             Effect::UnstagePath { .. } | Effect::UnstagePaths { .. } => {

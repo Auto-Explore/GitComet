@@ -985,11 +985,8 @@ pub(super) fn schedule_effect(
             remote_url_policy,
             auth,
         } => clone::schedule_clone_repo(executor, msg_tx, url, dest, remote_url_policy, auth),
-        Effect::StagePath { repo_id, path } => {
-            repo_actions::schedule_stage_path(executor, repos, msg_tx, repo_id, path);
-        }
-        Effect::StagePaths { repo_id, paths } => {
-            repo_actions::schedule_stage_paths(executor, repos, msg_tx, repo_id, paths);
+        Effect::Stage { repo_id, request } => {
+            repo_actions::schedule_stage(executor, repos, msg_tx, repo_id, request)
         }
         Effect::UnstagePath { repo_id, path } => {
             repo_actions::schedule_unstage_path(executor, repos, msg_tx, repo_id, path);

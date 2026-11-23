@@ -707,13 +707,14 @@ impl DetailsPaneView {
             self,
             repo_id,
             paths,
+            crate::view::conflict_markers::StageIntent::Status { clear_selection },
             window,
             cx,
-            move |this, paths, unresolved, window, cx| {
+            move |this, paths, check, window, cx| {
                 let clear_selection = selection.is_some_and(|before| {
                     before.as_ref() == this.status_multi_selection.get(&repo_id)
                 });
-                if !unresolved.is_empty() {
+                if let crate::view::conflict_markers::MarkerCheck::Marked(unresolved) = check {
                     this.open_popover_at(
                         PopoverKind::StageConflictMarkersConfirm {
                             repo_id,
@@ -725,15 +726,15 @@ impl DetailsPaneView {
                         window,
                         cx,
                     );
-                } else {
+                } else if let crate::view::conflict_markers::MarkerCheck::Clear(guard) = check {
                     if clear_selection {
                         this.clear_status_multi_selection(repo_id);
                     }
-                    crate::view::status_actions::stage_or_unstage_paths(
+                    crate::view::status_actions::stage_checked(
                         &this.store,
                         repo_id,
-                        DiffArea::Unstaged,
-                        paths,
+                        gitcomet_state::msg::StageSelection::Paths(paths.into()),
+                        guard,
                     );
                 }
                 cx.notify();

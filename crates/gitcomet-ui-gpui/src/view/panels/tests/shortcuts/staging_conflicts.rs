@@ -1544,10 +1544,16 @@ fn repeated_stage_scans_share_work_and_reopening_the_repository_drops_the_reply(
                         this,
                         repo_id,
                         vec![path.clone()],
+                        crate::view::conflict_markers::StageIntent::Command {
+                            offer_confirmation: true,
+                        },
                         window,
                         cx,
                         move |_, _, unresolved, _, _| {
-                            assert!(unresolved.is_empty());
+                            assert!(matches!(
+                                unresolved,
+                                crate::view::conflict_markers::MarkerCheck::Clear(_)
+                            ));
                             completed.set(completed.get() + 1);
                         },
                     );
@@ -1643,10 +1649,17 @@ fn staging_rechecks_new_conflicts_and_retains_marker_warnings_while_status_loads
                 this,
                 repo_id,
                 vec![first.clone(), second.clone()],
+                crate::view::conflict_markers::StageIntent::Command {
+                    offer_confirmation: true,
+                },
                 window,
                 cx,
                 move |_, _, unresolved, _, _| {
-                    *observed.borrow_mut() = unresolved;
+                    let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                    else {
+                        panic!("expected a marker confirmation")
+                    };
+                    *observed.borrow_mut() = paths;
                 },
             );
             let mut next = (*this.store.snapshot()).clone();
@@ -1664,10 +1677,17 @@ fn staging_rechecks_new_conflicts_and_retains_marker_warnings_while_status_loads
                 this,
                 repo_id,
                 vec![second.clone()],
+                crate::view::conflict_markers::StageIntent::Command {
+                    offer_confirmation: true,
+                },
                 window,
                 cx,
                 move |_, _, unresolved, _, _| {
-                    *observed.borrow_mut() = unresolved;
+                    let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                    else {
+                        panic!("expected a marker confirmation")
+                    };
+                    *observed.borrow_mut() = paths;
                 },
             );
             let mut next = (*this.store.snapshot()).clone();
@@ -1692,11 +1712,18 @@ fn staging_rechecks_new_conflicts_and_retains_marker_warnings_while_status_loads
                     this,
                     repo_id,
                     vec![first.clone()],
+                    crate::view::conflict_markers::StageIntent::Command {
+                        offer_confirmation: true,
+                    },
                     window,
                     cx,
                     move |_, _, unresolved, _, _| {
-                        assert_eq!(unresolved.len(), 1);
-                        observed.borrow_mut().extend(unresolved);
+                        let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                        else {
+                            panic!("expected a marker confirmation")
+                        };
+                        assert_eq!(paths.len(), 1);
+                        observed.borrow_mut().extend(paths);
                     },
                 );
                 if attempt == 0 {

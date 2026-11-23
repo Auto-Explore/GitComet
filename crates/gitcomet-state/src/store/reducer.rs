@@ -1546,11 +1546,11 @@ fn reduce_inner(
         }
         Msg::StagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
-            vec![Effect::StagePath { repo_id, path }]
+            vec![crate::msg::StageRequest::path(path).effect(repo_id)]
         }
         Msg::StagePaths { repo_id, paths } => {
             begin_local_action(state, repo_id);
-            vec![Effect::StagePaths { repo_id, paths }]
+            vec![paths.effect(repo_id)]
         }
         Msg::UnstagePath { repo_id, path } => {
             begin_local_action(state, repo_id);

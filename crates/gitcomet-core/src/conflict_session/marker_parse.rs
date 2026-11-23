@@ -354,6 +354,37 @@ pub fn reader_has_conflict_markers<R: std::io::BufRead>(
     }
 }
 
+pub fn worktree_file_has_conflict_markers(path: &std::path::Path) -> std::io::Result<bool> {
+    const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
+    const BUFFER_BYTES: usize = 64 * 1024;
+    match std::fs::metadata(path) {
+        Ok(metadata) if !metadata.is_file() => return Ok(false),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    #[cfg(unix)]
+    let opened = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map(std::fs::File::from)
+    .map_err(std::io::Error::from);
+    #[cfg(not(unix))]
+    let opened = std::fs::File::open(path);
+    let file = match opened {
+        Ok(file) if file.metadata()?.is_file() => file,
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    reader_has_conflict_markers(
+        std::io::BufReader::with_capacity(BUFFER_BYTES, file),
+        MAX_SCANNED_BYTES,
+    )
+}
+
 /// Whether `text` still holds at least one complete conflict block, i.e. a merge
 /// whose markers were never resolved — or were resolved by hand with the markers
 /// left behind. Uses the same conservative parse as the conflict session, so a

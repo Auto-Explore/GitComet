@@ -171,7 +171,7 @@ fn stage_path_sync_uses_inline_reducer_path() {
     with_stage_path_sync(&mut state, RepoId(1), path.clone(), |state, effects| {
         assert!(matches!(
             effects,
-            [Effect::StagePath { repo_id: RepoId(1), path: effect_path }]
+            [Effect::Stage { repo_id: RepoId(1), request: crate::msg::StageRequest { selection: crate::msg::StageSelection::Path(effect_path), guard: None } }]
                 if effect_path == &path
         ));
         assert_eq!(state.repos[0].ops_rev, 1);
@@ -200,9 +200,9 @@ fn stage_paths_sync_uses_inline_reducer_path() {
     with_stage_paths_sync(&mut state, RepoId(1), paths.clone(), |state, effects| {
         assert!(matches!(
             effects,
-            [Effect::StagePaths {
+            [Effect::Stage {
                 repo_id: RepoId(1),
-                paths: effect_paths
+                request: crate::msg::StageRequest {selection: crate::msg::StageSelection::Paths(effect_paths), guard: None}
             }] if effect_paths == &paths
         ));
         assert_eq!(state.repos[0].ops_rev, 1);

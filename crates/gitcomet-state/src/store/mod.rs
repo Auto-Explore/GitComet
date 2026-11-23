@@ -1123,7 +1123,7 @@ impl AppStore {
                     Msg::StagePath { repo_id, path } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             let mut effects = reducer::PathActionEffects::new();
-                            let effect = crate::msg::Effect::StagePath { repo_id, path };
+                            let effect = crate::msg::Effect::Stage { repo_id, request: crate::msg::StageRequest::path(path) };
                             fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
@@ -1131,7 +1131,7 @@ impl AppStore {
                     Msg::StagePaths { repo_id, paths } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             let mut effects = reducer::PathActionEffects::new();
-                            let effect = crate::msg::Effect::StagePaths { repo_id, paths };
+                            let effect = crate::msg::Effect::Stage { repo_id, request: paths };
                             fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });

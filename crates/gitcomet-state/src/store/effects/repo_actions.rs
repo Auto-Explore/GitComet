@@ -1,5 +1,7 @@
 use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
-use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use crate::msg::{
+    InternalMsg, Msg, RepoActionKind, RepoPathList, StageGuard, StageRequest, StageSelection,
+};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
@@ -773,61 +775,60 @@ pub(super) fn schedule_force_delete_branch(
     );
 }
 
-pub(super) fn schedule_stage_path(
+pub(super) fn schedule_stage(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    path: PathBuf,
+    request: StageRequest,
 ) {
-    let context = path_context(&path);
-    let completed_paths = vec![path.clone()].into();
+    let StageRequest { selection, guard } = request;
+    let action = selection.action();
+    let (context, completed_paths) = match &selection {
+        StageSelection::Path(path) => (path_context(path), vec![path.clone()].into()),
+        StageSelection::Paths(paths) => (paths_context(paths.as_slice(), "files"), paths.clone()),
+    };
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
-        RepoActionKind::StagePath,
+        action,
         context,
         move |repo| {
-            let path_ref: &Path = &path;
-            repo.stage(&[path_ref])
+            if let Some(guard) = guard {
+                let conflicts = match guard {
+                    StageGuard::Scanned(paths) => paths,
+                    StageGuard::CurrentStatus => {
+                        let status = repo
+                            .worktree_status(&gitcomet_core::services::CancellationToken::new())?;
+                        crate::msg::conflicted_stage_paths(&status, selection.paths()).into()
+                    }
+                };
+                for path in conflicts.as_slice() {
+                    if gitcomet_core::conflict_session::worktree_file_has_conflict_markers(
+                        &repo.spec().workdir.join(path),
+                    )? {
+                        return Err(Error::new(ErrorKind::Backend(format!(
+                            "{} contains conflict markers. Stage again to review them.",
+                            path.display()
+                        ))));
+                    }
+                }
+            }
+            match selection {
+                StageSelection::Path(path) => repo.stage(&[&path]),
+                StageSelection::Paths(paths) => {
+                    let unique = dedup_paths(paths.as_slice().to_vec());
+                    let refs = unique.iter().map(|path| path.as_path()).collect::<Vec<_>>();
+                    repo.stage(&refs)
+                }
+            }
         },
         |_msg_tx, _repo_id, _result| {},
         move |repo_id, result| InternalMsg::RepoPathsActionFinished {
             repo_id,
-            action: RepoActionKind::StagePath,
-            paths: completed_paths,
-            result,
-        },
-    );
-}
-
-pub(super) fn schedule_stage_paths(
-    executor: &TaskExecutor,
-    repos: &RepositoryRuntimes,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    paths: RepoPathList,
-) {
-    let context = paths_context(paths.as_slice(), "files");
-    let completed_paths = paths.clone();
-    schedule_repo_action_with_hook(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::StagePaths,
-        context,
-        move |repo| {
-            let unique = dedup_paths(paths.as_slice().to_vec());
-            let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-            repo.stage(&refs)
-        },
-        |_msg_tx, _repo_id, _result| {},
-        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
-            repo_id,
-            action: RepoActionKind::StagePaths,
+            action,
             paths: completed_paths,
             result,
         },
