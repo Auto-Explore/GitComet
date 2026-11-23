@@ -172,6 +172,8 @@ pub(super) struct DecodeFlights {
 struct DecodeFlight<'a> {
     flights: &'a DecodeFlights,
     key: BlockKey,
+    /// Taken over from a decode that failed or stopped.
+    waited: bool,
 }
 
 impl Drop for DecodeFlight<'_> {
@@ -199,6 +201,7 @@ impl DecodeFlights {
     ) -> Result<std::result::Result<Arc<HistoryRange>, DecodeFlight<'_>>> {
         let key = (Arc::as_ptr(index) as usize, rows.clone());
         let mut active = self.active.lock().expect("range decode flights");
+        let mut waited = false;
         loop {
             cancellation.check_cancelled()?;
             if !active.contains(&key) {
@@ -212,8 +215,13 @@ impl DecodeFlights {
                     return Ok(Ok(block));
                 }
                 active.push(key.clone());
-                return Ok(Err(DecodeFlight { flights: self, key }));
+                return Ok(Err(DecodeFlight {
+                    flights: self,
+                    key,
+                    waited,
+                }));
             }
+            waited = true;
             active = self
                 .changed
                 .wait_timeout(active, WAIT)
@@ -262,10 +270,15 @@ impl GixRepo {
         self.validate_history_store(index, &shared)?;
         // Decode a block once for concurrent callers, without holding the
         // global cache lock, or any other, through I/O.
-        let _flight = match shared.decode.join(shared.id, index, &rows, cancellation)? {
+        let flight = match shared.decode.join(shared.id, index, &rows, cancellation)? {
             Ok(block) => return Ok(block),
             Err(flight) => flight,
         };
+        if flight.waited {
+            // The store may have changed during the wait.
+            let (_, current) = self.current_history_store()?;
+            self.validate_history_store(index, &current)?;
+        }
         let block = Arc::new(decode()?);
         CACHE
             .lock()
@@ -370,6 +383,47 @@ mod tests {
             assert!(Arc::ptr_eq(&leader, &waiter.join().unwrap().unwrap()));
         });
         assert_eq!(decodes.load(SeqCst), 1);
+    }
+
+    /// A waiter that takes over a failed decode checks the store again: a
+    /// replace ref made during the wait changes what the index's rows mean.
+    #[test]
+    fn a_waiter_taking_over_a_failed_decode_sees_a_changed_store() {
+        let (dir, repo, index) = two_commits();
+        let cancel = CancellationToken::new();
+        let decodes = AtomicUsize::new(0);
+        let (started_tx, started) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (repo, index, cancel, decodes) = (&repo, &index, &cancel, &decodes);
+        std::thread::scope(move |scope| {
+            let leader = scope.spawn(move || {
+                repo.read_shared_history_range_with(index, 0..2, cancel, || {
+                    started_tx.send(()).unwrap();
+                    gate.recv().unwrap();
+                    Err(gitcomet_core::error::Error::new(
+                        gitcomet_core::error::ErrorKind::Backend("decode failed".into()),
+                    ))
+                })
+            });
+            started.recv().unwrap();
+            let waiter = scope.spawn(move || {
+                repo.read_shared_history_range_with(index, 0..2, cancel, || {
+                    decodes.fetch_add(1, SeqCst);
+                    repo.read_history_range_impl(index, 0..2, cancel)
+                })
+            });
+            // Let the waiter reach its wait.
+            std::thread::sleep(Duration::from_millis(50));
+            crate::test_support::git_success(dir.path(), &["replace", "--graft", "HEAD"]);
+            release.send(()).unwrap();
+            assert!(leader.join().unwrap().is_err());
+            let error = waiter.join().unwrap().unwrap_err();
+            assert!(
+                error.to_string().contains("interpretation changed"),
+                "{error}"
+            );
+        });
+        assert_eq!(decodes.load(SeqCst), 0);
     }
 
     #[test]
