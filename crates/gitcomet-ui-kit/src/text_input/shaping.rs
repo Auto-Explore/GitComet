@@ -224,10 +224,8 @@ pub(super) fn compute_line_starts(text: &str) -> Vec<usize> {
 
 /// Where a frame reads its row text from.
 ///
-/// The soft-wrap and masked arms hand over a document they already hold as one
-/// `&str`; the plain arm copies out only the rows it is about to shape, so a
-/// frame costs the viewport rather than the document.
 pub(super) enum LineTextSource<'a> {
+    Document(&'a crate::text_model::TextModelSnapshot),
     Whole {
         text: &'a str,
         starts: &'a [usize],
@@ -304,12 +302,26 @@ impl LineTextSource<'_> {
 
     /// Text of `line_ix`, excluding its terminator. Empty for rows outside the
     /// window, which a correct caller never asks for.
-    pub(super) fn line_text(&self, line_ix: usize) -> &str {
+    pub(super) fn line_text(&self, line_ix: usize) -> std::borrow::Cow<'_, str> {
+        use std::borrow::Cow;
         match self {
-            Self::Whole { text, starts } => line_text_for_index(text, starts, line_ix),
-            Self::Flat { text, rope } => {
-                row_text(text, rope.line_start(line_ix), rope.line_start(line_ix + 1))
+            Self::Document(snapshot) => match snapshot.line_text(line_ix) {
+                Cow::Borrowed(line) => Cow::Borrowed(line.strip_suffix('\r').unwrap_or(line)),
+                Cow::Owned(mut line) => {
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                    Cow::Owned(line)
+                }
+            },
+            Self::Whole { text, starts } => {
+                Cow::Borrowed(line_text_for_index(text, starts, line_ix))
             }
+            Self::Flat { text, rope } => Cow::Borrowed(row_text(
+                text,
+                rope.line_start(line_ix),
+                rope.line_start(line_ix + 1),
+            )),
             Self::Window {
                 rows,
                 text,
@@ -319,12 +331,12 @@ impl LineTextSource<'_> {
                 if let Some((stray_row, stray_text)) = stray
                     && *stray_row == line_ix
                 {
-                    return stray_text;
+                    return Cow::Borrowed(stray_text);
                 }
                 if !rows.contains(&line_ix) {
-                    return "";
+                    return Cow::Borrowed("");
                 }
-                line_text_for_index(text, starts, line_ix - rows.start)
+                Cow::Borrowed(line_text_for_index(text, starts, line_ix - rows.start))
             }
         }
     }

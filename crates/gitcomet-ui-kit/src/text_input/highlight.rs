@@ -284,7 +284,8 @@ pub(super) fn build_streamed_highlight_runs_for_visible_window<S: LineStartLooku
     for line_ix in visible_line_range {
         let line_start = line_starts.line_start(line_ix).unwrap_or(0);
         let line_text = display_text.line_text(line_ix);
-        let capped_line_text = build_shaping_line_slice(line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
+        let capped_line_text =
+            build_shaping_line_slice(&line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let capped_line_text = capped_line_text.as_ref();
         if !capped_line_text.is_empty() {
             let line_end = line_start.saturating_add(capped_line_text.len());

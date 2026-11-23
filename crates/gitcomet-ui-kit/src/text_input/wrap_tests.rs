@@ -9,6 +9,57 @@ struct WrappedInputView {
     width: Pixels,
 }
 
+#[gpui::test]
+fn typing_fifty_edits_in_a_four_mib_document_keeps_snapshots_lazy(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let row = format!("{:63}\n", "a line of source text with enough words to wrap");
+    let text = row.repeat(65_536);
+    assert_eq!(text.len(), 4 * 1024 * 1024);
+    for wrapped in [false, true] {
+        let (view, cx) = cx.add_window_view(WrappedInputView::new);
+        cx.update(|_, app| {
+            view.read(app)
+                .input
+                .clone()
+                .update(app, |input, cx| input.set_soft_wrap(wrapped, cx));
+        });
+        let input = seed_wrapped_input(&view, cx, &text);
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                let middle = text.len() / 2 + 4;
+                input.set_selected_range(middle..middle, true, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        draw_frame(cx);
+        let mut samples = Vec::new();
+        let mut flattened = 0u32;
+        let mut indexed = 0u32;
+        for ix in 0..55 {
+            let started = std::time::Instant::now();
+            cx.simulate_input("x");
+            draw_frame(cx);
+            let elapsed = started.elapsed();
+            if ix >= 5 {
+                samples.push(elapsed);
+                cx.update(|_, app| {
+                    let snapshot = input.read(app).text_snapshot();
+                    flattened += u32::from(snapshot.is_materialized());
+                    indexed += u32::from(snapshot.is_line_index_built());
+                });
+            }
+        }
+        samples.sort_unstable();
+        cx.update(|_, app| assert_eq!(input.read(app).text_snapshot().len(), text.len() + 55));
+        eprintln!(
+            "4 MiB 50 edits soft_wrap={wrapped}: median {:?}, p95 {:?}, flattened {flattened}/50, indexed {indexed}/50",
+            samples[25], samples[47]
+        );
+        assert_eq!(flattened, 0, "soft_wrap={wrapped}");
+        assert_eq!(indexed, 0, "soft_wrap={wrapped}");
+    }
+}
+
 impl WrappedInputView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         window.activate();
@@ -1143,8 +1194,7 @@ fn wrap_edit_that_keeps_every_row_count_requests_no_extra_frame(cx: &mut gpui::T
     );
 }
 
-/// A wrapped frame still flattens the text it wraps, but finds its rows through
-/// the rope: an edit builds no line-start array beside the flattened copy.
+/// Edited, visible and off-screen caret rows all read from the rope.
 #[gpui::test]
 fn wrapped_frames_after_edits_do_not_build_a_line_index(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
@@ -1177,6 +1227,10 @@ fn wrapped_frames_after_edits_do_not_build_a_line_index(cx: &mut gpui::TestAppCo
                 assert!(
                     !input.content.snapshot().is_line_index_built(),
                     "replacing {range:?} with {new_text:?}"
+                );
+                assert!(
+                    !input.content.snapshot().is_materialized(),
+                    "wrapped frame after {range:?}"
                 );
                 // The caret the frame painted is on the row hit-testing finds.
                 let cursor = input.cursor_offset();

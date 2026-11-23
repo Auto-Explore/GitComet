@@ -352,7 +352,7 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix,
                             line_start: line_starts.line_start(line_ix).unwrap_or(0),
-                            line_text: line_source.line_text(line_ix),
+                            line_text: &line_source.line_text(line_ix),
                         },
                         precomputed_runs,
                         &shape_style,
@@ -369,7 +369,7 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix: cursor_line_ix,
                             line_start: line_starts.line_start(cursor_line_ix).unwrap_or(0),
-                            line_text: line_source.line_text(cursor_line_ix),
+                            line_text: &line_source.line_text(cursor_line_ix),
                         },
                         None,
                         &shape_style,
@@ -463,14 +463,6 @@ impl Element for TextElement {
                 };
             }
 
-            // The soft-wrap arm still works over the whole document: its row
-            // counts, y-offset prefix sum and wrap job are all document-wide.
-            let display_text: SharedString = match substitute_text.as_ref() {
-                Some(text) => text.clone(),
-                None => content.as_shared_string(),
-            };
-            let display_text_str = display_text.as_ref();
-
             let wrap_width = bounds.size.width.max(px(0.0));
             let rounded_wrap_width = wrap_width.round();
             if input.wrap.row_counts.len() != line_count {
@@ -511,7 +503,9 @@ impl Element for TextElement {
             if input.wrap.recompute_requested {
                 // Estimating every row is the one pass that wants the array.
                 input.maybe_recompute_wrap_rows(
-                    display_text_str,
+                    substitute_text
+                        .as_deref()
+                        .unwrap_or_else(|| content.as_ref()),
                     &line_starts.to_array(&content),
                     rounded_wrap_width,
                     font_size,
@@ -527,7 +521,10 @@ impl Element for TextElement {
                 .map(|_| EditorLine::default())
                 .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
-            let wrapped_line_source = LineTextSource::whole(display_text_str, &line_starts);
+            let wrapped_line_source = match substitute_text.as_deref() {
+                Some(text) => LineTextSource::whole(text, &line_starts),
+                None => LineTextSource::Document(&content),
+            };
             let mut visible_line_range;
             loop {
                 let mut y = Pixels::ZERO;
@@ -589,7 +586,7 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix,
                             line_start,
-                            line_text,
+                            line_text: &line_text,
                         },
                         wrap_width,
                         precomputed_runs,
