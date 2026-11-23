@@ -246,6 +246,20 @@ pub(in crate::repo) fn extend_history_index(
             (2..=3).contains(&parents.len()),
         )?;
     }
+    // A merge on top can name older rows as its other parents, which a
+    // rebuild passes and this walk does not.
+    for id in shapes.awaited() {
+        let Some(row) = older.position_bytes(id.as_bytes()) else {
+            continue;
+        };
+        let parents: Option<Vec<gix::ObjectId>> = (0..older.parents(row).len())
+            .map(|parent| {
+                let id = older.parent_id_bytes(row, parent)?;
+                Some(gix::oid::from_bytes_unchecked(id).to_owned())
+            })
+            .collect();
+        shapes.passed(id, parents.as_deref());
+    }
     retain_probable_stashes(&mut builder, &repo, &shapes, false, cancellation)?;
     let index = builder.finish_before(older, cancellation)?;
     record(Work::HistoryIndexExtend);

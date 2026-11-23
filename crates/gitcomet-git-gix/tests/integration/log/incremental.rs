@@ -447,6 +447,52 @@ fn a_stash_on_top_grows_the_index_and_is_marked_as_one() {
     drop(held);
 }
 
+/// A merge on top whose summary reads like a stash's is one only if its
+/// other parents are shaped like a stash's; those are older rows here.
+#[test]
+fn a_merge_on_top_named_like_a_stash_is_none_in_a_grown_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    run_git(path, &["init", "-q", "-b", "main"]);
+    run_git(path, &["config", "user.email", "you@example.com"]);
+    run_git(path, &["config", "user.name", "You"]);
+    std::fs::write(path.join("file.txt"), "one\n").unwrap();
+    run_git(path, &["add", "file.txt"]);
+    run_git(path, &["commit", "-qm", "first"]);
+    run_git(path, &["switch", "-qc", "hotfix"]);
+    std::fs::write(path.join("fix.txt"), "fix\n").unwrap();
+    run_git(path, &["add", "fix.txt"]);
+    run_git(path, &["commit", "-qm", "fix"]);
+    run_git(path, &["switch", "-q", "main"]);
+    std::fs::write(path.join("file.txt"), "two\n").unwrap();
+    run_git(path, &["commit", "-qam", "second"]);
+    let repo = GixBackend.open(path).unwrap();
+    let _capture = capture();
+    let held = index_of(repo.as_ref());
+    assert_eq!(held.len(), 3);
+
+    run_git(
+        path,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "On release: merge hotfix",
+            "hotfix",
+        ],
+    );
+    let (grown, builds, extends) = rebuilt(repo.as_ref());
+    assert_eq!((builds, extends), (0, 1));
+    let rebuilt = index_of(GixBackend.open(path).unwrap().as_ref());
+    assert_eq!(index_rows(&grown), index_rows(&rebuilt));
+    for row in 0..grown.len() {
+        assert!(!rebuilt.is_probable_stash(row), "row {row}");
+        assert!(!grown.is_probable_stash(row), "row {row}");
+    }
+    drop(held);
+}
+
 #[test]
 fn pages_after_commits_on_top_read_only_the_added_headers() {
     let mut fixture = Fixture::new();

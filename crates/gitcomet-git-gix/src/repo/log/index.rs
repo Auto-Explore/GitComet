@@ -286,11 +286,7 @@ impl StashShapes {
     /// Takes the commits of a walk in its order, children before parents. A
     /// parent the walk never passes rules nothing out.
     pub(super) fn visit(&mut self, id: gix::ObjectId, parents: &[gix::ObjectId]) {
-        for (candidate, only_parent) in self.awaited.remove(&id).unwrap_or_default() {
-            if parents != only_parent.as_slice() {
-                self.ruled_out.insert(candidate);
-            }
-        }
+        self.passed(id, Some(parents));
         let (base, index, untracked) = match parents {
             [base, index] => (base, index, None),
             [base, index, untracked] => (base, index, Some(untracked)),
@@ -303,6 +299,21 @@ impl StashShapes {
         if let Some(untracked) = untracked {
             self.awaited.entry(*untracked).or_default().push((id, None));
         }
+    }
+
+    /// Rules on the candidates that name `id` as a parent, from `id`'s own
+    /// parents; `None` when it has parents that cannot all be named.
+    pub(super) fn passed(&mut self, id: gix::ObjectId, parents: Option<&[gix::ObjectId]>) {
+        for (candidate, only_parent) in self.awaited.remove(&id).unwrap_or_default() {
+            if parents != Some(only_parent.as_slice()) {
+                self.ruled_out.insert(candidate);
+            }
+        }
+    }
+
+    /// The parents candidates name that no visit has passed yet.
+    pub(super) fn awaited(&self) -> Vec<gix::ObjectId> {
+        self.awaited.keys().copied().collect()
     }
 
     pub(super) fn rules_out(&self, candidate: &gix::oid) -> bool {
