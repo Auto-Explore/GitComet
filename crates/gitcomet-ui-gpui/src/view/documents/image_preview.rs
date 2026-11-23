@@ -16,16 +16,15 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
     else {
         return match guessed {
             Some(encoding) => {
-                let preview = if let Some(format) = format {
-                    panes::diff::diff_cache::render_raster_image_diff_preview(format, bytes)
-                        .ok_or("Image exceeds the preview limit or is invalid")?
-                } else {
-                    decode_standalone_raster_fallback(encoding, bytes)?
-                };
+                let preview = panes::diff::diff_cache::render_raster_preview(encoding, bytes)
+                    .ok_or("Image exceeds the preview limit or is invalid")?;
                 Ok(Input {
                     preview: Some(preview),
                     ..Default::default()
                 })
+            }
+            None if (bytes.len() as u64) > detail_limit => {
+                Err("SVG image exceeds the preview limit".into())
             }
             None => match crate::view::image_preview::svg::parse(bytes) {
                 Ok(_) => Err("SVG image exceeds the preview limit".into()),
@@ -54,29 +53,6 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
         preview,
         frame: 0,
     })
-}
-
-fn decode_standalone_raster_fallback(
-    encoding: image::ImageFormat,
-    bytes: &[u8],
-) -> Result<Arc<gpui::RenderImage>, String> {
-    use image::ImageDecoder as _;
-    let mut decoder = image::ImageReader::with_format(std::io::Cursor::new(bytes), encoding)
-        .into_decoder()
-        .map_err(|error| error.to_string())?;
-    crate::view::image_preview::limit_decoder(&mut decoder, 512 * 1024 * 1024)
-        .map_err(|error| error.to_string())?;
-    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
-    let mut image =
-        image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
-    image.apply_orientation(orientation);
-    let mut pixels = image.into_rgba8();
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Ok(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-        pixels,
-    )])))
 }
 
 impl StandaloneBuffer {
