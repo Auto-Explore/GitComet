@@ -184,7 +184,7 @@ fn an_embedded_tree_at_the_limit_compares_on_the_worker_stack() {
 #[test]
 fn an_unsupported_language_falls_back_without_waiting_for_the_slot() {
     let cancellation = CancellationToken::new();
-    let held = Worker::acquire(&cancellation).unwrap();
+    let held = WORKER.acquire(Request::Visible(&cancellation)).unwrap();
     let (sent, outcome) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -199,6 +199,38 @@ fn an_unsupported_language_falls_back_without_waiting_for_the_slot() {
             )))
         );
     });
+}
+
+#[test]
+fn a_visible_file_interrupts_prefetch_and_has_first_use_of_the_worker() {
+    let slot = WorkerSlot::default();
+    let next = CancellationToken::new();
+    let prefetch = slot.acquire(Request::Prefetch(&next)).unwrap();
+    std::thread::scope(|scope| {
+        let visible = scope.spawn(|| {
+            let _work = slot
+                .acquire(Request::Visible(&CancellationToken::new()))
+                .unwrap();
+            assert!(
+                slot.acquire(Request::Prefetch(&CancellationToken::new()))
+                    .is_err()
+            );
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !next.is_cancelled() {
+            assert!(
+                Instant::now() < deadline,
+                "visible comparison did not interrupt prefetch"
+            );
+            std::thread::yield_now();
+        }
+        drop(prefetch);
+        visible.join().unwrap();
+    });
+    assert!(
+        slot.acquire(Request::Prefetch(&CancellationToken::new()))
+            .is_ok()
+    );
 }
 
 /// The support check before queueing reads the content as difftastic does,
