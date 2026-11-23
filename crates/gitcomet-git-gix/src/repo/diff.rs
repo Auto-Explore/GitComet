@@ -137,12 +137,17 @@ impl GixRepo {
         };
         // `--no-color`, as `-c color.ui=false` loses to a user's
         // `color.diff=always`.
-        cmd.arg(subcommand).args(["--no-ext-diff", "--no-color"]);
+        cmd.arg(subcommand).args([
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+        ]);
 
         match target {
             DiffTarget::WorkingTree { path, area, .. } => {
                 if exact {
-                    cmd.args(["--no-textconv", "--unified=3", "--no-renames"]);
+                    cmd.args(["--unified=3", "--no-renames"]);
                 }
                 if matches!(area, DiffArea::Unstaged) && !exact {
                     // Match the staged view on Windows by suppressing CR-at-EOL-only

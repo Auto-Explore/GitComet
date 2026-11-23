@@ -84,6 +84,7 @@ fn range_diff_command(
     push_read_only_diff_flags(&mut command);
     command
         .arg("diff")
+        .args(["--no-ext-diff", "--no-textconv"])
         .args(format)
         .arg("-z")
         .arg("--find-renames")
