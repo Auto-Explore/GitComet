@@ -237,6 +237,8 @@ const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 24 
 const TEST_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// Times a lock file may lose its name while it is being locked.
 const LOCK_ATTEMPTS: usize = 8;
+/// Milliseconds an operation waits for a lock file nothing converts.
+const PRUNER_WAITS: usize = 200;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum LockAdmission {
@@ -446,10 +448,22 @@ impl OperationLock {
     }
 
     fn acquire_at(coordination_path: &Path, intent_path: &Path) -> Result<Self> {
-        let file = lock_named(coordination_path, |file| match file.try_lock_shared() {
-            Ok(()) => Ok(()),
-            Err(std::fs::TryLockError::WouldBlock) => Err(Error::new(ErrorKind::RepositoryChanged)),
-            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+        let file = lock_named(coordination_path, |file| {
+            // A conversion holds the file alone, and its intent, while it
+            // runs; the stale-lock pruner holds the file alone for a moment.
+            for _ in 0..PRUNER_WAITS {
+                match file.try_lock_shared() {
+                    Ok(()) => return Ok(()),
+                    Err(std::fs::TryLockError::WouldBlock)
+                        if check_conversion_intent(intent_path).is_ok() =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(std::fs::TryLockError::WouldBlock) => break,
+                    Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+                }
+            }
+            Err(Error::new(ErrorKind::RepositoryChanged))
         })?;
         check_conversion_intent(intent_path)?;
         Ok(Self { _file: file })
@@ -745,6 +759,47 @@ mod tests {
     fn try_shared(file: &File) -> Result<()> {
         file.try_lock_shared()
             .map_err(|_| Error::new(ErrorKind::RepositoryChanged))
+    }
+
+    /// The pruner holds a lock file alone while it removes it: an operation
+    /// that meets it then waits, and only a conversion turns it away.
+    #[test]
+    fn an_operation_waits_out_the_pruner_but_not_a_conversion() {
+        let directory = tempfile::tempdir().unwrap();
+        let coordination = directory.path().join("repository.lock");
+        let intent = directory.path().join(".repository.bare-conversion.lock");
+        let pruner = open_lock(&coordination).unwrap();
+        pruner.try_lock().unwrap();
+        let (acquired_tx, acquired) = std::sync::mpsc::channel();
+        let operation = {
+            let (coordination, intent) = (coordination.clone(), intent.clone());
+            std::thread::spawn(move || {
+                let lock = OperationLock::acquire_at(&coordination, &intent);
+                acquired_tx.send(()).unwrap();
+                lock.map(drop)
+            })
+        };
+        // Still waiting while the pruner holds the file.
+        assert!(
+            acquired
+                .recv_timeout(std::time::Duration::from_millis(30))
+                .is_err()
+        );
+        std::fs::remove_file(&coordination).unwrap();
+        drop(HeldFileLock(pruner));
+        operation.join().unwrap().unwrap();
+
+        let conversion = open_lock(&coordination).unwrap();
+        conversion.try_lock().unwrap();
+        let held_intent = open_lock(&intent).unwrap();
+        held_intent.try_lock().unwrap();
+        let refused = OperationLock::acquire_at(&coordination, &intent).map(drop);
+        assert!(matches!(
+            refused.unwrap_err().kind(),
+            ErrorKind::RepositoryChanged
+        ));
+        drop(HeldFileLock(held_intent));
+        drop(HeldFileLock(conversion));
     }
 
     #[test]
