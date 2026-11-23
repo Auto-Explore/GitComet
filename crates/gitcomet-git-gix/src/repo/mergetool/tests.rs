@@ -137,6 +137,55 @@ fn test_build_stage_paths_write_to_temp_false_uses_workdir_prefix() {
 }
 
 #[test]
+fn a_merge_stage_collision_preserves_existing_files_and_cleans_up_its_own() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workdir = tmp.path();
+    crate::test_support::init_test_repo(workdir);
+    let repo = open_repo(workdir);
+    let path = Path::new("note.txt");
+    let (base, local, remote) = {
+        let paths = build_stage_paths(workdir, path, false, true).unwrap();
+        (
+            workdir.join(&paths.base),
+            workdir.join(&paths.local),
+            workdir.join(&paths.remote),
+        )
+    };
+    std::fs::write(&local, b"existing local notes").unwrap();
+    std::fs::write(&remote, b"existing remote notes").unwrap();
+
+    let error = materialize_mergetool_stage_files(&repo, workdir, path, false, false)
+        .expect_err("existing stage path must be preserved");
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::Io(std::io::ErrorKind::AlreadyExists)
+    ));
+    assert_eq!(std::fs::read(&local).unwrap(), b"existing local notes");
+    assert_eq!(std::fs::read(&remote).unwrap(), b"existing remote notes");
+    assert!(!base.exists());
+}
+
+#[test]
+fn merge_stage_cleanup_preserves_a_replacement() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workdir = tmp.path();
+    crate::test_support::init_test_repo(workdir);
+    let repo = open_repo(workdir);
+    let stage =
+        materialize_mergetool_stage_files(&repo, workdir, Path::new("note.txt"), false, false)
+            .unwrap();
+    let local = workdir.join(&stage.local);
+    let remote = workdir.join(&stage.remote);
+    std::fs::remove_file(&local).unwrap();
+    std::fs::write(&local, b"replacement note").unwrap();
+
+    drop(stage);
+
+    assert_eq!(std::fs::read(local).unwrap(), b"replacement note");
+    assert!(!remote.exists());
+}
+
+#[test]
 fn test_build_stage_paths_write_to_temp_true_uses_tempdir() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = build_stage_paths(tmp.path(), Path::new("nested/a.txt"), true, false).unwrap();
@@ -214,7 +263,9 @@ fn test_write_stage_bytes_does_not_follow_symlink() {
     let stage_path = Path::new("file_BASE_test.txt");
     std::os::unix::fs::symlink(&victim, tmp.path().join(stage_path)).unwrap();
 
-    assert!(write_stage_bytes(tmp.path(), stage_path, b"replace").is_err());
+    let mut created_files = Vec::new();
+    assert!(write_stage_bytes(tmp.path(), stage_path, b"replace", &mut created_files).is_err());
+    assert!(created_files.is_empty());
     assert_eq!(std::fs::read(victim).unwrap(), b"keep");
 }
 
