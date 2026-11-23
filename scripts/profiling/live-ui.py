@@ -56,6 +56,9 @@ import perf_gpu  # noqa: E402
 SURVEY_SOURCE = ROOT / "crates/gitcomet-base/src/identity.rs"
 SAVE_FILE = "save-target.txt"
 SEARCH_FILE = "search-target.txt"
+DIFF_NAVIGATION_REPEATS = 40
+ACTIVATION_TARGETS = {f"activate_{index:02}": "primary" if index % 2 == 0 else "second"
+                      for index in range(20)}
 IGNORED_DIR = "build"
 WINDOW_SIZE = (1400, 900)
 REFRESH_HZ = 60
@@ -270,6 +273,24 @@ def picker_scenario(ready):
     return {"version": 1, "steps": steps}
 
 
+def history_scroll_steps():
+    return [{"do": "phase", "name": "scroll"},
+            {"do": "scroll", "target": "history", "delta_px": -96, "repeat": 1200,
+             "interval_ms": 16, "flip_every": 150, "witness": {"kind": "history_scrolled"}}]
+
+
+def check_diff_navigation_fixture(repository):
+    env = fixture_env()
+    status = git(repository, "status", "--porcelain=v1", "-z", "--untracked-files=all", env=env)
+    if status.stdout != f" M {SEARCH_FILE}\0".encode():
+        raise ValueError(f"diff-navigation requires {SEARCH_FILE} as the only unstaged change in a clean index")
+    diff = git(repository, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-cr-at-eol",
+               "--", SEARCH_FILE, env=env)
+    hunks = sum(line.startswith(b"@@ ") for line in diff.stdout.splitlines())
+    if hunks <= DIFF_NAVIGATION_REPEATS:
+        raise ValueError(f"diff-navigation needs at least {DIFF_NAVIGATION_REPEATS + 1} hunks in {SEARCH_FILE}, found {hunks}")
+
+
 def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
     ready = [{"do": "wait_ready", "timeout_ms": 180_000}]
@@ -281,6 +302,37 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     if name == "repo-picker":
         return picker_scenario(ready)
     others = list(secondary) if isinstance(secondary, (list, tuple)) else ([secondary] if secondary else [])
+    if name == "window-activation":
+        indexed = {"do": "wait_ready", "indexed": True, "timeout_ms": 180_000}
+        steps = [indexed, {"do": "new_window", "name": "second"},
+                 {"do": "open_repo", "path": str(Path(repository).resolve())},
+                 indexed, {"do": "settle", "ms": 1000}]
+        for phase, target in ACTIVATION_TARGETS.items():
+            steps += [{"do": "phase", "name": phase},
+                      {"do": "switch_window", "name": target},
+                      {"do": "settle", "ms": 120}]
+        return {"steps": steps}
+    if name == "diff-navigation":
+        check_diff_navigation_fixture(repository)
+        steps = [{"do": "wait_ready", "indexed": True, "timeout_ms": 180_000},
+                 {"do": "click", "target": {"list": "unstaged_row", "index": 0},
+                  "witness": {"kind": "diff_loaded"}}, {"do": "settle", "ms": 1200}]
+        for index in range(6):
+            steps += [{"do": "phase", "name": f"keys_{index:02}"},
+                      {"do": "keys", "key": "f7" if index % 2 == 0 else "shift-f7",
+                       "repeat": DIFF_NAVIGATION_REPEATS, "interval_ms": 16}]
+        return {"steps": steps + [{"do": "settle", "ms": 300}]}
+    if name == "history-scroll-tabs":
+        steps = list(ready)
+        for path in others:
+            steps += [{"do": "open_repo", "path": str(Path(path).resolve())},
+                      {"do": "wait_ready", "timeout_ms": 180_000}]
+        if others:
+            steps.append({"do": "command", "id": "next-repo-tab",
+                          "witness": {"kind": "repo_open", "path": str(Path(repository).resolve())}})
+        steps += [{"do": "wait_ready", "indexed": True, "timeout_ms": 180_000},
+                  {"do": "settle", "ms": 3000}]
+        return {"steps": steps + history_scroll_steps()}
     if name == "repo-tabs":
         # Several open repositories; the measured phase cycles through their
         # tabs. Each switch is witnessed (that tab active and loaded), then
@@ -473,10 +525,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
             {"do": "phase", "name": "select"},
             {"do": "keys", "key": "down", "repeat": 240, "interval_ms": 120,
              "witness": {"kind": "commit_details"}}],
-        "history-scroll": ready + [
-            {"do": "phase", "name": "scroll"},
-            {"do": "scroll", "target": "history", "delta_px": -96, "repeat": 1200, "interval_ms": 16,
-             "flip_every": 150, "witness": {"kind": "history_scrolled"}}],
+        "history-scroll": ready + history_scroll_steps(),
         "status-save": ready + [
             {"do": "phase", "name": "save"},
             {"do": "write_files", "paths": [save_file], "contents": "edited by the scenario\n",
@@ -507,7 +556,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
              "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "pane-resize", "pane-resize-diff",
-             "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
+             "history-select-burst", "history-scroll", "history-scroll-tabs", "window-activation", "diff-navigation", "status-save", "status-burst", "status-touch",
              "ignored-churn", "repo-tabs", "repo-tabs-edit", "diff-open", "still",
              "diff-search", "terminal-output", "settings", "lifecycle")
 
@@ -917,6 +966,18 @@ def load_records(directory):
     return records
 
 
+def native_activation_ms(target, begin_ms, end_ms, windows, witnesses):
+    window = next((window_id for window_id, info in windows.items()
+                   if info["name"] == target and info["active_at_start"] is False), None)
+    switches = [r for r in witnesses if begin_ms <= r["at_ms"] <= end_ms]
+    if window is None or len(switches) != 1:
+        return None
+    switch = switches[0]
+    if switch["detail"]["name"] == target and switch["detail"]["window"] == window:
+        return switch["at_ms"] - begin_ms
+    return None
+
+
 def summarize(directory):
     """Per-phase distributions and validity checks for one run."""
     directory = Path(directory)
@@ -965,6 +1026,9 @@ def summarize(directory):
     process = [json.loads(line) for line in (directory / "process.jsonl").read_text().splitlines()]
 
     phases = {}
+    activation_times = {}
+    focus_run = capture["scenario"] == "window-activation"
+    window_targets = [r for r in records if r["event"] == "scenario_window_target"] if focus_run else []
     begins = {}
     for record in (r for r in records if r["event"] == "scenario_phase"):
         name = record["detail"]["name"]
@@ -974,12 +1038,19 @@ def summarize(directory):
             begin = begins.pop(name)
             phases[name] = analyse_phase(begin, record, draws, submits, by_op, applied,
                                          records, threads, process, start)
+            if focus_run and name in ACTIVATION_TARGETS:
+                activation_times[name] = native_activation_ms(
+                    ACTIVATION_TARGETS[name], begin["at_ms"], record["at_ms"], phases[name]["windows"], window_targets)
             if capture.get("gpu_capture", {}).get("requested"):
                 phases[name]["gpu"] = perf_gpu.summarize_phase(
                     gpu_records, start["unix_ms"] + begin["at_ms"],
                     start["unix_ms"] + record["at_ms"], distribution)
     if not phases and capture["scenario"] != "startup":
         problems.append("no complete phase")
+    if focus_run:
+        for name, target in ACTIVATION_TARGETS.items():
+            if activation_times.get(name) is None:
+                problems.append(f"{name}: missing verified native activation of {target}")
     for name, phase in phases.items():
         inputs = phase["inputs"]
         if inputs["witnessed"] + inputs["superseded"] != inputs["expected_witnesses"]:
@@ -1048,6 +1119,8 @@ def summarize(directory):
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
                "note": "Submission is CPU/platform work, not display completion; see README."}
+    if focus_run:
+        summary["window_activation_ms"] = distribution(activation_times.values())
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
 

@@ -362,6 +362,63 @@ class LiveUiMeasurementTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 live_ui.scenario("status-touch", repository, save_file="missing.txt")
 
+    def test_diff_navigation_requires_the_row_and_enough_hunks_for_every_repeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = live_ui.create_fixture(Path(directory) / "repo", 2, 1)
+            steps = live_ui.scenario("diff-navigation", repository)["steps"]
+            self.assertEqual(sum(step["repeat"] for step in steps if step["do"] == "keys"), 240)
+            live_ui.git(repository, "config", "diff.context", "999")
+            with self.assertRaisesRegex(ValueError, "found 1$"):
+                live_ui.scenario("diff-navigation", repository)
+            live_ui.git(repository, "config", "--unset", "diff.context")
+            (repository / "another.txt").write_text("untracked\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "only unstaged"):
+                live_ui.scenario("diff-navigation", repository)
+            (repository / "another.txt").unlink()
+            live_ui.git(repository, "restore", "search-target.txt")
+            with (repository / "search-target.txt").open("a", encoding="utf-8") as target:
+                target.write("one hunk\n")
+            with self.assertRaisesRegex(ValueError, "41 hunks"):
+                live_ui.scenario("diff-navigation", repository)
+            live_ui.git(repository, "restore", "search-target.txt")
+            target = repository / "search-target.txt"
+            lines = target.read_bytes().splitlines(keepends=True)
+            for index in range(0, len(lines), 1000):
+                lines[index] = lines[index].replace(b"\n", b"\r\n")
+            target.write_bytes(b"".join(lines))
+            with self.assertRaisesRegex(ValueError, "found 0$"):
+                live_ui.scenario("diff-navigation", repository)
+
+    def test_activation_times_use_the_expected_native_window_in_each_phase(self):
+        records = [self.records()[0]]
+        for index in range(20):
+            at = 1000 + index * 150
+            name = f"activate_{index:02}"
+            target = "primary" if index % 2 == 0 else "second"
+            windows = [{"name": label, "window": label + "-id", "active": label != target}
+                       for label in ("primary", "second")]
+            records.extend([
+                {"event": "scenario_windows", "at_ms": at - 1, "detail": {"windows": windows}},
+                {"event": "scenario_phase", "at_ms": at, "detail": {"name": name, "state": "begin"}},
+                {"event": "scenario_window_target", "at_ms": at + index + 1,
+                 "detail": {"name": target, "window": target + "-id"}},
+                {"event": "scenario_phase", "at_ms": at + 130, "detail": {"name": name, "state": "end"}},
+            ])
+        records.append(self.records()[-1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, records, capture={"scenario": "window-activation"})
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            timing = summary["window_activation_ms"]
+            self.assertEqual((timing["count"], timing["p50"], timing["p95"]), (20, 10, 19))
+            records[3]["detail"]["window"] = "second-id"
+            self.write_run(root, records, capture={"scenario": "window-activation"})
+            summary = live_ui.summarize(root)
+            self.assertFalse(summary["valid"])
+            self.assertIn("activate_00", " ".join(summary["problems"]))
+            self.assertEqual(summary["window_activation_ms"]["count"], 19)
+
     def test_lifecycle_growth_is_per_measured_cycle(self):
         phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
                                          "detail": {"name": name, "state": state}}
