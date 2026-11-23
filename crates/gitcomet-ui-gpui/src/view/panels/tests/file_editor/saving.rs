@@ -70,7 +70,9 @@ fn crlf_editor_save_preserves_line_endings(cx: &mut gpui::TestAppContext) {
 
 #[cfg(unix)]
 #[gpui::test]
-fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::TestAppContext) {
+fn repository_editor_rejects_reads_and_saves_through_a_symlinked_directory(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -100,19 +102,37 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
     });
     cx.run_until_parked();
     cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert!(pane.file_editor_error().is_some());
+        assert!(pane.file_editor_input.read(app).text().is_empty());
+        assert!(pane.file_editor_disk_versions().is_empty());
+    });
+
+    // Load a real file, then replace its parent before the next save.
+    let folder = repository.join("historical-folder");
+    std::fs::remove_file(&folder).unwrap();
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("file.txt"), "local contents\n").unwrap();
+    cx.update(|_, app| {
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| pane.reread_file_editor_from_disk(cx))
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
         view.read(app)
             .diff_renderer
             .clone()
             .update(app, |pane, cx| {
-                assert_eq!(
-                    pane.file_editor_input.read(cx).text(),
-                    "external contents\n"
-                );
+                assert_eq!(pane.file_editor_input.read(cx).text(), "local contents\n");
                 pane.file_editor_input
                     .update(cx, |input, cx| input.replace_utf8_range(0..0, "edit ", cx));
             })
     });
     cx.run_until_parked();
+    std::fs::rename(&folder, repository.join("original-folder")).unwrap();
+    std::os::unix::fs::symlink(&external, &folder).unwrap();
     cx.update(|_, app| {
         view.read(app)
             .diff_renderer
@@ -126,7 +146,7 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
         assert!(pane.file_editor_error().is_some());
         assert_eq!(
             pane.file_editor_input.read(app).text(),
-            "edit external contents\n"
+            "edit local contents\n"
         );
     });
     assert_eq!(

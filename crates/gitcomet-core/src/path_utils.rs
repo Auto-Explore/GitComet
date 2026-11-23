@@ -22,6 +22,8 @@ pub fn validated_repo_relative_path(path: &Path) -> io::Result<PathBuf> {
                 format!("repository path cannot enter .git: {}", path.display()),
             ));
         }
+        #[cfg(windows)]
+        crate::filesystem::validate_name(name)?;
         normalized.push(name);
     }
 
@@ -194,9 +196,14 @@ pub fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
 pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<PathBuf> {
     let mut candidate = workdir.to_path_buf();
     for component in relative.components() {
+        if component == Component::CurDir {
+            continue;
+        }
+        #[cfg(windows)]
+        crate::filesystem::validate_name(component.as_os_str())?;
         candidate.push(component.as_os_str());
         match std::fs::symlink_metadata(&candidate) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata) if is_path_redirect(&metadata) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
@@ -216,12 +223,158 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
     Ok(workdir.join(relative))
 }
 
+fn is_path_redirect(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    metadata.file_type().is_symlink()
+}
+
+pub fn worktree_entry_metadata(
+    workdir: &Path,
+    path: &Path,
+) -> io::Result<Option<(PathBuf, std::fs::Metadata)>> {
+    let relative = if path.is_absolute() {
+        path.strip_prefix(workdir)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?
+    } else {
+        path
+    };
+    let relative = validated_repo_relative_path(relative)?;
+    let parent = relative.parent().expect("validated path has a parent");
+    let parent = symlink_free_write_target(workdir, parent)?;
+    let full = parent.join(relative.file_name().expect("validated path has a name"));
+    match std::fs::symlink_metadata(&full) {
+        Ok(metadata) if is_path_redirect(&metadata) && !metadata.is_symlink() => {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "worktree path is a filesystem redirect",
+            ))
+        }
+        Ok(metadata) => Ok(Some((full, metadata))),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub const MAX_CONFLICT_WORKTREE_BYTES: u64 = 64 * 1024 * 1024;
+
+pub fn open_worktree_regular_file(
+    workdir: &Path,
+    path: &Path,
+) -> io::Result<Option<std::fs::File>> {
+    let Some((full, metadata)) = worktree_entry_metadata(workdir, path)? else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worktree path is not a regular file",
+        ));
+    }
+    let file = open_worktree_file(workdir, &full)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || is_path_redirect(&opened) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worktree path is not a regular file",
+        ));
+    }
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn open_worktree_file(workdir: &Path, full: &Path) -> io::Result<std::fs::File> {
+    use rustix::fs::{Mode, OFlags, open, openat};
+
+    let relative = full
+        .strip_prefix(workdir)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let directory = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut parent = open(workdir, directory, Mode::empty())?;
+    for component in relative.parent().unwrap().components() {
+        parent = openat(
+            &parent,
+            component.as_os_str(),
+            directory | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?;
+    }
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let file = openat(&parent, relative.file_name().unwrap(), flags, Mode::empty())?;
+    Ok(std::fs::File::from(file))
+}
+
+#[cfg(windows)]
+fn open_worktree_file(workdir: &Path, full: &Path) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+    let root = strip_windows_verbatim_prefix(std::fs::canonicalize(workdir)?);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(full)?;
+    let opened = strip_windows_verbatim_prefix(gitcomet_filesystem_native::final_file_path(&file)?);
+    let relative = opened
+        .strip_prefix(root)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    validated_repo_relative_path(relative)?;
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_worktree_file(_workdir: &Path, full: &Path) -> io::Result<std::fs::File> {
+    std::fs::File::open(full)
+}
+
+pub fn read_worktree_file_bounded(
+    workdir: &Path,
+    path: &Path,
+    byte_limit: u64,
+) -> io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+
+    let Some(file) = open_worktree_regular_file(workdir, path)? else {
+        return Ok(None);
+    };
+    let too_large = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("worktree file exceeds the {byte_limit} byte limit"),
+        )
+    };
+    if file.metadata()?.len() > byte_limit {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    file.take(byte_limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > byte_limit {
+        return Err(too_large());
+    }
+    Ok(Some(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         canonicalize_or_original, git_dir_for_workdir, has_service_owned_component,
         has_service_owned_git_component, is_git_metadata_component, is_service_owned_name,
-        resolved_git_dir, symlink_free_write_target, validated_repo_relative_path,
+        open_worktree_regular_file, read_worktree_file_bounded, resolved_git_dir,
+        symlink_free_write_target, validated_repo_relative_path, worktree_entry_metadata,
     };
     use std::ffi::OsStr;
     use std::fs;
@@ -397,6 +550,61 @@ mod tests {
         let err = symlink_free_write_target(dir.path(), Path::new("docs/notes.md"))
             .expect_err("a symlinked parent must be refused");
         assert!(err.to_string().contains("docs"), "{err}");
+    }
+
+    #[test]
+    fn worktree_file_reads_enforce_size_and_preserve_missing_files() {
+        let root = tempdir().unwrap();
+        let path = Path::new("note.txt");
+        assert_eq!(
+            read_worktree_file_bounded(root.path(), path, 4).unwrap(),
+            None
+        );
+        fs::write(root.path().join(path), b"note").unwrap();
+        assert_eq!(
+            read_worktree_file_bounded(root.path(), path, 4).unwrap(),
+            Some(b"note".to_vec())
+        );
+        assert_eq!(
+            read_worktree_file_bounded(root.path(), path, 3)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert!(open_worktree_regular_file(root.path(), Path::new(".git/HEAD")).is_err());
+        assert!(open_worktree_regular_file(root.path(), Path::new("../note.txt")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_metadata_exposes_links_without_opening_their_targets() {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), b"note").unwrap();
+        let alias = Path::new("alias.txt");
+        std::os::unix::fs::symlink("note.txt", root.path().join(alias)).unwrap();
+        let (_, metadata) = worktree_entry_metadata(root.path(), alias)
+            .unwrap()
+            .unwrap();
+        assert!(metadata.is_symlink());
+        assert!(open_worktree_regular_file(root.path(), alias).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn worktree_paths_refuse_directory_junctions() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("docs")).unwrap();
+        fs::write(root.path().join("docs/note.txt"), b"note").unwrap();
+        let result = std::process::Command::new("cmd.exe")
+            .current_dir(root.path())
+            .args(["/d", "/c", "mklink", "/J", "alias", "docs"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "junction fixture: {result:?}");
+
+        let path = Path::new("alias/note.txt");
+        assert!(worktree_entry_metadata(root.path(), path).is_err());
+        assert!(symlink_free_write_target(root.path(), path).is_err());
     }
 
     #[test]

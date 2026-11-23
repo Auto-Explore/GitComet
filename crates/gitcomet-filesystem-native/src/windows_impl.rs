@@ -73,12 +73,48 @@ pub fn file_identity(path: &Path) -> io::Result<(u64, u64)> {
         }
         .map_err(io::Error::other)?,
     );
+    handle_identity(handle.0)
+}
+
+pub fn open_file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    handle_identity(windows::Win32::Foundation::HANDLE(file.as_raw_handle()))
+}
+
+fn handle_identity(handle: windows::Win32::Foundation::HANDLE) -> io::Result<(u64, u64)> {
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    unsafe { GetFileInformationByHandle(handle.0, &mut info) }.map_err(io::Error::other)?;
+    // Both callers keep the handle open until the query finishes.
+    unsafe { GetFileInformationByHandle(handle, &mut info) }.map_err(io::Error::other)?;
     Ok((
         u64::from(info.dwVolumeSerialNumber),
         (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
     ))
+}
+
+pub fn final_file_path(file: &std::fs::File) -> io::Result<PathBuf> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows::Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{GetFinalPathNameByHandleW, VOLUME_NAME_DOS},
+    };
+
+    let handle = HANDLE(file.as_raw_handle());
+    let mut buffer = vec![0u16; 512];
+    loop {
+        // The file owns the handle and the buffer lives through the call.
+        let length = unsafe { GetFinalPathNameByHandleW(handle, &mut buffer, VOLUME_NAME_DOS) };
+        if length == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let length = length as usize;
+        if length < buffer.len() {
+            return Ok(OsString::from_wide(&buffer[..length]).into());
+        }
+        buffer.resize(length + 1, 0);
+    }
 }
 
 #[implement(IFileOperationProgressSink)]

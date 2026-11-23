@@ -3,6 +3,7 @@ use crate::util::{run_git_capture_bytes_cancellable, run_git_parsed_stdout_cance
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileDiffTextSource};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::patch_action::{DiffActionSnapshot, SOURCE_BYTE_LIMIT};
+use gitcomet_core::path_utils::{read_worktree_file_bounded, worktree_entry_metadata};
 use gitcomet_core::services::{CancellationToken, Result};
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -48,23 +49,26 @@ fn append_policy(policy: &mut Vec<u8>, bytes: &[u8]) {
     policy.extend_from_slice(bytes);
 }
 
-fn append_worktree_copy(policy: &mut Vec<u8>, path: &std::path::Path) -> Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            let bytes = if metadata.is_symlink() {
-                std::fs::read_link(path)
-                    .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?
-                    .as_os_str()
-                    .as_encoded_bytes()
-                    .to_vec()
-            } else {
-                read_bounded(path)?
-            };
-            policy.push(1);
-            append_policy(policy, &bytes);
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => policy.push(0),
-        Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+fn append_worktree_copy(
+    policy: &mut Vec<u8>,
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<()> {
+    let bytes = match worktree_entry_metadata(workdir, path)? {
+        Some((full, metadata)) if metadata.is_symlink() => Some(
+            std::fs::read_link(full)?
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec(),
+        ),
+        Some(_) => read_worktree_file_bounded(workdir, path, SOURCE_BYTE_LIMIT as u64)?,
+        None => None,
+    };
+    if let Some(bytes) = bytes {
+        policy.push(1);
+        append_policy(policy, &bytes);
+    } else {
+        policy.push(0);
     }
     Ok(())
 }
@@ -110,8 +114,8 @@ impl GixRepo {
                 .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?;
             file.write_all(new.as_bytes())
                 .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?;
-            let metadata = std::fs::metadata(self.spec.workdir.join(path))
-                .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?;
+            let (_, metadata) = worktree_entry_metadata(&self.spec.workdir, path)?
+                .ok_or_else(|| Error::new(ErrorKind::Io(std::io::ErrorKind::NotFound)))?;
             file.as_file()
                 .set_permissions(metadata.permissions())
                 .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?;
@@ -174,7 +178,7 @@ impl GixRepo {
         // Unstaging moves lines between HEAD and the index; the worktree copy
         // plays no part in it, so it must not make the snapshot stale.
         if *area == DiffArea::Unstaged {
-            append_worktree_copy(&mut policy, &self.spec.workdir.join(path))?;
+            append_worktree_copy(&mut policy, &self.spec.workdir, path)?;
         }
         Ok(DiffActionSnapshot {
             diff: gitcomet_core::patch_action::parse_exact_diff(target.clone(), bytes)

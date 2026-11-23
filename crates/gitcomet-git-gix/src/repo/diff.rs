@@ -90,9 +90,7 @@ impl GixRepo {
     /// Whether `path` is a file in the working tree that the index does not
     /// hold.
     fn is_untracked_worktree_file(&self, path: &Path) -> bool {
-        if !std::fs::symlink_metadata(self.spec.workdir.join(path))
-            .is_ok_and(|metadata| !metadata.is_dir())
-        {
+        if worktree_entry_optional(&self.spec.workdir, path).is_none() {
             return false;
         }
         let Ok(key) = gix::path::into_bstr(path) else {
@@ -416,6 +414,30 @@ impl GixRepo {
         ))
     }
 
+    pub(super) fn cache_worktree_preview_bytes(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<FileDiffTextSource> {
+        let directory = preview_cache_dir()?;
+        let mut temp = tempfile::NamedTempFile::new_in(&directory)?;
+        temp.write_all(bytes)?;
+        temp.flush()?;
+        let mut hasher = FxHasher::default();
+        bytes.hash(&mut hasher);
+        let identity = worktree_source_identity(&self.spec.workdir, path, hasher.finish());
+        let suffix = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        let mut cache_path = directory.join(format!("worktree-raw-{identity}"));
+        if !suffix.is_empty() {
+            cache_path.set_extension(suffix);
+        }
+        persist_worktree_git_cache_file(temp, &cache_path)?;
+        Ok(FileDiffTextSource::with_identity(
+            cache_path,
+            format!("worktree-raw:{identity}"),
+        ))
+    }
+
     /// The file handed to "open this side": the worktree file itself, or for
     /// a symlink the cached link text, which is what `git show` would print.
     fn worktree_preview_path_optional(
@@ -495,10 +517,15 @@ impl GixRepo {
         })?;
         let converted;
         let normalized = if super::text_attributes::decodes_working_tree_encoding(&attributes) {
-            converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
+            converted =
+                worktree_encoding_to_git(repo, &index, &self.spec.workdir, path, &attributes)?;
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
         } else {
-            let file = std::fs::File::open(&full).map_err(Error::from)?;
+            let Some(file) =
+                gitcomet_core::path_utils::open_worktree_regular_file(&self.spec.workdir, path)?
+            else {
+                return Ok(None);
+            };
             pipeline.convert_to_git(file, path, &index).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix worktree-to-git conversion: {e}"
@@ -582,16 +609,11 @@ impl GixRepo {
         let repo = self.repo_with_current_config()?;
         match target {
             DiffTarget::WorkingTree { path, area, .. } => {
-                let full_path = if path.is_absolute() {
-                    path.clone()
-                } else {
-                    self.spec.workdir.join(path)
-                };
-                if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                if worktree_path_is_directory(&self.spec.workdir, &repo_path)? {
                     return Ok(None);
                 }
 
-                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
                         let old = match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)?
@@ -798,17 +820,12 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         match target {
             DiffTarget::WorkingTree { path, area, .. } => {
-                let full_path = if path.is_absolute() {
-                    path.clone()
-                } else {
-                    self.spec.workdir.join(path)
-                };
-                if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                if worktree_path_is_directory(&self.spec.workdir, &repo_path)? {
                     return Ok(None);
                 }
 
                 let repo = self.large_file_read_repo();
-                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
                         self.worktree_preview_path_optional(&repo, &repo_path, cancellation)
@@ -979,17 +996,12 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         match target {
             DiffTarget::WorkingTree { path, area, .. } => {
-                let full_path = if path.is_absolute() {
-                    path.clone()
-                } else {
-                    self.spec.workdir.join(path)
-                };
-                if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                if worktree_path_is_directory(&self.spec.workdir, &repo_path)? {
                     return Ok(None);
                 }
 
                 let repo = self.large_file_read_repo();
-                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
                         let old = match gix_index_unconflicted_image_blob_bytes_optional(
@@ -1124,17 +1136,12 @@ impl GixRepo {
         &self,
         path: &Path,
     ) -> Result<Option<ConflictFileStages>> {
-        let full_path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.spec.workdir.join(path)
-        };
-        if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+        let repo_path = to_repo_path(path, &self.spec.workdir)?;
+        if worktree_path_is_directory(&self.spec.workdir, &repo_path)? {
             return Ok(None);
         }
 
         let repo = self.large_file_read_repo();
-        let repo_path = to_repo_path(path, &self.spec.workdir)?;
         Ok(Some(conflict_file_stages_from_stage_data(
             &repo_path,
             gix_index_conflict_stage_data(&repo, &repo_path)?,
@@ -1170,23 +1177,25 @@ impl GixRepo {
             &attributes,
             encoding,
         );
-        let (mut current, current_format) = match std::fs::read(self.spec.workdir.join(&repo_path))
-        {
-            Ok(bytes) => {
-                let (payload, format) = ConflictPayload::decode(
-                    Some(Arc::from(bytes)),
-                    None,
-                    SideKind::Worktree,
-                    &attributes,
-                    encoding,
-                );
-                (Some(payload), format)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                (Some(ConflictPayload::Absent), None)
-            }
-            Err(_) => (None, None),
-        };
+        let (mut current, current_format) =
+            match gitcomet_core::path_utils::read_worktree_file_bounded(
+                &self.spec.workdir,
+                &repo_path,
+                gitcomet_core::path_utils::MAX_CONFLICT_WORKTREE_BYTES,
+            ) {
+                Ok(Some(bytes)) => {
+                    let (payload, format) = ConflictPayload::decode(
+                        Some(Arc::from(bytes)),
+                        None,
+                        SideKind::Worktree,
+                        &attributes,
+                        encoding,
+                    );
+                    (Some(payload), format)
+                }
+                Ok(None) => (Some(ConflictPayload::Absent), None),
+                Err(_) => (None, None),
+            };
 
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
@@ -1437,13 +1446,19 @@ fn conflict_file_stages_from_stage_data(
 pub(super) fn worktree_encoding_to_git(
     repo: &gix::Repository,
     index: &gix::index::State,
+    workdir: &Path,
     path: &Path,
-    full: &Path,
     attributes: &gitcomet_core::text_format::TextAttributes,
 ) -> Result<Vec<u8>> {
     use gix::filter::plumbing::eol;
 
-    let raw = std::fs::read(full).map_err(Error::from)?;
+    const MAX_ENCODED_WORKTREE_BYTES: u64 = 64 * 1024 * 1024;
+    let raw = gitcomet_core::path_utils::read_worktree_file_bounded(
+        workdir,
+        path,
+        MAX_ENCODED_WORKTREE_BYTES,
+    )?
+    .ok_or_else(|| Error::new(ErrorKind::Io(std::io::ErrorKind::NotFound)))?;
     // No override: resolving the attribute lets a UTF-16 label yield to the
     // file's BOM, as iconv does.
     let decoded = gitcomet_core::text_format::decode_bytes(
@@ -1589,16 +1604,14 @@ fn read_worktree_image_file_bytes_cancellable(
     cancellation: &CancellationToken,
 ) -> Result<Option<Vec<u8>>> {
     cancellation.check_cancelled()?;
-    let full = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workdir.join(path)
+    let Some((full, metadata)) = gitcomet_core::path_utils::worktree_entry_metadata(workdir, path)?
+    else {
+        return Ok(None);
     };
-    let metadata = match std::fs::symlink_metadata(&full) {
-        Ok(metadata) if metadata.is_file() => metadata,
+    if !metadata.is_file() {
         // A git-annex locked file: its link text is the git form, which the
         // large-file side resolves to the content. Other links are not images.
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+        if metadata.file_type().is_symlink() {
             let target = std::fs::read_link(&full).map_err(Error::from)?;
             let target = gix::path::into_bstr(target)
                 .map_err(|_| {
@@ -1611,16 +1624,13 @@ fn read_worktree_image_file_bytes_cancellable(
                     .then(|| target.into()),
             );
         }
-        Ok(_) => return Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(Error::from(e)),
-    };
+        return Ok(None);
+    }
     ensure_image_diff_side_size(path, metadata.len())?;
 
-    let mut file = match std::fs::File::open(&full) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(Error::from(e)),
+    let Some(mut file) = gitcomet_core::path_utils::open_worktree_regular_file(workdir, path)?
+    else {
+        return Ok(None);
     };
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     let mut chunk = [0u8; 64 * 1024];
@@ -1873,12 +1883,9 @@ enum WorktreeEntry {
 }
 
 fn worktree_entry_optional(workdir: &Path, path: &Path) -> Option<WorktreeEntry> {
-    let full = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workdir.join(path)
-    };
-    let metadata = std::fs::symlink_metadata(&full).ok()?;
+    let (full, metadata) = gitcomet_core::path_utils::worktree_entry_metadata(workdir, path)
+        .ok()
+        .flatten()?;
     if metadata.file_type().is_symlink() {
         let mut target = Vec::new();
         target.extend_from_slice(
@@ -1889,6 +1896,13 @@ fn worktree_entry_optional(workdir: &Path, path: &Path) -> Option<WorktreeEntry>
         return Some(WorktreeEntry::Symlink { target });
     }
     metadata.is_file().then_some(WorktreeEntry::Regular(full))
+}
+
+fn worktree_path_is_directory(workdir: &Path, path: &Path) -> Result<bool> {
+    Ok(
+        gitcomet_core::path_utils::worktree_entry_metadata(workdir, path)?
+            .is_some_and(|(_, metadata)| metadata.is_dir()),
+    )
 }
 
 #[cfg(test)]

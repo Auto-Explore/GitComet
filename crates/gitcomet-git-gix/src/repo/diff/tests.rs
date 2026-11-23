@@ -254,6 +254,27 @@ fn read_worktree_image_file_bytes_rejects_oversized_file_before_reading() {
     assert!(message.contains("byte limit"));
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_diff_does_not_read_through_a_linked_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/example.png"), b"ordinary fixture bytes").unwrap();
+    std::os::unix::fs::symlink("docs", root.join("alias")).unwrap();
+
+    assert!(worktree_entry_optional(root, Path::new("docs/example.png")).is_some());
+    assert!(worktree_entry_optional(root, Path::new("alias/example.png")).is_none());
+    assert!(matches!(
+        read_worktree_image_file_bytes_optional(root, Path::new("docs/example.png")),
+        Ok(Some(bytes)) if bytes == b"ordinary fixture bytes"
+    ));
+    assert!(!matches!(
+        read_worktree_image_file_bytes_optional(root, Path::new("alias/example.png")),
+        Ok(Some(_))
+    ));
+}
+
 #[test]
 fn read_worktree_image_file_bytes_allows_file_at_size_limit() {
     let tmp = tempfile::tempdir().expect("tempdir");

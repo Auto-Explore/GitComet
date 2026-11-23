@@ -48,16 +48,17 @@ pub(in crate::view) fn unresolved_conflict_marker_paths(
         .iter()
         .filter(|entry| entry.conflict.is_some())
         .filter(|entry| requested.is_empty() || requested.contains(entry.path.as_path()))
-        .filter(|entry| worktree_file_has_conflict_markers(&workdir.join(&entry.path)))
+        .filter(|entry| worktree_file_has_conflict_markers(workdir, &entry.path))
         .map(|entry| entry.path.clone())
         .collect()
 }
 
-fn worktree_file_has_conflict_markers(path: &std::path::Path) -> bool {
+fn worktree_file_has_conflict_markers(workdir: &std::path::Path, path: &std::path::Path) -> bool {
     // Streamed rather than read whole: a conflict can span a multi-megabyte
     // file, and sizing the file out of the scan is what silently skipped the
     // warning. The scan stops at the first closing marker.
-    let Ok(file) = std::fs::File::open(path) else {
+    let Ok(Some(file)) = gitcomet_core::path_utils::open_worktree_regular_file(workdir, path)
+    else {
         // A path that cannot be read cannot be shown to have markers; staging
         // will surface whatever the real problem is.
         return false;

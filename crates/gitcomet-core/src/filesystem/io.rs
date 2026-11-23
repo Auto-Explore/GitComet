@@ -185,6 +185,59 @@ impl DiskVersion {
         Self::read_version(path, &Cancellation::default(), Some(max_bytes))
     }
 
+    /// Read an editor buffer and its save baseline from the same open file.
+    pub fn read_open_file(file: File, max_bytes: u64) -> io::Result<(Self, fs::Metadata, Vec<u8>)> {
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("Only regular files can be edited"));
+        }
+        let too_large = || {
+            io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "File exceeds the editor size limit",
+            )
+        };
+        if metadata.len() > max_bytes {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::new();
+        (&file)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(too_large());
+        }
+        if bytes.len() as u64 != metadata.len() {
+            return Err(io::Error::other(
+                "File changed while reading. Open it again.",
+            ));
+        }
+        let mut hasher = Sha256::new();
+        hash_permissions(&mut hasher, &metadata);
+        hash_file_header(&mut hasher, &metadata);
+        hasher.update(&bytes);
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(windows)]
+        let identity = gitcomet_filesystem_native::open_file_identity(&file)?;
+        #[cfg(not(any(unix, windows)))]
+        let identity = Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Filesystem identity is not available on this platform",
+        ))?;
+        Ok((
+            Self {
+                digest: hasher.finalize().into(),
+                identity,
+            },
+            metadata,
+            bytes,
+        ))
+    }
+
     pub(super) fn read_cancellable(path: &Path, cancellation: &Cancellation) -> io::Result<Self> {
         Self::read_version(path, cancellation, None)
     }
@@ -282,17 +335,12 @@ fn hash_entry(
             return Err(invalid(format!("File exceeds the {limit} byte size limit")));
         }
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        hasher.update(m.permissions().mode().to_le_bytes());
-    }
+    hash_permissions(hasher, &m);
     if m.file_type().is_symlink() {
         hasher.update(b"link");
         hash_bytes(hasher, fs::read_link(path)?.as_os_str().as_encoded_bytes());
     } else if m.is_file() {
-        hasher.update(b"file");
-        hasher.update(m.len().to_le_bytes());
+        hash_file_header(hasher, &m);
         let mut file = open_regular_file(path)?;
         let mut buffer = [0u8; 64 * 1024];
         let mut bytes_read = 0u64;
@@ -333,6 +381,19 @@ fn hash_entry(
         ));
     }
     Ok(())
+}
+
+fn hash_permissions(_hasher: &mut Sha256, _metadata: &fs::Metadata) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        _hasher.update(_metadata.permissions().mode().to_le_bytes());
+    }
+}
+
+fn hash_file_header(hasher: &mut Sha256, metadata: &fs::Metadata) {
+    hasher.update(b"file");
+    hasher.update(metadata.len().to_le_bytes());
 }
 
 fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {

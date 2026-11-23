@@ -126,10 +126,11 @@ impl DiffRenderer {
         repo_id: RepoId,
         path: &Path,
     ) -> Option<DocumentIdentity> {
-        self.repositories()
-            .iter()
-            .find(|r| r.id == repo_id)
-            .map(|r| DocumentIdentity(r.spec.workdir.join(path)))
+        let repo = self.repositories().iter().find(|repo| repo.id == repo_id)?;
+        let root = &repo.spec.workdir;
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        let relative = gitcomet_core::path_utils::validated_repo_relative_path(relative).ok()?;
+        Some(DocumentIdentity(root.join(relative)))
     }
 
     pub(crate) fn filesystem_resolve_unsaved(
@@ -638,6 +639,12 @@ impl DiffRenderer {
         let Some(load_key) = self.file_editor_key().clone() else {
             return;
         };
+        let Some(workdir) = self
+            .document_repository(&load_key)
+            .map(|repo| repo.spec.workdir.clone())
+        else {
+            return;
+        };
         let absolute = load_key.0.clone();
         let Some((request, decode_key)) = self.selected_text_decode_request(SideKind::Worktree)
         else {
@@ -663,21 +670,9 @@ impl DiffRenderer {
         });
         let filesystem = self.store.filesystem();
         cx.spawn(async move |view: WeakEntity<DiffRenderer>, cx| {
-            let read = {
-                let absolute = absolute.clone();
-                move || {
-                    super::preview::preflight_worktree_file_for_editing(&absolute)?;
-                    let _guard = filesystem.lock().unwrap_or_else(|e| e.into_inner());
-                    let version =
-                        super::preview::read_worktree_file_version_for_editing(&absolute)?;
-                    let (text, stamp, hash, format) =
-                        super::preview::read_worktree_file_for_editing(&absolute, &request)?;
-                    if super::preview::read_worktree_file_version_for_editing(&absolute)? != version
-                    {
-                        return Err("File changed while reading. Open it again.".to_string());
-                    }
-                    Ok((text, stamp, hash, format, version))
-                }
+            let read = move || {
+                let _guard = filesystem.lock().unwrap_or_else(|e| e.into_inner());
+                super::preview::read_repository_text_for_editing(&workdir, &absolute, &request)
             };
             let result = if crate::ui_runtime::current().uses_background_compute() {
                 smol::unblock(read).await
@@ -788,6 +783,12 @@ impl DiffRenderer {
         let Some(key) = self.file_editor_key().clone() else {
             return;
         };
+        let Some(workdir) = self
+            .document_repository(&key)
+            .map(|repo| repo.spec.workdir.clone())
+        else {
+            return;
+        };
         let Some(document) = self.editor_documents.find(&key) else {
             return;
         };
@@ -797,10 +798,8 @@ impl DiffRenderer {
                 let path = key.0.clone();
                 move || {
                     let _guard = filesystem.lock().unwrap_or_else(|e| e.into_inner());
-                    gitcomet_core::filesystem::DiskVersion::read_file(
-                        &path,
-                        super::preview::FILE_EDITOR_MAX_TEXT_BYTES as u64,
-                    )
+                    super::preview::read_repository_editor_file(&workdir, &path)
+                        .map(|(version, _, _)| version)
                 }
             };
             let version = if crate::ui_runtime::current().uses_background_compute() {
@@ -1006,29 +1005,20 @@ impl DiffRenderer {
         if self.editor_documents.paused() || buffer.document.read().saving().is_some() {
             return Ok(false);
         }
-        let Some((repo_id, lifetime, worktree)) = self
-            .repositories()
-            .iter()
-            .filter(|repo| key.0.starts_with(&repo.spec.workdir))
-            .max_by_key(|repo| repo.spec.workdir.components().count())
-            .map(|repo| (repo.id, repo.lifetime(), repo.spec.workdir.clone()))
-        else {
+        let Some(repo) = self.document_repository(&key) else {
             self.prune_orphaned_file_editor_stash(cx);
             return Ok(false);
         };
-        if self
-            .repositories()
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .is_some_and(RepoState::is_bare)
-        {
+        if repo.is_bare() {
             buffer.document.set_save_error(
                 Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()),
                 cx,
             );
             return Ok(false);
         }
-        let Some(origin) = self.store.document_save_origin(repo_id, lifetime) else {
+        let repo_id = repo.id;
+        let worktree = repo.spec.workdir.clone();
+        let Some(origin) = self.store.document_save_origin(repo_id, repo.lifetime()) else {
             return Ok(false);
         };
         let current = self.file_editor_key().as_ref() == Some(&key);
@@ -1104,21 +1094,23 @@ impl DiffRenderer {
         cx.notify();
     }
 
-    /// The repository tab and repo-relative path `key` belongs to; the
-    /// innermost repository wins for nested worktrees.
+    fn document_repository(&self, key: &DocumentIdentity) -> Option<&RepoState> {
+        self.repositories()
+            .iter()
+            .filter(|repo| key.0.starts_with(&repo.spec.workdir))
+            .max_by_key(|repo| repo.spec.workdir.components().count())
+    }
+
+    /// The repository tab and relative path of the document's innermost worktree.
     pub(in crate::view) fn document_repo_path(
         &self,
         key: &DocumentIdentity,
     ) -> Option<(RepoId, PathBuf)> {
-        self.repositories()
-            .iter()
-            .filter_map(|repo| {
-                key.0
-                    .strip_prefix(&repo.spec.workdir)
-                    .ok()
-                    .map(|path| (repo.id, path.to_path_buf()))
-            })
-            .min_by_key(|(_, path)| path.components().count())
+        let repo = self.document_repository(key)?;
+        Some((
+            repo.id,
+            key.0.strip_prefix(&repo.spec.workdir).ok()?.to_path_buf(),
+        ))
     }
 
     pub(in crate::view) fn process_file_editor_saves(

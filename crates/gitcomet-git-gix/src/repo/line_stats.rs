@@ -599,7 +599,7 @@ struct FoundFile<'a, 'repo> {
     repo: &'repo gix::Repository,
     filters: &'a mut Filters<'repo>,
     relative: &'a std::path::Path,
-    full: PathBuf,
+    workdir: &'repo std::path::Path,
     /// A clean or process program converts it.
     cleans: bool,
     /// It has a `working-tree-encoding`.
@@ -665,7 +665,10 @@ impl<'repo> WorktreeReader<'repo> {
         let full = self.workdir.join(relative);
         // Before the stat: a pause after it must not age a racy stamp.
         let now = super::racy_check_now(&full);
-        let metadata = std::fs::symlink_metadata(&full).ok()?;
+        let (_, metadata) =
+            gitcomet_core::path_utils::worktree_entry_metadata(self.workdir, relative)
+                .ok()
+                .flatten()?;
         if metadata.file_type().is_symlink() {
             let target = gix::path::into_bstr(std::fs::read_link(&full).ok()?).ok()?;
             return Some(Found::Link(target.into_owned()));
@@ -707,7 +710,7 @@ impl<'repo> WorktreeReader<'repo> {
             repo: self.repo,
             filters,
             relative,
-            full,
+            workdir: self.workdir,
             cleans,
             encoded,
             stamp,
@@ -780,8 +783,8 @@ impl FoundFile<'_, '_> {
                 let Ok(bytes) = super::diff::worktree_encoding_to_git(
                     self.repo,
                     index,
+                    self.workdir,
                     self.relative,
-                    &self.full,
                     &text,
                 ) else {
                     return ReadOutcome::Unreadable;
@@ -790,7 +793,9 @@ impl FoundFile<'_, '_> {
                 return ReadOutcome::of(out);
             }
         }
-        let Ok(mut file) = std::fs::File::open(&self.full) else {
+        let Ok(Some(mut file)) =
+            gitcomet_core::path_utils::open_worktree_regular_file(self.workdir, self.relative)
+        else {
             return ReadOutcome::Unreadable;
         };
         // Without a cleaning driver or working-tree-encoding, conversion only

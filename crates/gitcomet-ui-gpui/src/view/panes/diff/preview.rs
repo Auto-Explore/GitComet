@@ -143,6 +143,71 @@ pub(super) fn worktree_preview_materialized_line_raw_text(
     )
 }
 
+pub(super) fn read_repository_editor_file(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<(
+    gitcomet_core::filesystem::DiskVersion,
+    std::fs::Metadata,
+    Vec<u8>,
+)> {
+    let file =
+        gitcomet_core::path_utils::open_worktree_regular_file(workdir, path)?.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "This file does not exist in the working tree.",
+            )
+        })?;
+    gitcomet_core::filesystem::DiskVersion::read_open_file(file, FILE_EDITOR_MAX_TEXT_BYTES as u64)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::FileTooLarge => std::io::Error::new(
+                error.kind(),
+                format!(
+                    "File is larger than {} MB; editing is not supported.",
+                    FILE_EDITOR_MAX_TEXT_BYTES / (1024 * 1024)
+                ),
+            ),
+            _ => error,
+        })
+}
+
+pub(super) fn read_repository_text_for_editing(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    request: &TextDecodeRequest,
+) -> Result<
+    (
+        SharedString,
+        DiskStamp,
+        u64,
+        SideTextFormat,
+        gitcomet_core::filesystem::DiskVersion,
+    ),
+    String,
+> {
+    let (version, metadata, bytes) =
+        read_repository_editor_file(workdir, path).map_err(|error| error.to_string())?;
+    let decoded = gitcomet_core::text_format::decode_bytes(
+        &bytes,
+        request.kind,
+        &request.attributes,
+        request.encoding,
+    );
+    if decoded.format.binary {
+        return Err(BINARY_PREVIEW_MESSAGE.into());
+    }
+    let hash = disk_content_hash(&bytes);
+    let format = decoded.format;
+    let text = SharedString::from(decoded.text.into_owned());
+    drop(bytes);
+    let (current, _, _) =
+        read_repository_editor_file(workdir, path).map_err(|error| error.to_string())?;
+    if version != current {
+        return Err("File changed while reading. Open it again.".into());
+    }
+    Ok((text, disk_stamp(&metadata), hash, format, version))
+}
+
 /// Read a working-tree file for the editor, decoded as `request` says.
 ///
 /// Shares the preview's reader so both agree on what "editable text" means: it
@@ -248,6 +313,36 @@ fn index_worktree_preview_file(
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let reader = std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
     index_worktree_preview_reader(path, request, &metadata, reader)
+}
+
+fn index_repository_worktree_preview_file(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    request: &TextDecodeRequest,
+) -> Result<(IndexedWorktreePreview, tempfile::TempPath), String> {
+    use std::io::Read as _;
+
+    const MAX_WORKTREE_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+    let mut file = gitcomet_core::path_utils::open_worktree_regular_file(workdir, path)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "This file does not exist in the working tree.".to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let size_error = "File is larger than 64 MB; preview is not supported.";
+    if metadata.len() > MAX_WORKTREE_PREVIEW_BYTES {
+        return Err(size_error.into());
+    }
+    let mut snapshot = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    let size = std::io::copy(
+        &mut (&mut file).take(MAX_WORKTREE_PREVIEW_BYTES + 1),
+        snapshot.as_file_mut(),
+    )
+    .map_err(|error| error.to_string())?;
+    if size > MAX_WORKTREE_PREVIEW_BYTES {
+        return Err(size_error.into());
+    }
+    let mut preview = index_worktree_preview_file(snapshot.path(), request)?;
+    preview.stamp = disk_stamp(&metadata);
+    Ok((preview, snapshot.into_temp_path()))
 }
 
 fn index_worktree_preview_reader(
@@ -692,6 +787,7 @@ impl DiffRenderer {
     /// language) separately.
     pub(in crate::view) fn reset_worktree_preview_source_state(&mut self) {
         self.worktree_preview_source_path = None;
+        self.worktree_preview_snapshot = None;
         self.worktree_preview_decode_key = None;
         self.worktree_preview_text_format = None;
         self.worktree_preview_source_len = 0;
@@ -1184,7 +1280,7 @@ impl DiffRenderer {
         )?;
 
         if self.worktree_preview_source_len > 0 && self.worktree_preview_text.is_empty() {
-            let source_path = Arc::new(self.worktree_preview_source_path.clone()?);
+            let source_path = Arc::new(self.worktree_preview_disk_source_path()?.to_path_buf());
             let flags = self
                 .worktree_preview_line_flags
                 .get(line_ix)
@@ -1205,6 +1301,13 @@ impl DiffRenderer {
             &self.worktree_preview_text,
             range,
         ))
+    }
+
+    pub(super) fn worktree_preview_disk_source_path(&self) -> Option<&std::path::Path> {
+        self.worktree_preview_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.as_ref())
+            .or(self.worktree_preview_source_path.as_deref())
     }
 
     #[cfg(test)]
@@ -2084,6 +2187,9 @@ impl DiffRenderer {
         } else {
             SideKind::GitInternal
         };
+        let workdir = (kind == SideKind::Worktree)
+            .then(|| self.input.workdir().map(std::path::Path::to_path_buf))
+            .flatten();
         let Some((request, decode_key)) = self.selected_text_decode_request(kind) else {
             self.ensure_preview_loading(display_path);
             return;
@@ -2115,7 +2221,16 @@ impl DiffRenderer {
         cx.spawn(async move |view, cx| {
             let index_preview = {
                 let source_path_for_task = source_path.clone();
-                move || index_worktree_preview_file(&source_path_for_task, &request)
+                move || match workdir {
+                    Some(workdir) => index_repository_worktree_preview_file(
+                        &workdir,
+                        &source_path_for_task,
+                        &request,
+                    )
+                    .map(|(preview, snapshot)| (preview, Some(snapshot))),
+                    None => index_worktree_preview_file(&source_path_for_task, &request)
+                        .map(|preview| (preview, None)),
+                }
             };
             let result = if crate::ui_runtime::current().uses_background_compute() {
                 smol::unblock(index_preview).await
@@ -2134,7 +2249,8 @@ impl DiffRenderer {
                         .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 }
                 match result {
-                    Ok(preview) => {
+                    Ok((preview, snapshot)) => {
+                        this.worktree_preview_snapshot = snapshot;
                         this.worktree_preview_disk =
                             DiskIdentity::loaded(preview.stamp, preview.content_hash);
                         let format = preview.format;
@@ -2300,6 +2416,9 @@ impl DiffRenderer {
         let Some((repo_id, path, abs_path)) = self.markdown_preview_task_file() else {
             return;
         };
+        let Some(workdir) = self.input.workdir() else {
+            return;
+        };
         let error = if self.file_edits_are_unsaved_for(repo_id, &path) {
             Some("Save or discard your unsaved edits to this file first")
         } else {
@@ -2308,8 +2427,13 @@ impl DiffRenderer {
                 .map_or(gitcomet_core::text_format::TextFormat::UTF_8, |format| {
                     format.format
                 });
-            match std::fs::read(&abs_path) {
-                Ok(bytes) => {
+            const MAX_TASK_FILE_BYTES: u64 = 64 * 1024 * 1024;
+            match gitcomet_core::path_utils::read_worktree_file_bounded(
+                workdir,
+                &path,
+                MAX_TASK_FILE_BYTES,
+            ) {
+                Ok(Some(bytes)) => {
                     let expected_contents =
                         WorktreeSaveBaseline::Present(Arc::<[u8]>::from(bytes.as_slice()));
                     match toggle_task_marker_in_format(bytes, task, format) {
@@ -2339,7 +2463,7 @@ impl DiffRenderer {
                         None => Some("The file changed on disk; the preview is catching up"),
                     }
                 }
-                Err(_) => Some("Couldn't read the file to update the checkbox"),
+                Ok(None) | Err(_) => Some("Couldn't read the file to update the checkbox"),
             }
         };
         if let Some(message) = error {
