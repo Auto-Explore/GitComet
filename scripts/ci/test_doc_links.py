@@ -20,6 +20,24 @@ class DocLinkTests(unittest.TestCase):
     def test_escaped_spaces_name_the_file_on_disk(self):
         self.assertEqual(doc_links.broken("README.md", "[a](docs/my%20file.md)", {"docs/my file.md"}.__contains__), [])
 
+    def test_code_fences_close_only_with_their_own_kind(self):
+        text = (
+            "````md\n```\n[in a fence](missing.md)\n```\n````\n"
+            "~~~\n```\n[still in](missing.md)\n~~~\n"
+            "use `x[i](missing.md)` and ``a `[b](missing.md)` c``\n"
+            "[after](gone.md)\n"
+        )
+        self.assertEqual(doc_links.broken("a.md", text, set().__contains__), [
+            "a.md:11: link target 'gone.md' does not exist",
+        ])
+
+    def test_a_linked_image_checks_both_targets(self):
+        text = "[![badge](docs/badge.svg)](LICENSE)\n"
+        self.assertEqual(doc_links.broken("README.md", text, set().__contains__), [
+            "README.md:1: link target 'docs/badge.svg' does not exist",
+            "README.md:1: link target 'LICENSE' does not exist",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

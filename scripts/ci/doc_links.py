@@ -13,20 +13,30 @@ import sys
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
-LINK = re.compile(r"\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-FENCE = re.compile(r"^(```|~~~)")
+# The target of an inline link or image, whatever its text holds: in
+# `[![badge](img.svg)](LICENSE)` both targets count.
+TARGET = re.compile(r"\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1")
 SKIPPED = re.compile(r"(?:^|/)(?:vendor|fixtures|test_data)/")
 
 
 def targets(text):
-    """(line, target) for every inline link outside fenced code."""
-    found, fenced = [], False
+    """(line, target) for every inline link outside code."""
+    found, fence = [], None
     for number, line in enumerate(text.splitlines(), 1):
-        if FENCE.match(line.strip()):
-            fenced = not fenced
+        opening = FENCE.match(line)
+        if fence is None and opening:
+            fence = opening.group(1)
             continue
-        if not fenced:
-            found.extend((number, match.group(1)) for match in LINK.finditer(line))
+        if fence is not None:
+            # Only a fence of the same character, at least as long, closes it.
+            closing = opening and not opening.group(2).strip()
+            if closing and opening.group(1)[0] == fence[0] and len(opening.group(1)) >= len(fence):
+                fence = None
+            continue
+        line = CODE_SPAN.sub("", line)
+        found.extend((number, match.group(1)) for match in TARGET.finditer(line))
     return found
 
 
