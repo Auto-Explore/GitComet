@@ -1672,7 +1672,12 @@ impl GitCometView {
         self.show_history_view(window, cx);
         self.sidebar_pane.update(cx, |sidebar, cx| {
             sidebar.open_file_history(
-                self.store.clone(), self.ui_model.clone(), repo_id, path, window, cx,
+                self.store.clone(),
+                self.ui_model.clone(),
+                repo_id,
+                path,
+                window,
+                cx,
             );
         });
     }

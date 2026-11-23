@@ -57,7 +57,8 @@ fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::
             settings.copy_environment_details(window, cx);
             assert_eq!(settings.runtime_info.environment.graphics.len(), 1);
             let copied = crate::clipboard::read_text(cx).expect("environment details copied");
-            let timings = copied.strip_prefix(&settings.runtime_info.environment.summary())
+            let timings = copied
+                .strip_prefix(&settings.runtime_info.environment.summary())
                 .expect("all displayed environment details are included");
             assert!(timings.starts_with("\n\nResponsiveness across open windows"));
             assert!(timings.contains("Frame draw"));

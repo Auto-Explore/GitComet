@@ -336,7 +336,10 @@ type FileSearchMatchRows = (Rc<[FileBrowserVisibleRow]>, Rc<[usize]>);
 pub(in super::super) struct SidebarPaneView {
     /// Tabs contributed after Branches and Files; `None` without any.
     extension_tabs: Option<SidebarExtensionTabs>,
-    file_history: Option<(Entity<panes::file_history::FileHistoryPaneView>, gpui::Subscription)>,
+    file_history: Option<(
+        Entity<panes::file_history::FileHistoryPaneView>,
+        gpui::Subscription,
+    )>,
     pub(in crate::view) file_history_selected: bool,
     explorer_focus: gpui::FocusHandle,
     /// Input events can arrive before the store publishes the preceding click.
@@ -1424,13 +1427,21 @@ impl SidebarPaneView {
         }
     }
 
-    pub(in crate::view) fn file_history_pane(&self) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
+    pub(in crate::view) fn file_history_pane(
+        &self,
+    ) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
         self.file_history.as_ref().map(|(pane, _)| pane)
     }
 
-    fn visible_file_history(&self, cx: &gpui::App) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
+    fn visible_file_history(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
         self.file_history_pane().filter(|pane| {
-            pane.read(cx).target.as_ref().is_some_and(|(repo, _)| Some(*repo) == self.active_repo_id())
+            pane.read(cx)
+                .target
+                .as_ref()
+                .is_some_and(|(repo, _)| Some(*repo) == self.active_repo_id())
         })
     }
 
@@ -1448,8 +1459,12 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let (pane, _) = self.file_history.get_or_insert_with(|| {
-            let init = panes::file_history::FileHistoryPaneInit { root_view: self.root_view.clone() };
-            let pane = cx.new(|cx| panes::file_history::FileHistoryPaneView::new(store, ui_model, init, window, cx));
+            let init = panes::file_history::FileHistoryPaneInit {
+                root_view: self.root_view.clone(),
+            };
+            let pane = cx.new(|cx| {
+                panes::file_history::FileHistoryPaneView::new(store, ui_model, init, window, cx)
+            });
             let subscription = cx.observe(&pane, |_, _, cx| {
                 cx.emit(SidebarHeaderChanged);
                 cx.notify();
@@ -1490,7 +1505,9 @@ impl SidebarPaneView {
             .as_ref()
             .filter(|tabs| tabs.showing().is_some())
             .and_then(|tabs| tabs.view.clone());
-        let history = self.visible_file_history(cx).filter(|_| self.file_history_selected);
+        let history = self
+            .visible_file_history(cx)
+            .filter(|_| self.file_history_selected);
         let content = match (history, contributed, mode) {
             (Some(pane), _, _) => div()
                 .flex_1()
