@@ -417,7 +417,7 @@ impl Topology {
         if !added.keeps(older_tips, &row_of, self.parents.iter().copied()) {
             return None;
         }
-        let added_order = added.date_order(floor)?;
+        let prepends = added.can_prepend(older_tips, floor);
         let rows = self.times.len();
         let first = u32::try_from(rows).ok()?;
         first.checked_add(u32::try_from(added.ids.len()).ok()?)?;
@@ -438,6 +438,45 @@ impl Topology {
             offsets.push(u32::try_from(parents.len()).ok()?);
             times.push(added.times[row]);
         }
+        if !prepends {
+            let mut degrees = vec![0u32; times.len()];
+            for edges in parents.chunks(65_536) {
+                if cancelled() {
+                    return None;
+                }
+                for &parent in edges {
+                    degrees[parent as usize] = degrees[parent as usize].checked_add(1)?;
+                }
+            }
+            let mut seen = rustc_hash::FxHashSet::default();
+            let tip_rows = tips
+                .iter()
+                .filter(|id| seen.insert(**id))
+                .map(|id| {
+                    added
+                        .rows
+                        .get(id)
+                        .map(|row| first + row)
+                        .or_else(|| self.row_of(id))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let topology = Self::ordered(
+                self.hash_len,
+                Scanned {
+                    ids,
+                    offsets,
+                    parents,
+                    times,
+                    degrees,
+                    tip_rows,
+                },
+                cancelled,
+            )
+            .ok()?;
+            record(Work::LogTopologyExtend);
+            return Some(topology);
+        }
+        let added_order = added.date_order(tips)?;
         let mut order = Vec::with_capacity(rows + added_order.len());
         order.extend(added_order.iter().map(|row| first + row));
         order.extend_from_slice(&self.order);

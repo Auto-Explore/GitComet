@@ -149,7 +149,7 @@ fn rebuilt(repo: &dyn GitRepository) -> (HistoryIndexHandle, u64, u64) {
 }
 
 #[test]
-fn commits_on_top_grow_the_index_and_anything_else_rebuilds_it() {
+fn retained_history_grows_across_new_and_older_tips_and_rebuilds_after_rewrites() {
     let mut fixture = Fixture::new();
     let a = fixture.commit("main", &[], 100);
     let b = fixture.commit("main", &[a], 110);
@@ -182,7 +182,7 @@ fn commits_on_top_grow_the_index_and_anything_else_rebuilds_it() {
     // A commit dated before the newest row sorts into the old rows.
     fixture.commit("late", &[a], 105);
     let (index, builds, extends) = rebuilt(repo.as_ref());
-    assert_eq!((builds, extends), (1, 0), "an older commit arrives");
+    assert_eq!((builds, extends), (0, 1), "an older commit arrives");
     assert_eq!(index_rows(&index), fixture.git_rows());
     keep(&mut held, index);
 
@@ -520,9 +520,107 @@ fn pages_after_commits_on_top_read_only_the_added_headers() {
     assert_eq!(page_rows(repo.as_ref()), fixture.git_rows());
     assert_eq!(work(), (1, 1, 44));
 
-    // A commit dated among the older rows is sorted by a full scan, after
-    // its own header showed that it is.
+    // An older fetched branch interleaves with existing rows using their
+    // retained topology. The new commit is the only header read.
     fixture.commit("late", &[tip], 120);
     assert_eq!(page_rows(repo.as_ref()), fixture.git_rows());
-    assert_eq!(work(), (2, 1, 44 + 1 + 45));
+    assert_eq!(work(), (1, 2, 45));
+}
+
+#[test]
+fn interleaved_tips_match_an_independent_full_index_including_time_ties() {
+    let mut fixture = Fixture::new();
+    let root = fixture.commit("main", &[], 100);
+    let base = fixture.commit("main", &[root], 200);
+    let side = fixture.commit("side", &[base], 220);
+    let main = fixture.commit("main", &[base], 250);
+    fixture.commit("main", &[main], 260);
+    fixture.commit("unmerged", &[root], 220);
+    let repo = GixBackend.open(fixture.path()).unwrap();
+    let _capture = capture();
+    let mut held = index_of(repo.as_ref());
+
+    let first = fixture.commit("fetch-one", &[root], 219);
+    fixture.commit("fetch-one", &[first, side], 220);
+    fixture.commit("fetch-two", &[base], 220);
+    for deleted in [false, true] {
+        if deleted {
+            run_git(fixture.path(), &["update-ref", "-d", "refs/heads/unmerged"]);
+        }
+        let extensions = count(Work::LogTopologyExtend);
+        let builds = count(Work::LogTopologyBuild);
+        let (actual, index_builds, index_extensions) = rebuilt(repo.as_ref());
+        assert_eq!(index_builds, u64::from(deleted));
+        assert_eq!(index_extensions, u64::from(!deleted));
+        let pages = page_rows(repo.as_ref());
+        assert_eq!(
+            count(Work::LogTopologyExtend) - extensions,
+            u64::from(!deleted)
+        );
+        assert_eq!(count(Work::LogTopologyBuild) - builds, u64::from(deleted));
+        let expected = independent_index(&fixture);
+        assert_eq!(index_rows(&actual), index_rows(&expected));
+        assert_eq!(actual.probable_stash_rows(), expected.probable_stash_rows());
+        assert_eq!(pages, index_rows(&expected));
+        keep(&mut held, actual);
+    }
+}
+
+fn independent_index(fixture: &Fixture) -> HistoryIndexHandle {
+    let mirror = tempfile::tempdir().unwrap();
+    let clone = git_cmd(fixture.path())
+        .args(["clone", "--quiet", "--mirror"])
+        .arg(fixture.path())
+        .arg(mirror.path())
+        .output()
+        .unwrap();
+    assert!(
+        clone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    index_of(GixBackend.open(mirror.path()).unwrap().as_ref())
+}
+
+#[test]
+fn adding_an_independent_tip_preserves_the_full_walks_heap_ties() {
+    for time in [220, 240] {
+        let mut fixture = Fixture::new();
+        let root = fixture.commit("main", &[], 100);
+        // Distinct parents keep the three equal-time tip commits distinct.
+        let p = fixture.commit("p", &[root], 190);
+        let q = fixture.commit("q", &[root], 195);
+        fixture.commit("main", &[root], 220);
+        fixture.commit("p", &[p], 220);
+        fixture.commit("q", &[q], 220);
+        let repo = GixBackend.open(fixture.path()).unwrap();
+        let held = index_of(repo.as_ref());
+        fixture.commit("r", &[root, p], time);
+        let actual = index_of(repo.as_ref());
+        let expected = index_rows(&independent_index(&fixture));
+        assert_eq!(index_rows(&actual), expected, "new time {time}");
+        assert_eq!(page_rows(repo.as_ref()), expected, "new time {time}");
+        drop(held);
+    }
+}
+
+#[test]
+fn a_deep_insertion_exhausts_the_header_budget_and_matches_a_fresh_index() {
+    let mut fixture = Fixture::new();
+    fast_import_linear_history(fixture.path(), 20_100);
+    let repo = GixBackend.open(fixture.path()).unwrap();
+    let _capture = capture();
+    let held = index_of(repo.as_ref());
+
+    fixture.commit("older", &[], 1);
+    let reads = count(Work::IndexObjectRead);
+    let (actual, builds, extends) = rebuilt(repo.as_ref());
+    assert_eq!((builds, extends), (1, 0));
+    // The new header, the original floor, and the bounded old candidates.
+    assert_eq!(count(Work::IndexObjectRead) - reads, 20_002);
+    assert_eq!(actual.len(), held.len() + 1);
+    assert_eq!(
+        index_rows(&actual),
+        index_rows(&independent_index(&fixture))
+    );
 }

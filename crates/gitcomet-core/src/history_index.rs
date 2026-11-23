@@ -272,6 +272,61 @@ impl HistoryIndex {
             + self.external_edges.capacity() * 4
             + self.external_ids.capacity()
     }
+
+    /// Reorders the leading rows of an unpublished index. Row references and
+    /// external parents follow the permutation; the ID lookup stays sorted.
+    pub fn reorder_prefix(&mut self, order: &[u32]) -> Result<()> {
+        if order.len() > self.len() {
+            return Err(invalid_index("row permutation exceeds index length"));
+        }
+        let mut place = vec![MISSING_PARENT; order.len()];
+        for (at, &row) in order.iter().enumerate() {
+            let Some(previous) = place.get_mut(row as usize) else {
+                return Err(invalid_index("row permutation leaves its prefix"));
+            };
+            if *previous != MISSING_PARENT {
+                return Err(invalid_index("duplicate row in permutation"));
+            }
+            *previous = at as u32;
+        }
+        let edge_count = self.parent_offsets[order.len()] as usize;
+        let mut ids = Vec::with_capacity(order.len() * self.hash_len);
+        let mut offsets = vec![0u32];
+        let mut parents = Vec::with_capacity(edge_count);
+        let mut missing_edges = Vec::new();
+        let mut missing_ids = Vec::new();
+        for &row in order {
+            let row = row as usize;
+            ids.extend_from_slice(self.id_bytes(row).expect("validated row"));
+            for (slot, &parent) in self.parents(row).iter().enumerate() {
+                if parent == MISSING_PARENT {
+                    missing_edges.push(parents.len() as u32);
+                    missing_ids.extend_from_slice(
+                        self.parent_id_bytes(row, slot).expect("external parent"),
+                    );
+                }
+                parents.push(parent);
+            }
+            offsets.push(parents.len() as u32);
+        }
+        self.ids[..ids.len()].copy_from_slice(&ids);
+        self.parent_offsets[..offsets.len()].copy_from_slice(&offsets);
+        self.parents[..edge_count].copy_from_slice(&parents);
+        self.external_edges[..missing_edges.len()].copy_from_slice(&missing_edges);
+        self.external_ids[..missing_ids.len()].copy_from_slice(&missing_ids);
+        for row in self
+            .sorted_rows
+            .iter_mut()
+            .chain(&mut self.parents)
+            .chain(&mut self.probable_stashes)
+        {
+            if let Some(&new) = place.get(*row as usize) {
+                *row = new;
+            }
+        }
+        self.probable_stashes.sort_unstable();
+        Ok(())
+    }
 }
 
 /// A handle pins its immutable topology across refreshes and range reads.
@@ -1528,6 +1583,29 @@ mod lookup_regressions {
                 grown == whole,
                 "rows={rows} added={added} hash_len={hash_len}"
             );
+        }
+    }
+
+    #[test]
+    fn reordered_prefix_matches_a_full_build_with_external_edges_and_stashes() {
+        let cancel = CancellationToken::new();
+        for (count, hash_len) in [(193usize, 20), (65_700, 32)] {
+            let rows = random_rows(count, hash_len, 0x70b2);
+            let mut index = built(&rows, hash_len).finish(&cancel).unwrap();
+            let prefix = 113usize;
+            let order: Vec<u32> = (0..prefix as u32)
+                .map(|row| row * 17 % prefix as u32)
+                .collect();
+            let reordered: Vec<_> = order
+                .iter()
+                .map(|&row| rows[row as usize].clone())
+                .chain(rows[prefix..].iter().cloned())
+                .collect();
+            let index_mut = Arc::get_mut(&mut index).unwrap();
+            assert!(index_mut.reorder_prefix(&[1, 1]).is_err());
+            assert!(index_mut.reorder_prefix(&[1, 2]).is_err());
+            index_mut.reorder_prefix(&order).unwrap();
+            assert!(index == built(&reordered, hash_len).finish(&cancel).unwrap());
         }
     }
 
