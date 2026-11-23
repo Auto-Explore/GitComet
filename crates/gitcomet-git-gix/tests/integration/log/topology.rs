@@ -81,6 +81,33 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     );
 }
 
+/// A history with a commit gone falls back to the commit-date walk after one
+/// topology build: the paged walk would only build the same one again.
+#[test]
+fn a_missing_commit_builds_the_topology_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    run_git(path, &["init", "-q", "-b", "main"]);
+    run_git(path, &["config", "user.email", "you@example.com"]);
+    run_git(path, &["config", "user.name", "You"]);
+    for message in ["one", "two", "three"] {
+        run_git(path, &["commit", "-q", "--allow-empty", "-m", message]);
+    }
+    let root = git_stdout(path, &["rev-list", "--max-parents=0", "HEAD"]);
+    let root = root.trim();
+    std::fs::remove_file(path.join(".git/objects").join(&root[..2]).join(&root[2..])).unwrap();
+    let repo = GixBackend.open(path).unwrap();
+    let _capture = capture();
+    let _ = repo.build_history_index(
+        &HistoryMode::FullReachable.into(),
+        None,
+        &Default::default(),
+        &CancellationToken::new(),
+        &mut |_| {},
+    );
+    assert_eq!(count(Work::LogTopologyBuild), 1);
+}
+
 #[test]
 fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips() {
     use std::io::Write as _;

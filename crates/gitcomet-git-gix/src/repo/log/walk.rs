@@ -346,14 +346,29 @@ pub(super) fn new_whole_history_walk(
             .flatten()
             .is_none_or(|graph| tips_lie_far_apart(&graph, tips));
         let cache = shared.then_some(topology_cache);
-        if let Ok(walk) = TopologyWalk::new(repo, tips, &walk_cancellation, cache) {
-            return Ok(super::LogPagedWalkState {
-                pending: std::collections::VecDeque::new(),
-                walk: super::LogPagedWalk::CachedDateOrder(walk),
-                cancellation: walk_cancellation,
-            });
+        let state = |walk| super::LogPagedWalkState {
+            pending: std::collections::VecDeque::new(),
+            walk,
+            cancellation: walk_cancellation.clone(),
+        };
+        match TopologyWalk::new(repo, tips, &walk_cancellation, cache) {
+            Ok(walk) => return Ok(state(super::LogPagedWalk::CachedDateOrder(walk))),
+            // The paged walk would build this same topology again; take its
+            // fallback here instead.
+            Err(error) if shared => {
+                cancellation.check_cancelled()?;
+                if !topo_build_error_is_missing_object(&error) {
+                    return Err(crate::repo::object_store::gix_error(
+                        "gix date-order walk",
+                        error,
+                    ));
+                }
+                let filter = log_paged_walk_filter(repo, shallow);
+                let parents = gix::traverse::commit::Parents::All;
+                return Ok(state(new_commit_time_walk(repo, tips, parents, filter)?));
+            }
+            Err(_) => cancellation.check_cancelled()?,
         }
-        cancellation.check_cancelled()?;
     }
     new_log_paged_walk(
         repo,
