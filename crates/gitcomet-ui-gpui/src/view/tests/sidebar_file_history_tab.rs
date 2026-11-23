@@ -46,6 +46,13 @@ fn opening_the_tab_selects_it_and_shows_its_content(cx: &mut gpui::TestAppContex
     let (view, cx) = open_view(cx);
     assert!(!shows(cx, "sidebar_tab_file_history"));
     let mode = cx.update(|_window, app| view.read(app).ui_model.read(app).state.sidebar_mode);
+    assert!(cx.update(|_, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .is_none()
+    }));
     open_history(&view, cx);
     assert!(shows(cx, "sidebar_tab_file_history"));
     assert!(shows(cx, "sidebar_file_history_content"));
@@ -71,7 +78,14 @@ fn files_shows_the_browser_and_the_tab_stays_until_closed(cx: &mut gpui::TestApp
     click(cx, "sidebar_tab_file_history");
     assert!(shows(cx, "sidebar_file_history_content"));
 
-    let pane = cx.update(|_window, app| view.read(app).file_history_pane.clone());
+    let pane = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .expect("opened file history")
+            .clone()
+    });
     cx.update(|_window, app| pane.update(app, |pane, cx| pane.close(cx)));
     test_support::redraw(cx);
     assert!(!shows(cx, "sidebar_tab_file_history"));
@@ -184,7 +198,14 @@ fn escape_in_the_filter_keeps_the_sidebar_search_open(cx: &mut gpui::TestAppCont
     let sidebar = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
     cx.update(|_window, app| sidebar.update(app, |pane, _| pane.file_search_open = true));
     open_history(&view, cx);
-    let pane = cx.update(|_window, app| view.read(app).file_history_pane.clone());
+    let pane = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .expect("opened file history")
+            .clone()
+    });
 
     let input = cx.update(|_w, app| pane.read(app).filter_input());
     cx.update(|_w, app| input.update(app, |input, cx| input.set_text("abc", cx)));
@@ -262,7 +283,14 @@ fn picking_a_commit_from_a_contributed_view_shows_history(cx: &mut gpui::TestApp
     click(cx, "picker_prompt_item_1");
     assert!(!shows(cx, "panels_review"), "History has the main canvas");
     assert!(shows(cx, "sidebar_file_history_content"));
-    let pane = cx.update(|_window, app| view.read(app).file_history_pane.clone());
+    let pane = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .expect("opened file history")
+            .clone()
+    });
     assert_eq!(
         cx.update(|_w, app| pane.read(app).selected.clone()),
         Some(menu_commit(1).id)

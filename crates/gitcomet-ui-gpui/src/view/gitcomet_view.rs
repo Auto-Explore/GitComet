@@ -800,17 +800,6 @@ impl GitCometView {
             cx.new(|cx| BottomStatusBarView::new(ui_model.clone(), weak_view.clone(), cx));
         panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
-        let file_history_pane = cx.new(|cx| {
-            panes::file_history::FileHistoryPaneView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                panes::file_history::FileHistoryPaneInit {
-                    root_view: weak_view.clone(),
-                },
-                window,
-                cx,
-            )
-        });
         let sidebar_pane = cx.new(|cx| {
             let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
@@ -819,7 +808,6 @@ impl GitCometView {
                 ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
-                file_history_pane.clone(),
                 cx,
             );
             pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
@@ -1284,7 +1272,6 @@ impl GitCometView {
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             reflog_pane,
-            file_history_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
             commit_push_after_enabled,
@@ -1677,10 +1664,11 @@ impl GitCometView {
         // is selected, since changing the view may select a sidebar tab of
         // its own.
         self.show_history_view(window, cx);
-        self.file_history_pane
-            .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.show_file_history(window, cx));
+        self.sidebar_pane.update(cx, |sidebar, cx| {
+            sidebar.open_file_history(
+                self.store.clone(), self.ui_model.clone(), repo_id, path, window, cx,
+            );
+        });
     }
 
     pub(super) fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {

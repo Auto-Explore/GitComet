@@ -336,10 +336,8 @@ type FileSearchMatchRows = (Rc<[FileBrowserVisibleRow]>, Rc<[usize]>);
 pub(in super::super) struct SidebarPaneView {
     /// Tabs contributed after Branches and Files; `None` without any.
     extension_tabs: Option<SidebarExtensionTabs>,
-    /// The on-demand file history tab; it has content while its pane has a target.
-    file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
+    file_history: Option<(Entity<panes::file_history::FileHistoryPaneView>, gpui::Subscription)>,
     pub(in crate::view) file_history_selected: bool,
-    _file_history_subscription: gpui::Subscription,
     explorer_focus: gpui::FocusHandle,
     /// Input events can arrive before the store publishes the preceding click.
     explorer_pending_focus: Option<(RepoId, PathBuf)>,
@@ -509,13 +507,8 @@ impl SidebarPaneView {
         sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
-        file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let file_history_subscription = cx.observe(&file_history_pane, |_, _, cx| {
-            cx.emit(SidebarHeaderChanged);
-            cx.notify();
-        });
         let state = Arc::clone(&ui_model.read(cx).state);
         let documents = ui_model.read(cx).documents.clone();
         let documents_subscription = cx.observe(documents.changes(), |_, _, cx| cx.notify());
@@ -707,9 +700,8 @@ impl SidebarPaneView {
             sidebar_collapsed_items_by_repo,
             sidebar_pinned_branches_by_repo,
             extension_tabs: None,
-            file_history_pane,
+            file_history: None,
             file_history_selected: false,
-            _file_history_subscription: file_history_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -1422,17 +1414,40 @@ impl SidebarPaneView {
         }
     }
 
-    /// Whether the history tab is listed: it belongs to one repository.
-    fn file_history_visible(&self, cx: &gpui::App) -> bool {
-        self.file_history_pane
-            .read(cx)
-            .target
-            .as_ref()
-            .is_some_and(|(repo_id, _)| Some(*repo_id) == self.active_repo_id())
+    pub(in crate::view) fn file_history_pane(&self) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
+        self.file_history.as_ref().map(|(pane, _)| pane)
+    }
+
+    fn visible_file_history(&self, cx: &gpui::App) -> Option<&Entity<panes::file_history::FileHistoryPaneView>> {
+        self.file_history_pane().filter(|pane| {
+            pane.read(cx).target.as_ref().is_some_and(|(repo, _)| Some(*repo) == self.active_repo_id())
+        })
     }
 
     fn file_history_shown(&self, cx: &gpui::App) -> bool {
-        self.file_history_selected && self.file_history_visible(cx)
+        self.file_history_selected && self.visible_file_history(cx).is_some()
+    }
+
+    pub(in crate::view) fn open_file_history(
+        &mut self,
+        store: Arc<AppStore>,
+        ui_model: Entity<AppUiModel>,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (pane, _) = self.file_history.get_or_insert_with(|| {
+            let init = panes::file_history::FileHistoryPaneInit { root_view: self.root_view.clone() };
+            let pane = cx.new(|cx| panes::file_history::FileHistoryPaneView::new(store, ui_model, init, window, cx));
+            let subscription = cx.observe(&pane, |_, _, cx| {
+                cx.emit(SidebarHeaderChanged);
+                cx.notify();
+            });
+            (pane, subscription)
+        });
+        pane.update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
+        self.show_file_history(window, cx);
     }
 
     /// Selects the history tab and leaves a contributed tab.
@@ -1465,22 +1480,22 @@ impl SidebarPaneView {
             .as_ref()
             .filter(|tabs| tabs.showing().is_some())
             .and_then(|tabs| tabs.view.clone());
-        let history_shown = self.file_history_shown(cx);
-        let content = match (contributed, mode) {
-            _ if history_shown => div()
+        let history = self.visible_file_history(cx).filter(|_| self.file_history_selected);
+        let content = match (history, contributed, mode) {
+            (Some(pane), _, _) => div()
                 .flex_1()
                 .min_h(px(0.0))
                 .debug_selector(|| "sidebar_file_history_content".to_string())
-                .child(self.file_history_pane.clone())
+                .child(pane.clone())
                 .into_any_element(),
-            (Some(view), _) => div()
+            (None, Some(view), _) => div()
                 .flex_1()
                 .min_h(px(0.0))
                 .debug_selector(|| "sidebar_extension_tab_content".to_string())
                 .child(view)
                 .into_any_element(),
-            (None, SidebarMode::Branches) => self.render_branches_content(theme, cx),
-            (None, SidebarMode::Files) => self.render_file_browser_content(theme, cx),
+            (None, None, SidebarMode::Branches) => self.render_branches_content(theme, cx),
+            (None, None, SidebarMode::Files) => self.render_file_browser_content(theme, cx),
         };
 
         // `size_full`, not just `h_full`: mounted as a cached view this is laid
