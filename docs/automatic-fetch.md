@@ -23,8 +23,10 @@ Saved workspaces whose windows are closed do not participate.
 
 Automatic fetch uses the same remote selection, refspecs, and pruning preference
 as **Fetch all**. It updates remote information without initiating pull, merge,
-rebase, or checkout. The existing pruning safeguards for local branches and tags
-also apply. A force push overwrites only the remote tip its confirmation showed
+rebase, checkout, or recursive submodule fetching. It skips file-based Git hooks
+and reference-transaction hooks. The existing pruning safeguards for local
+branches and tags also apply. A force push overwrites only the remote tip its
+confirmation showed
 when it opened, so a fetch while the dialog is open cannot add commits to what
 it replaces.
 
@@ -82,6 +84,15 @@ is unavailable.
 Automatic fetch can use stored credentials and unlocked SSH keys. It does not
 open sign-in dialogs or interrupt the current task with notifications. If
 authentication needs input, use **Fetch all** to complete it.
+
+Automatic fetch skips a checkout if its Git configuration or its includes
+define a credential helper, SSH command, Git proxy command, upload-pack command,
+remote helper, or Git hook setting. Helpers configured outside the checkout
+through your Git user or system configuration can still supply credentials.
+The Pull menu shows why the checkout was skipped. Use **Fetch all** if you
+trust the checkout and want its configuration to apply. The check runs before
+Git starts fetching. A shared folder whose Git settings can change during the
+fetch still requires a trusted owner.
 
 ## Failures
 

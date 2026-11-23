@@ -30,7 +30,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
-gitcomet-git-gix = { workspace = true }
+gitcomet-git-gix = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true }

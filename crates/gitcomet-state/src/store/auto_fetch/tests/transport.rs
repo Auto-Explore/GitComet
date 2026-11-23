@@ -109,13 +109,10 @@ impl GatedStore {
                 "ssh://fixture.invalid/repository",
             ],
         );
-        git(
-            &clone,
-            &[
-                "config",
-                "core.sshCommand",
-                &format!("sh {}", shell_quote(script.to_str().unwrap())),
-            ],
+        set_trusted_fixture_config(
+            root.path(),
+            "core.sshCommand",
+            &format!("sh {}", shell_quote(script.to_str().unwrap())),
         );
         git(&clone, &["config", "ssh.variant", "ssh"]);
         let (store, events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));

@@ -53,6 +53,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
 
 mod annex;
 mod apply_change;
+mod background_fetch;
 pub(crate) mod bare;
 mod bare_lifecycle;
 mod blame;

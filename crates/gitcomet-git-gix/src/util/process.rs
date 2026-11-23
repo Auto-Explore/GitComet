@@ -95,9 +95,10 @@ pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
     if super::background::background_git_enabled() {
         credentials_without_prompts(&mut cmd);
+        super::background::disable_background_git_hooks(&mut cmd);
     }
     #[cfg(any(test, feature = "test-support"))]
-    crate::test_support::apply_git_command_environment(&mut cmd);
+    crate::test_support::apply_git_command_environment(&mut cmd, workdir);
     cmd.arg("-C").arg(workdir);
     cmd
 }
