@@ -24,6 +24,8 @@ pub enum Work {
     LogWalkObjectRead,
     /// A commit header read ahead of the scan, from a pack's run of commits.
     LogHeaderReadAhead,
+    /// Every record of a commit-graph read front to back for a scan.
+    CommitGraphRead,
     LogTopologyBuild,
     /// A topology made from the cached one and the commits added on top.
     LogTopologyExtend,
@@ -34,7 +36,7 @@ pub enum Work {
 }
 
 impl Work {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -52,6 +54,7 @@ impl Work {
         Self::PickerFilterItem,
         Self::LogWalkObjectRead,
         Self::LogHeaderReadAhead,
+        Self::CommitGraphRead,
         Self::LogTopologyBuild,
         Self::LogTopologyExtend,
         Self::HistoryIndexBuild,
@@ -78,6 +81,7 @@ impl Work {
             Self::PickerFilterItem => "picker_filter_item",
             Self::LogWalkObjectRead => "log_walk_object_read",
             Self::LogHeaderReadAhead => "log_header_read_ahead",
+            Self::CommitGraphRead => "commit_graph_read",
             Self::LogTopologyBuild => "log_topology_build",
             Self::LogTopologyExtend => "log_topology_extend",
             Self::HistoryIndexBuild => "history_index_build",

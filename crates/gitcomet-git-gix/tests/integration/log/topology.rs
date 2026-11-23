@@ -446,9 +446,10 @@ fn packed_commit_headers_are_read_ahead_and_give_the_same_order() {
             )
             .unwrap()
             .unwrap();
-        // The scan reads the kept commit, its child and the five later ones.
+        // The scan reads its first 4,096 headers one by one, among them the
+        // kept commit, its child and the five later ones, and the rest ahead.
         assert_eq!(count(Work::LogHeaderReadAhead), packed - 1, "{format}");
-        assert_eq!(count(Work::LogWalkObjectRead), 7, "{format}");
+        assert_eq!(count(Work::LogWalkObjectRead), 4_096, "{format}");
         assert_eq!(index.len(), expected.len());
         for (row, info) in expected.iter().enumerate() {
             assert_eq!(

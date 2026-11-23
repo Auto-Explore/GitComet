@@ -2,15 +2,17 @@
 //!
 //! The graph's commits lie in the order of their IDs, so following parents
 //! through it reads memory at random: a record, the row table and an ID for
-//! every commit, 255 ns each on a history of 1.8 million. Here the records
-//! are first read front to back into one small array, on several threads.
-//! The scan then follows parents through that array alone, numbering rows
-//! as it meets them, which keeps a commit near its parents for the ordering
-//! that follows. The IDs are copied last, again on several threads.
+//! every commit, 255 ns each on a history of 1.8 million. Once the tips are
+//! seen to reach many commits, the records are read front to back into one
+//! small array, on several threads, and the scan follows parents through
+//! that array alone, numbering rows as it meets them, which keeps a commit
+//! near its parents for the ordering that follows. The IDs are copied last,
+//! again on several threads.
 
 use super::{Scanned, check_cancelled, read_header, too_large};
 use crate::repo::log::log_paged_walk_handle;
 use crate::repo::log::walk::DecodeThreadBudget;
+use gitcomet_core::history_perf::{Work, record};
 use gix::commitgraph::{Graph, Position};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Mutex;
@@ -21,6 +23,17 @@ const NONE: u32 = u32::MAX;
 const MANY: u32 = u32::MAX - 1;
 /// Commits a thread takes at a time, between looks at whether to stop.
 const CHUNK: usize = 65_536;
+
+/// Commits followed record by record before every record is read in bulk: a
+/// record read at random costs about as much as 64 read front to back, and a
+/// short branch of a large history reads few.
+fn bulk_after(commits: usize) -> usize {
+    (commits / 256).max(4_096)
+}
+
+fn corrupt_edge<E>(_: E) -> gix::Error {
+    gix::error::corruption("Commit-graph parent edge").into()
+}
 
 /// A commit's first two parents, as positions in the graph, and its
 /// committer time: one cache line for what the scan reads of a commit.
@@ -73,6 +86,7 @@ fn on_decode_threads<T: Send>(
 
 impl Headers {
     fn read(graph: &Graph, chunk: usize, cancelled: &dyn Fn() -> bool) -> gix::Result<Self> {
+        record(Work::CommitGraphRead);
         let commits = graph.num_commits() as usize;
         if commits >= MANY as usize {
             return Err(too_large());
@@ -103,11 +117,9 @@ impl Headers {
                     let position = (at_chunk * chunk + at) as u32;
                     let commit = graph.commit_at(Position(position));
                     header.time = commit.committer_timestamp() as i64;
-                    let mut parents = commit.iter_parents().map(|parent| {
-                        parent.map(|parent| parent.0).map_err(|_| {
-                            gix::Error::from(gix::error::corruption("Commit-graph parent edge"))
-                        })
-                    });
+                    let mut parents = commit
+                        .iter_parents()
+                        .map(|parent| parent.map(|parent| parent.0).map_err(corrupt_edge));
                     let Some(first) = parents.next().transpose()? else {
                         continue;
                     };
@@ -219,23 +231,26 @@ pub(super) fn scan(
     tips: &[gix::ObjectId],
     cancelled: &dyn Fn() -> bool,
 ) -> gix::Result<Scanned> {
-    scan_in_chunks(repo, graph, tips, cancelled, CHUNK)
+    let bulk = bulk_after(graph.num_commits() as usize);
+    scan_in_chunks(repo, graph, tips, cancelled, CHUNK, bulk)
 }
 
-/// [`scan`], sharing the graph out `chunk` commits at a time.
+/// [`scan`], sharing the graph out `chunk` commits at a time once `bulk`
+/// commits were followed record by record.
 pub(super) fn scan_in_chunks(
     repo: &gix::ThreadSafeRepository,
     graph: &Graph,
     tips: &[gix::ObjectId],
     cancelled: &dyn Fn() -> bool,
     chunk: usize,
+    bulk: usize,
 ) -> gix::Result<Scanned> {
-    let headers = Headers::read(graph, chunk, cancelled)?;
+    let mut headers = None;
     let mut rows = Rows {
         graph,
         nodes: Vec::new(),
         degrees: Vec::new(),
-        by_position: vec![NONE; headers.headers.len()],
+        by_position: vec![NONE; graph.num_commits() as usize],
         outside: Vec::new(),
         by_id: FxHashMap::default(),
     };
@@ -259,15 +274,26 @@ pub(super) fn scan_in_chunks(
         if row % chunk == 0 {
             check_cancelled(cancelled())?;
         }
-        let time = match rows.nodes[row] {
-            Node::Graph(position) => {
+        if row == bulk {
+            headers = Some(Headers::read(graph, chunk, cancelled)?);
+        }
+        let time = match (rows.nodes[row], &headers) {
+            (Node::Graph(position), Some(headers)) => {
                 for parent in headers.parents(position) {
                     let parent = rows.of_position(parent)?;
                     parents.push(rows.child_of(parent));
                 }
                 headers.headers[position as usize].time
             }
-            Node::Outside(outside) => {
+            (Node::Graph(position), None) => {
+                let commit = graph.commit_at(Position(position));
+                for parent in commit.iter_parents() {
+                    let parent = rows.of_position(parent.map_err(corrupt_edge)?.0)?;
+                    parents.push(rows.child_of(parent));
+                }
+                commit.committer_timestamp() as i64
+            }
+            (Node::Outside(outside), _) => {
                 check_cancelled(cancelled())?;
                 let id = rows.outside[outside as usize];
                 read_header(&objects, &id, &mut buffer, |parent| {

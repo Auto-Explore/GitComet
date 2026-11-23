@@ -549,6 +549,7 @@ impl Topology {
 
 /// Every commit reachable from the tips as a row, with its parents as rows
 /// and the number of rows naming it as a parent: what the ordering takes.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct Scanned {
     ids: Vec<u8>,
     offsets: Vec<u32>,
@@ -559,6 +560,11 @@ struct Scanned {
     tip_rows: Vec<u32>,
 }
 
+/// Headers read one by one before the packs' commits are read ahead: about
+/// as long as reading ahead a few thousand takes, which a short branch of a
+/// large store does not have to wait for.
+const READ_BEFORE_READING_AHEAD: usize = 4_096;
+
 /// Scans without a commit-graph: each header is read from its object, or
 /// from the packs' commits read ahead on several threads.
 fn scan_objects(
@@ -566,13 +572,17 @@ fn scan_objects(
     tips: &[gix::ObjectId],
     cancelled: &dyn Fn() -> bool,
 ) -> gix::Result<Scanned> {
-    let hash_len = repo.objects.object_hash().len_in_bytes();
-    let packed = PackedCommits::read(repo, cancelled);
-    let table = match &packed {
-        Some(packed) => Table::Packed(packed),
-        None => Table::None,
-    };
-    let mut rows = Rows::new(table);
+    scan_objects_reading_ahead_after(repo, tips, cancelled, READ_BEFORE_READING_AHEAD)
+}
+
+/// [`scan_objects`], reading ahead once `read` headers were read.
+fn scan_objects_reading_ahead_after(
+    repo: &gix::ThreadSafeRepository,
+    tips: &[gix::ObjectId],
+    cancelled: &dyn Fn() -> bool,
+    read: usize,
+) -> gix::Result<Scanned> {
+    let mut rows = Rows::new(Table::None);
     let mut tip_rows = Vec::new();
     for &tip in tips {
         let known = rows.len();
@@ -582,49 +592,99 @@ fn scan_objects(
         }
     }
     let objects = log_paged_walk_handle(repo);
-    let mut buffer = Vec::new();
-    let mut offsets = vec![0];
-    let mut parents = Vec::new();
-    let mut times = Vec::new();
-    let mut row = 0;
-    while row < rows.len() {
-        check_cancelled(cancelled())?;
-        let mut time = 0;
-        // A table holds the header: no object to find or inflate.
-        let held = match (table, rows.position(row)) {
-            (Table::Packed(packed), Some(position)) => match packed.commit(position) {
-                Some((at, held)) => {
-                    time = at;
-                    for parent in held {
-                        parents.push(rows.child_of_position(parent)?);
-                    }
-                    true
-                }
-                None => false,
-            },
-            _ => false,
-        };
-        if !held {
-            let id =
-                gix::ObjectId::from_bytes_or_panic(&rows.ids[row * hash_len..(row + 1) * hash_len]);
-            time = read_header(&objects, &id, &mut buffer, |parent| {
-                parents.push(rows.child_of_id(parent)?);
-                Ok(())
-            })?;
+    let mut scan = ObjectScan::new(repo.objects.object_hash().len_in_bytes());
+    scan.until(&mut rows, &objects, read, cancelled)?;
+    let packed = if scan.row < rows.len() {
+        PackedCommits::read(repo, cancelled)
+    } else {
+        None
+    };
+    let mut rows = match &packed {
+        Some(packed) => rows.with_table(Table::Packed(packed)),
+        None => rows,
+    };
+    scan.until(&mut rows, &objects, usize::MAX, cancelled)?;
+    Ok(scan.finish(rows, tip_rows))
+}
+
+/// What an object scan has read: the rows below `row`.
+struct ObjectScan {
+    hash_len: usize,
+    buffer: Vec<u8>,
+    offsets: Vec<u32>,
+    parents: Vec<u32>,
+    times: Vec<i64>,
+    row: usize,
+}
+
+impl ObjectScan {
+    fn new(hash_len: usize) -> Self {
+        Self {
+            hash_len,
+            buffer: Vec::new(),
+            offsets: vec![0],
+            parents: Vec::new(),
+            times: Vec::new(),
+            row: 0,
         }
-        times.push(time);
-        offsets.push(u32::try_from(parents.len()).map_err(|_| too_large())?);
-        row += 1;
     }
-    let Rows { ids, degrees, .. } = rows;
-    Ok(Scanned {
-        ids,
-        offsets,
-        parents,
-        times,
-        degrees,
-        tip_rows,
-    })
+
+    /// Reads rows until `end` or until every row met is read.
+    fn until(
+        &mut self,
+        rows: &mut Rows<'_>,
+        objects: &impl gix::objs::Find,
+        end: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> gix::Result<()> {
+        let hash_len = self.hash_len;
+        while self.row < rows.len().min(end) {
+            check_cancelled(cancelled())?;
+            let row = self.row;
+            let mut time = 0;
+            // A table holds the header: no object to find or inflate.
+            let held = match (rows.table, rows.position(row)) {
+                (Table::Packed(packed), Some(position)) => match packed.commit(position) {
+                    Some((at, held)) => {
+                        time = at;
+                        for parent in held {
+                            self.parents.push(rows.child_of_position(parent)?);
+                        }
+                        true
+                    }
+                    None => false,
+                },
+                _ => false,
+            };
+            if !held {
+                let id = gix::ObjectId::from_bytes_or_panic(
+                    &rows.ids[row * hash_len..(row + 1) * hash_len],
+                );
+                let parents = &mut self.parents;
+                time = read_header(objects, &id, &mut self.buffer, |parent| {
+                    parents.push(rows.child_of_id(parent)?);
+                    Ok(())
+                })?;
+            }
+            self.times.push(time);
+            let edges = u32::try_from(self.parents.len()).map_err(|_| too_large())?;
+            self.offsets.push(edges);
+            self.row += 1;
+        }
+        Ok(())
+    }
+
+    fn finish(self, rows: Rows<'_>, tip_rows: Vec<u32>) -> Scanned {
+        let Rows { ids, degrees, .. } = rows;
+        Scanned {
+            ids,
+            offsets: self.offsets,
+            parents: self.parents,
+            times: self.times,
+            degrees,
+            tip_rows,
+        }
+    }
 }
 
 /// Reads a commit's parents and committer time from its object.
@@ -707,6 +767,30 @@ impl<'a> Rows<'a> {
 
     fn len(&self) -> usize {
         self.degrees.len()
+    }
+
+    /// These rows, finding commits in `table` from now on.
+    fn with_table<'b>(self, table: Table<'b>) -> Rows<'b> {
+        let mut rows = Rows {
+            table,
+            by_position: vec![u32::MAX; table.len()],
+            by_id: FxHashMap::default(),
+            ids: self.ids,
+            positions: self.positions,
+            degrees: self.degrees,
+        };
+        for (id, row) in self.by_id {
+            match table.lookup(&id) {
+                Some(position) => {
+                    rows.by_position[position as usize] = row;
+                    rows.positions[row as usize] = position;
+                }
+                None => {
+                    rows.by_id.insert(id, row);
+                }
+            }
+        }
+        rows
     }
 
     fn position(&self, row: usize) -> Option<u32> {
@@ -896,9 +980,17 @@ mod tests {
                 .unwrap();
             let never = || false;
             let capture = gitcomet_core::history_perf::capture();
-            let from_graph = graph_scan::scan_in_chunks(&store, &graph, &tips, &never, 64).unwrap();
+            let from_graph =
+                graph_scan::scan_in_chunks(&store, &graph, &tips, &never, 64, 0).unwrap();
             let read = gitcomet_core::history_perf::count(Work::LogWalkObjectRead);
             drop(capture);
+            // Records followed one by one first, all of them, or none: the
+            // rows come out numbered alike.
+            for bulk in [1, 37, usize::MAX] {
+                let scanned =
+                    graph_scan::scan_in_chunks(&store, &graph, &tips, &never, 64, bulk).unwrap();
+                assert_eq!(scanned, from_graph, "seed {seed}, bulk after {bulk}");
+            }
             let from_graph = walked(Topology::ordered(20, from_graph, &never).unwrap());
             let from_objects = scan_objects(&store, &tips, &never).unwrap();
             let from_objects = walked(Topology::ordered(20, from_objects, &never).unwrap());
@@ -920,6 +1012,116 @@ mod tests {
             );
             // Only the commits newer than the graph are read as objects.
             assert!((1..=40).contains(&read), "seed {seed}: {read} objects read");
+        }
+    }
+
+    /// `count` commits in a line on `tip0`, through `git fast-import`.
+    fn import_line(root: &std::path::Path, count: u64) {
+        let mut stream = String::new();
+        for commit in 1..=count {
+            let time = 1_700_000_000 + commit;
+            stream.push_str(&format!(
+                "commit refs/heads/tip0\nmark :{commit}\n\
+                 committer T <t@example.invalid> {time} +0000\ndata 2\nc\n"
+            ));
+            if commit > 1 {
+                stream.push_str(&format!("from :{}\n", commit - 1));
+            }
+            stream.push('\n');
+        }
+        crate::repo::log::tests::git_with_stdin(
+            root,
+            &["fast-import", "--quiet"],
+            stream.as_bytes(),
+        );
+    }
+
+    /// A commit no branch shares history with.
+    fn orphan(root: &std::path::Path) -> gix::ObjectId {
+        use crate::test_support::git_stdout;
+        let tree = git_stdout(root, &["mktree"]);
+        let id = git_stdout(root, &["commit-tree", "-m", "orphan", tree.trim()]);
+        gix::ObjectId::from_hex(id.trim().as_bytes()).unwrap()
+    }
+
+    fn head(root: &std::path::Path) -> gix::ObjectId {
+        let id = crate::test_support::git_stdout(root, &["rev-parse", "tip0"]);
+        gix::ObjectId::from_hex(id.trim().as_bytes()).unwrap()
+    }
+
+    /// What scanning from `tips` read, as `work` counts it.
+    fn scanned_reads(
+        tips: &[gix::ObjectId],
+        work: Work,
+        scan: impl FnOnce(&[gix::ObjectId]) -> Scanned,
+    ) -> (usize, u64) {
+        let _capture = gitcomet_core::history_perf::capture();
+        let rows = scan(tips).degrees.len();
+        (rows, gitcomet_core::history_perf::count(work))
+    }
+
+    /// A short branch of a long history reads its own few records, and a
+    /// long walk the whole graph at once.
+    #[test]
+    fn the_commit_graph_is_read_in_bulk_only_for_a_long_walk() {
+        use crate::test_support::{git_success, init_test_repo};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        import_line(root, 6_000);
+        let orphan = orphan(root);
+        git_success(
+            root,
+            &["update-ref", "refs/heads/orphan", &orphan.to_string()],
+        );
+        git_success(root, &["commit-graph", "write", "--reachable"]);
+        let store = gix::open(root).unwrap().into_sync();
+        let graph = store
+            .to_thread_local()
+            .commit_graph_if_enabled()
+            .unwrap()
+            .unwrap();
+        let never = || false;
+        let scan = |tips: &[gix::ObjectId]| graph_scan::scan(&store, &graph, tips, &never).unwrap();
+        assert_eq!(
+            scanned_reads(&[orphan], Work::CommitGraphRead, scan),
+            (1, 0)
+        );
+        assert_eq!(
+            scanned_reads(&[head(root)], Work::CommitGraphRead, scan),
+            (6_000, 1)
+        );
+    }
+
+    /// The same for the packs' commits without a commit-graph.
+    #[test]
+    fn packed_commits_are_read_ahead_only_for_a_long_walk() {
+        use crate::test_support::{git_success, init_test_repo};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        import_line(root, 9_000);
+        // Commits first, as Git packs a clone.
+        git_success(root, &["repack", "-adq"]);
+        let orphan = orphan(root);
+        let store = gix::open(root).unwrap().into_sync();
+        let never = || false;
+        let scan = |tips: &[gix::ObjectId]| scan_objects(&store, tips, &never).unwrap();
+        assert_eq!(
+            scanned_reads(&[orphan], Work::LogHeaderReadAhead, scan),
+            (1, 0)
+        );
+        assert_eq!(
+            scanned_reads(&[head(root)], Work::LogHeaderReadAhead, scan),
+            (9_000, 9_000)
+        );
+
+        // Read ahead at once, later, or never: the rows come out alike.
+        let tips = [head(root), orphan];
+        let alike = scan_objects_reading_ahead_after(&store, &tips, &never, usize::MAX).unwrap();
+        for read in [0, 1, 4_096] {
+            let scanned = scan_objects_reading_ahead_after(&store, &tips, &never, read).unwrap();
+            assert_eq!(scanned, alike, "read ahead after {read}");
         }
     }
 
