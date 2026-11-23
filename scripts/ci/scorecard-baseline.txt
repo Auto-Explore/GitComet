@@ -37,7 +37,7 @@ fn-lines crates/gitcomet-state/src/msg/repository_requirement.rs::repository_req
 fn-lines crates/gitcomet-state/src/session/mod.rs::load_from_path 169 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch.rs::sync 200 -
 fn-lines crates/gitcomet-state/src/store/auto_fetch/worker.rs::finish 151 -
-fn-lines crates/gitcomet-state/src/store/effects.rs::schedule_effect 938 -
+fn-lines crates/gitcomet-state/src/store/effects.rs::schedule_effect 935 -
 fn-lines crates/gitcomet-state/src/store/effects/clone.rs::schedule_clone_repo 243 -
 fn-lines crates/gitcomet-state/src/store/effects/conflict_load.rs::schedule_load_conflict_file 171 -
 fn-lines crates/gitcomet-state/src/store/effects/diff_session.rs::schedule 163 -
@@ -45,7 +45,7 @@ fn-lines crates/gitcomet-state/src/store/effects/repo_commands.rs::repo_command_
 fn-lines crates/gitcomet-state/src/store/effects/repo_commands.rs::schedule 612 -
 fn-lines crates/gitcomet-state/src/store/effects/repo_load.rs::schedule_load_selected_diff 184 -
 fn-lines crates/gitcomet-state/src/store/effects/repo_load.rs::schedule_load_worktree_dirty 173 -
-fn-lines crates/gitcomet-state/src/store/effects/unavailable.rs::send_unavailable_git_effect_result 570 -
+fn-lines crates/gitcomet-state/src/store/effects/unavailable.rs::send_unavailable_git_effect_result 567 -
 fn-lines crates/gitcomet-state/src/store/mod.rs::handle_effects 167 -
 fn-lines crates/gitcomet-state/src/store/mod.rs::with_initial_state 471 -
 fn-lines crates/gitcomet-state/src/store/reducer.rs::reduce_inner 1564 -
@@ -148,7 +148,7 @@ fn-lines crates/gitcomet-ui-gpui/src/view/panes/details.rs::new 263 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/conflict_actions/sync.rs::resync_conflict_resolver_from_state 334 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/conflict_actions/sync.rs::sync_conflict_resolver 438 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/diff_wrap.rs::diff_wrap_ranges_for_source_visible_ix 212 -
-fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/init.rs::new 628 -
+fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/init.rs::new 624 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/live_syntax.rs::refresh_conflict_resolved_output_syntax 226 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/outline.rs::recompute_conflict_resolved_outline_and_provenance_incremental 301 -
 fn-lines crates/gitcomet-ui-gpui/src/view/panes/diff/core_impl/outline.rs::schedule_conflict_resolved_outline_recompute 153 -
