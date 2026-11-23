@@ -2,10 +2,10 @@
 # Checked by scripts/ci/scorecard.py. A value above its entry fails; a count below
 # it needs the entry lowered (`scorecard.py check --write`). Never raise a value to
 # admit new code: split the function, name the import, or use the typed path.
-clock-calls gitcomet-core 6 -
-clock-calls gitcomet-git-gix 35 -
-clock-calls gitcomet-state 37 -
-clock-calls gitcomet-ui-gpui 71 -
+clock-calls gitcomet-core 10 -
+clock-calls gitcomet-git-gix 57 -
+clock-calls gitcomet-state 56 -
+clock-calls gitcomet-ui-gpui 85 -
 diff-renderer-refs gitcomet-ui-gpui 1662 -
 enum-variants gitcomet-state::Effect 74 -
 enum-variants gitcomet-state::InternalMsg 81 -
@@ -279,10 +279,10 @@ glob-super gitcomet-conflict-resolver 9 -
 glob-super gitcomet-core 5 -
 glob-super gitcomet-git-gix 14 -
 glob-super gitcomet-markdown 9 -
-glob-super gitcomet-perf 11 -
+glob-super gitcomet-perf 23 -
 glob-super gitcomet-state 28 -
 glob-super gitcomet-syntax 12 -
-glob-super gitcomet-ui-gpui 352 -
+glob-super gitcomet-ui-gpui 369 -
 glob-super gitcomet-ui-kit 16 -
 glob-super gitcomet-ui-media 8 -
 glob-super gitcomet-ui-terminal 3 -

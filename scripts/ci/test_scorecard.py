@@ -56,6 +56,17 @@ class ScorecardTests(unittest.TestCase):
         self.assertEqual(found[("set-theme-fns", "gitcomet-ui-gpui")], 1)
         self.assertEqual(found[("diff-renderer-refs", "gitcomet-ui-gpui")], 3)
 
+    def test_every_glob_import_of_a_parent_and_every_clock_read_count(self):
+        code = (
+            "use super::super::*;\npub(crate) use super::*;\n"
+            "fn f() { let clock = Instant::now; let started = clock(); started.elapsed(); }\n"
+        )
+        path = "crates/gitcomet-state/src/store/x.rs"
+        import identity_literals
+        found = scorecard.measure({path: code}, identity_literals.production_code({path: code}))
+        self.assertEqual(found.get(("glob-super", "gitcomet-state"), 0), 2)
+        self.assertEqual(found.get(("clock-calls", "gitcomet-state"), 0), 2)
+
     def test_a_lower_layer_naming_a_higher_one_is_counted(self):
         view = "crates/gitcomet-ui-gpui/src/view"
         texts = {

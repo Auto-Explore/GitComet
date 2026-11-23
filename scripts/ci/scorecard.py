@@ -38,8 +38,11 @@ UI = "gitcomet-ui-gpui"
 STATE = "gitcomet-state"
 # (metric, scope, pattern, crates or None for every crate)
 COUNTS = (
-    ("glob-super", "production", re.compile(r"^[ \t]*use super::\*;", re.M), None),
-    ("clock-calls", "production", re.compile(r"\b(?:Instant|SystemTime)::now\(\)"),
+    # `use super::super::*;` and a re-exporting `pub(crate) use super::*;` too.
+    ("glob-super", "production",
+     re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use (?:super::)+\*;", re.M), None),
+    # A read of the clock: a call, the function passed as a value, or `elapsed`.
+    ("clock-calls", "production", re.compile(r"\b(?:Instant|SystemTime)::now\b|\.elapsed\(\)"),
      (UI, STATE, "gitcomet-git-gix", "gitcomet-core")),
     ("root-view-updates", "production", re.compile(r"\broot_view\s*\.update\("), (UI,)),
     ("set-theme-fns", "production", re.compile(r"\bfn set_theme\("), (UI,)),
