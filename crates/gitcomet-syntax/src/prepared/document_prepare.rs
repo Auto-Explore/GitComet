@@ -664,9 +664,10 @@ pub fn benchmark_drop_payload_timed_step(
     } else {
         SyntaxCacheDropMode::InlineWhenLarge
     };
+    let chunks = chunk_line_tokens_by_row(arc_payload);
     let start = std::time::Instant::now();
     drop_line_tokens_with_mode(
-        SyntaxCacheDropPayload::new(arc_payload, estimated_bytes),
+        SyntaxCacheDropPayload::new(chunks, estimated_bytes),
         drop_mode,
     );
     start.elapsed()

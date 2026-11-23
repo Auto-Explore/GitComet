@@ -15,16 +15,19 @@ pub(crate) enum SyntaxCacheDropMessage {
 }
 
 pub(crate) struct SyntaxCacheDropPayload {
-    pub(crate) line_tokens: Vec<Arc<[SyntaxToken]>>,
+    pub(crate) chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
     pub(crate) estimated_bytes: usize,
     #[cfg(any(test, feature = "test-support"))]
     counters: Arc<SyntaxDropCounters>,
 }
 
 impl SyntaxCacheDropPayload {
-    pub(crate) fn new(line_tokens: Vec<Arc<[SyntaxToken]>>, estimated_bytes: usize) -> Self {
+    pub(crate) fn new(
+        chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+        estimated_bytes: usize,
+    ) -> Self {
         Self {
-            line_tokens,
+            chunks,
             estimated_bytes,
             #[cfg(any(test, feature = "test-support"))]
             counters: syntax_drop_counters(),
@@ -225,7 +228,7 @@ pub(crate) fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxC
                             SyntaxCacheDropMessage::Drop(drop_payload) => {
                                 #[cfg(any(test, feature = "test-support"))]
                                 let counters = Arc::clone(&drop_payload.counters);
-                                drop(drop_payload);
+                                drop(drop_payload.chunks);
                                 #[cfg(any(test, feature = "test-support"))]
                                 counters
                                     .completed
@@ -488,7 +491,7 @@ pub(crate) fn drop_line_tokens_with_mode(
     counters
         .inline
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    drop(drop_payload);
+    drop(drop_payload.chunks);
 }
 
 #[cfg(test)]

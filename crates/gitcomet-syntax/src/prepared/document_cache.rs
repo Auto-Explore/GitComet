@@ -52,27 +52,7 @@ impl TreesitterCachedDocument {
     }
 
     pub(crate) fn into_drop_payload(self) -> SyntaxCacheDropPayload {
-        if self.line_token_chunks.is_empty() {
-            return SyntaxCacheDropPayload::new(Vec::new(), self.line_token_bytes);
-        }
-
-        let mut chunks = self.line_token_chunks.into_iter().collect::<Vec<_>>();
-        chunks.sort_by_key(|(chunk_ix, _)| *chunk_ix);
-        let line_capacity = chunks
-            .iter()
-            .map(|(_, chunk)| chunk.len())
-            .fold(0usize, |acc, len| acc.saturating_add(len));
-        let mut out = Vec::with_capacity(line_capacity);
-        for (_, chunk) in chunks {
-            out.extend(chunk);
-        }
-        let payload = SyntaxCacheDropPayload::new(out, self.line_token_bytes);
-        debug_assert_eq!(
-            payload.estimated_bytes,
-            estimated_line_tokens_allocation_bytes(&payload.line_tokens),
-            "cached line-token byte accounting should match flattened drop payloads"
-        );
-        payload
+        SyntaxCacheDropPayload::new(self.line_token_chunks, self.line_token_bytes)
     }
 }
 
