@@ -192,8 +192,10 @@ The terminal and `target/llvm-cov/summary.md` show covered lines, measurable
 lines and their percentage, overall and by crate. Open
 `target/llvm-cov/html/index.html` to inspect individual missed lines.
 `target/llvm-cov/lcov.info` records one for a line reached by any test and zero
-for a missed line. All three reports use the same counts. Cargo keeps the
-instrumented builds in `target/source-coverage-build/`, keyed by coverage settings.
+for a missed line. All three reports use the same counts. Coverage builds use
+checkout-relative source paths even when your Rust flags remap the checkout or
+an individual crate. Cargo keeps the instrumented builds in
+`target/source-coverage-build/` and reuses them when the available CPU count changes.
 
 The denominator is the union of LLVM-mapped Rust source lines under
 `crates/*/src` in the GUI and headless `gitcomet` binaries, built for the host

@@ -94,15 +94,63 @@ class ProductLineCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "outside its Cargo executable inventory"):
                     coverage.test_traces(root, raw, binaries)
 
-    @unittest.skipUnless(sys.platform.startswith("linux"), "the ELF build ID is used on Linux")
-    def test_linux_compiler_wrapper_keeps_cargo_binary_paths_and_requests_a_build_id(self):
-        env = dict(os.environ, GITCOMET_COVERAGE_RUSTC_WRAPPER=sys.executable)
-        env["CARGO_BIN_EXE_gitcomet-test-mergetool"] = "a path with spaces"
-        compiler = ('import os, sys; print(os.environ["CARGO_BIN_EXE_gitcomet-test-mergetool"]); '
-                    'print(*sys.argv[1:], sep="\\n")')
-        output = subprocess.check_output([coverage.ROOT / "scripts/linux/coverage-rustc.sh",
-                                          "-c", compiler, "main.rs"], env=env, text=True)
-        self.assertEqual(output.splitlines(), ["a path with spaces", "main.rs", "-C", "link-arg=-Wl,--build-id"])
+    @unittest.skipUnless(shutil.which("rustc"), "the coverage compiler requires Rust")
+    def test_remapped_sources_keep_their_test_profiles_and_cargo_binary_paths(self):
+        libdir = subprocess.check_output(["rustc", "--print", "target-libdir"], text=True).strip()
+        llvm = Path(libdir).parent / "bin"
+        if not (llvm / ("llvm-cov" + coverage.EXE)).is_file():
+            self.skipTest("requires the Rust llvm-tools-preview component")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = Path("crates/probe/src/main.rs")
+            (root / source).parent.mkdir(parents=True)
+            (root / source).write_text('fn main() { assert_eq!(env!("CARGO_BIN_EXE_test-tool"), "a b"); }\n')
+            compiler = coverage.build_compiler_wrapper(root)
+            binary = root / ("probe" + coverage.EXE)
+            env = dict(os.environ, GITCOMET_COVERAGE_RUSTC_WRAPPER=shutil.which("rustc"))
+            env["CARGO_BIN_EXE_test-tool"] = "a b"
+            linux = sys.platform.startswith("linux")
+            for name, path, prefix in (("workspace", root / source, root), ("partial", source, source.parent)):
+                with self.subTest(remap=name):
+                    raw = root / name
+                    raw.mkdir()
+                    subprocess.run([compiler, path, "-C", "instrument-coverage", f"--remap-path-prefix={prefix}=/src",
+                                    *(["-Clink-arg=-Wl,--build-id=none"] if linux else []), "-o", binary],
+                                   cwd=root, env=env, check=True)
+                    pattern = "%b-%4m.profraw" if linux else "%4m.profraw"
+                    subprocess.run([binary], env=dict(env, LLVM_PROFILE_FILE=str(raw / pattern)), check=True)
+                    trace, = coverage.test_traces(llvm, raw, [binary])
+                    self.assertEqual(list(coverage.trace_lines(root, trace)), [(source.as_posix(), 1, 1)])
+
+    @unittest.skipIf(os.name == "nt", "uses POSIX shell fixtures")
+    def test_build_cache_ignores_runtime_profile_pool_and_keeps_instrumented_crates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "ci").mkdir(parents=True)
+            shutil.copy(coverage.ROOT / "scripts/coverage.sh", scripts)
+            shutil.copy(coverage.ROOT / "scripts/ci/coverage_rustc.rs", scripts / "ci")
+            (scripts / "ci/source_coverage.py").write_text(
+                'import os\nassert os.environ["CARGO_BUILD_BUILD_DIR"] == os.environ["CARGO_TARGET_DIR"]\n'
+                'print(os.environ["CARGO_TARGET_DIR"])\n')
+            cargo = root / "cargo"
+            cargo.write_text('#!/bin/sh\nif [ "$2" = show-env ]; then\n'
+                             '  echo "export LLVM_PROFILE_FILE=%${TEST_POOL}m.profraw"\n'
+                             '  echo "export __CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES=$TEST_CRATES"\n'
+                             '  echo "export RUSTC_WRAPPER=cargo-llvm-cov"\nfi\n')
+            cargo.chmod(0o755)
+            for tool in ("rustup", "perl", "genhtml"):
+                (root / tool).symlink_to(cargo)
+
+            def build_dir(pool, crates):
+                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                           TEST_POOL=pool, TEST_CRATES=crates)
+                output = subprocess.check_output(["bash", scripts / "coverage.sh"], env=env, text=True)
+                return Path(output.splitlines()[-1])
+
+            first = build_dir("1", "probe")
+            self.assertEqual(build_dir("8", "probe"), first)
+            self.assertNotEqual(build_dir("1", "probe,dependency"), first)
 
     def test_failed_run_keeps_its_own_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -134,12 +182,17 @@ class ProductLineCoverageTests(unittest.TestCase):
             self.assertFalse((diagnostics / "runtime-exclusions.log").exists())
 
     @unittest.skipUnless(shutil.which("perl"), "the coverage renderer requires Perl")
-    def test_publishes_html_with_an_extensionless_perl_renderer(self):
+    def test_publishes_html_with_homebrew_and_msys2_renderer_layouts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "checkout with spaces"
             root.mkdir()
             genhtml = root / "genhtml"
-            genhtml.write_text('#!/usr/bin/perl\nuse File::Copy; mkdir $ARGV[-2] or die $!; '
+            program = genhtml
+            if os.name != "nt":
+                program = root / "genhtml.pl"
+                genhtml.write_text('#!/bin/bash\nexport PERL5LIB="$PWD"\n'
+                                   'exec perl "$(dirname "$0")/genhtml.pl" "$@"\n')
+            program.write_text('#!/usr/bin/perl\nuse File::Copy; mkdir $ARGV[-2] or die $!; '
                                'copy $ARGV[-1], "$ARGV[-2]/index.html" or die $!;\n')
             genhtml.chmod(0o755)
             target = root / "target"

@@ -135,13 +135,20 @@ def test_traces(llvm, raw, executables):
     return traces
 
 
+def build_compiler_wrapper(work):
+    wrapper = work / ("coverage-rustc" + EXE)
+    subprocess.run(["rustc", "--edition=2024", ROOT / "scripts/ci/coverage_rustc.rs", "-o", wrapper],
+                   check=True)
+    return wrapper
+
+
 def collect(work, diagnostics):
     tool_lib = subprocess.check_output(["rustc", "--print", "target-libdir"], text=True).strip()
     llvm = Path(tool_lib).parent / "bin"
     if not (llvm / ("llvm-cov" + EXE)).is_file():
         raise ValueError("missing Rust LLVM tools; run rustup component add llvm-tools-preview")
     setup = dict(os.environ, LLVM_PROFILE_FILE=str(work / "setup-%m.profraw"),
-                 GITCOMET_CI_REPORT_DIR=str(diagnostics))
+                 GITCOMET_CI_REPORT_DIR=str(diagnostics), RUSTC_WRAPPER=str(build_compiler_wrapper(work)))
     setup.pop("GITHUB_STEP_SUMMARY", None)
     baselines, observations = [], []
     for variant, features in (("gui", []), ("headless", ["--no-default-features", "--features", "gix"])):
@@ -212,9 +219,9 @@ def main():
             report = work / "report"
             report.mkdir()
             write_reports(report, collect(work, diagnostics))
-            # MSYS2 ships genhtml as an extensionless Perl script. Let Perl locate it on PATH.
+            renderer = ["perl", "-S", "genhtml"] if os.name == "nt" else ["genhtml"]
             staged = report.relative_to(ROOT)
-            subprocess.run(["perl", "-S", "genhtml",
+            subprocess.run([*renderer,
                             "--quiet", "--no-function-coverage", "--legend",
                             "--title", "GitComet source line coverage", "--output-directory",
                             (staged / "html").as_posix(), (staged / "lcov.info").as_posix()],
