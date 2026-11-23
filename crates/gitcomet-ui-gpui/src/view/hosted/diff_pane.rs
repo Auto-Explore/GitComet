@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::hosted::environment::{DiffPaneEnvironment, DiffPreferences};
-use crate::view::panes::diff::diff_cache::SharedFileDiffCache;
+use crate::view::panes::diff::diff_cache::{PrefetchedFileDiff, SharedFileDiffCache};
 use crate::view::panes::diff::input::DiffPaneInput;
 use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
@@ -43,6 +43,8 @@ pub(crate) struct DiffPaneView {
     view_id: DiffViewId,
     options: DiffPaneOptions,
     file_cache: Option<Arc<SharedFileDiffCache>>,
+    next_file: Option<Arc<PrefetchedFileDiff>>,
+    current_prefetch: Option<Arc<PrefetchedFileDiff>>,
     raw: [Option<super::raw_lines::RawLines>; 2],
     raw_task: Option<gpui::Task<()>>,
     revision: u64,
@@ -104,6 +106,8 @@ impl DiffPaneView {
             #[cfg(test)]
             rendered_statuses: Vec::new(),
             file_cache: None,
+            next_file: None,
+            current_prefetch: None,
             raw: [None, None],
             raw_task: None,
             revision: 0,
@@ -544,13 +548,16 @@ impl DiffPaneView {
                 })
                 .cloned()
                 .unwrap_or_else(|| {
-                    Arc::new(SharedFileDiffCache::with_engine(
-                        file,
-                        patch.as_ref(),
-                        workdir,
-                        self.effective_engine(cx),
-                        self.whitespace_mode(cx),
-                    ))
+                    Arc::new(
+                        SharedFileDiffCache::with_engine(
+                            file,
+                            patch.as_ref(),
+                            workdir,
+                            self.effective_engine(cx),
+                            self.whitespace_mode(cx),
+                        )
+                        .with_prefetch(self.current_prefetch.clone()),
+                    )
                 })
         });
         self.set_file_cache(cache, cx);
@@ -693,6 +700,17 @@ impl DiffPaneView {
         let (store, repo_id, lifetime) =
             (store.clone(), repository.repo_id(), repository.lifetime());
         self.reset(cx);
+        if let Some(previous) = self.current_prefetch.take() {
+            previous.cancel();
+        }
+        self.current_prefetch = self.next_file.take().and_then(|next| {
+            if next.targets(&target) {
+                Some(next)
+            } else {
+                next.cancel();
+                None
+            }
+        });
         self.pending_target = Some(target.clone());
         self.open_request = self.open_request.wrapping_add(1);
         let Some(store) = store.upgrade() else {
@@ -712,6 +730,48 @@ impl DiffPaneView {
                 view: self.view_id,
             }));
         }
+    }
+
+    fn prefetch_target(&mut self, target: Option<DiffTarget>, cx: &mut gpui::Context<Self>) {
+        let PaneSource::Session { repository, .. } = &self.source else {
+            return;
+        };
+        let engine = self.effective_engine(cx);
+        let whitespace = self.whitespace_mode(cx);
+        if let Some(target) = &target
+            && self
+                .next_file
+                .as_ref()
+                .is_some_and(|next| next.matches(target, engine, whitespace))
+        {
+            return;
+        }
+        if let Some(previous) = self.next_file.take() {
+            previous.cancel();
+        }
+        let Some(next) =
+            target.and_then(|target| PrefetchedFileDiff::new(target, engine, whitespace))
+        else {
+            return;
+        };
+        let next = Arc::new(next);
+        let reader = self.host.repository_reader();
+        let repository = repository.clone();
+        self.next_file = Some(next.clone());
+        cx.background_executor()
+            .spawn(async move {
+                if let Ok(repo) = reader.repository(&repository) {
+                    next.prepare(repo.as_ref());
+                }
+            })
+            .detach();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn prefetched_rows(
+        &self,
+    ) -> Option<Arc<crate::view::panes::diff::diff_cache::PagedFileDiffRows>> {
+        self.next_file.as_ref()?.prepared_rows().cloned()
     }
 
     fn session<'a>(&self, state: &'a AppState) -> Option<&'a DiffSession> {
@@ -1006,6 +1066,9 @@ impl Render for DiffPaneView {
 
 impl Drop for DiffPaneView {
     fn drop(&mut self) {
+        for prefetch in self.next_file.iter().chain(&self.current_prefetch) {
+            prefetch.cancel();
+        }
         if let Some(cache) = &self.file_cache {
             cache.cancel();
         }
@@ -1046,6 +1109,11 @@ impl DiffPaneImpl for HostedDiffPane {
     fn set_target(&self, target: DiffTarget, cx: &mut App) {
         self.entity
             .update(cx, |pane, cx| pane.set_target(target, cx));
+    }
+
+    fn prefetch_target(&self, target: Option<DiffTarget>, cx: &mut App) {
+        self.entity
+            .update(cx, |pane, cx| pane.prefetch_target(target, cx));
     }
 
     fn set_snapshot(&self, snapshot: DiffSnapshot, cx: &mut App) {

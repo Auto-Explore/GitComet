@@ -31,6 +31,19 @@ pub(super) fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffTex
     file.content_signature()
 }
 
+pub(super) fn file_diff_source_len(
+    source: Option<&gitcomet_core::domain::FileDiffTextSource>,
+    text: Option<&Arc<str>>,
+) -> usize {
+    if let Some(text) = text {
+        return text.len();
+    }
+    source
+        .and_then(|source| std::fs::metadata(&source.path).ok())
+        .and_then(|metadata| usize::try_from(metadata.len()).ok())
+        .unwrap_or(0)
+}
+
 fn file_diff_lines_from_starts<'a>(text: &'a str, line_starts: &[usize]) -> Vec<&'a str> {
     if text.is_empty() {
         return Vec::new();
@@ -2085,7 +2098,7 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         patch_diff,
         whitespace_mode,
         DiffEngine::LineByLine,
-        &gitcomet_core::services::CancellationToken::new(),
+        gitcomet_difftastic::Request::Visible(&gitcomet_core::services::CancellationToken::new()),
     )
 }
 
@@ -2095,12 +2108,11 @@ pub(in crate::view) fn build_file_diff_cache_with_engine(
     patch_diff: Option<&gitcomet_core::domain::Diff>,
     whitespace_mode: DiffWhitespaceMode,
     engine: DiffEngine,
-    cancellation: &gitcomet_core::services::CancellationToken,
+    request: gitcomet_difftastic::Request<'_>,
 ) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
     let mut old_source = index_file_diff_side(file, file.old_source.as_ref(), file.old.as_ref())?;
     let mut new_source = index_file_diff_side(file, file.new_source.as_ref(), file.new.as_ref())?;
-    let structural =
-        structural::compare(file, &mut old_source, &mut new_source, engine, cancellation)?;
+    let structural = structural::compare(file, &mut old_source, &mut new_source, engine, request)?;
     let old_text = file_diff_source_text(&old_source);
     let new_text = file_diff_source_text(&new_source);
     let old_source_path = file_diff_source_path(&old_source);

@@ -2,6 +2,8 @@ use super::super::super::*;
 use super::*;
 use crate::view::panes::diff::input::DiffPaneInput;
 use gitcomet_core::domain::FileDiffText;
+use gitcomet_core::services::CancellationToken;
+use gitcomet_difftastic::Request;
 
 #[gpui::test]
 fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
@@ -398,7 +400,7 @@ fn a_structural_build_makes_its_inline_row_maps_once() {
         None,
         DiffWhitespaceMode::Show,
         DiffEngine::Difftastic,
-        &CancellationToken::new(),
+        Request::Visible(&CancellationToken::new()),
     )
     .expect("difftastic build");
 
@@ -431,7 +433,7 @@ fn a_structural_comparison_keeps_the_sides_it_was_given() {
         &mut old,
         &mut new,
         DiffEngine::Difftastic,
-        &CancellationToken::new(),
+        Request::Visible(&CancellationToken::new()),
     )
     .expect("comparison");
 
@@ -459,7 +461,7 @@ fn a_cancelled_difftastic_build_yields_no_rows() {
             None,
             DiffWhitespaceMode::Show,
             DiffEngine::Difftastic,
-            cancellation,
+            Request::Visible(cancellation),
         )
     };
     let cancelled = CancellationToken::new();

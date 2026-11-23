@@ -9,19 +9,6 @@ pub(super) fn file_diff_text_is_source_backed(file: &gitcomet_core::domain::File
     file.old_source.is_some() || file.new_source.is_some()
 }
 
-pub(super) fn file_diff_markdown_source_len(
-    source: Option<&gitcomet_core::domain::FileDiffTextSource>,
-    legacy_text: Option<&Arc<str>>,
-) -> usize {
-    if let Some(text) = legacy_text {
-        return text.len();
-    }
-    source
-        .and_then(|source| std::fs::metadata(&source.path).ok())
-        .and_then(|metadata| usize::try_from(metadata.len()).ok())
-        .unwrap_or(0)
-}
-
 pub(super) fn read_file_diff_markdown_source(
     source: Option<&gitcomet_core::domain::FileDiffTextSource>,
     legacy_text: Option<&Arc<str>>,
