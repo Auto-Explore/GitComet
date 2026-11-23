@@ -7,7 +7,7 @@
 //! compiled with `multi_line` so `^`/`$` anchor to individual lines.
 
 use crate::services::CancellationToken;
-use memchr::{memchr_iter, memchr2_iter};
+use memchr::{memchr, memchr2_iter, memmem};
 use regex::{Regex, RegexBuilder};
 use std::borrow::Cow;
 use std::ops::Range;
@@ -35,6 +35,7 @@ pub struct TextSearchMatcher {
     options: TextSearchOptions,
     regex: Option<Regex>,
     regex_error: Option<String>,
+    literal_finder: Option<Box<memmem::Finder<'static>>>,
     cancellation: Option<CancellationToken>,
 }
 
@@ -84,11 +85,14 @@ impl TextSearchMatcher {
             (None, None)
         };
 
+        let literal_finder = (!options.regex && options.match_case && query.len() > 1)
+            .then(|| Box::new(memmem::Finder::new(query.as_bytes()).into_owned()));
         Self {
             query,
             options,
             regex,
             regex_error,
+            literal_finder,
             cancellation: None,
         }
     }
@@ -169,25 +173,22 @@ impl TextSearchMatcher {
         haystack: &str,
         start_at: usize,
     ) -> Option<Range<usize>> {
-        let needle = self.query.as_bytes();
-        let haystack_bytes = haystack.as_bytes();
-        let (&first, _) = needle.first().zip(needle.last())?;
-        let last_start = haystack_bytes.len().checked_sub(needle.len())?;
-        let start_at = start_at.min(haystack_bytes.len());
-        if start_at > last_start {
-            return None;
-        }
-
-        for offset in memchr_iter(first, &haystack_bytes[start_at..=last_start]) {
-            let start = start_at + offset;
-            let range = start..(start + needle.len());
-            if haystack_bytes.get(range.clone()) == Some(needle)
-                && self.range_has_requested_boundaries(haystack, range.clone())
-            {
+        let bytes = haystack.as_bytes();
+        let first = *self.query.as_bytes().first()?;
+        let mut cursor = start_at.min(bytes.len());
+        loop {
+            let rest = &bytes[cursor..];
+            let offset = match &self.literal_finder {
+                Some(finder) => finder.find(rest)?,
+                None => memchr(first, rest)?,
+            };
+            let start = cursor + offset;
+            let range = start..(start + self.query.len());
+            if self.range_has_requested_boundaries(haystack, range.clone()) {
                 return Some(range);
             }
+            cursor = start + 1;
         }
-        None
     }
 
     fn find_literal_ascii_case_insensitive_from(
@@ -316,6 +317,19 @@ pub fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{TextSearchMatcher, TextSearchOptions};
+
+    #[test]
+    fn whole_word_literal_can_overlap_a_rejected_match() {
+        let matcher = TextSearchMatcher::new(
+            "--",
+            TextSearchOptions {
+                match_case: true,
+                whole_word: true,
+                regex: false,
+            },
+        );
+        assert_eq!(matcher.find_range_at_or_after("x--- ", 0), Some(2..4));
+    }
     use crate::services::CancellationToken;
 
     #[test]
