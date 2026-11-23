@@ -77,12 +77,12 @@ impl HistoryCache {
     }
 
     /// The object store for indexed range reads, re-opened every
-    /// [`RANGE_READER_REOPEN_BLOCKS`] blocks. Range reads touch commit objects
+    /// [`range_reader_blocks`] blocks. Range reads touch commit objects
     /// across the whole pack set, and every page of a mapped pack they touch
     /// stays resident until the mapping is dropped; scrolling a large history
-    /// this way grew resident memory by gigabytes. A fresh open costs a config
-    /// parse and releases the mappings, so the store's footprint stays bounded
-    /// by the blocks read since.
+    /// this way grew resident memory by gigabytes. A fresh open releases the
+    /// mappings, so the store's footprint stays bounded by the blocks read
+    /// since.
     pub(in crate::repo) fn range_reader_repo(
         &self,
         reopen: impl FnOnce() -> Result<gix::Repository>,
@@ -90,13 +90,15 @@ impl HistoryCache {
         let mut slot = self.range_reader.lock().expect("range reader");
         if slot
             .as_ref()
-            .is_none_or(|reader| reader.blocks >= RANGE_READER_REOPEN_BLOCKS)
+            .is_none_or(|reader| reader.blocks >= reader.blocks_max)
         {
             gitcomet_core::history_perf::record(
                 gitcomet_core::history_perf::Work::RangeStoreReopen,
             );
+            let repo = reopen()?.into_sync();
             *slot = Some(RangeReader {
-                repo: reopen()?.into_sync(),
+                blocks_max: range_reader_blocks(pack_index_bytes(&repo)),
+                repo,
                 blocks: 0,
             });
         }
@@ -302,8 +304,115 @@ struct HistoryHandle {
 pub(super) struct RangeReader {
     repo: gix::ThreadSafeRepository,
     blocks: usize,
+    blocks_max: usize,
 }
 
 /// Blocks of 256 commits read through one range-reader store before it is
 /// re-opened. On chromium a block touches roughly 0.2 MiB of pack pages.
-const RANGE_READER_REOPEN_BLOCKS: usize = 64;
+const RANGE_READER_BLOCKS: usize = 64;
+
+/// Pack index bytes that let a store read one block more. A new store reads
+/// its pack indexes from end to end before its first lookup, and its lookups
+/// map them again: with chromium's 1 GB of them, re-opening every 64 blocks
+/// took more time than reading the blocks.
+const RANGE_READER_INDEX_BYTES_PER_BLOCK: u64 = 1 << 20;
+
+fn range_reader_blocks(pack_index_bytes: u64) -> usize {
+    let more = pack_index_bytes / RANGE_READER_INDEX_BYTES_PER_BLOCK;
+    RANGE_READER_BLOCKS.saturating_add(usize::try_from(more).unwrap_or(usize::MAX))
+}
+
+/// The size of the pack indexes `repo` reads objects through, its
+/// alternates' included. What cannot be read counts as nothing.
+fn pack_index_bytes(repo: &gix::ThreadSafeRepository) -> u64 {
+    let objects = repo.objects.path().to_owned();
+    let alternates = gix::odb::alternate::resolve(
+        objects.clone(),
+        &std::env::current_dir().unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    std::iter::once(objects)
+        .chain(alternates)
+        .filter_map(|objects| std::fs::read_dir(objects.join("pack")).ok())
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let is_index = entry.path().extension().is_some_and(|ext| ext == "idx");
+            is_index
+                .then(|| entry.metadata().ok())?
+                .map(|file| file.len())
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
+
+    #[test]
+    fn a_store_reads_more_blocks_the_larger_its_pack_indexes() {
+        assert_eq!(range_reader_blocks(0), 64);
+        assert_eq!(range_reader_blocks((1 << 20) - 1), 64);
+        assert_eq!(range_reader_blocks(1 << 30), 64 + 1024);
+    }
+
+    #[test]
+    fn a_range_reader_lasts_longer_beside_larger_pack_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_test_repo(dir.path());
+        let repo = open_repo(dir.path());
+        let cache = HistoryCache::default();
+        let reopens = std::cell::Cell::new(0);
+        let read = |blocks: usize| {
+            for _ in 0..blocks {
+                let reopen = || {
+                    reopens.set(reopens.get() + 1);
+                    Ok(repo.repo())
+                };
+                cache.range_reader_repo(reopen).unwrap();
+            }
+            reopens.get()
+        };
+        assert_eq!(read(64), 1);
+
+        // Two megabytes of pack index, as far as a directory listing shows.
+        let index = dir.path().join(".git/objects/pack/pack-large.idx");
+        let file = std::fs::File::create(index).unwrap();
+        file.set_len(2 << 20).unwrap();
+        assert_eq!(read(66), 2);
+        assert_eq!(read(1), 3);
+    }
+
+    #[test]
+    fn pack_index_bytes_include_those_of_alternates() {
+        let packed = |root: &std::path::Path, files: usize| {
+            init_test_repo(root);
+            for file in 0..files {
+                write_file(root, &format!("{file}.txt"), &format!("{file}\n"));
+            }
+            git_success(root, &["add", "-A"]);
+            git_success(root, &["commit", "-qm", "files"]);
+            git_success(root, &["repack", "-a", "-d", "-q"]);
+            let index = std::fs::read_dir(root.join(".git/objects/pack"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "idx"))
+                .unwrap();
+            std::fs::metadata(index).unwrap().len()
+        };
+        let (here, there) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let own = packed(here.path(), 1);
+        let borrowed = packed(there.path(), 40);
+        assert_ne!(own, borrowed);
+        let bytes = || pack_index_bytes(&open_repo(here.path()).repo().into_sync());
+        assert_eq!(bytes(), own);
+
+        write_file(
+            here.path(),
+            ".git/objects/info/alternates",
+            &format!("{}\n", there.path().join(".git/objects").display()),
+        );
+        assert_eq!(bytes(), own + borrowed);
+    }
+}

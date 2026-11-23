@@ -736,3 +736,25 @@ the tips.
 | --- | ---: | ---: |
 | First page | 1.84–1.97 s | 0.30 s |
 | Index after it | 0.29–0.32 s | 0.12 s |
+
+## Range reader stores last longer beside large pack indexes (2026-11-23)
+
+Range reads go through an object store of their own, re-opened every 64 blocks
+to release the pack pages they map. gix now reads a pack index from end to end
+when a store first loads it, and a new store's lookups map the index again. On
+Chromium, with 1 GB of pack index, that made re-opening cost more than reading:
+44 ms before the first block and about 69 ms at every 64th, against 1.3 ms for
+a block. A store now reads 64 blocks and one more for every megabyte of pack
+index beside it, alternates included, which is 1,037 blocks here and still 64
+for a repository whose pack indexes stay below a megabyte.
+
+| Chromium, range reads of 256 rows | Before | After |
+| --- | ---: | ---: |
+| 200 blocks | 597 ms | 314 ms |
+| 4,000 blocks | 10.9 s | 5.0 s |
+| Peak resident memory over 4,000 blocks | 958 MiB | 1,183 MiB |
+
+The first block still waits 43-47 ms for its store. Reading the first blocks
+through the store everything else uses removes that wait and was measured, but
+it leaves the index pages of those lookups mapped for as long as the repository
+is open: 1,874 MiB at the peak of the same 4,000 blocks.
