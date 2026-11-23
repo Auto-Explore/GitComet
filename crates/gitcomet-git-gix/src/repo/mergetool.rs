@@ -18,6 +18,7 @@ use gitcomet_core::services::{
 #[cfg(any(test, feature = "test-support"))]
 use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 #[cfg(any(not(windows), test))]
 use std::process::Command;
@@ -592,6 +593,7 @@ struct StagePaths {
     base_present: bool,
     _temp_dir: Option<tempfile::TempDir>,
     cleanup_files: bool,
+    created_files: Vec<(PathBuf, same_file::Handle)>,
 }
 
 impl Drop for StagePaths {
@@ -599,9 +601,14 @@ impl Drop for StagePaths {
         if !self.cleanup_files {
             return;
         }
-        for path in [&self.base, &self.local, &self.remote] {
-            if let Ok(path) = stage_path_to_fs_path(&self.workdir, path) {
-                let _ = std::fs::remove_file(path);
+        for (path, created) in &self.created_files {
+            let Ok(Some(file)) =
+                gitcomet_core::path_utils::open_worktree_regular_file(&self.workdir, path)
+            else {
+                continue;
+            };
+            if same_file::Handle::from_file(file).is_ok_and(|current| &current == created) {
+                let _ = std::fs::remove_file(self.workdir.join(path));
             }
         }
     }
@@ -622,6 +629,7 @@ fn materialize_mergetool_stage_files(
         workdir,
         &stage_paths.base,
         base_bytes.as_deref().unwrap_or(b""),
+        &mut stage_paths.created_files,
     )?;
     write_stage_bytes(
         workdir,
@@ -629,6 +637,7 @@ fn materialize_mergetool_stage_files(
         gix_index_stage_blob_bytes_optional(repo, conflict_path, 2)?
             .as_deref()
             .unwrap_or(b""),
+        &mut stage_paths.created_files,
     )?;
     write_stage_bytes(
         workdir,
@@ -636,6 +645,7 @@ fn materialize_mergetool_stage_files(
         gix_index_stage_blob_bytes_optional(repo, conflict_path, 3)?
             .as_deref()
             .unwrap_or(b""),
+        &mut stage_paths.created_files,
     )?;
     Ok(stage_paths)
 }
@@ -690,6 +700,7 @@ fn build_stage_paths(
             base_present: false,
             _temp_dir: temp_dir_guard,
             cleanup_files: false,
+            created_files: Vec::new(),
         });
     }
 
@@ -723,6 +734,7 @@ fn build_stage_paths(
         base_present: false,
         _temp_dir: None,
         cleanup_files: !keep_temporaries,
+        created_files: Vec::new(),
     })
 }
 
@@ -806,12 +818,32 @@ fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> Result<PathBuf> {
     }
 }
 
-fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
+fn write_stage_bytes(
+    workdir: &Path,
+    stage_path: &Path,
+    bytes: &[u8],
+    created_files: &mut Vec<(PathBuf, same_file::Handle)>,
+) -> Result<()> {
     let path = stage_path_to_fs_path(workdir, stage_path)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(Error::from)?;
     }
-    std::fs::write(path, bytes).map_err(Error::from)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|error| Error::from(error).with_context("create merge stage", Some(&path)))?;
+    let result = file.write_all(bytes);
+    if !stage_path.is_absolute() {
+        let identity = same_file::Handle::from_file(file)?;
+        created_files.push((stage_path.to_path_buf(), identity));
+    }
+    result.map_err(Error::from)
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
