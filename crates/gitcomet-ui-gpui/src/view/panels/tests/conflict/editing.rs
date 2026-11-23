@@ -258,7 +258,7 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         },
     );
 
-    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    let diff_renderer = super::super::diff_renderer(cx, &view);
 
     // Take "ours" for the single whole-file conflict. This is the step the old
     // ceiling refused: it expands a one-line placeholder into the full file.
