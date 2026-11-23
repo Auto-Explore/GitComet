@@ -88,7 +88,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         #[cfg(feature = "benchmarks")]
         let timing = crate::status_trace::StageTimer::new("repository-config");
-        let repo = self.status_repo();
+        let repo = self.status_repo()?;
         #[cfg(feature = "benchmarks")]
         drop(timing);
         // Bare repositories can display history, but have no checkout whose
@@ -179,7 +179,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let repo = self.status_repo();
+        let repo = self.status_repo()?;
         if repo.workdir().is_none() {
             return Ok(Vec::new());
         }

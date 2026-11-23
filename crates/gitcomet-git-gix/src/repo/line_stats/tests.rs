@@ -158,12 +158,12 @@ fn a_cleaning_driver_decides_binary_after_it_runs() {
     write_file(dir, "data.dat", "one\n");
     git_success(dir, &["add", "."]);
     git_success(dir, &["commit", "-m", "seed"]);
-    git_success(dir, &["config", "filter.strip.clean", "tr -d '\\000'"]);
     std::fs::write(dir.join("data.dat"), b"one\n\0two\n").unwrap();
 
-    let stats = open_repo(dir)
-        .uncommitted_line_stats_impl(&CancellationToken::new())
-        .unwrap();
+    let stats =
+        crate::test_support::open_repo_with_config(dir, ["filter.strip.clean=tr -d '\\000'"])
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
 
     assert_eq!(
         counts(stats.unstaged.get(std::path::Path::new("data.dat"))),
@@ -631,8 +631,14 @@ fn empty_supplied_status_does_not_launch_clean_filter_or_rescan_worktree() {
         .uncommitted_line_stats_for_status(&empty, &token)
         .unwrap();
     assert!(counts.staged.is_empty() && counts.unstaged.is_empty());
-    // Control: a traversal actually needs the broken clean filter.
-    assert!(repo.worktree_status(&token).is_err());
+    // Control: the status traversal sees the change while leaving the local
+    // filter inactive.
+    assert!(
+        repo.worktree_status(&token)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.path == std::path::Path::new("asset.bin"))
+    );
 }
 
 #[cfg(unix)]
@@ -1030,11 +1036,9 @@ fn a_conversion_config_change_counts_untracked_files_again() {
     assert_eq!(crlf(), LineStats::UNKNOWN);
 }
 
-/// A clean program's output can change while the file does not, so the
-/// files it converts are counted on every refresh.
 #[cfg(unix)]
 #[test]
-fn files_a_clean_program_converts_are_counted_on_every_refresh() {
+fn repository_clean_program_changes_do_not_change_line_stats() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -1055,7 +1059,7 @@ fn files_a_clean_program_converts_are_counted_on_every_refresh() {
 
     git_success(dir, &["config", "filter.pick.clean", "sed -n 1p"]);
 
-    assert_eq!(data(), Some((Some(1), Some(0))));
+    assert_eq!(data(), Some((Some(2), Some(0))));
 }
 
 /// A count kept before git-lfs was configured is not served after it:

@@ -280,20 +280,60 @@ fn shell_path(path: &Path) -> String {
 }
 
 #[test]
+fn status_filter_pipeline_keeps_user_filters_and_ignores_repository_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(
+        root,
+        ".git/filter-settings",
+        "[filter \"included\"]\n\tprocess = included-filter\n",
+    );
+    git_success(root, &["config", "include.path", "filter-settings"]);
+    git_success(root, &["config", "filter.local.clean", "local-filter"]);
+    git_success(root, &["config", "extensions.worktreeConfig", "true"]);
+    git_success(
+        root,
+        &[
+            "config",
+            "--worktree",
+            "filter.user.process",
+            "worktree-filter",
+        ],
+    );
+    let mut permissions = gix::open::Permissions::isolated();
+    permissions.config.includes = true;
+    let options = gix::open::Options::default()
+        .permissions(permissions)
+        .config_overrides(["filter.user.clean=user-filter"]);
+    let repo = crate::open::open_worktree_repo_with_options(root, options).unwrap();
+    assert_eq!(
+        gix::filter::Pipeline::options(&repo).unwrap().drivers.len(),
+        3
+    );
+    let repo = crate::repo::GixRepo::new(root.to_owned(), repo.into_sync()).unwrap();
+    let status_repo = repo.status_repo().unwrap();
+    let drivers = gix::filter::Pipeline::options(&status_repo)
+        .unwrap()
+        .drivers;
+    assert_eq!(drivers.len(), 1, "{drivers:?}");
+    assert_eq!(drivers[0].name, "user");
+    assert_eq!(
+        drivers[0].clean.as_ref().map(|text| text.as_slice()),
+        Some(b"user-filter".as_slice())
+    );
+    assert!(drivers[0].process.is_none());
+}
+
+#[test]
 fn small_clean_filtered_files_keep_refreshed_stats_without_restarting_filters() {
     let dir = tempfile::tempdir().unwrap();
     let workdir = dir.path();
     init_test_repo(workdir);
     write_file(workdir, ".gitattributes", "*.txt filter=count\n");
     let counter = workdir.join(".git/filter-count");
-    git_success(
-        workdir,
-        &[
-            "config",
-            "filter.count.clean",
-            &format!("printf x >> {}; cat", shell_path(&counter)),
-        ],
-    );
+    let clean = format!("printf x >> {}; cat", shell_path(&counter));
+    git_success(workdir, &["config", "filter.count.clean", &clean]);
     let timestamp = filetime::FileTime::now().unix_seconds() - 30;
     for number in 0..10 {
         let name = format!("{number}.txt");
@@ -318,7 +358,10 @@ fn small_clean_filtered_files_keep_refreshed_stats_without_restarting_filters() 
         .unwrap();
     }
 
-    let repo = open_repo(workdir);
+    let repo = crate::test_support::open_repo_with_config(
+        workdir,
+        [format!("filter.count.clean={clean}")],
+    );
     let cancellation = CancellationToken::new();
     assert!(repo.status_impl().unwrap().unstaged.is_empty());
     let count = std::fs::read(&counter).unwrap();
@@ -399,7 +442,7 @@ fn filesystem_cache_configuration_preserves_status_and_is_fresh_per_scan() {
             ],
         );
         assert_eq!(
-            super::filesystem_cache_enabled(&repo.status_repo()),
+            super::filesystem_cache_enabled(&repo.status_repo().unwrap()),
             enabled
         );
         assert!(repo.status_impl().unwrap().unstaged.is_empty());
@@ -436,7 +479,7 @@ fn filesystem_cache_configuration_preserves_status_and_is_fresh_per_scan() {
     // like absent ones, to the upstream Windows default.
     git_success(workdir, &["config", "core.fscache", "invalid"]);
     assert_eq!(
-        super::filesystem_cache_enabled(&repo.status_repo()),
+        super::filesystem_cache_enabled(&repo.status_repo().unwrap()),
         cfg!(windows)
     );
 }

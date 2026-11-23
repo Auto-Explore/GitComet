@@ -1791,7 +1791,6 @@ fn worktree_file_source_memo_bypasses_external_clean_filters() {
         .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30))
         .unwrap();
 
-    let repo = open_repo(tmp.path());
     let read_source = |repo: &GixRepo| {
         let source = repo
             .cached_git_normalized_worktree_file_source(&repo.repo(), Path::new("src.txt"))
@@ -1799,6 +1798,14 @@ fn worktree_file_source_memo_bypasses_external_clean_filters() {
             .expect("exists");
         fs::read(source.path).unwrap()
     };
+    assert_eq!(read_source(&open_repo(tmp.path())), b"one\ntwo\n");
+    let open_with_user_filter = || {
+        crate::test_support::open_repo_with_config(
+            tmp.path(),
+            [format!("filter.upper.clean=sh {}", script.display())],
+        )
+    };
+    let repo = open_with_user_filter();
     assert_eq!(read_source(&repo), b"ONE\nTWO\n");
     assert!(
         repo.worktree_source_memo.lock().unwrap().is_empty(),
@@ -1807,7 +1814,7 @@ fn worktree_file_source_memo_bypasses_external_clean_filters() {
 
     // The driver changes behind git's back: no tracked input differs.
     fs::write(&script, "exec sed s/one/uno/\n").unwrap();
-    assert_eq!(read_source(&open_repo(tmp.path())), b"uno\ntwo\n");
+    assert_eq!(read_source(&open_with_user_filter()), b"uno\ntwo\n");
     assert_eq!(
         read_source(&repo),
         b"uno\ntwo\n",

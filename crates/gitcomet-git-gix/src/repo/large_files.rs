@@ -60,26 +60,30 @@ fn classify_git_form(bytes: &[u8]) -> Option<Classified> {
     classify_bytes(bytes, false).or_else(|| classify_bytes(bytes, true))
 }
 
-/// Drop the git-annex filter driver from this handle's in-memory config (never
-/// the file on disk). Background reads use it: git-annex's clean filter hashes
-/// whole files and writes its keys database, and `git status` does not run it
-/// for status either, reporting stale annexed files as modified instead.
-pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
-    let has_annex_filter = repo
+pub(super) fn restrict_passive_filters(repo: &mut gix::Repository) -> Result<()> {
+    let restricted = repo
         .config_snapshot()
         .plumbing()
-        .sections_by_name("filter")
+        .sections_and_ids_by_name("filter")
         .into_iter()
         .flatten()
-        .any(|section| section.header().subsection_name() == Some(ANNEX_FILTER_DRIVER.into()));
-    if !has_annex_filter {
-        return;
+        .filter_map(|(section, id)| {
+            (section.meta().source.kind() == gix::config::source::Kind::Repository
+                || section.header().subsection_name() == Some(ANNEX_FILTER_DRIVER.into()))
+            .then_some(id)
+        })
+        .collect::<Vec<_>>();
+    if restricted.is_empty() {
+        return Ok(());
     }
     let mut config = repo.config_snapshot_mut();
-    while config
-        .remove_section("filter", ANNEX_FILTER_DRIVER)
-        .is_some()
-    {}
+    for id in restricted {
+        config.remove_section_by_id(id);
+    }
+    config
+        .commit()
+        .map_err(|error| backend_error("restrict passive Git filters", error))?;
+    Ok(())
 }
 
 /// The `filter` attribute value Git LFS assigns, and its driver's name.
