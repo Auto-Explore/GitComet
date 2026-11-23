@@ -199,13 +199,19 @@ fn clean_up_aborted_clone(
         Ok(output) => return Ok(output),
         Err(error) => error,
     };
-    Err(
-        match cleanup_aborted_clone_destination(dest, dest_preexisted) {
-            Ok(()) => error,
-            Err(cleanup) if matches!(error.kind(), ErrorKind::Cancelled) => cleanup,
-            Err(cleanup) => CloneCleanupError::combine(error, cleanup, dest),
-        },
-    )
+    Err(aborted_clone_error(
+        error,
+        cleanup_aborted_clone_destination(dest, dest_preexisted),
+        dest,
+    ))
+}
+
+fn aborted_clone_error(error: Error, cleanup: Result<(), Error>, dest: &Path) -> Error {
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup) if matches!(error.kind(), ErrorKind::Cancelled) => cleanup,
+        Err(cleanup) => CloneCleanupError::combine(error, cleanup, dest),
+    }
 }
 
 fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Result<(), Error> {
@@ -762,33 +768,54 @@ mod tests {
         assert!(pending.is_empty());
     }
 
-    #[test]
-    fn a_failed_cleanup_replaces_a_plain_abort_and_joins_any_other_failure() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let file = temp.path().join("file");
-        std::fs::write(&file, "x").expect("write file");
-        // A path under a file cannot be inspected, so its cleanup fails.
-        let dest = file.join("clone");
-
-        let aborted = clean_up_aborted_clone(Err(Error::new(ErrorKind::Cancelled)), &dest, false)
-            .expect_err("cleanup fails");
-        let message = |error: &Error| match error.kind() {
+    fn backend_message(error: &Error) -> String {
+        match error.kind() {
             ErrorKind::Backend(message) => message.clone(),
             kind => panic!("unexpected {kind:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_cleanup_replaces_a_plain_abort_and_joins_any_other_failure() {
+        let dest = Path::new("clone");
+        let cleanup = || {
+            Err(Error::new(ErrorKind::Backend(
+                "clone aborted, but failed to remove it".into(),
+            )))
         };
-        assert!(message(&aborted).starts_with("clone aborted, but failed"));
+        let aborted = aborted_clone_error(Error::new(ErrorKind::Cancelled), cleanup(), dest);
+        assert_eq!(
+            backend_message(&aborted),
+            "clone aborted, but failed to remove it"
+        );
 
         let failed = Error::new(ErrorKind::Backend("clone failed".into()));
-        let joined = clean_up_aborted_clone(Err(failed), &dest, false).expect_err("cleanup fails");
-        let joined = message(&joined);
+        let joined = backend_message(&aborted_clone_error(failed, cleanup(), dest));
         assert!(
             joined.starts_with("clone failed; ") && joined.contains("clone aborted, but failed"),
             "{joined}"
         );
 
-        let kept = clean_up_aborted_clone(Err(Error::new(ErrorKind::Cancelled)), &dest, true)
+        let kept = clean_up_aborted_clone(Err(Error::new(ErrorKind::Cancelled)), dest, true)
             .expect_err("still aborted");
         assert!(matches!(kept.kind(), ErrorKind::Cancelled));
+    }
+
+    /// A path under a regular file cannot be inspected on Unix. Windows
+    /// reports such a path as missing, which needs no cleanup.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_cannot_be_inspected_fails_the_cleanup() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file = temp.path().join("file");
+        std::fs::write(&file, "x").expect("write file");
+        let aborted = clean_up_aborted_clone(
+            Err(Error::new(ErrorKind::Cancelled)),
+            &file.join("clone"),
+            false,
+        )
+        .expect_err("cleanup fails");
+        assert!(backend_message(&aborted).starts_with("clone aborted, but failed to inspect"));
     }
 
     #[test]
