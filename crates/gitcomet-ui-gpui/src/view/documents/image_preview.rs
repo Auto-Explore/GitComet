@@ -9,32 +9,41 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
     let guessed = image::guess_format(bytes).ok();
     let format = match guessed {
         Some(_) => crate::view::diff_utils::image_format_for_bytes(bytes),
-        None => image_format_for_path(path),
+        None => Some(gpui::ImageFormat::Svg),
     };
     let Some((format, source)) = format
         .and_then(|format| Source::new(format, bytes, detail_limit).map(|source| (format, source)))
     else {
-        // Match gpui::img's format detection and validate the header without
-        // allocating the full raster. The document can use its legacy renderer
-        // when detail decoding is over budget or needs another supported codec.
-        let decoder = |format| {
-            image::ImageReader::with_format(std::io::Cursor::new(bytes), format).into_decoder()
-        };
-        if let Some(format) = guessed {
-            let decoder = decoder(format).map_err(|error| error.to_string())?;
-            use image::ImageDecoder as _;
-            if decoder.dimensions().0 == 0 || decoder.dimensions().1 == 0 {
-                return Err("Empty image".into());
+        return match guessed {
+            Some(encoding) => {
+                let preview = if let Some(format) = format {
+                    panes::diff::diff_cache::render_raster_image_diff_preview(format, bytes)
+                        .ok_or("Image exceeds the preview limit or is invalid")?
+                } else {
+                    decode_standalone_raster_fallback(encoding, bytes)?
+                };
+                Ok(Input {
+                    preview: Some(preview),
+                    ..Default::default()
+                })
             }
-        } else if let Err(error) = crate::view::image_preview::svg::parse(bytes) {
-            // gpui::img renders unrecognized bytes as SVG, but a broken raster
-            // file reports its own codec's error rather than an SVG one.
-            return Err(match format.and_then(raster_format).map(decoder) {
-                Some(Err(raster)) => raster.to_string(),
-                _ => error.to_string(),
-            });
-        }
-        return Ok(Input::default());
+            None => match crate::view::image_preview::svg::parse(bytes) {
+                Ok(_) => Err("SVG image exceeds the preview limit".into()),
+                Err(error) => {
+                    let native =
+                        image_format_for_path(path)
+                            .and_then(raster_format)
+                            .map(|format| {
+                                image::ImageReader::with_format(std::io::Cursor::new(bytes), format)
+                                    .into_decoder()
+                            });
+                    Err(match native {
+                        Some(Err(raster)) => raster.to_string(),
+                        _ => error.to_string(),
+                    })
+                }
+            },
+        };
     };
     let preview = match source.svg() {
         Some(tree) => panes::diff::diff_cache::render_svg_image_diff_preview(tree),
@@ -45,6 +54,29 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
         preview,
         frame: 0,
     })
+}
+
+fn decode_standalone_raster_fallback(
+    encoding: image::ImageFormat,
+    bytes: &[u8],
+) -> Result<Arc<gpui::RenderImage>, String> {
+    use image::ImageDecoder as _;
+    let mut decoder = image::ImageReader::with_format(std::io::Cursor::new(bytes), encoding)
+        .into_decoder()
+        .map_err(|error| error.to_string())?;
+    crate::view::image_preview::limit_decoder(&mut decoder, 512 * 1024 * 1024)
+        .map_err(|error| error.to_string())?;
+    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+    let mut image =
+        image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
+    image.apply_orientation(orientation);
+    let mut pixels = image.into_rgba8();
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Ok(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        pixels,
+    )])))
 }
 
 impl StandaloneBuffer {
@@ -69,8 +101,15 @@ impl StandaloneBuffer {
                 });
             }
             let theme = self.theme;
+            let Some(preview) = self.image_input.preview.clone() else {
+                return (
+                    components::empty_state_message(theme, "Preview unavailable.")
+                        .into_any_element(),
+                    None,
+                );
+            };
             return (
-                gpui::img(self.identity().0.clone())
+                gpui::img(preview)
                     .id("document_image_fallback")
                     .debug_selector(|| "document_image_fallback".into())
                     .size_full()
@@ -169,7 +208,11 @@ mod tests {
             .expect("a detail budget must not turn a valid picture into an error document");
         assert!(
             input.source.is_none(),
-            "an over-budget image uses the legacy renderer"
+            "an over-budget image skips the detailed renderer"
+        );
+        assert!(
+            input.preview.is_some(),
+            "the fallback keeps the decoded snapshot"
         );
     }
 
@@ -202,7 +245,7 @@ mod tests {
         });
         assert!(
             cx.debug_bounds("document_image_fallback").is_some(),
-            "the document mounts the legacy image renderer"
+            "the document mounts the fallback image renderer"
         );
     }
 

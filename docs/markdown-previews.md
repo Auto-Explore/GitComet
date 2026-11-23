@@ -12,6 +12,8 @@ Click a link to open its menu; Cmd-click or Ctrl-click follows it directly. Drag
 
 Local images use regular files inside the working tree, up to 64 MiB per file. Paths through symbolic links and Git metadata are blocked.
 
+SVG images can contain embedded pictures. References to separate files are blocked, even inside an approved remote SVG.
+
 ## Embedding a preview
 
 `WindowHost::create_markdown_view` returns a content-height view. Place it inside the extension's scroll container, supply the source, and associate that container's `ScrollHandle`:

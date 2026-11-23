@@ -227,6 +227,25 @@ fn downscaling_widens_support_to_avoid_checkerboard_aliasing() {
 }
 
 #[test]
+fn svg_previews_do_not_load_separate_image_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("fixture.png");
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
+        .save(&image)
+        .unwrap();
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><image id="separate" href="{}" width="20" height="20"/></svg>"#,
+        image.display(),
+    );
+    let tree = super::svg::parse(svg.as_bytes()).unwrap();
+    assert!(tree.node_by_id("separate").is_none());
+    assert!(super::svg::requests_external_images(svg.as_bytes()).unwrap());
+    assert!(!super::svg::requests_external_images(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20"/></svg>"#,
+    ).unwrap());
+}
+
+#[test]
 fn svg_rerasterization_has_white_background_and_continuous_tiles() {
     let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100"><path d="M0 0L200 100" stroke="#ff0000" stroke-width="1"/></svg>"##;
     let source = Source::new(gpui::ImageFormat::Svg, bytes, 1024 * 1024).unwrap();

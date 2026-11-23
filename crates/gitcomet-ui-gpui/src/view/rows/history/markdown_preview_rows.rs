@@ -265,6 +265,16 @@ fn decode_markdown_image(
 ) -> Result<Arc<gpui::RenderImage>, gpui::ImageCacheError> {
     use image::ImageFormat as Format;
     let Ok(format) = image::guess_format(&bytes) else {
+        if (bytes.len() as u64) > MAX_MARKDOWN_IMAGE_BYTES {
+            return Err(gpui::ImageCacheError::Asset(
+                "SVG image exceeds the 64 MiB limit".into(),
+            ));
+        }
+        if gitcomet_ui_media::image_preview::svg::requests_external_images(&bytes)? {
+            return Err(gpui::ImageCacheError::Asset(
+                "SVG image refers to an external resource".into(),
+            ));
+        }
         return renderer
             .render_single_frame(&bytes, 1.0)
             .map_err(Into::into);

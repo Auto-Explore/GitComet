@@ -719,11 +719,10 @@ fn decode_file_image_diff_preview_side_upscales_small_svg_to_target_width() {
 }
 
 #[test]
-fn decode_file_image_diff_preview_side_keeps_svg_path_fallback_for_invalid_svg() {
+fn decode_file_image_diff_preview_side_refuses_a_path_fallback_for_invalid_svg() {
     let preview = decode_file_image_diff_preview_side(gpui::ImageFormat::Svg, b"<not-valid-svg>");
     assert!(preview.render.is_none());
-    assert!(preview.cached_path.is_some());
-    assert!(preview.cached_path.unwrap().exists());
+    assert!(preview.cached_path.is_none());
 }
 
 #[test]
@@ -803,7 +802,7 @@ fn build_file_image_diff_cache_rebuild_rasterizes_distinct_svg_sides_without_fal
 }
 
 #[test]
-fn build_file_image_diff_cache_rebuild_uses_fallback_paths_for_invalid_distinct_svg_sides() {
+fn invalid_svg_sides_are_unavailable_without_writing_raw_fallbacks() {
     let file = gitcomet_core::domain::FileDiffImage {
         path: Path::new("images/sample.svg").to_path_buf(),
         old: Some(b"<not-valid-svg-old>".to_vec()),
@@ -814,18 +813,9 @@ fn build_file_image_diff_cache_rebuild_uses_fallback_paths_for_invalid_distinct_
     let rebuild = build_file_image_diff_cache_rebuild(&file, Path::new("/tmp"));
     assert!(rebuild.old.is_none());
     assert!(rebuild.new.is_none());
-    assert!(
-        rebuild
-            .old_svg_path
-            .as_ref()
-            .is_some_and(|path| path.exists())
-    );
-    assert!(
-        rebuild
-            .new_svg_path
-            .as_ref()
-            .is_some_and(|path| path.exists())
-    );
+    assert!(rebuild.failed);
+    assert!(rebuild.old_svg_path.is_none());
+    assert!(rebuild.new_svg_path.is_none());
 }
 
 #[test]
@@ -891,7 +881,7 @@ fn decode_file_image_diff_bytes_uses_cached_svg_file_for_valid_svg() {
 }
 
 #[test]
-fn decode_file_image_diff_bytes_keeps_svg_path_fallback_for_invalid_svg() {
+fn decode_file_image_diff_bytes_refuses_a_path_fallback_for_invalid_svg() {
     let mut svg_path = None;
     let image = decode_file_image_diff_bytes(
         gpui::ImageFormat::Svg,
@@ -899,8 +889,7 @@ fn decode_file_image_diff_bytes_keeps_svg_path_fallback_for_invalid_svg() {
         Some(&mut svg_path),
     );
     assert!(image.is_none());
-    assert!(svg_path.is_some());
-    assert!(svg_path.unwrap().exists());
+    assert!(svg_path.is_none());
 }
 
 #[test]

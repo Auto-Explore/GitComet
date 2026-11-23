@@ -373,7 +373,7 @@ fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
 }
 
 #[gpui::test]
-fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads(
+fn file_image_diff_cache_never_serves_paths_for_invalid_svg_payloads(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -398,30 +398,13 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
         Some(&b"<not-valid-svg-old>"[..]),
         Some(&b"<not-valid-svg-new>"[..]),
     );
-    wait_for_file_image_diff_cache(
-        cx,
-        &view,
-        "invalid svg image diff fallback cache build",
-        |pane| {
-            pane.file_image_diff_cache_old.is_none()
-                && pane.file_image_diff_cache_new.is_none()
-                && pane.file_image_diff_cache_old_svg_path.is_some()
-                && pane.file_image_diff_cache_new_svg_path.is_some()
-        },
-    );
-
-    cx.update(|_window, app| {
-        let pane = view.read(app).diff_renderer.read(app);
-        assert!(
-            pane.file_image_diff_cache_old_svg_path
-                .as_ref()
-                .is_some_and(|path| path.exists())
-        );
-        assert!(
-            pane.file_image_diff_cache_new_svg_path
-                .as_ref()
-                .is_some_and(|path| path.exists())
-        );
+    wait_for_file_image_diff_cache(cx, &view, "invalid SVG image diff cache", |pane| {
+        pane.file_image_diff_cache_complete
+            && pane.file_image_diff_cache_failed
+            && pane.file_image_diff_cache_old.is_none()
+            && pane.file_image_diff_cache_new.is_none()
+            && pane.file_image_diff_cache_old_svg_path.is_none()
+            && pane.file_image_diff_cache_new_svg_path.is_none()
     });
 }
 
@@ -618,7 +601,7 @@ fn image_preview_controls_and_wheel_take_precedence_over_window_zoom(
 }
 
 #[gpui::test]
-fn image_preview_lifecycle_invalid_svg_path_keeps_the_unavailable_placeholder(
+fn image_preview_lifecycle_invalid_svg_keeps_the_unavailable_placeholder(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -641,11 +624,8 @@ fn image_preview_lifecycle_invalid_svg_path_keeps_the_unavailable_placeholder(
     });
     cx.update(|_, app| {
         let pane = view.read(app).diff_renderer.read(app);
-        assert!(
-            pane.file_image_diff_cache_new_svg_path.is_some(),
-            "exercise the legacy SVG path renderer"
-        );
-        assert!(!pane.file_image_diff_cache_failed);
+        assert!(pane.file_image_diff_cache_new_svg_path.is_none());
+        assert!(pane.file_image_diff_cache_failed);
     });
     let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
     loop {
