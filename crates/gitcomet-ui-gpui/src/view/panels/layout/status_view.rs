@@ -208,8 +208,8 @@ impl DetailsPaneView {
         );
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
-        // Measured last frame by the probe on the sections container; the
-        // prepaint callback refreshes the window when it changes. Unmeasured on
+        // Measured last frame by the probe on the sections container, whose
+        // prepaint callback notifies this pane when it changes. Unmeasured on
         // the very first frame, which reads as "plenty of room" and settles on
         // the next one.
         let header_width = self
@@ -1002,6 +1002,7 @@ impl DetailsPaneView {
         let resize_handle_h = px(PANE_RESIZE_HANDLE_PX);
         let change_tracking_stack_bounds_for_prepaint =
             std::rc::Rc::clone(&self.change_tracking_stack_bounds_ref);
+        let pane = cx.weak_entity();
         let stack_container = div()
             .relative()
             .flex()
@@ -1015,11 +1016,17 @@ impl DetailsPaneView {
                 resize_handle_h,
             ))
             .overflow_hidden()
-            .on_children_prepainted(move |children_bounds, _window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = change_tracking_stack_bounds_for_prepaint.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
+                    // Cached panes must be notified after prepaint: this
+                    // frame was drawn with the old bounds.
+                    let pane = pane.clone();
+                    app.defer(move |app| {
+                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                    });
                 }
             });
         let untracked_top_height = untracked_heights.map(|(top_height, _)| top_height);
@@ -1100,6 +1107,7 @@ impl DetailsPaneView {
         let staged_section = staged_section.debug_selector(|| "status_staged_wrapper".to_string());
         let status_sections_bounds_for_prepaint =
             std::rc::Rc::clone(&self.status_sections_bounds_ref);
+        let pane = cx.weak_entity();
         let status_sections_container = div()
             .relative()
             .w_full()
@@ -1109,11 +1117,17 @@ impl DetailsPaneView {
             .h_full()
             .min_h(px(0.0))
             .overflow_hidden()
-            .on_children_prepainted(move |children_bounds, _window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = status_sections_bounds_for_prepaint.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
+                    // Cached panes must be notified after prepaint: this
+                    // frame was drawn with the old bounds.
+                    let pane = pane.clone();
+                    app.defer(move |app| {
+                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                    });
                 }
             });
         status_sections_container

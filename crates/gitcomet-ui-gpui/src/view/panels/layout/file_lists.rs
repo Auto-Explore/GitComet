@@ -363,6 +363,7 @@ impl DetailsPaneView {
         );
 
         let section_bounds = std::rc::Rc::clone(&self.commit_files_section_bounds_ref);
+        let pane = cx.weak_entity();
         div()
             .relative()
             .flex()
@@ -374,11 +375,17 @@ impl DetailsPaneView {
             .border_t_1()
             .border_color(theme.colors.stroke.default)
             .pt_2()
-            .on_children_prepainted(move |children_bounds, _window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = section_bounds.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
+                    // Cached panes must be notified after prepaint: this
+                    // frame was drawn with the old bounds.
+                    let pane = pane.clone();
+                    app.defer(move |app| {
+                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                    });
                 }
             })
             .child(visible_bounds_probe())
