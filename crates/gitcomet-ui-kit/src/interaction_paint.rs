@@ -51,6 +51,14 @@ impl InteractionPaint {
                 paint: self.clone(),
             })
     }
+    /// The pointer tracker alone, without the control it would cover.
+    #[cfg(test)]
+    pub(crate) fn tracker(&self) -> impl IntoElement {
+        Tracker {
+            paint: self.clone(),
+        }
+    }
+
     /// Apply ordinary control feedback when an existing canvas tracks pointers.
     pub fn apply_with_canvas(&self, control: Stateful<Div>) -> Stateful<Div> {
         self.style.clone().apply(control, self.state)

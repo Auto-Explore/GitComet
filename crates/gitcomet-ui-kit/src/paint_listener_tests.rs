@@ -19,6 +19,8 @@ enum Subject {
     Scrollbar,
     Minimap,
     PaintedRow,
+    /// Its press tracker alone, in no stateful element, as on a canvas row.
+    PaintedTracker,
 }
 
 /// The cached view that paints the control under test.
@@ -77,6 +79,19 @@ impl Render for Owner {
                     .h(px(28.0)),
             )
             .into_any_element(),
+            Subject::PaintedTracker => div()
+                .relative()
+                .debug_selector(|| "subject".to_string())
+                .w(px(100.0))
+                .h(px(28.0))
+                .child(
+                    InteractionPaint::new(
+                        InteractionStyle::new(theme).on_surface(theme.colors.surface.chrome),
+                        InteractionState::default(),
+                    )
+                    .tracker(),
+                )
+                .into_any_element(),
         };
         div().size_full().child(subject)
     }
@@ -245,4 +260,19 @@ fn painted_press_feedback_redraws_only_the_view_that_painted_it(cx: &mut TestApp
     fixture.assert_redraws_owner_only("a move with no button held", |cx| {
         cx.simulate_mouse_move(at + point(px(1.0), px(0.0)), None, Modifiers::default())
     });
+}
+
+/// Without a stateful element around the tracker, gpui refreshes nothing on
+/// a press: only the tracker's own notify can show it, and that must redraw
+/// the owning view alone.
+#[gpui::test]
+fn press_feedback_alone_redraws_only_the_view_that_painted_it(cx: &mut TestAppContext) {
+    let mut fixture = Fixture::new(cx, Subject::PaintedTracker);
+    let at = fixture.subject.center();
+    fixture
+        .cx
+        .simulate_mouse_move(at, None, Modifiers::default());
+    fixture.cx.run_until_parked();
+    fixture.assert_redraws_owner_only("a press", down(at));
+    fixture.assert_redraws_owner_only("a release", up(at));
 }
