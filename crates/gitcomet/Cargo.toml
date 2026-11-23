@@ -42,7 +42,10 @@ rustix = { workspace = true }
 gitcomet-core = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+hmac = { workspace = true }
 rustix = { workspace = true, features = ["pty"] }
+sha2 = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = { workspace = true }
