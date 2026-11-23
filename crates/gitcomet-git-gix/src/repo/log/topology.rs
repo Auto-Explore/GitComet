@@ -4,8 +4,8 @@
 use super::read_ahead::PackedCommits;
 use super::*;
 use gitcomet_core::history_perf::{Work, record};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 mod graph_scan;
 
@@ -38,6 +38,34 @@ struct Flight {
     tips: Vec<gix::ObjectId>,
     /// Requests that still want the build; it is cancelled when none do.
     subscribers: AtomicUsize,
+    /// Set when the cache is cleared mid-build: the build still serves its
+    /// subscribers, but its topology is not cached.
+    superseded: AtomicBool,
+    /// How the build ended, for the subscribers that waited on it.
+    outcome: OnceLock<Outcome>,
+}
+
+type Outcome = std::result::Result<Arc<Topology>, Arc<gix::Error>>;
+
+/// A build's error, given to each of its subscribers. gix classifies it by
+/// its source, so a missing object still reads as one.
+#[derive(Debug)]
+struct SharedError(Arc<gix::Error>);
+
+impl std::fmt::Display for SharedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for SharedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+fn shared_error(error: Arc<gix::Error>) -> gix::Error {
+    gix::Error::from_error(SharedError(error))
 }
 
 impl Flight {
@@ -71,7 +99,8 @@ impl Drop for Subscription {
 struct Builder<'a> {
     cache: &'a TopologyCache,
     flight: Arc<Flight>,
-    built: Option<Arc<Topology>>,
+    /// `None` until the build ends, and after a panic.
+    outcome: Option<Outcome>,
     /// The topology cached for other tips of the same store, and those tips.
     previous: Option<Previous>,
 }
@@ -84,17 +113,21 @@ impl Drop for Builder<'_> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         state.build = None;
-        // A failed or abandoned build cannot replace the last complete
-        // snapshot. Only one snapshot is retained; active walks pin their own
-        // immutable table across ref changes.
-        if let Some(topology) = self.built.take()
-            && !self.flight.is_cancelled()
-        {
-            state.cached = Some(CachedTopology {
-                generation: self.flight.generation,
-                tips: self.flight.tips.clone(),
-                topology,
-            });
+        if let Some(outcome) = self.outcome.take() {
+            // A failed or abandoned build cannot replace the last complete
+            // snapshot. Only one snapshot is retained; active walks pin their
+            // own immutable table across ref changes.
+            if let Ok(topology) = &outcome
+                && !self.flight.is_cancelled()
+                && !self.flight.superseded.load(Ordering::Acquire)
+            {
+                state.cached = Some(CachedTopology {
+                    generation: self.flight.generation,
+                    tips: self.flight.tips.clone(),
+                    topology: Arc::clone(topology),
+                });
+            }
+            let _ = self.flight.outcome.set(outcome);
         }
         drop(state);
         self.cache.changed.notify_all();
@@ -102,11 +135,12 @@ impl Drop for Builder<'_> {
 }
 
 impl TopologyCache {
+    /// Forgets the cached topology. A build in progress finishes for its
+    /// subscribers without waiting here, and caches nothing.
     pub(in super::super) fn clear(&self) {
         let mut state = self.state.lock().expect("log topology cache");
-        // Wait out a build, which would otherwise publish after this.
-        while state.build.is_some() {
-            state = self.changed.wait(state).expect("log topology cache");
+        if let Some(flight) = &state.build {
+            flight.superseded.store(true, Ordering::Release);
         }
         state.cached = None;
     }
@@ -131,11 +165,16 @@ impl TopologyCache {
             {
                 return Ok(Ok(Arc::clone(&cached.topology)));
             }
+            if let Some(outcome) = joined.as_ref().and_then(|joined| joined.0.outcome.get()) {
+                return outcome.clone().map(Ok).map_err(shared_error);
+            }
             let Some(flight) = &state.build else {
                 let flight = Arc::new(Flight {
                     generation,
                     tips: tips.to_vec(),
                     subscribers: AtomicUsize::new(1),
+                    superseded: AtomicBool::new(false),
+                    outcome: OnceLock::new(),
                 });
                 state.build = Some(Arc::clone(&flight));
                 let previous = state
@@ -146,7 +185,7 @@ impl TopologyCache {
                 return Ok(Err(Builder {
                     cache: self,
                     flight,
-                    built: None,
+                    outcome: None,
                     previous,
                 }));
             };
@@ -188,12 +227,14 @@ impl TopologyCache {
             }
             flight.is_cancelled()
         };
-        let result = build(&cancelled, builder.previous.as_ref()).map(Arc::new);
+        let result = build(&cancelled, builder.previous.as_ref())
+            .map(Arc::new)
+            .map_err(Arc::new);
         cancelled();
-        builder.built = result.as_ref().ok().cloned();
+        builder.outcome = Some(result.clone());
         drop(builder);
         check_cancelled(cancellation.is_cancelled())?;
-        result
+        result.map_err(shared_error)
     }
 }
 
@@ -937,8 +978,22 @@ mod tests {
         waiter: mpsc::Receiver<gix::Result<Arc<Topology>>>,
     }
 
+    /// `build`, ending as a commit gone missing would end it.
+    fn failing(build: Build) -> Build {
+        Box::new(move |cancelled, previous| {
+            build(cancelled, previous)?;
+            let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "a commit is missing");
+            Err(gix::Error::from_error(missing))
+        })
+    }
+
     /// A gated builder with one subscribed waiter for the same tips.
     fn flight() -> Shared {
+        flight_with(|build| build)
+    }
+
+    /// [`flight`] with the builder's build passed through `wrap`.
+    fn flight_with(wrap: fn(Build) -> Build) -> Shared {
         let builds = Arc::new(AtomicUsize::new(0));
         let cache = Arc::new(TopologyCache::default());
         let tokens = [CancellationToken::new(), CancellationToken::new()];
@@ -951,7 +1006,7 @@ mod tests {
         };
         let builder = std::thread::spawn(request(
             &tokens[0],
-            build(&builds, Some(started_tx), Some(gate)),
+            wrap(build(&builds, Some(started_tx), Some(gate))),
         ));
         started.recv().unwrap();
         let wait = request(&tokens[1], build(&builds, None, None));
@@ -978,6 +1033,47 @@ mod tests {
         let built = flight.builder.join().unwrap().unwrap();
         let waited = flight.waiter.recv().unwrap().unwrap();
         assert!(Arc::ptr_eq(&built, &waited));
+        assert_eq!(flight.builds.load(SeqCst), 1);
+    }
+
+    /// A store invalidation clears the cache under the store's own locks, so
+    /// clearing must not wait for a build; the build still serves its
+    /// subscriber, and caches nothing.
+    #[test]
+    fn clearing_the_cache_leaves_a_build_to_its_subscribers() {
+        let flight = flight();
+        let (cleared_tx, cleared) = mpsc::channel();
+        let cache = flight.cache.clone();
+        std::thread::spawn(move || {
+            cache.clear();
+            cleared_tx.send(()).unwrap();
+        });
+        cleared
+            .recv_timeout(Duration::from_secs(2))
+            .expect("clearing must not wait for the build");
+        flight.release.send(()).unwrap();
+        let built = flight.builder.join().unwrap().unwrap();
+        let waited = flight.waiter.recv().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&built, &waited));
+        assert_eq!(flight.builds.load(SeqCst), 1);
+        let later = build(&flight.builds, None, None);
+        flight
+            .cache
+            .get_or_build(&tips(), &LogWalkCancellation::default(), 1, later)
+            .unwrap();
+        assert_eq!(flight.builds.load(SeqCst), 2, "nothing was cached");
+    }
+
+    /// Its subscriber gets a failed build's error, classified as gix
+    /// classified it, instead of building again.
+    #[test]
+    fn a_failed_build_fails_its_subscriber_as_it_failed() {
+        let flight = flight_with(failing);
+        flight.release.send(()).unwrap();
+        let not_found =
+            |result: gix::Result<Arc<Topology>>| result.is_err_and(|e| e.is_not_found());
+        assert!(not_found(flight.builder.join().unwrap()));
+        assert!(not_found(flight.waiter.recv().unwrap()));
         assert_eq!(flight.builds.load(SeqCst), 1);
     }
 
