@@ -450,6 +450,7 @@ pub(crate) struct GixRepo {
     /// [`status::StatRefreshedIndex`].
     stat_refreshed_index: std::sync::Mutex<Option<status::StatRefreshedIndex>>,
     staged_line_stats_cache: std::sync::Mutex<Option<line_stats::StagedLineStatsCache>>,
+    committed_blame: std::sync::Mutex<blame::cache::Cache>,
     /// Immutable signature formats by oid. `None` means an unsigned commit.
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
@@ -507,6 +508,7 @@ impl GixRepo {
             line_stats_memo: std::sync::Mutex::default(),
             stat_refreshed_index: std::sync::Mutex::new(None),
             staged_line_stats_cache: std::sync::Mutex::new(None),
+            committed_blame: Default::default(),
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
