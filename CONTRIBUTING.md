@@ -176,18 +176,37 @@ bash scripts/generate-open-source-licenses.sh --check
 
 After a dependency change, run `scripts/generate-open-source-licenses.sh` to refresh the open-source licence list the app shows.
 
-Coverage (local + CI-compatible):
+### Measuring test coverage
+
+Run coverage from the checkout with the native test prerequisites above, the
+repository's pinned nextest, and the `genhtml` command from the LCOV package.
 
 ```bash
 rustup component add llvm-tools-preview
-cargo install --locked cargo-llvm-cov
+cargo install --locked --version 0.9.2 cargo-llvm-cov
+python3 scripts/ci/install-nextest.py --bin-dir "${CARGO_HOME:-$HOME/.cargo}/bin"
 bash scripts/coverage.sh
 ```
 
-This writes:
+The terminal and `target/llvm-cov/summary.md` show covered lines, measurable
+lines and their percentage, overall and by crate. Open
+`target/llvm-cov/html/index.html` to inspect individual missed lines.
+`target/llvm-cov/lcov.info` records one for a line reached by any test and zero
+for a missed line. All three reports use the same counts.
 
-- `target/llvm-cov/lcov.info` (used by CI upload)
-- `target/llvm-cov/html/index.html` (local detailed report)
+The denominator is the union of LLVM-mapped Rust source lines under
+`crates/*/src` in the GUI and headless `gitcomet` binaries, built for the host
+with the `ci-test` profile and without the Rust test harness.
+The numerator comes from the `workspace`, `app-gui` and `example` unit and
+integration test contexts, with the same nextest and GPUI harnesses as native
+CI. A line present in several configurations counts once. This excludes
+test-only modules (including inline tests), vendored dependencies, examples,
+and code available only on other platforms or through optional features outside
+those two builds. Doctests run separately in native CI.
+
+The [Source coverage workflow](.github/workflows/source-coverage.yml) runs on
+Linux on pushes to `main` and can be started manually. Its job summary shows
+the numbers, and the artifact contains the source view and LCOV file.
 
 ### Release packaging
 

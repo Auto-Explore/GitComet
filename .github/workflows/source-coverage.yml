@@ -1,0 +1,45 @@
+name: Source coverage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GITCOMET_REQUIRE_GIT_LFS: "1"
+      GITCOMET_REQUIRE_SYNTAX_CORPUS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang git-lfs lcov libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - uses: ./.github/actions/setup-mold
+      - name: Install coverage tools and the repository test runner
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install --locked --version 0.9.2 cargo-llvm-cov
+          python3 scripts/ci/install-nextest.py --bin-dir "$RUNNER_TEMP/gitcomet-ci-bin"
+      - name: Measure GitComet source coverage
+        run: |
+          bash scripts/coverage.sh
+          cat target/llvm-cov/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitcomet-linux-source-coverage
+          path: target/llvm-cov/
+          if-no-files-found: error

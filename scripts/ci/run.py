@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
-REPORTS = ROOT / "target" / "ci-reports"
+REPORTS = Path(os.environ.get("GITCOMET_CI_REPORT_DIR", ROOT / "target" / "ci-reports"))
 REPORT_LOCK = threading.RLock()
 CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
