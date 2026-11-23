@@ -201,8 +201,16 @@ impl GixRepo {
         // Loose refs are read from disk on every call; this handle also
         // reloads packed refs rewritten without a newer mtime.
         let (repo, _) = self.current_history_store()?;
-        gix_head_id_or_none(&repo.to_thread_local())
-            .map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
+        let repo = repo.to_thread_local();
+        // Off Unix that stamp is length and mtime only, blind to a same-length
+        // rewrite within one mtime tick, so read packed refs again.
+        #[cfg(not(unix))]
+        if repo.refs.packed_refs_path().is_file() {
+            repo.refs.force_refresh_packed_buffer().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix reload packed-refs: {e}")))
+            })?;
+        }
+        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
 
     pub(super) fn commit_is_ancestor(

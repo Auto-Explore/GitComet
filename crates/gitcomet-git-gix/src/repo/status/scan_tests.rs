@@ -92,7 +92,8 @@ fn directories_scanned_apart_report_what_one_scan_reports() {
         let root = dir.path();
         scattered_tree(root, seed);
         let alone = unstaged_with(root, 1, usize::MAX);
-        assert!(alone.len() > 60, "seed {seed}: {}", alone.len());
+        // Off Unix the tree has no symlinks; seed 3 leaves 59 entries there.
+        assert!(alone.len() > 50, "seed {seed}: {}", alone.len());
         // Every tracked directory shared, then only the larger ones.
         for (scanners, files) in [(2, 1), (8, 1), (3, 4), (8, 12)] {
             assert_eq!(

@@ -900,8 +900,10 @@ fn unchanged_modified_files_are_not_read_again() {
     assert_eq!(take_worktree_reads_for_tests(), 2);
     let second = repo.uncommitted_line_stats_impl(&token).unwrap();
     assert_eq!(second, first);
-    // Off Unix a stamp has no inode or ctime, so it is never trusted.
+    // Off Unix a stamp has no inode or ctime, so it is never trusted and
+    // both modified files are read on every refresh.
     let kept = if cfg!(unix) { 0 } else { 2 };
+    let one_changed = if cfg!(unix) { 1 } else { 2 };
     assert_eq!(take_worktree_reads_for_tests(), kept);
 
     // Another blob in the index for the same file: counted against it.
@@ -910,13 +912,13 @@ fn unchanged_modified_files_are_not_read_again() {
     git_success(dir, &["update-index", "--cacheinfo", &entry]);
     let third = repo.uncommitted_line_stats_impl(&token).unwrap();
     assert_eq!(counts(third.unstaged.get(a)), Some((Some(5), Some(2))));
-    assert_eq!(take_worktree_reads_for_tests(), kept + 1);
+    assert_eq!(take_worktree_reads_for_tests(), one_changed);
 
     // And the file itself changed: read again.
     write_file(dir, "a.txt", &lines("again", 4));
     let fourth = repo.uncommitted_line_stats_impl(&token).unwrap();
     assert_eq!(counts(fourth.unstaged.get(a)), Some((Some(4), Some(2))));
-    assert_eq!(take_worktree_reads_for_tests(), kept + 1);
+    assert_eq!(take_worktree_reads_for_tests(), one_changed);
 }
 
 /// Enough changed files to share out: counted on several threads they come
