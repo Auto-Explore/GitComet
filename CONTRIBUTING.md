@@ -207,6 +207,8 @@ those two builds. Doctests run separately in native CI.
 The [Source coverage workflow](.github/workflows/source-coverage.yml) runs on
 Linux on pushes to `main` and can be started manually. Its job summary shows
 the numbers, and the artifact contains the source view and LCOV file.
+See [Code Coverage Formats, Viewers, and Rust Tooling](docs/code-coverage.md)
+for the comparison of tools and formats.
 
 ### Release packaging
 
