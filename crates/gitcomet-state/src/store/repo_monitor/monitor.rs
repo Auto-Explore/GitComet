@@ -145,6 +145,9 @@ pub(super) struct MonitorState {
     pub plan: WatchPlan,
 }
 impl MonitorState {
+    pub fn index_locked(&self) -> bool {
+        self.snapshot().index_locked()
+    }
     pub fn snapshot(&self) -> Arc<PolicySnapshot> {
         self.policy
             .read()
@@ -868,7 +871,7 @@ pub(super) fn repo_monitor_thread(
             break;
         }
         let now = Instant::now();
-        due_change = due_change.or_else(|| debouncer.take_if_due(now));
+        due_change = due_change.or_else(|| debouncer.take_due(now, || state.index_locked()));
         let idle = now >= idle_at;
         if idle {
             idle_at = now + config.idle_tick;

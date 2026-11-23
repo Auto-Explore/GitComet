@@ -547,6 +547,41 @@ fn a_lone_worktree_change_after_a_quiet_spell_flushes_early() {
     assert_eq!(d.take_if_due(base + ms(249)), None);
 }
 
+/// A checkout writes the working tree first and the index last, under its
+/// lock: a lone change seen meanwhile waits like any other.
+#[test]
+fn a_lone_change_while_git_holds_the_index_waits_in_full() {
+    let ms = Duration::from_millis;
+    let base = Instant::now();
+    let mut d = DebouncedChange::new(ms(250), ms(2_000)).with_lone_change(ms(50), ms(1_000));
+    assert_eq!(d.push(RepoExternalChange::Worktree, base), None);
+    // Not asked before the shorter wait is up.
+    assert_eq!(d.take_due(base + ms(49), || unreachable!()), None);
+    assert_eq!(d.take_due(base + ms(50), || true), None);
+    assert_eq!(d.take_due(base + ms(249), || true), None);
+    assert!(d.take_due(base + ms(250), || true).is_some());
+
+    // Unlocked, the shorter wait stands.
+    let later = base + ms(5_000);
+    assert_eq!(d.push(RepoExternalChange::Worktree, later), None);
+    assert!(d.take_due(later + ms(50), || false).is_some());
+}
+
+#[test]
+fn the_index_counts_as_locked_while_its_lock_file_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    let git = workdir.join(".git");
+    fs::create_dir_all(&git).unwrap();
+    let mut inputs = WatchInputs::default();
+    inputs.info.git_dirs.push(git.clone());
+    inputs.index_file = Some(git.join("index"));
+    let policy = PolicySnapshot::new(workdir, &inputs);
+    assert!(!policy.index_locked());
+    fs::write(workdir.join(".git/index.lock"), "").unwrap();
+    assert!(policy.index_locked());
+}
+
 #[test]
 fn access_events_do_not_trigger_refresh_loops() {
     let dir = unique_temp_dir("gitcomet-monitor-test");

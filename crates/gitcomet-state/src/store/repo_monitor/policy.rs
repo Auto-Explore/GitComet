@@ -141,6 +141,15 @@ impl PolicySnapshot {
         self.input_ancestors.contains(path)
     }
 
+    /// Whether Git holds the lock of this repository's index.
+    pub fn index_locked(&self) -> bool {
+        self.index_file.as_ref().is_some_and(|index| {
+            let mut lock = index.clone().into_os_string();
+            lock.push(".lock");
+            Path::new(&lock).exists()
+        })
+    }
+
     pub fn is_git_directory_modify(&self, path: &Path, event: &notify::Event) -> bool {
         if !matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_)))
         {

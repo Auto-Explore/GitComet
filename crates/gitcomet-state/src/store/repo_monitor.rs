@@ -352,12 +352,30 @@ impl DebouncedChange {
         Some(due.saturating_duration_since(now))
     }
 
-    fn take_if_due(&mut self, now: Instant) -> Option<RepoExternalChange> {
+    /// The pending changes once they are due. The shorter wait gives way
+    /// while `git_busy`: a checkout holds the index lock from its first file
+    /// until the new index is in place.
+    fn take_due(
+        &mut self,
+        now: Instant,
+        git_busy: impl FnOnce() -> bool,
+    ) -> Option<RepoExternalChange> {
         if !self.is_pending() {
             return None;
         }
-        let timeout = self.next_timeout(now).unwrap_or(Duration::from_secs(0));
-        if timeout.is_zero() { self.take() } else { None }
+        let due = |this: &Self| {
+            this.next_timeout(now)
+                .is_none_or(|timeout| timeout.is_zero())
+        };
+        if self.wait() < self.debounce && due(self) && git_busy() {
+            self.after_quiet = false;
+        }
+        if due(self) { self.take() } else { None }
+    }
+
+    #[cfg(test)]
+    fn take_if_due(&mut self, now: Instant) -> Option<RepoExternalChange> {
+        self.take_due(now, || false)
     }
 
     fn take(&mut self) -> Option<RepoExternalChange> {

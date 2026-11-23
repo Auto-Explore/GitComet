@@ -182,6 +182,33 @@ fn drain_finishes_rescan_before_acknowledging() {
     );
 }
 
+/// A checkout holds the index lock while it writes the working tree: a lone
+/// change seen then is part of it, and waits the full debounce.
+#[test]
+fn a_lone_change_under_the_index_lock_waits_the_debounce() {
+    let (_temp, root) = repository();
+    let debounce = Duration::from_millis(250);
+    let (monitor, _callbacks) = injected_monitor(
+        &root,
+        MonitorConfig {
+            debounce,
+            ..Default::default()
+        },
+    );
+    monitor.drain_delivered();
+    fs::write(root.join(".git/index.lock"), "").unwrap();
+    let started = Instant::now();
+    monitor
+        .tx
+        .send(content_event(root.join("checked-out.txt")))
+        .unwrap();
+    monitor.refresh_delivered();
+    assert!(
+        started.elapsed() >= debounce,
+        "flushed under the index lock"
+    );
+}
+
 #[test]
 fn drain_stop_cancels_pending_acknowledgements() {
     let (_temp, root) = repository();
