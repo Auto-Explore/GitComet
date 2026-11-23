@@ -20,7 +20,6 @@ fn-lines crates/gitcomet-core/src/filesystem/engine.rs::transfer_inner 210 -
 fn-lines crates/gitcomet-core/src/merge/plan.rs::trim_rows 214 -
 fn-lines crates/gitcomet-core/src/word_diff.rs::word_diff_ranges_with_bufs 203 -
 fn-lines crates/gitcomet-extension-api/src/registry.rs::build 215 -
-fn-lines crates/gitcomet-git-gix/examples/interaction-probe.rs::main 153 -
 fn-lines crates/gitcomet-git-gix/examples/operation-context-probe.rs::main 171 -
 fn-lines crates/gitcomet-git-gix/src/ignore.rs::repository_watch_info 254 -
 fn-lines crates/gitcomet-git-gix/src/repo/annex.rs::run_annex_command_inner 255 -
