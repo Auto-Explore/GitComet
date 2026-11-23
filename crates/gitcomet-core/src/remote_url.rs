@@ -135,9 +135,7 @@ pub fn validate_remote_url_with_policy(url: &str, policy: RemoteUrlPolicy) -> Re
         return Err(invalid("remote URL cannot be empty"));
     }
     if url.starts_with('-') {
-        return Err(invalid(format!(
-            "remote URL cannot start with '-': {url:?}"
-        )));
+        return Err(invalid("remote URL cannot start with '-'"));
     }
 
     let (scheme, remainder) = git_transport_prefix(url);
@@ -200,6 +198,17 @@ mod tests {
     use super::{
         RemoteProtocol, RemoteUrlPolicy, validate_remote_url, validate_remote_url_with_policy,
     };
+
+    #[test]
+    fn invalid_option_like_urls_do_not_echo_embedded_credentials() {
+        let error = validate_remote_url("-https://user:test-secret@example.test/repo").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("remote URL cannot start with '-'")
+        );
+        assert!(!error.to_string().contains("test-secret"));
+    }
 
     #[test]
     fn secure_defaults_accept_only_the_default_protocols_and_path_forms() {
