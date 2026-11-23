@@ -995,6 +995,202 @@ fn add_local_submodule_requires_explicit_trust() {
 }
 
 #[test]
+fn relative_submodule_add_consent_uses_the_parent_upstream() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("checkout");
+    let upstream = dir.path().join("upstream");
+    let source = upstream.join("child");
+    fs::create_dir_all(&parent).unwrap();
+    fs::create_dir_all(&source).unwrap();
+    init_repo_with_seed(&parent, "parent.txt", "hello\n", "parent seed");
+    init_repo_with_seed(&source, "child.txt", "hello\n", "child seed");
+    run_git(
+        &parent,
+        &[
+            "remote",
+            "add",
+            "origin",
+            upstream.join("parent").to_str().unwrap(),
+        ],
+    );
+    let opened = GixBackend.open(&parent).unwrap();
+    let trust = opened
+        .check_submodule_add_trust("../child", Path::new("mods/child"), Default::default())
+        .unwrap();
+    let SubmoduleTrustDecision::Prompt { sources } = trust else {
+        panic!("local source must require consent");
+    };
+    assert_eq!(
+        sources[0].local_source_path,
+        gitcomet_core::path_utils::canonicalize_or_original(source)
+    );
+    let output = opened
+        .add_submodule_with_output(
+            "../child",
+            Path::new("mods/child"),
+            None,
+            None,
+            false,
+            &sources,
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(
+        fs::read(parent.join("mods/child/child.txt")).unwrap(),
+        b"hello\n"
+    );
+}
+
+#[test]
+fn relative_submodule_add_checks_local_and_network_upstream_rewrites() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("checkout");
+    let original = dir.path().join("upstream/child");
+    let replacement = dir.path().join("replacement");
+    for path in [&parent, &original, &replacement] {
+        fs::create_dir_all(path).unwrap();
+        init_repo_with_seed(path, "note.txt", "hello\n", "seed");
+    }
+    let repo = GixBackend.open(&parent).unwrap();
+    let rewrite_key = format!("url.{}.insteadOf", replacement.display());
+    let expected = gitcomet_core::path_utils::canonicalize_or_original(replacement);
+    for (upstream, native_source) in [
+        ("../upstream/parent", "../upstream/child"),
+        (
+            "https://example.test/team/parent",
+            "https://example.test/team/child",
+        ),
+    ] {
+        run_git(&parent, &["config", "remote.origin.url", upstream]);
+        run_git(&parent, &["config", &rewrite_key, native_source]);
+        let trust = repo
+            .check_submodule_add_trust("../child", Path::new("mods/child"), Default::default())
+            .unwrap();
+        let SubmoduleTrustDecision::Prompt { sources } = trust else {
+            panic!("rewritten local source must require consent");
+        };
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.local_source_path == expected),
+            "{upstream}: {sources:?}"
+        );
+    }
+}
+
+#[test]
+fn submodule_add_consent_checks_the_rewritten_local_source() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("checkout");
+    let original = dir.path().join("original");
+    let replacement = dir.path().join("replacement");
+    for path in [&parent, &original, &replacement] {
+        fs::create_dir_all(path).unwrap();
+        init_repo_with_seed(path, "note.txt", "hello\n", "seed");
+    }
+    run_git(
+        &parent,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", replacement.display()),
+            original.to_str().unwrap(),
+        ],
+    );
+    let repo = GixBackend.open(&parent).unwrap();
+    let trust = repo
+        .check_submodule_add_trust(
+            original.to_str().unwrap(),
+            Path::new("mods/child"),
+            Default::default(),
+        )
+        .unwrap();
+    let SubmoduleTrustDecision::Prompt { sources } = trust else {
+        panic!("rewritten local source must require consent");
+    };
+    let replacement = gitcomet_core::path_utils::canonicalize_or_original(replacement);
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.local_source_path == replacement)
+    );
+}
+
+#[test]
+fn submodule_update_consent_includes_the_initialized_childs_fetch_source() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("checkout");
+    let original = dir.path().join("original");
+    let replacement = dir.path().join("replacement");
+    for path in [&parent, &original, &replacement] {
+        fs::create_dir_all(path).unwrap();
+        init_repo_with_seed(path, "note.txt", "hello\n", "seed");
+    }
+    let submodule = Path::new("mods/child");
+    add_submodule_raw(&parent, &original, submodule, None);
+    run_git(
+        &parent.join(submodule),
+        &["remote", "set-url", "origin", replacement.to_str().unwrap()],
+    );
+    let opened = GixBackend.open(&parent).unwrap();
+    let trust = opened
+        .check_submodule_update_trust(Default::default())
+        .unwrap();
+    let SubmoduleTrustDecision::Prompt { sources } = trust else {
+        panic!("local source must require consent");
+    };
+    let replacement = gitcomet_core::path_utils::canonicalize_or_original(replacement);
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.local_source_path == replacement)
+    );
+}
+
+#[test]
+fn submodule_update_consent_reads_legacy_child_fetch_sources() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("checkout");
+    let original = dir.path().join("original");
+    let replacement = dir.path().join("replacement");
+    for path in [&parent, &original, &replacement] {
+        fs::create_dir_all(path).unwrap();
+        init_repo_with_seed(path, "note.txt", "hello\n", "seed");
+    }
+    let submodule = Path::new("mods/child");
+    add_submodule_raw(&parent, &original, submodule, None);
+    let child = parent.join(submodule);
+    run_git(&child, &["remote", "remove", "origin"]);
+    let git_dir = PathBuf::from(git_stdout(&child, &["rev-parse", "--absolute-git-dir"]));
+    let remotes = git_dir.join("remotes");
+    fs::create_dir_all(&remotes).unwrap();
+    fs::write(
+        remotes.join("origin"),
+        format!("URL: {}\n", replacement.display()),
+    )
+    .unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let trust = repo
+        .check_submodule_update_trust(Default::default())
+        .unwrap();
+    let SubmoduleTrustDecision::Prompt { sources } = trust else {
+        panic!("legacy local source must require consent");
+    };
+    let replacement = gitcomet_core::path_utils::canonicalize_or_original(replacement);
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.local_source_path == replacement)
+    );
+}
+
+#[test]
 fn add_submodule_supports_branch_selection() {
     let _guard = setup_submodule_test();
     let dir = tempfile::tempdir().expect("create tempdir");

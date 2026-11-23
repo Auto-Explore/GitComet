@@ -130,6 +130,8 @@ GitComet requires a local Git installation of `2.53` or newer. With an older Git
 
 **Settings → Security / Privacy → Allowed remote protocols** controls which explicit URL schemes you can enter. Clone, fetch, pull, push, remote-ref lookups, and submodule operations also apply your HTTP, HTTPS, Git, FTP, and FTPS settings after Git rewrites a URL. Git treats SSH aliases as one transport. Configured remotes continue to use Git's rules for file and SSH transports so local paths and SCP-style addresses remain usable. Git’s own rules also govern custom transport helpers selected by a rewrite. Git LFS and git-annex use their own connection settings.
 
+When you add or update a submodule, GitComet asks before using a local source you haven’t approved for this repository. It checks where Git resolves the address and the fetch addresses of an existing submodule. The check happens before Git clones or fetches. Anyone who can change the shared repository or its Git settings during the operation still needs to be trusted.
+
 ### GitComet User Survey
 
 We’re running this short survey to better understand how people use our Git GUI client in their daily work. Your feedback will help us improve the product and prioritize the features that matter most.

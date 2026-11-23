@@ -6,7 +6,8 @@ use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
     push_literal_paths, push_read_only_diff_flags, run_git_capture_bytes_cancellable,
-    run_git_simple, run_git_with_output, stable_path_bytes, submodule_script_path,
+    run_git_metadata_capture, run_git_simple, run_git_with_output, stable_path_bytes,
+    submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -24,6 +25,7 @@ use gitcomet_core::services::{
 use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -35,11 +37,34 @@ const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
     "Only one side of the submodule pointer is available.";
 const GIT_CONFIG_CONTENTION_RETRIES: usize = 6;
 const GIT_CONFIG_CONTENTION_RETRY_DELAY: Duration = Duration::from_millis(25);
+type SubmoduleTrustTargets = BTreeMap<(PathBuf, PathBuf), SubmoduleTrustTarget>;
 
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
     // Use per-command config so local workflows keep working without disabling `https`/`ssh`.
     cmd.arg("-c").arg("protocol.file.allow=always");
+}
+
+fn deny_file_submodule_transport(cmd: &mut Command) {
+    const ALLOW: &str = "GIT_ALLOW_PROTOCOL";
+    cmd.args(["-c", "protocol.file.allow=never"]);
+    let inherited = cmd
+        .get_envs()
+        .find_map(|(key, value)| (key == ALLOW).then_some(value))
+        .map_or_else(
+            || std::env::var_os(ALLOW),
+            |value| value.map(OsStr::to_owned),
+        );
+    if let Some(inherited) = inherited {
+        let allowed = inherited
+            .to_str()
+            .unwrap_or_default()
+            .split(':')
+            .filter(|name| *name != "file")
+            .collect::<Vec<_>>()
+            .join(":");
+        cmd.env(ALLOW, allowed);
+    }
 }
 
 impl GixRepo {
@@ -100,18 +125,16 @@ impl GixRepo {
     ) -> Result<SubmoduleTrustDecision> {
         validate_remote_url_with_policy(url, remote_url_policy)?;
         let repo = self.reopen_repo()?;
-        let Some(target) =
-            trust_target_from_raw_source(repo_workdir_for_submodule_trust(&repo), path, url)?
-        else {
-            return Ok(SubmoduleTrustDecision::Proceed);
-        };
-
-        if submodule_source_trusted(repo_workdir_for_submodule_trust(&repo), &target)? {
+        let mut sources = Vec::new();
+        for target in submodule_add_trust_targets(&repo, path, url, remote_url_policy)? {
+            if !submodule_source_trusted(repo_workdir_for_submodule_trust(&repo), &target)? {
+                sources.push(target);
+            }
+        }
+        if sources.is_empty() {
             Ok(SubmoduleTrustDecision::Proceed)
         } else {
-            Ok(SubmoduleTrustDecision::Prompt {
-                sources: vec![target],
-            })
+            Ok(SubmoduleTrustDecision::Prompt { sources })
         }
     }
 
@@ -187,10 +210,15 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         restrict_native_git_transports(&mut cmd, remote_url_policy, Some(url));
-        if let Some(target) = trust_target_from_raw_source(trust_root, path, url)? {
-            if !submodule_source_trusted(trust_root, &target)? {
-                return Err(untrusted_local_submodule_error(&target, "add"));
+        let local_targets = submodule_add_trust_targets(&repo, path, url, remote_url_policy)?;
+        for target in &local_targets {
+            if !submodule_source_trusted(trust_root, target)? {
+                return Err(untrusted_local_submodule_error(target, "add"));
             }
+        }
+        if local_targets.is_empty() {
+            deny_file_submodule_transport(&mut cmd);
+        } else {
             allow_file_submodule_transport(&mut cmd);
         }
         let logical_name = name
@@ -550,10 +578,10 @@ fn submodule_entries<'repo>(
 
 /// Records `submodule`'s source if it is local and untrusted, then its nested ones.
 fn collect_untrusted_submodule_source(
-    current_workdir: &Path,
+    repo: &gix::Repository,
     trust_root: &Path,
     entry: &SubmoduleEntry<'_>,
-    out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    out: &mut SubmoduleTrustTargets,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let SubmoduleEntry {
@@ -561,11 +589,13 @@ fn collect_untrusted_submodule_source(
         full_path,
         ..
     } = entry;
-    if let Some(target) =
-        trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?
-        && !submodule_source_trusted(trust_root, &target)?
-    {
-        out.insert(full_path.to_path_buf(), target);
+    for target in submodule_trust_targets(repo, entry, remote_url_policy)? {
+        if !submodule_source_trusted(trust_root, &target)? {
+            out.insert(
+                (full_path.to_path_buf(), target.local_source_path.clone()),
+                target,
+            );
+        }
     }
     if let Some(nested_repo) = open_configured_submodule_repo(submodule)? {
         collect_repo_untrusted_submodule_sources(
@@ -589,23 +619,34 @@ fn update_submodule_recursive(
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let SubmoduleEntry {
-        submodule,
         relative_path,
         full_path,
+        ..
     } = entry;
     let current_workdir = repo_workdir_for_submodule_trust(repo);
-    let local_target =
-        trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?;
+    let local_targets = submodule_trust_targets(repo, entry, remote_url_policy)?;
     let mut cmd = git_workdir_cmd_for(current_workdir);
     restrict_native_git_transports(&mut cmd, remote_url_policy, None);
-    if let Some(target) = local_target.as_ref() {
+    for target in &local_targets {
         if !submodule_source_trusted(trust_root, target)? {
             return Err(untrusted_local_submodule_error(target, "update"));
         }
+    }
+    if local_targets.is_empty() {
+        deny_file_submodule_transport(&mut cmd);
+    } else {
         allow_file_submodule_transport(&mut cmd);
     }
 
-    cmd.arg("submodule").arg("update").arg("--init");
+    cmd.args([
+        "-c",
+        "fetch.recurseSubmodules=false",
+        "-c",
+        "submodule.recurse=false",
+    ])
+    .arg("submodule")
+    .arg("update")
+    .arg("--init");
     push_literal_paths(&mut cmd, [submodule_script_path(relative_path)]);
     outputs.push(run_git_with_output(
         cmd,
@@ -628,19 +669,12 @@ fn collect_repo_untrusted_submodule_sources(
     repo: &gix::Repository,
     trust_root: &Path,
     prefix: &Path,
-    out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    out: &mut SubmoduleTrustTargets,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let current_workdir = repo_workdir_for_submodule_trust(repo);
     for entry in submodule_entries(repo, prefix)? {
         let entry = entry?;
-        collect_untrusted_submodule_source(
-            current_workdir,
-            trust_root,
-            &entry,
-            out,
-            remote_url_policy,
-        )?;
+        collect_untrusted_submodule_source(repo, trust_root, &entry, out, remote_url_policy)?;
     }
 
     Ok(())
@@ -666,20 +700,13 @@ fn collect_target_submodule_untrusted_sources(
     trust_root: &Path,
     prefix: &Path,
     target_path: &Path,
-    out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    out: &mut SubmoduleTrustTargets,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let current_workdir = repo_workdir_for_submodule_trust(repo);
     for entry in submodule_entries(repo, prefix)? {
         let entry = entry?;
         if entry.full_path == target_path {
-            collect_untrusted_submodule_source(
-                current_workdir,
-                trust_root,
-                &entry,
-                out,
-                remote_url_policy,
-            )?;
+            collect_untrusted_submodule_source(repo, trust_root, &entry, out, remote_url_policy)?;
             return Ok(true);
         }
 
@@ -1706,64 +1733,252 @@ fn open_configured_submodule_repo(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))
 }
 
-fn trust_target_from_submodule(
-    current_repo_workdir: &Path,
-    full_submodule_path: &Path,
-    submodule: &gix::Submodule<'_>,
+fn submodule_trust_targets(
+    repo: &gix::Repository,
+    entry: &SubmoduleEntry<'_>,
     remote_url_policy: RemoteUrlPolicy,
-) -> Result<Option<SubmoduleTrustTarget>> {
-    let url = submodule
-        .url()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule url: {e}"))))?;
-    // .gitmodules ships with the repository, so hold its URL to the same
-    // allowlist as the Add dialog rather than to Git's protocol policy alone.
-    validate_remote_url_with_policy(
-        &bytes_to_text_preserving_utf8(url.to_bstring().as_ref()),
-        remote_url_policy,
-    )?;
-    trust_target_from_url(current_repo_workdir, full_submodule_path, &url)
+) -> Result<Vec<SubmoduleTrustTarget>> {
+    let name = entry.submodule.name();
+    let configured = repo.config_snapshot().string_by("submodule", name, "url");
+    let source = match configured {
+        Some(url) => url,
+        None => {
+            let modules = crate::refs::modules_snapshot(repo).map_err(|_| {
+                Error::new(ErrorKind::Backend(
+                    "could not read submodule sources".into(),
+                ))
+            })?;
+            let url = modules
+                .and_then(|modules| modules.config().string_by("submodule", Some(name), "url"))
+                .ok_or_else(|| Error::new(ErrorKind::Backend("submodule has no source".into())))?;
+            validate_submodule_source(url.as_bstr(), remote_url_policy)?;
+            resolve_submodule_source(repo, url.as_bstr())?
+        }
+    };
+    let mut targets =
+        submodule_clone_trust_targets(repo, &entry.full_path, source.as_bstr(), remote_url_policy)?;
+    let nested = entry
+        .submodule
+        .open()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))?;
+    if let Some(nested) = nested.as_ref() {
+        let workdir = repo_workdir_for_submodule_trust(repo).join(&entry.relative_path);
+        let names = nested.remote_names();
+        let default_remote = default_submodule_remote(nested)?;
+        let fallback =
+            (!names.contains(default_remote.as_bstr())).then_some(default_remote.as_bstr());
+        for name in names.iter().map(|name| name.as_bstr()).chain(fallback) {
+            let url =
+                native_effective_submodule_url(repo, Some((nested.git_dir(), &workdir)), name)?;
+            if let Some(target) = local_submodule_source(
+                &workdir,
+                &entry.full_path,
+                url.as_bstr(),
+                remote_url_policy,
+            )? {
+                let missing_implicit_origin = fallback == Some(name)
+                    && name == "origin"
+                    && target.local_source_path == workdir.join("origin")
+                    && !target.local_source_path.exists();
+                if !missing_implicit_origin {
+                    targets.insert(target.local_source_path.clone(), target);
+                }
+            }
+        }
+    }
+    Ok(targets.into_values().collect())
 }
 
-fn trust_target_from_raw_source(
-    current_repo_workdir: &Path,
+fn native_effective_submodule_url(
+    repo: &gix::Repository,
+    nested: Option<(&Path, &Path)>,
+    source: &gix::bstr::BStr,
+) -> Result<gix::bstr::BString> {
+    let mut command = git_workdir_cmd_for(repo_workdir_for_submodule_trust(repo));
+    command.arg("--no-pager");
+    if let Some((git_dir, worktree)) = nested {
+        command
+            .arg("--git-dir")
+            .arg(git_dir)
+            .arg("--work-tree")
+            .arg(worktree);
+    }
+    command
+        .args(["ls-remote", "--get-url", "--"])
+        .arg(path_buf_from_git_bytes(source, "Git submodule source")?);
+    let output = run_git_metadata_capture(command, "git ls-remote --get-url").map_err(|error| {
+        if matches!(error.kind(), ErrorKind::Cancelled) {
+            error
+        } else {
+            Error::new(ErrorKind::Backend(
+                "Git could not resolve the effective submodule source".into(),
+            ))
+        }
+    })?;
+    let url = output.strip_suffix(b"\n").ok_or_else(|| {
+        Error::new(ErrorKind::Backend(
+            "Git did not return a submodule source".into(),
+        ))
+    })?;
+    Ok(url.to_vec().into())
+}
+
+fn submodule_clone_trust_targets(
+    repo: &gix::Repository,
+    path: &Path,
+    resolved: &gix::bstr::BStr,
+    policy: RemoteUrlPolicy,
+) -> Result<BTreeMap<PathBuf, SubmoduleTrustTarget>> {
+    let rewritten = native_effective_submodule_url(repo, None, resolved)?;
+    let mut targets = BTreeMap::new();
+    for url in [resolved, rewritten.as_bstr()] {
+        if let Some(target) =
+            local_submodule_source(repo_workdir_for_submodule_trust(repo), path, url, policy)?
+        {
+            targets.insert(target.local_source_path.clone(), target);
+        }
+    }
+    Ok(targets)
+}
+
+fn default_submodule_remote(repo: &gix::Repository) -> Result<gix::bstr::BString> {
+    let config = repo.config_snapshot();
+    let branch = crate::refs::head_name(repo)?;
+    Ok(branch
+        .as_ref()
+        .and_then(|branch| config.string_by("branch", branch.shorten(), "remote"))
+        .or_else(|| repo.remote_default_name(gix::remote::Direction::Fetch))
+        .unwrap_or_else(|| "origin".into()))
+}
+
+fn submodule_add_trust_targets(
+    repo: &gix::Repository,
     submodule_path: &Path,
     raw_source: &str,
-) -> Result<Option<SubmoduleTrustTarget>> {
-    let url = gix::url::parse(raw_source.as_bytes().as_bstr()).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "invalid submodule source {raw_source:?}: {e}"
-        )))
-    })?;
-    let display_source = raw_source.trim().to_string();
-    trust_target_from_parsed_url(current_repo_workdir, submodule_path, &url, display_source)
+    policy: RemoteUrlPolicy,
+) -> Result<Vec<SubmoduleTrustTarget>> {
+    let source = resolve_submodule_source(repo, raw_source.as_bytes().as_bstr())?;
+    Ok(
+        submodule_clone_trust_targets(repo, submodule_path, source.as_bstr(), policy)?
+            .into_values()
+            .collect(),
+    )
 }
 
-fn trust_target_from_url(
-    current_repo_workdir: &Path,
-    submodule_path: &Path,
-    url: &gix::Url,
-) -> Result<Option<SubmoduleTrustTarget>> {
-    let display_source = bytes_to_text_preserving_utf8(url.to_bstring().as_ref());
-    trust_target_from_parsed_url(current_repo_workdir, submodule_path, url, display_source)
+fn resolve_submodule_source(
+    repo: &gix::Repository,
+    source: &gix::bstr::BStr,
+) -> Result<gix::bstr::BString> {
+    if !submodule_url_starts_with_segment(source, b".")
+        && !submodule_url_starts_with_segment(source, b"..")
+    {
+        return Ok(source.to_owned());
+    }
+    let remote = default_submodule_remote(repo)?;
+    let config = repo.config_snapshot();
+    let base = match config.string_by("remote", remote.as_bstr(), "url") {
+        Some(url) => url,
+        None => gix::path::into_bstr(repo_workdir_for_submodule_trust(repo))
+            .map_err(|_| {
+                Error::new(ErrorKind::Backend(
+                    "submodule worktree path is invalid".into(),
+                ))
+            })?
+            .into_owned(),
+    };
+    resolve_relative_submodule_source(base.as_bstr(), source)
 }
 
-fn trust_target_from_parsed_url(
+fn submodule_url_separator(byte: u8) -> bool {
+    byte == b'/' || cfg!(windows) && byte == b'\\'
+}
+
+fn submodule_url_starts_with_segment(url: &[u8], segment: &[u8]) -> bool {
+    url.strip_prefix(segment)
+        .and_then(|remainder| remainder.first().copied())
+        .is_some_and(submodule_url_separator)
+}
+
+fn resolve_relative_submodule_source(
+    upstream: &gix::bstr::BStr,
+    mut source: &[u8],
+) -> Result<gix::bstr::BString> {
+    let invalid = || {
+        Error::new(ErrorKind::Backend(
+            "relative submodule source exceeds its upstream path".into(),
+        ))
+    };
+    let mut base = upstream.to_vec();
+    if base.is_empty() {
+        return Err(invalid());
+    }
+    if base.last().copied().is_some_and(submodule_url_separator) {
+        base.pop();
+    }
+    let has_drive = cfg!(windows) && gix::path::windows_drive_prefix(base.as_bstr()).is_some();
+    let relative = !has_drive
+        && !base.first().copied().is_some_and(submodule_url_separator)
+        && base
+            .find_byte(b':')
+            .is_none_or(|colon| base.find_byte(b'/').is_some_and(|slash| slash < colon));
+    if relative
+        && !submodule_url_starts_with_segment(&base, b".")
+        && !submodule_url_starts_with_segment(&base, b"..")
+    {
+        base.splice(..0, *b"./");
+    }
+    let mut separator = b'/';
+    loop {
+        if submodule_url_starts_with_segment(source, b".") {
+            source = &source[2..];
+        } else if submodule_url_starts_with_segment(source, b"..") {
+            source = &source[3..];
+            if let Some(slash) = base.iter().rposition(|&byte| submodule_url_separator(byte)) {
+                base.truncate(slash);
+            } else if let Some(colon) = base.rfind_byte(b':') {
+                base.truncate(colon);
+                separator = b':';
+            } else if relative || base == b"." {
+                return Err(invalid());
+            } else {
+                base = b".".to_vec();
+            }
+        } else {
+            break;
+        }
+    }
+    base.push(separator);
+    base.extend_from_slice(source.strip_suffix(b"/").unwrap_or(source));
+    if submodule_url_starts_with_segment(&base, b".") {
+        base.drain(..2);
+    }
+    Ok(base.into())
+}
+
+fn validate_submodule_source(source: &gix::bstr::BStr, policy: RemoteUrlPolicy) -> Result<()> {
+    validate_remote_url_with_policy(&bytes_to_text_preserving_utf8(source), policy)
+}
+
+fn local_submodule_source(
     current_repo_workdir: &Path,
     submodule_path: &Path,
-    url: &gix::Url,
-    display_source: String,
+    source: &gix::bstr::BStr,
+    policy: RemoteUrlPolicy,
 ) -> Result<Option<SubmoduleTrustTarget>> {
+    validate_submodule_source(source, policy)?;
+    let url = gix::url::parse(source)
+        .map_err(|_| Error::new(ErrorKind::Backend("invalid submodule source".into())))?;
     if url.scheme != gix::url::Scheme::File {
         return Ok(None);
     }
 
     let local_source_path = canonicalize_or_original(resolve_local_file_transport_path(
         current_repo_workdir,
-        url,
+        &url,
     )?);
     Ok(Some(SubmoduleTrustTarget {
         submodule_path: submodule_path.to_path_buf(),
-        display_source,
+        display_source: redact_url_userinfo(&bytes_to_text_preserving_utf8(source)),
         local_source_path,
     }))
 }
@@ -2393,6 +2608,32 @@ mod tests {
             !cmd.get_envs()
                 .any(|(key, _)| key == OsStr::new("GIT_ALLOW_PROTOCOL"))
         );
+    }
+
+    #[test]
+    fn unapproved_submodule_file_transport_cannot_inherit_a_file_allowlist() {
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_ALLOW_PROTOCOL", "file:https");
+        deny_file_submodule_transport(&mut cmd);
+        assert!(cmd.get_args().any(|arg| arg == "protocol.file.allow=never"));
+        assert_eq!(
+            cmd.get_envs()
+                .find_map(|(key, value)| (key == "GIT_ALLOW_PROTOCOL").then_some(value))
+                .flatten(),
+            Some(OsStr::new("https"))
+        );
+    }
+
+    #[test]
+    fn invalid_submodule_source_errors_omit_url_credentials() {
+        let error = local_submodule_source(
+            Path::new("."),
+            Path::new("module"),
+            b"https://test:fixture-secret@example.invalid:not-a-port/repo".as_bstr(),
+            RemoteUrlPolicy::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid submodule source");
     }
 
     fn git_config_failure(stderr: &str) -> Error {
