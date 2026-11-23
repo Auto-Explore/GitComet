@@ -435,14 +435,58 @@ fn accept_error_is_retryable(_error: &io::Error) -> bool {
     true
 }
 
+/// Bound the whole exchange, including messages received in several parts.
+struct BrokerIo<'a> {
+    socket: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl<'a> BrokerIo<'a> {
+    fn new(socket: &'a mut TcpStream) -> Self {
+        Self {
+            socket,
+            deadline: Instant::now() + IO_TIMEOUT,
+        }
+    }
+
+    fn remaining(&self) -> io::Result<Duration> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "browser broker exchange timed out",
+            ))
+        } else {
+            Ok(remaining)
+        }
+    }
+}
+
+impl Read for BrokerIo<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.socket.set_read_timeout(Some(self.remaining()?))?;
+        self.socket.read(bytes)
+    }
+}
+
+impl Write for BrokerIo<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.socket.set_write_timeout(Some(self.remaining()?))?;
+        self.socket.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.socket.flush()
+    }
+}
+
 fn handle_connection(
     mut stream: TcpStream,
     descriptor: &InstanceDescriptor,
     requests: &BrowserRequestSender,
 ) -> io::Result<()> {
     stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    let mut stream = BrokerIo::new(&mut stream);
     identify_server(&mut stream, &descriptor.token)?;
     if let Err(error) = enqueue_request(&mut stream, descriptor, requests) {
         // Nothing was queued: say so, so the client may start a primary
@@ -455,7 +499,7 @@ fn handle_connection(
 }
 
 fn enqueue_request(
-    stream: &mut TcpStream,
+    stream: &mut impl Read,
     descriptor: &InstanceDescriptor,
     requests: &BrowserRequestSender,
 ) -> io::Result<()> {
@@ -514,7 +558,7 @@ fn server_proof(token: &str, challenge: &[u8; 16]) -> Hmac<Sha256> {
     mac
 }
 
-fn identify_server(stream: &mut TcpStream, token: &str) -> io::Result<()> {
+fn identify_server(stream: &mut (impl Read + Write), token: &str) -> io::Result<()> {
     let mut challenge = [0; 16];
     stream.read_exact(&mut challenge)?;
     stream.write_all(&server_proof(token, &challenge).finalize().into_bytes())
@@ -522,8 +566,7 @@ fn identify_server(stream: &mut TcpStream, token: &str) -> io::Result<()> {
 
 fn verify_server(stream: &mut TcpStream, token: &str) -> io::Result<()> {
     let challenge = Uuid::new_v4();
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    let mut stream = BrokerIo::new(stream);
     stream.write_all(challenge.as_bytes())?;
     let mut proof = [0; 32];
     stream.read_exact(&mut proof)?;
@@ -583,6 +626,7 @@ fn send_request(
     };
     let mut line = serde_json::to_vec(&wire)?;
     line.push(b'\n');
+    let mut stream = BrokerIo::new(&mut stream);
     // The broker queues a request only once it has read the whole line, so
     // a failure before the line is out (a broker closing its listener as it
     // shuts down, say) delivered nothing.
@@ -1480,6 +1524,27 @@ mod tests {
             "{case}: the fallback must not publish a second primary"
         );
         drop(primary);
+    }
+
+    #[test]
+    fn another_byte_does_not_extend_an_expired_broker_exchange() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut socket, _) = listener.accept().unwrap();
+        peer.write_all(b"ab").unwrap();
+        let mut stream = BrokerIo::new(&mut socket);
+        let mut byte = [0; 1];
+        stream.read_exact(&mut byte).unwrap();
+        assert_eq!(&byte, b"a");
+        stream.deadline = Instant::now();
+        assert_eq!(
+            stream.read_exact(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            stream.write_all(b"x").unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
     }
 
     // Guards against WouldBlock when accepted sockets are non-blocking and
