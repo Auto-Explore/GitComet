@@ -13,7 +13,7 @@ use gitcomet_core::large_files::{
 use gitcomet_core::lfs;
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice;
-use std::io::Read as _;
+use std::io::{Read as _, Seek as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -45,10 +45,10 @@ pub(super) fn read_pointer_candidate(path: &Path) -> Option<Vec<u8>> {
     if !std::fs::symlink_metadata(path).ok()?.is_file() {
         return None;
     }
-    read_pointer_candidate_file(std::fs::File::open(path).ok()?)
+    read_pointer_candidate_file(&mut std::fs::File::open(path).ok()?)
 }
 
-fn read_pointer_candidate_file(mut file: std::fs::File) -> Option<Vec<u8>> {
+fn read_pointer_candidate_file(file: &mut std::fs::File) -> Option<Vec<u8>> {
     if file.metadata().ok()?.len() > MAX_POINTER_BYTES {
         return None;
     }
@@ -289,6 +289,7 @@ fn index_classified(
 /// Where content lives locally: the LFS store, and git-annex's objects
 /// directory, whose layout is hashed from each key.
 struct LocalStores {
+    common_dir: PathBuf,
     lfs: PathBuf,
     annex_objects: PathBuf,
     annex_levels: usize,
@@ -301,6 +302,7 @@ impl LocalStores {
             .boolean("annex.tune.objecthash1")
             .unwrap_or(false);
         Self {
+            common_dir: repo.common_dir().to_path_buf(),
             lfs: lfs_storage_dir(repo),
             annex_objects: repo.common_dir().join("annex").join("objects"),
             annex_levels: if objecthash1 { 1 } else { 2 },
@@ -315,6 +317,99 @@ impl LocalStores {
             .map(|relative| self.annex_objects.join(relative))
             .find(|path| path.is_file())
     }
+
+    fn open_preview_object(&self, pointer: &LargeFilePointer) -> Option<std::fs::File> {
+        use gitcomet_core::path_utils::open_worktree_regular_file;
+
+        match pointer {
+            LargeFilePointer::Lfs(pointer) => {
+                let object = lfs::object_relative_path(&pointer.oid);
+                let (root, relative) = match self.lfs.strip_prefix(&self.common_dir) {
+                    Ok(relative) => (self.common_dir.as_path(), relative.join(object)),
+                    Err(_) => (self.lfs.as_path(), object),
+                };
+                open_worktree_regular_file(root, &relative).ok().flatten()
+            }
+            LargeFilePointer::Annex(key) => annex::object_paths(&key.raw, self.annex_levels)
+                .into_iter()
+                .find_map(|object| {
+                    let relative = Path::new("annex/objects").join(object);
+                    open_worktree_regular_file(&self.common_dir, &relative)
+                        .ok()
+                        .flatten()
+                }),
+        }
+    }
+}
+
+fn read_preview_object(
+    file: Option<std::fs::File>,
+    max_bytes: u64,
+) -> (LargeFileContent, Option<Vec<u8>>) {
+    let Some((file, length)) =
+        file.and_then(|file| file.metadata().ok().map(|metadata| (file, metadata.len())))
+    else {
+        return (LargeFileContent::MissingLocally, None);
+    };
+    if length > max_bytes {
+        return (LargeFileContent::TooLarge { bytes: length }, None);
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return (LargeFileContent::MissingLocally, None);
+    }
+    if bytes.len() as u64 > max_bytes {
+        return (
+            LargeFileContent::TooLarge {
+                bytes: bytes.len() as u64,
+            },
+            None,
+        );
+    }
+    (LargeFileContent::Available, Some(bytes))
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn managed_preview_reads_regular_objects_without_following_store_links() {
+    let root = tempfile::tempdir().unwrap();
+    let common_dir = root.path().join("repository");
+    let external = root.path().join("external-lfs");
+    let pointer = lfs::LfsPointer {
+        oid: lfs::LfsOid([1; 32]),
+        size: 4,
+    };
+    let relative = lfs::object_relative_path(&pointer.oid);
+    let object = external.join(&relative);
+    std::fs::create_dir_all(&common_dir).unwrap();
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::write(&object, b"note").unwrap();
+    let pointer = LargeFilePointer::Lfs(pointer);
+    let external_store = LocalStores {
+        common_dir: common_dir.clone(),
+        lfs: external.clone(),
+        annex_objects: common_dir.join("annex/objects"),
+        annex_levels: 2,
+    };
+    assert_eq!(
+        read_preview_object(external_store.open_preview_object(&pointer), 8),
+        (LargeFileContent::Available, Some(b"note".to_vec()))
+    );
+
+    let local = common_dir.join("lfs");
+    std::os::unix::fs::symlink(&external, &local).unwrap();
+    let local_store = LocalStores {
+        lfs: local,
+        ..external_store
+    };
+    assert_eq!(
+        read_preview_object(local_store.open_preview_object(&pointer), 8),
+        (LargeFileContent::MissingLocally, None)
+    );
 }
 
 fn has_annex_branch(repo: &gix::Repository) -> bool {
@@ -659,11 +754,12 @@ impl super::GixRepo {
         if !self.committed_pointer_scan(repo).annex {
             return None;
         }
-        let file = gitcomet_core::path_utils::open_worktree_regular_file(&self.spec.workdir, path)
-            .ok()
-            .flatten()?;
+        let mut file =
+            gitcomet_core::path_utils::open_worktree_regular_file(&self.spec.workdir, path)
+                .ok()
+                .flatten()?;
         let metadata = file.metadata().ok()?;
-        if read_pointer_candidate_file(file)
+        if read_pointer_candidate_file(&mut file)
             .and_then(|bytes| classify_git_form(&bytes))
             .is_some()
         {
@@ -723,13 +819,13 @@ impl super::GixRepo {
             return None;
         }
         let pointer = if source.path.starts_with(&self.spec.workdir) {
-            let file = gitcomet_core::path_utils::open_worktree_regular_file(
+            let mut file = gitcomet_core::path_utils::open_worktree_regular_file(
                 &self.spec.workdir,
                 &source.path,
             )
             .ok()
             .flatten()?;
-            read_pointer_candidate_file(file)?
+            read_pointer_candidate_file(&mut file)?
         } else {
             read_pointer_candidate(&source.path)?
         };
@@ -739,64 +835,30 @@ impl super::GixRepo {
         }
         let worktree_content = worktree
             .then(|| {
-                let file = gitcomet_core::path_utils::open_worktree_regular_file(
+                let mut file = gitcomet_core::path_utils::open_worktree_regular_file(
                     &self.spec.workdir,
                     logical_path,
                 )
                 .ok()
                 .flatten()?;
-                read_pointer_candidate_file(file)
+                if read_pointer_candidate_file(&mut file)
                     .and_then(|bytes| classify_bytes(&bytes, false))
-                    .is_none()
-                    .then(|| self.spec.workdir.join(logical_path))
+                    .is_some()
+                {
+                    return None;
+                }
+                file.rewind().ok()?;
+                Some(file)
             })
             .flatten();
-        let (content_path, identity) = match worktree_content {
-            Some(path) => (Some(path), None),
-            None => match &classified.pointer {
-                LargeFilePointer::Lfs(pointer) => {
-                    let path = scan
-                        .stores
-                        .lfs
-                        .join(lfs::object_relative_path(&pointer.oid));
-                    (
-                        path.is_file().then_some(path),
-                        Some(format!("lfs:{}", pointer.oid)),
-                    )
-                }
-                LargeFilePointer::Annex(key) => (
-                    scan.stores.annex_object(&key.raw),
-                    Some(format!("annex:{}", key.raw)),
-                ),
-            },
-        };
-        let content = match &content_path {
-            Some(path) => {
-                let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                if bytes > LARGE_FILE_TEXT_DIFF_MAX_BYTES {
-                    LargeFileContent::TooLarge { bytes }
-                } else {
-                    LargeFileContent::Available
-                }
-            }
-            None => LargeFileContent::MissingLocally,
-        };
-        let replacement = (content == LargeFileContent::Available)
-            .then_some(content_path)
-            .flatten()
-            .and_then(|path| match identity {
-                Some(identity) => Some(FileDiffTextSource::with_identity(path, identity)),
-                None => {
-                    let bytes = gitcomet_core::path_utils::read_worktree_file_bounded(
-                        &self.spec.workdir,
-                        logical_path,
-                        LARGE_FILE_TEXT_DIFF_MAX_BYTES,
-                    )
-                    .ok()
-                    .flatten()?;
-                    self.cache_worktree_preview_bytes(logical_path, &bytes).ok()
-                }
-            });
+        let file =
+            worktree_content.or_else(|| scan.stores.open_preview_object(&classified.pointer));
+        let (mut content, bytes) = read_preview_object(file, LARGE_FILE_TEXT_DIFF_MAX_BYTES);
+        let replacement =
+            bytes.and_then(|bytes| self.cache_worktree_preview_bytes(logical_path, &bytes).ok());
+        if content == LargeFileContent::Available && replacement.is_none() {
+            content = LargeFileContent::MissingLocally;
+        }
         Some((
             LargeFileSide {
                 pointer: classified.pointer,
@@ -822,42 +884,10 @@ impl super::GixRepo {
         if !scan.supports(&classified.pointer) {
             return None;
         }
-        let path = match &classified.pointer {
-            LargeFilePointer::Lfs(pointer) => scan
-                .stores
-                .lfs
-                .join(lfs::object_relative_path(&pointer.oid)),
-            LargeFilePointer::Annex(key) => match scan.stores.annex_object(&key.raw) {
-                Some(path) => path,
-                None => {
-                    return Some((
-                        LargeFileSide {
-                            pointer: classified.pointer,
-                            content: LargeFileContent::MissingLocally,
-                        },
-                        None,
-                    ));
-                }
-            },
-        };
-        let (content, bytes) = match std::fs::metadata(&path) {
-            Ok(meta) if meta.len() > max_bytes => {
-                (LargeFileContent::TooLarge { bytes: meta.len() }, None)
-            }
-            Ok(meta) if meta.is_file() => match std::fs::read(path) {
-                Ok(bytes) if bytes.len() as u64 <= max_bytes => {
-                    (LargeFileContent::Available, Some(bytes))
-                }
-                Ok(bytes) => (
-                    LargeFileContent::TooLarge {
-                        bytes: bytes.len() as u64,
-                    },
-                    None,
-                ),
-                Err(_) => (LargeFileContent::MissingLocally, None),
-            },
-            _ => (LargeFileContent::MissingLocally, None),
-        };
+        let (content, bytes) = read_preview_object(
+            scan.stores.open_preview_object(&classified.pointer),
+            max_bytes,
+        );
         Some((
             LargeFileSide {
                 pointer: classified.pointer,
