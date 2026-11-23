@@ -7,7 +7,7 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt as _};
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TestGitCommandEnvironment {
@@ -18,6 +18,7 @@ struct TestGitCommandEnvironment {
 }
 
 static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> = OnceLock::new();
+static TEST_GIT_CONFIG_BY_ROOT: Mutex<Vec<(PathBuf, PathBuf)>> = Mutex::new(Vec::new());
 
 pub fn install_test_git_command_environment(
     global_config: PathBuf,
@@ -41,7 +42,21 @@ pub fn install_test_git_command_environment(
     let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
 }
 
-pub(crate) fn apply_git_command_environment(cmd: &mut Command) {
+pub fn register_test_git_config_for_root(root: PathBuf, config: PathBuf) {
+    TEST_GIT_CONFIG_BY_ROOT.lock().unwrap().push((root, config));
+}
+
+pub(crate) fn apply_git_command_environment(cmd: &mut Command, workdir: &Path) {
+    if let Some((_, config)) = TEST_GIT_CONFIG_BY_ROOT
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(root, _)| workdir.starts_with(root))
+    {
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        cmd.env("GIT_CONFIG_GLOBAL", config);
+        return;
+    }
     let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
         return;
     };

@@ -409,6 +409,16 @@ fn git(path: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
+#[cfg(unix)]
+fn set_trusted_fixture_config(root: &Path, key: &str, value: &str) {
+    let fixture = root.join("trusted.gitconfig");
+    git(
+        root,
+        &["config", "--file", fixture.to_str().unwrap(), key, value],
+    );
+    gitcomet_git_gix::register_test_git_config_for_root(root.canonicalize().unwrap(), fixture);
+}
+
 fn remote_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let temp = tempfile::tempdir().unwrap();
     // The store canonicalizes workdirs; macOS temp paths resolve through /private.
@@ -1352,7 +1362,7 @@ fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
 
 /// Counts remote contacts: every fetch runs the remote's upload-pack once.
 #[cfg(unix)]
-fn count_upload_packs(root: &Path, clone: &Path) -> PathBuf {
+fn count_upload_packs(root: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let log = root.join("upload-pack.log");
@@ -1366,14 +1376,7 @@ fn count_upload_packs(root: &Path, clone: &Path) -> PathBuf {
     )
     .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    git(
-        clone,
-        &[
-            "config",
-            "remote.origin.uploadpack",
-            wrapper.to_str().unwrap(),
-        ],
-    );
+    set_trusted_fixture_config(root, "remote.origin.uploadpack", wrapper.to_str().unwrap());
     log
 }
 
@@ -1381,7 +1384,7 @@ fn count_upload_packs(root: &Path, clone: &Path) -> PathBuf {
 #[test]
 fn linked_worktrees_of_one_repository_contact_the_remote_once() {
     let (temp, _source, clone, _latest) = remote_fixture();
-    let log = count_upload_packs(temp.path(), &clone);
+    let log = count_upload_packs(temp.path());
     let mut workdirs = vec![clone.clone()];
     for ix in 1..=2 {
         let linked = temp.path().join(format!("linked-{ix}"));

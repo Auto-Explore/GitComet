@@ -1144,6 +1144,9 @@ impl GixRepo {
         }
         let mut cmd = self.git_remote_cmd();
         cmd.arg("fetch").arg("--progress");
+        if crate::util::background::background_git_enabled() {
+            cmd.arg("--no-recurse-submodules");
+        }
         // `--all` would also try a git-annex special remote left without
         // `skipFetchAll`, and fail. Name the fetchable remotes instead. One
         // remote goes without `--multiple`, which would expand a remote group
@@ -1289,6 +1292,9 @@ impl GixRepo {
         prune: bool,
         skipped: &[String],
     ) -> Result<CommandOutput> {
+        if crate::util::background::background_git_enabled() {
+            self.check_automatic_fetch_helpers()?;
+        }
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
         // remote-tracking ref for reasons this fetch says nothing about.
@@ -1368,8 +1374,11 @@ impl GixRepo {
         }
 
         let mut cmd = self.git_remote_cmd();
-        cmd.arg("fetch")
-            .arg("--progress")
+        cmd.arg("fetch");
+        if crate::util::background::background_git_enabled() {
+            cmd.arg("--no-recurse-submodules");
+        }
+        cmd.arg("--progress")
             .arg("--prune")
             .arg("--no-prune-tags")
             .arg("--")

@@ -2,10 +2,13 @@ use gitcomet_core::auth::askpass::PromptAuth;
 use gitcomet_core::auth::load_session_passphrases;
 use gitcomet_core::services::{CancellationToken, Result};
 use std::cell::RefCell;
+use std::ffi::OsString;
+use std::process::Command;
 
 struct BackgroundGit {
     cancellation: CancellationToken,
     auth: Option<PromptAuth>,
+    empty_hooks: tempfile::TempDir,
 }
 
 thread_local! {
@@ -28,6 +31,7 @@ pub(crate) fn with_background_git<T>(
     let background = BackgroundGit {
         cancellation: cancellation.clone(),
         auth: PromptAuth::from_cached_passphrases(load_session_passphrases()),
+        empty_hooks: tempfile::tempdir()?,
     };
     let _scope = BackgroundGitScope(BACKGROUND_GIT.with(|slot| slot.replace(Some(background))));
     let result = run();
@@ -35,8 +39,21 @@ pub(crate) fn with_background_git<T>(
     result
 }
 
-pub(super) fn background_git_enabled() -> bool {
+pub(crate) fn background_git_enabled() -> bool {
     BACKGROUND_GIT.with(|slot| slot.borrow().is_some())
+}
+
+pub(super) fn disable_background_git_hooks(command: &mut Command) {
+    BACKGROUND_GIT.with(|slot| {
+        if let Some(background) = slot.borrow().as_ref() {
+            let mut hooks_path = OsString::from("core.hooksPath=");
+            hooks_path.push(background.empty_hooks.path());
+            command
+                .arg("-c")
+                .arg(hooks_path)
+                .args(["-c", "hook.reference-transaction.enabled=false"]);
+        }
+    });
 }
 
 pub(super) fn background_git_auth() -> Option<Option<PromptAuth>> {

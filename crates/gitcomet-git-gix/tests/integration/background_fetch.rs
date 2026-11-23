@@ -248,6 +248,42 @@ fn background_fetch_updates_tracking_refs_without_changing_checkout() {
 }
 
 #[test]
+fn background_fetch_skips_repository_credential_helpers_and_manual_fetch_works() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    let remote = repository(root.path(), "remote");
+    let first = commit(&remote, "first");
+    let local = repository(root.path(), "local");
+    git_stdout(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git_stdout(&local, &["fetch", "origin"]);
+    let latest = commit(&remote, "second");
+    let included = local.join("credential-config");
+    fs::write(&included, "[credential]\nhelper = cache\n").expect("write inert config");
+    git_stdout(
+        &local,
+        &[
+            "config",
+            "--local",
+            "include.path",
+            included.to_str().unwrap(),
+        ],
+    );
+
+    let opened = GixBackend.open(&local).expect("open repository");
+    let error = opened
+        .fetch_all_background(false, &CancellationToken::new())
+        .expect_err("repository helper must pause unattended fetch");
+    assert!(
+        error
+            .to_string()
+            .contains("repository-configured credential helper")
+    );
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), first);
+
+    opened.fetch_all(false).expect("manual fetch still works");
+    assert_eq!(git_stdout(&local, &["rev-parse", "origin/main"]), latest);
+}
+
+#[test]
 fn background_fetch_leaves_staged_manual_credentials_available() {
     use gitcomet_core::auth::{
         GitAuthKind, ScopedStagedGitAuth, StagedGitAuth, take_staged_git_auth,
@@ -391,6 +427,27 @@ mod transport {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 
+    fn set_trusted_config(local: &Path, file: &Path, key: &str, value: &str) {
+        static GLOBAL_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = GLOBAL_CONFIG_LOCK.lock().unwrap();
+        git_stdout(
+            local,
+            &["config", "--file", file.to_str().unwrap(), key, value],
+        );
+        let git_dir = local.join(".git").canonicalize().unwrap();
+        let include = format!("includeIf.gitdir:{}.path", git_dir.display());
+        git_stdout(
+            local,
+            &[
+                "config",
+                "--global",
+                "--add",
+                &include,
+                file.to_str().unwrap(),
+            ],
+        );
+    }
+
     fn install_remote(local: &Path, script: &Path, contents: &str) {
         fs::write(script, contents).expect("write remote transport");
         git_stdout(
@@ -402,13 +459,11 @@ mod transport {
                 "ssh://fixture.invalid/repository",
             ],
         );
-        git_stdout(
+        set_trusted_config(
             local,
-            &[
-                "config",
-                "core.sshCommand",
-                &format!("sh {}", shell_path(script)),
-            ],
+            &script.with_extension("gitconfig"),
+            "core.sshCommand",
+            &format!("sh {}", shell_path(script)),
         );
         git_stdout(local, &["config", "ssh.variant", "ssh"]);
     }
@@ -431,7 +486,12 @@ mod transport {
             shell_path(&helper_called),
             shell_path(&stored),
         );
-        git_stdout(&local, &["config", "credential.helper", &helper]);
+        set_trusted_config(
+            &local,
+            &root.path().join("trusted.gitconfig"),
+            "credential.helper",
+            &helper,
+        );
         git_stdout(&local, &["config", "credential.interactive", "true"]);
         let opened = GixBackend.open(&local).expect("open repository");
 

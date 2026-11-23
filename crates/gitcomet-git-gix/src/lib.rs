@@ -18,6 +18,7 @@ pub use backend::GixBackend;
 #[doc(hidden)]
 pub use test_support::{
     allow_test_repo_local_mergetool_command, install_test_git_command_environment,
+    register_test_git_config_for_root,
 };
 
 /// Optional decoded retention and caller-pinned allocations, in bytes, followed
