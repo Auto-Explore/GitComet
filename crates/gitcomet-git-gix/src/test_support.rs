@@ -222,3 +222,13 @@ pub(crate) fn open_repo(workdir: &Path) -> crate::repo::GixRepo {
     crate::repo::GixRepo::new(workdir.to_path_buf(), open_gix(workdir).into_sync())
         .expect("open native repository topology")
 }
+
+#[cfg(test)]
+pub(crate) fn open_repo_with_config(
+    workdir: &Path,
+    overrides: impl IntoIterator<Item = impl Into<gix::bstr::BString>>,
+) -> crate::repo::GixRepo {
+    let options = gix::open::Options::isolated().config_overrides(overrides);
+    let repo = crate::open::open_worktree_repo_with_options(workdir, options).unwrap();
+    crate::repo::GixRepo::new(workdir.to_path_buf(), repo.into_sync()).unwrap()
+}

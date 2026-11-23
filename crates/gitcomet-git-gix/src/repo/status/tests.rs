@@ -1249,7 +1249,10 @@ fn repeated_status_does_not_run_clean_filters_again_after_the_first_scan() {
         filetime::FileTime::from_unix_time(timestamp + 1, 0),
     )
     .unwrap();
-    let repo = open_repo(workdir);
+    let repo = crate::test_support::open_repo_with_config(
+        workdir,
+        [format!("filter.count.clean={clean}")],
+    );
     assert!(repo.status_impl().unwrap().unstaged.is_empty());
     let hashes = std::fs::read(workdir.join(".git/hash-count")).unwrap();
     assert!(

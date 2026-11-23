@@ -238,7 +238,7 @@ impl super::GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<UncommittedLineStats> {
         cancellation.check_cancelled()?;
-        let repo = self.status_repo();
+        let (repo, lfs_configured) = self.line_stats_repo()?;
         // Taken, not held: a concurrent scan starts cold instead of waiting.
         let mut scan = MemoScan {
             previous: std::mem::take(&mut *self.line_stats_memo()),
@@ -247,7 +247,14 @@ impl super::GixRepo {
         let result =
             cached_staged_line_stats(self, &repo, &mut scan, cancellation).and_then(|staged| {
                 cancellation.check_cancelled()?;
-                let unstaged = unstaged_line_stats(self, &repo, entries, &mut scan, cancellation)?;
+                let unstaged = unstaged_line_stats(
+                    self,
+                    &repo,
+                    lfs_configured,
+                    entries,
+                    &mut scan,
+                    cancellation,
+                )?;
                 Ok(UncommittedLineStats { staged, unstaged })
             });
         let MemoScan { mut previous, next } = scan;
@@ -278,8 +285,8 @@ impl super::GixRepo {
         {
             return Ok(());
         }
-        let repo = self.status_repo();
-        let mut reader = WorktreeReader::new(&repo, &self.spec.workdir);
+        let (repo, lfs_configured) = self.line_stats_repo()?;
+        let mut reader = WorktreeReader::new(&repo, &self.spec.workdir, lfs_configured);
         let (mut old, mut new) = (Vec::new(), Vec::new());
         for file in files.iter_mut() {
             if file.kind == FileStatusKind::Untracked {
@@ -307,6 +314,13 @@ impl super::GixRepo {
             file.line_stats.edit = line_stats_from_bytes(&old, &new).edit;
         }
         Ok(())
+    }
+
+    fn line_stats_repo(&self) -> Result<(gix::Repository, bool)> {
+        let mut repo = self.large_file_read_repo();
+        let lfs_configured = super::large_files::lfs_filter_configured(&repo.config_snapshot());
+        super::large_files::restrict_passive_filters(&mut repo)?;
+        Ok((repo, lfs_configured))
     }
 
     fn line_stats_memo(&self) -> std::sync::MutexGuard<'_, LineStatsMemo> {
@@ -436,6 +450,7 @@ fn staged_line_stats(
 fn unstaged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
+    lfs_configured: bool,
     entries: &[FileStatus],
     memo: &mut MemoScan,
     cancellation: &CancellationToken,
@@ -451,7 +466,7 @@ fn unstaged_line_stats(
     // Only the old side is a blob, so `CommitStatsScratch` does not fit.
     let mut index_blob = Vec::new();
     let mut worktree = Vec::new();
-    let mut reader = WorktreeReader::new(repo, &gix_repo.spec.workdir);
+    let mut reader = WorktreeReader::new(repo, &gix_repo.spec.workdir, lfs_configured);
 
     for entry in entries.iter() {
         // Conflicted has no single before.
@@ -582,6 +597,7 @@ struct Filters<'repo> {
     selected: gix::attrs::search::Outcome,
     /// Filter drivers with a clean or process program configured.
     cleaning_drivers: Vec<gix::bstr::BString>,
+    lfs_configured: bool,
     /// The values of [`super::diff::WORKTREE_CONVERSION_CONFIG`], hashed.
     config: u64,
     /// A file's raw sniff window, reused across files.
@@ -610,7 +626,11 @@ struct FoundFile<'a, 'repo> {
 }
 
 impl<'repo> WorktreeReader<'repo> {
-    fn new(repo: &'repo gix::Repository, workdir: &'repo std::path::Path) -> Self {
+    fn new(
+        repo: &'repo gix::Repository,
+        workdir: &'repo std::path::Path,
+        lfs_configured: bool,
+    ) -> Self {
         let filters = repo
             .filter_pipeline(None)
             .ok()
@@ -639,6 +659,7 @@ impl<'repo> WorktreeReader<'repo> {
                     index,
                     attributes,
                     cleaning_drivers,
+                    lfs_configured,
                     config: config.finish(),
                     window: Vec::with_capacity(COMMIT_STATS_BINARY_SNIFF_BYTES),
                 })
@@ -688,15 +709,18 @@ impl<'repo> WorktreeReader<'repo> {
             (states.next(), states.next())
         };
         let driver = match filter {
+            Some(StateRef::Value(name))
+                if name.as_bstr() == super::large_files::LFS_FILTER_DRIVER
+                    && filters.lfs_configured =>
+            {
+                return None;
+            }
             Some(StateRef::Value(name)) => filters
                 .cleaning_drivers
                 .iter()
                 .find(|driver| **driver == name.as_bstr()),
             _ => None,
         };
-        if driver.is_some_and(|driver| *driver == super::large_files::LFS_FILTER_DRIVER) {
-            return None;
-        }
         let cleans = driver.is_some();
         let encoded = matches!(encoding, Some(StateRef::Value(_)));
         // Unlike the diff panel's memo, no second stat after the read: a write

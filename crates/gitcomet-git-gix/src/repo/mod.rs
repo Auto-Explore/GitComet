@@ -633,12 +633,10 @@ impl GixRepo {
         read()
     }
 
-    /// For index-vs-worktree status: use the refreshed filter configuration,
-    /// but never start git-annex (see [`large_files::strip_annex_filter`]).
-    pub(super) fn status_repo(&self) -> gix::Repository {
+    pub(super) fn status_repo(&self) -> Result<gix::Repository> {
         let mut repo = self.large_file_read_repo();
-        large_files::strip_annex_filter(&mut repo);
-        repo
+        large_files::restrict_passive_filters(&mut repo)?;
+        Ok(repo)
     }
 
     /// A fresh open, for operations that must see config/ref changes made after

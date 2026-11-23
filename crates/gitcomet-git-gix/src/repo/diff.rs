@@ -449,6 +449,10 @@ impl GixRepo {
             None => return Ok(None),
         };
 
+        let mut read_repo = repo.clone();
+        super::large_files::restrict_passive_filters(&mut read_repo)?;
+        let repo = &read_repo;
+
         // Memo: the whole filter + copy + hash + compare pass below only ever
         // rediscovers the same cache file when nothing changed, and a diff
         // row re-opens on every status refresh. A file modified within the
@@ -477,11 +481,6 @@ impl GixRepo {
                 hit.identity,
             )));
         }
-
-        // Only a miss runs filters; the fingerprint above never hashes annex's.
-        let mut read_repo = repo.clone();
-        super::large_files::strip_annex_filter(&mut read_repo);
-        let repo = &read_repo;
 
         // Record the identity before verification and check it again afterwards.
         let file_stamp =
