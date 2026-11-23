@@ -76,8 +76,10 @@ displays a loading screen until Git validation completes.
 Windows additionally reports renderer choice and fallback. `system_font_catalog`
 covers font-family discovery through GPUI when font preferences or the font
 picker require the installed-font catalog.
-`first_paint` marks prepaint of the initial view and `first_interactive` its next
-frame callback, not an OS presentation timestamp or measured input latency. These
+`first_paint` and `first_interactive` are recorded when a foreground callback
+observes GPUI's first completed platform submission for that window. The callback
+can run one frame after submission. Physical display timing requires a compositor
+or device trace. These
 may refer to the Git-checking loading screen. `home_ready` is the frame after the
 Home picker was prepainted with Git available, so use it for empty-picker startup
 latency. `GITCOMET_PERF_STARTUP_WAIT_FOR_HOME_READY=1` makes probe autoexit wait for
@@ -723,8 +725,8 @@ App-launch sidecars distinguish the initial window from usable repository data:
 
 | Metric | Completion condition |
 | --- | --- |
-| `first_paint_ms` | The first root view reaches the end of prepaint. |
-| `first_interactive_ms` | The frame callback after that first prepaint runs; repository contents may still be loading. |
+| `first_paint_ms` | A foreground callback observes the first completed window submission. |
+| `first_interactive_ms` | The foreground processes the first submission milestone while repository loading can continue. |
 | `repos_loaded` | Number of repository handles opened; inactive restored tabs load their contents on selection. |
 | `active_repo_ready_ms` | The active repository has status and history, with its foreground loads and actions settled. Optional remote-tag discovery and other-checkout scans may continue. |
 

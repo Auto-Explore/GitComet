@@ -554,12 +554,6 @@ pub(super) fn run_windowed_app(
             async {}
         })
         .detach();
-        {
-            let _stage = gitcomet_core::startup_trace::span("register_bundled_fonts");
-            if let Err(err) = crate::bundled_fonts::register(cx) {
-                eprintln!("Failed to register bundled fonts: {err:#}");
-            }
-        }
         if quit_when_all_windows_closed {
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
@@ -615,6 +609,11 @@ pub(super) fn run_windowed_app(
                     .collect()
             })
             .unwrap_or_default();
+        if !workflows.is_empty()
+            && let Err(err) = crate::bundled_fonts::register(cx)
+        {
+            eprintln!("Failed to register startup workflow fonts: {err:#}");
+        }
         let mut next: Box<dyn FnOnce(&mut App)> = Box::new(resume);
         for workflow in workflows.into_iter().rev() {
             next = Box::new(move |cx| {
@@ -725,6 +724,42 @@ pub(super) fn should_quit_when_all_windows_closed(launch: &WindowLaunchConfig) -
     launch.view_config.view_mode != GitCometViewMode::Normal || !cfg!(target_os = "macos")
 }
 
+fn after_first_window_submission(
+    window: &gpui::Window,
+    mut journal: gpui::profiler::journal::ForegroundJournalCollector,
+) {
+    use gpui::profiler::journal::{ForegroundEvent, ForegroundJournalEntry, IntervalBoundary};
+    window.on_next_frame(move |window, cx| {
+        if !crate::bundled_fonts::has_deferred_fonts(cx)
+            && !crate::startup_probe::waiting_for_first_presentation()
+        {
+            return;
+        }
+        let id = window.window_handle().window_id();
+        let presented = journal
+            .collect_unseen()
+            .entries
+            .iter()
+            .any(|entry| match entry {
+                ForegroundJournalEntry::Boundary(IntervalBoundary::Presented(frame)) => {
+                    frame.presentation.window_id == id
+                }
+                ForegroundJournalEntry::Event(ForegroundEvent::Present(submit)) => {
+                    submit.window_id == id
+                }
+                _ => false,
+            });
+        if !presented {
+            after_first_window_submission(window, journal);
+            return;
+        }
+        crate::startup_probe::record_first_presentation(cx);
+        if let Err(err) = crate::bundled_fonts::register_after_first_frame(cx) {
+            eprintln!("Failed to register deferred fonts: {err:#}");
+        }
+    });
+}
+
 pub(super) fn open_gitcomet_window(
     cx: &mut App,
     backend: Arc<dyn GitBackend>,
@@ -732,6 +767,14 @@ pub(super) fn open_gitcomet_window(
 ) -> gpui::WindowHandle<GitCometView> {
     clear_clean_shutdown_request(cx);
     let ui_session = session::load();
+    {
+        let _stage = gitcomet_core::startup_trace::span("register_ui_font");
+        if let Err(err) =
+            crate::bundled_fonts::register_ui_face(ui_session.ui_font_family.as_deref(), cx)
+        {
+            eprintln!("Failed to register UI font: {err:#}");
+        }
+    }
     let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
     crate::session_ui::window_controls(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
@@ -817,6 +860,11 @@ pub(super) fn open_gitcomet_window(
             }),
             move |window, cx| {
                 let _stage = gitcomet_core::startup_trace::span("window_view_init");
+                if crate::bundled_fonts::has_deferred_fonts(cx)
+                    || crate::startup_probe::waiting_for_first_presentation()
+                {
+                    after_first_window_submission(window, cx.foreground_journal().collector());
+                }
                 ui_scale::apply_to_window(window, ui_scale_percent);
                 window.on_window_should_close(cx, |window, cx| {
                     close_window_or_warn(window, cx);

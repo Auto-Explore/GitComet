@@ -230,7 +230,21 @@ fn system_font_catalog(text_system: &TextSystem) -> &'static SystemFontCatalog {
 
 fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
     let _stage = gitcomet_base::startup_trace::span("system_font_catalog");
-    let all_families = normalize_font_names(text_system.all_font_names());
+    use gitcomet_fonts::{
+        FIRA_CODE_FONT_FAMILY, IBM_PLEX_SANS_FONT_FAMILY, LILEX_FONT_FAMILY, NOTO_EMOJI_FONT_FAMILY,
+    };
+    let bundled = [
+        FIRA_CODE_FONT_FAMILY,
+        IBM_PLEX_SANS_FONT_FAMILY,
+        LILEX_FONT_FAMILY,
+        NOTO_EMOJI_FONT_FAMILY,
+    ];
+    let all_families = normalize_font_names(
+        text_system
+            .all_font_names()
+            .into_iter()
+            .chain(bundled.map(str::to_owned)),
+    );
     let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
 
     SystemFontCatalog {
@@ -360,7 +374,7 @@ fn resolve_with_catalog(
     use_font_ligatures: Option<bool>,
     catalog: impl FnOnce() -> &'static FontOptionCatalog,
 ) -> AppFontPreferences {
-    // Bundled families are registered before windows open. Native system-font
+    // Bundled families are always available to select. Native system-font
     // aliases are also always valid and need no installed-font catalog. Linux
     // resolves that alias to a concrete installed family, so keeps its catalog.
     let ui = ui_font_family.unwrap_or(DEFAULT_UI_FONT_FAMILY);

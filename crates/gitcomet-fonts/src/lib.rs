@@ -3,7 +3,8 @@ pub const FIRA_CODE_FONT_FAMILY: &str = "Fira Code";
 pub const IBM_PLEX_SANS_FONT_FAMILY: &str = "IBM Plex Sans";
 pub const LILEX_FONT_FAMILY: &str = "Lilex";
 
-const FIRA_CODE_REGULAR_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-Regular.ttf");
+pub const FIRA_CODE_REGULAR_BYTES: &[u8] =
+    include_bytes!("../assets/fira_code/FiraCode-Regular.ttf");
 const FIRA_CODE_SEMIBOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-SemiBold.ttf");
 const FIRA_CODE_BOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-Bold.ttf");
 
@@ -30,8 +31,11 @@ const LILEX_SEMIBOLD_ITALIC_BYTES: &[u8] =
 const LILEX_BOLD_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Bold.ttf");
 const LILEX_BOLD_ITALIC_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-BoldItalic.ttf");
 
+pub const NOTO_EMOJI_FONT_FAMILY: &str = "Noto Emoji";
+pub const NOTO_EMOJI_BYTES: &[u8] = include_bytes!("../assets/noto_emoji/NotoEmoji.ttf");
+
 pub const BUNDLED_FONT_BYTES: &[&[u8]] = &[
-    include_bytes!("../assets/noto_emoji/NotoEmoji.ttf"),
+    NOTO_EMOJI_BYTES,
     FIRA_CODE_REGULAR_BYTES,
     FIRA_CODE_SEMIBOLD_BYTES,
     FIRA_CODE_BOLD_BYTES,
