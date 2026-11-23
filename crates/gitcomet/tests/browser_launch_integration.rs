@@ -82,16 +82,18 @@ fn terminal_launch_uses_the_build_default_when_foreground_is_unset_or_empty() {
 
 #[test]
 fn a_running_browser_receives_requests_before_relaunch_or_gui_preparation() {
-    use std::io::{BufRead, BufReader, Write};
+    use hmac::{Hmac, KeyInit, Mac};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Duration;
 
     let profile = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let token = uuid::Uuid::new_v4().simple().to_string();
     let descriptor = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "port": listener.local_addr().unwrap().port(),
-        "token": "early-forward-fixture",
+        "token": token,
         "pid": std::process::id(),
         "product": gitcomet_app::ProductIdentity::gitcomet().app_id(),
     });
@@ -101,10 +103,16 @@ fn a_running_browser_receives_requests_before_relaunch_or_gui_preparation() {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
+        let mut challenge = [0; 16];
+        stream.read_exact(&mut challenge).unwrap();
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes()).unwrap();
+        mac.update(b"browser-instance-server-v2");
+        mac.update(&challenge);
+        stream.write_all(&mac.finalize().into_bytes()).unwrap();
         let mut line = String::new();
         BufReader::new(&mut stream).read_line(&mut line).unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["token"], "early-forward-fixture");
+        assert_eq!(request["token"], token);
         stream.write_all(b"ok\n").unwrap();
     });
     let trace_path = profile.path().join("startup.jsonl");
@@ -175,7 +183,7 @@ fn library_launch_preserves_supplied_arguments_and_process_state_with_terminal_s
 
 #[test]
 fn a_cli_launch_probes_a_running_browser_only_once() {
-    use std::io::{BufRead, BufReader, ErrorKind, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -185,9 +193,9 @@ fn a_cli_launch_probes_a_running_browser_only_once() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let descriptor = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "port": listener.local_addr().unwrap().port(),
-        "token": "single-probe-fixture",
+        "token": uuid::Uuid::new_v4().simple().to_string(),
         "pid": std::process::id(),
         "product": gitcomet_app::ProductIdentity::gitcomet().app_id(),
     });
@@ -208,9 +216,9 @@ fn a_cli_launch_probes_a_running_browser_only_once() {
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
                         .unwrap();
-                    let mut line = String::new();
-                    let _ = BufReader::new(&mut stream).read_line(&mut line);
-                    let _ = stream.write_all(b"rejected\n");
+                    let mut challenge = [0; 16];
+                    stream.read_exact(&mut challenge).unwrap();
+                    let _ = stream.write_all(&[0; 32]);
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock && drained => {
                     return connections;
