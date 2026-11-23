@@ -198,8 +198,11 @@ const CHERRY_PICK_ALREADY_APPLIED_SENTINEL: &str = "GITCOMET_CHERRY_PICK_ALREADY
 
 impl GixRepo {
     pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
-        // HEAD and refs are read from disk; no config decides them.
-        gix_head_id_or_none(&self.repo()).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
+        // Loose refs are read from disk on every call; this handle also
+        // reloads packed refs rewritten without a newer mtime.
+        let (repo, _) = self.current_history_store()?;
+        gix_head_id_or_none(&repo.to_thread_local())
+            .map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
 
     pub(super) fn commit_is_ancestor(

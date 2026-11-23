@@ -584,13 +584,37 @@ fn history_reads_reuse_the_repository_and_still_see_moved_refs() {
     assert_eq!(count(Work::RepositoryReopen), 0, "a moved branch");
 }
 
+/// Push-after-commit and rebase checks trust this id, so it must follow a
+/// packed branch rewritten within one mtime tick.
+#[test]
+fn head_commit_id_sees_packed_refs_rewritten_without_a_newer_mtime() {
+    let dir = fixture();
+    run_git(dir.path(), &["pack-refs", "--all", "--prune"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let head = repo.head_commit_id().unwrap().unwrap();
+    let parent = git_stdout(dir.path(), &["rev-parse", "HEAD~1"]);
+    let packed = dir.path().join(".git/packed-refs");
+    let modified = std::fs::metadata(&packed).unwrap().modified().unwrap();
+    let refs = std::fs::read_to_string(&packed).unwrap();
+    std::fs::write(&packed, refs.replace(head.as_ref(), parent.trim())).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&packed)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let moved = repo.head_commit_id().unwrap().unwrap();
+    assert_eq!(moved.as_ref(), parent.trim());
+}
+
 #[test]
 fn head_commit_id_follows_head_without_reopening() {
     let dir = fixture();
     let repo = GixBackend.open(dir.path()).unwrap();
     let head = || git_stdout(dir.path(), &["rev-parse", "HEAD"]);
-    let _capture = capture();
+    // The first read opens the handle that history reads keep.
     let before = repo.head_commit_id().unwrap().unwrap();
+    let _capture = capture();
     assert_eq!(before.as_ref(), head().trim());
     run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~1"]);
     assert_ne!(repo.head_commit_id().unwrap().unwrap(), before);
