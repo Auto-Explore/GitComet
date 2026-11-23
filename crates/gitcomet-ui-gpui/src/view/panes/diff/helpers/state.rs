@@ -37,7 +37,6 @@ pub(in crate::view) struct VersionedCachedDiffStyledText {
 #[derive(Clone, Debug)]
 pub(in crate::view) struct StashedResolvedOutlineState {
     pub(in crate::view) text: TextModelSnapshot,
-    pub(in crate::view) line_starts: Arc<[usize]>,
     pub(in crate::view) marker_segments: Vec<conflict_resolver::ConflictSegment>,
     pub(in crate::view) view_mode: ConflictResolverViewMode,
     pub(in crate::view) outline: ResolvedOutlineData,
@@ -1059,7 +1058,6 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
-    pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
     /// The editable resolved output's tree-sitter document. Owned here rather
     /// than in the shared thread-local cache because there is exactly one of
     /// them at a time and it must survive every keystroke — which is precisely

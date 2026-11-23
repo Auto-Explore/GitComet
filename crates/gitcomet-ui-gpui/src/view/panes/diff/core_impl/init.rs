@@ -603,7 +603,6 @@ impl DiffRenderer {
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
             conflict_resolved_preview_line_count: 0,
-            conflict_resolved_preview_line_starts: Arc::default(),
             conflict_resolved_output_live_syntax: None,
             conflict_resolved_output_live_syntax_reparse: None,
             conflict_resolved_output_live_syntax_reparsing: None,

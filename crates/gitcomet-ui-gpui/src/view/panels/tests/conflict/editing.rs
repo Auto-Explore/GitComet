@@ -319,6 +319,21 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         "a keystroke in a large resolved output should land and persist"
     );
 
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.recompute_conflict_resolved_outline_for_tests(cx);
+            let edited = pane.conflict_resolver_input.read(cx).text_snapshot();
+            assert!(
+                !edited.is_line_index_built(),
+                "the edited merge output should locate its rows through the rope"
+            );
+            assert_eq!(
+                pane.conflict_resolved_preview_line_count,
+                edited.line_count()
+            );
+        });
+    });
+
     fixture.cleanup();
 }
 

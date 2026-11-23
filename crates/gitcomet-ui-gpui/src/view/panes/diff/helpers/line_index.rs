@@ -1,6 +1,7 @@
 //! Line-start indexes and the line/byte range arithmetic built on them.
 
 use super::*;
+use crate::kit::text_model::TextModelSnapshot;
 
 pub(in crate::view::panes::diff) fn count_newlines(text: &str) -> usize {
     text.as_bytes().iter().filter(|&&b| b == b'\n').count()
@@ -135,14 +136,6 @@ pub(in crate::view) fn preview_line_flags_from_source(
     Arc::from(flags)
 }
 
-pub(in crate::view::panes::diff) fn line_start_offset_for_index(
-    line_starts: &[usize],
-    text_len: usize,
-    line_ix: usize,
-) -> usize {
-    line_starts.get(line_ix).copied().unwrap_or(text_len)
-}
-
 pub(in crate::view::panes::diff) fn source_line_count(text: &str) -> usize {
     if text.is_empty() {
         0
@@ -223,31 +216,17 @@ pub(in crate::view::panes::diff) fn append_line_insertion_text(
     out
 }
 
-fn line_index_for_byte_offset(line_starts: &[usize], byte_offset: usize) -> usize {
-    if line_starts.is_empty() {
-        return 0;
-    }
-    line_starts
-        .partition_point(|&start| start <= byte_offset)
-        .saturating_sub(1)
-}
-
 pub(in crate::view::panes::diff) fn dirty_byte_range_to_line_range(
-    line_starts: &[usize],
-    text_len: usize,
+    snapshot: &TextModelSnapshot,
     dirty_range: Range<usize>,
 ) -> Range<usize> {
-    let line_count = line_starts.len().max(1);
-    let start_byte = dirty_range.start.min(text_len);
-    let end_byte = dirty_range.end.min(text_len);
-    let start_line = line_index_for_byte_offset(line_starts, start_byte).min(line_count - 1);
-    let end_line_exclusive = if dirty_range.is_empty() {
-        start_line.saturating_add(1)
+    let start = snapshot.row_for_offset(dirty_range.start);
+    let last = if dirty_range.is_empty() {
+        start
     } else {
-        line_index_for_byte_offset(line_starts, end_byte).saturating_add(1)
-    }
-    .clamp(start_line.saturating_add(1), line_count);
-    start_line..end_line_exclusive
+        snapshot.row_for_offset(dirty_range.end)
+    };
+    start..last.saturating_add(1)
 }
 
 pub(in crate::view::panes::diff) fn shifted_line_index(ix: usize, delta: isize) -> usize {

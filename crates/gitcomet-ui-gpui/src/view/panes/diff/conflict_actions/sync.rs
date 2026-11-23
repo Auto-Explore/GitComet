@@ -388,7 +388,6 @@ impl DiffRenderer {
             visible_projection_rev: self.conflict_resolver.visible_projection_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
-            resolved_outline_gutter_rows: Vec::new(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,

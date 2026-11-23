@@ -421,7 +421,6 @@ impl DiffRenderer {
             let output_snapshot = self
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
-            self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
             self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
             self.conflict_resolved_output_measure_row =
                 resolved_output_measure_row(&output_snapshot);
@@ -646,7 +645,6 @@ impl DiffRenderer {
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count = projection.len();
-        self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = projection.widest_line_ix();
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_output_visible_dirty = true;
@@ -845,7 +843,6 @@ impl DiffRenderer {
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language = None;
         self.conflict_resolved_preview_line_count = 0;
-        self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = 0;
         self.conflict_resolved_outline_stash = None;
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
@@ -1661,11 +1658,12 @@ impl DiffRenderer {
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
         let context_line = line_ix.min(self.conflict_resolved_preview_line_count.saturating_sub(1));
-        let cursor_offset = line_start_offset_for_index(
-            self.conflict_resolved_preview_line_starts.as_ref(),
-            content.len(),
-            context_line,
-        );
+        let cursor_offset = self
+            .conflict_resolver_input
+            .read(cx)
+            .text_snapshot()
+            .line_range_with_terminator(context_line)
+            .start;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_cursor_offset(cursor_offset, cx);
         });
