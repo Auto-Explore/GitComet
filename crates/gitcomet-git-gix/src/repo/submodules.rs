@@ -416,6 +416,24 @@ enum SubmoduleTask {
     },
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Runs once on the listing thread just before its helpers start.
+    static BEFORE_LISTERS: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Each configured submodule's name and path, which positions in
+/// [`SubmoduleTask::Configured`] refer to.
+fn submodule_mapping(
+    submodules: &[gix::Submodule<'_>],
+) -> Vec<(gix::bstr::BString, Option<gix::bstr::BString>)> {
+    submodules
+        .iter()
+        .map(|submodule| (submodule.name().to_owned(), submodule.path().ok()))
+        .collect()
+}
+
 /// The configured submodules of `repo`, in the order gix names them.
 fn configured_submodules(repo: &gix::Repository) -> Result<Vec<gix::Submodule<'_>>> {
     let submodules = crate::refs::submodules(repo).map_err(|e| {
@@ -2034,8 +2052,10 @@ fn list_submodules_in(
     cancellation: &CancellationToken,
 ) -> Result<Vec<Submodule>> {
     let configured = configured_submodules(repo)?;
+    // Every gitlink makes one task.
+    let workers = workers.min(gitlinks.len() / SUBMODULE_LISTERS_MIN_SUBMODULES);
+    let again = (workers >= 2).then(|| gitlinks.clone());
     let tasks = submodule_tasks(&configured, gitlinks, cancellation)?;
-    let workers = workers.min(tasks.len() / SUBMODULE_LISTERS_MIN_SUBMODULES);
     let mut submodules = Vec::new();
     if workers < 2 {
         for task in &tasks {
@@ -2048,11 +2068,20 @@ fn list_submodules_in(
             )?);
         }
     } else {
-        // A repository handle and what borrows it stay with one thread.
+        // A repository handle and what borrows it stay with one thread, so
+        // each reads `.gitmodules` again; one that finds other mappings than
+        // the tasks name lists nothing.
+        let mapping = submodule_mapping(&configured);
         drop(configured);
+        #[cfg(test)]
+        BEFORE_LISTERS.take().into_iter().for_each(|hook| hook());
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let list = |repo: gix::Repository| -> Result<Vec<(usize, Result<Vec<Submodule>>)>> {
+        type Listed = Vec<(usize, Result<Vec<Submodule>>)>;
+        let list = |repo: gix::Repository| -> Result<Option<Listed>> {
             let configured = configured_submodules(&repo)?;
+            if submodule_mapping(&configured) != mapping {
+                return Ok(None);
+            }
             let mut listed = Vec::new();
             while let Some((at, task)) =
                 Some(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
@@ -2061,7 +2090,7 @@ fn list_submodules_in(
                 let rows = list_submodule(&repo, &configured, Path::new(""), task, cancellation);
                 listed.push((at, rows));
             }
-            Ok(listed)
+            Ok(Some(listed))
         };
         let listed = std::thread::scope(|scope| {
             let helpers: Vec<_> = (1..workers)
@@ -2080,11 +2109,15 @@ fn list_submodules_in(
             }
             listed
         });
+        if let Some(gitlinks) = again.filter(|_| listed.iter().any(|l| matches!(l, Ok(None)))) {
+            // `.gitmodules` changed while the threads started: one reads it.
+            return list_submodules_in(repo, gitlinks, 1, cancellation);
+        }
         // In the tasks' order, so that the first failure is the one a single
         // thread would have stopped at.
         let mut by_task: Vec<Option<Result<Vec<Submodule>>>> = tasks.iter().map(|_| None).collect();
         for listed in listed {
-            for (at, rows) in listed? {
+            for (at, rows) in listed?.into_iter().flatten() {
                 by_task[at] = Some(rows);
             }
         }
@@ -2545,6 +2578,82 @@ mod tests {
         git_success(repo, &["update-index", "--add", "--cacheinfo", &entry]);
     }
 
+    /// Gitlinks at `paths`, in one Git call.
+    fn add_gitlinks(repo: &Path, paths: impl Iterator<Item = String>, id: &str) {
+        use std::io::Write as _;
+        let mut child = crate::test_support::git_command()
+            .arg("-C")
+            .arg(repo)
+            .args(["update-index", "--index-info"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for path in paths {
+            writeln!(stdin, "160000 {id}\t{path}").unwrap();
+        }
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
+
+    /// Threads that read `.gitmodules` after it changed list nothing of
+    /// theirs: positions taken from the earlier read would name other
+    /// submodules, or none.
+    #[test]
+    fn mappings_changed_under_the_listing_threads_are_listed_on_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        let path = |number: usize| format!("mods/m{number:02}");
+        let modules = |numbers: &mut dyn Iterator<Item = usize>| -> String {
+            numbers
+                .map(|number| {
+                    let path = path(number);
+                    format!("[submodule \"{path}\"]\n\tpath = {path}\n\turl = ./{path}\n")
+                })
+                .collect()
+        };
+        for number in 0..40 {
+            std::fs::create_dir_all(root.join(path(number))).unwrap();
+        }
+        add_gitlinks(root, (0..40).map(path), &"1".repeat(40));
+        std::fs::write(root.join(".gitmodules"), modules(&mut (0..40))).unwrap();
+
+        let repo = gix::open(root).unwrap();
+        let cancellation = CancellationToken::new();
+        let list = |workers: usize| {
+            let gitlinks = collect_gitlinks(&repo, &cancellation).unwrap();
+            list_submodules_in(&repo, gitlinks, workers, &cancellation).unwrap()
+        };
+        // Every other mapping goes, and the file looks newer, as a checkout
+        // that removes submodules leaves it.
+        let gitmodules = root.join(".gitmodules");
+        let rewrite = {
+            let gitmodules = gitmodules.clone();
+            let fewer = modules(&mut (0..40).step_by(2));
+            move || {
+                let modified = std::fs::metadata(&gitmodules).unwrap().modified().unwrap();
+                std::fs::write(&gitmodules, fewer).unwrap();
+                let later = modified + std::time::Duration::from_secs(5);
+                std::fs::File::options()
+                    .write(true)
+                    .open(&gitmodules)
+                    .unwrap()
+                    .set_modified(later)
+                    .unwrap();
+            }
+        };
+        BEFORE_LISTERS.set(Some(Box::new(rewrite)));
+        let listed = list(2);
+        assert!(BEFORE_LISTERS.take().is_none(), "the threads started");
+        assert_eq!(listed, list(1));
+        let mapped = listed
+            .iter()
+            .filter(|submodule| submodule.status != SubmoduleStatus::MissingMapping)
+            .count();
+        assert_eq!(mapped, 20);
+    }
+
     /// Recorded commits come from the index as it is on disk, also after Git
     /// rewrote it within one timestamp tick.
     #[test]
@@ -2634,12 +2743,16 @@ mod tests {
         }
         std::fs::write(root.join(".gitmodules"), modules).unwrap();
         git_success(root, &["add", ".gitmodules"]);
+        // Enough plain unmapped gitlinks besides for eight threads.
+        let plain = (0..100).map(|number| format!("plain/p{number:03}"));
+        add_gitlinks(root, plain, &"2".repeat(40));
         git_success(root, &["commit", "-q", "-m", "submodules"]);
 
         let repo = gix::open(root).unwrap();
         let cancellation = CancellationToken::new();
         let list = |workers: usize| {
             let gitlinks = collect_gitlinks(&repo, &cancellation).unwrap();
+            assert!(gitlinks.len() >= workers * SUBMODULE_LISTERS_MIN_SUBMODULES);
             list_submodules_in(&repo, gitlinks, workers, &cancellation).unwrap()
         };
         let alone = list(1);
@@ -2649,13 +2762,13 @@ mod tests {
                 .filter(|submodule| submodule.status == status)
                 .count()
         };
-        // Ten of each kind at the top; below them, a gitlink in each
-        // unmapped one and a submodule in five of the moved ones.
-        assert_eq!(count(SubmoduleStatus::MissingMapping), 20);
+        // Ten of each kind at the top and the plain ones; below them, a
+        // gitlink in each unmapped one and a submodule in five moved ones.
+        assert_eq!(count(SubmoduleStatus::MissingMapping), 120);
         assert_eq!(count(SubmoduleStatus::UpToDate), 15);
         assert_eq!(count(SubmoduleStatus::HeadMismatch), 10);
         assert_eq!(count(SubmoduleStatus::NotInitialized), 10);
-        assert_eq!(alone.len(), 55);
+        assert_eq!(alone.len(), 155);
         assert!(alone.is_sorted_by(|a, b| a.path < b.path));
         for workers in [2, 8] {
             assert_eq!(list(workers), alone, "{workers} workers");
