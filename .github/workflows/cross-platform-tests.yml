@@ -272,8 +272,8 @@ jobs:
         run: |
           git --version
           git lfs version
-          # The only lane with git-annex: Ubuntu 22.04 ships 8.x, which has no
-          # `annex pull`/`push`. Its integration tests fail rather than skip here.
+          # Fedora runs the native matrix's annex tests. Ubuntu 22.04 ships 8.x,
+          # which predates `annex pull` and `annex push`.
           git annex version | head -1
           echo "GITCOMET_REQUIRE_GIT_ANNEX=1" >> "$GITHUB_ENV"
           # Fetch-cancellation fixtures read process groups with ps.

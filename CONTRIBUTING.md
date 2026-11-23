@@ -192,7 +192,8 @@ The terminal and `target/llvm-cov/summary.md` show covered lines, measurable
 lines and their percentage, overall and by crate. Open
 `target/llvm-cov/html/index.html` to inspect individual missed lines.
 `target/llvm-cov/lcov.info` records one for a line reached by any test and zero
-for a missed line. All three reports use the same counts.
+for a missed line. All three reports use the same counts. Cargo keeps the
+instrumented builds in `target/source-coverage-build/`, keyed by coverage settings.
 
 The denominator is the union of LLVM-mapped Rust source lines under
 `crates/*/src` in the GUI and headless `gitcomet` binaries, built for the host
@@ -205,8 +206,12 @@ and code available only on other platforms or through optional features outside
 those two builds. Doctests run separately in native CI.
 
 The [Source coverage workflow](.github/workflows/source-coverage.yml) runs on
-Linux on pushes to `main` and can be started manually. Its job summary shows
-the numbers, and the artifact contains the source view and LCOV file.
+Ubuntu 24.04 on pushes to `main` and can be started manually. It requires
+git-annex, Git LFS and the syntax corpus for their integration tests. Its job
+summary shows the counts and its coverage artifact includes the HTML and LCOV
+reports. The latest run's test logs, including any runtime skip reasons, are
+in `target/source-coverage-diagnostics/`. CI uploads these logs in the
+`gitcomet-linux-source-coverage-diagnostics` artifact even when tests fail.
 See [Code Coverage Formats, Viewers, and Rust Tooling](docs/code-coverage.md)
 for the comparison of tools and formats.
 

@@ -186,8 +186,8 @@ def record_runtime_exclusions(name, text):
             for line in notices:
                 excluded.write(f"{name}: {line}\n")
     with CONSOLE_LOCK:
-        print(f"::warning title=Incomplete test coverage::{name}: {len(notices)} runtime skip notice(s); "
-              "see runtime-exclusions.log in the test artifact", flush=True)
+        print(f"::warning title=Incomplete test coverage::{name}: {len(notices)} runtime skip notice(s). "
+              f"See {REPORTS / 'runtime-exclusions.log'}", flush=True)
 
 
 class TestsFailed(RuntimeError):
@@ -370,7 +370,7 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
             echo(log_path.read_text(encoding="utf-8", errors="replace"), final=True)
         print("::endgroup::", flush=True)
         if dots and code:
-            print(f"{name}: full output is {log_path.name} in the uploaded target/ci-reports artifact", flush=True)
+            print(f"{name}: full output is in {log_path}", flush=True)
     if check and code:
         raise subprocess.CalledProcessError(code, command)
     return code

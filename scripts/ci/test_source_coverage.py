@@ -1,3 +1,8 @@
+import os
+import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +35,9 @@ class ProductLineCoverageTests(unittest.TestCase):
             integration = trace("integration.info", {"crates/gitcomet/src/../src/main.rs": [(2, 0), (5, 4)],
                                                      "crates/gitcomet/tests/cli.rs": [(10, 2)]})
 
-            lines = coverage.product_lines(root, [gui, headless], [unit, integration])
+            # A checkout and its LLVM source paths can use different spellings of the same root.
+            (root / "subdir").mkdir()
+            lines = coverage.product_lines(root / "subdir" / "..", [gui, headless], [unit, integration])
             coverage.write_reports(root, lines)
             self.assertEqual((root / "lcov.info").read_text().splitlines(), [
                 f"SF:{unused}", "DA:7,0", "LF:1", "LH:0", "end_of_record",
@@ -65,10 +72,15 @@ class ProductLineCoverageTests(unittest.TestCase):
                 if command[1] == "merge":
                     command[-1].write_text(command[-3].read_text())
                 else:
+                    filename = f"crates/{command[-1]}/src/main.rs"
+                    pattern, = (arg.split("=", 1)[1] for arg in command[2:]
+                                if str(arg).startswith("-include-filename-regex="))
+                    if not re.search(pattern, filename):
+                        return
                     profile = next(arg.removeprefix("-instr-profile=") for arg in command[2:]
                                    if str(arg).startswith("-instr-profile="))
                     line = Path(profile).read_text()
-                    kwargs["stdout"].write(f"SF:crates/{command[-1]}/src/main.rs\nDA:{line},1\n".encode())
+                    kwargs["stdout"].write(f"SF:{filename}\nDA:{line},1\n".encode())
 
             with (
                 patch.object(coverage.sys, "platform", "linux"),
@@ -81,6 +93,64 @@ class ProductLineCoverageTests(unittest.TestCase):
                 (raw / "ff-pool_0.profraw").touch()
                 with self.assertRaisesRegex(ValueError, "outside its Cargo executable inventory"):
                     coverage.test_traces(root, raw, binaries)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the ELF build ID is used on Linux")
+    def test_linux_compiler_wrapper_keeps_cargo_binary_paths_and_requests_a_build_id(self):
+        env = dict(os.environ, GITCOMET_COVERAGE_RUSTC_WRAPPER=sys.executable)
+        env["CARGO_BIN_EXE_gitcomet-test-mergetool"] = "a path with spaces"
+        compiler = ('import os, sys; print(os.environ["CARGO_BIN_EXE_gitcomet-test-mergetool"]); '
+                    'print(*sys.argv[1:], sep="\\n")')
+        output = subprocess.check_output([coverage.ROOT / "scripts/linux/coverage-rustc.sh",
+                                          "-c", compiler, "main.rs"], env=env, text=True)
+        self.assertEqual(output.splitlines(), ["a path with spaces", "main.rs", "-C", "link-arg=-Wl,--build-id"])
+
+    def test_failed_run_keeps_its_own_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            diagnostics = target / "source-coverage-diagnostics"
+            diagnostics.mkdir()
+            (diagnostics / "runtime-exclusions.log").write_text("previous run\n")
+            llvm = target / "bin"
+            llvm.mkdir()
+            (llvm / ("llvm-cov" + coverage.EXE)).touch()
+
+            def run(command, **kwargs):
+                if command[:2] == ["cargo", "build"]:
+                    kwargs["stdout"].write(b'{"executable":"gitcomet"}\n')
+                elif "compile" in command:
+                    report_dir = Path(kwargs["env"]["GITCOMET_CI_REPORT_DIR"])
+                    report_dir.mkdir(exist_ok=True)
+                    (report_dir / "workspace-compile.log").write_text("compiler error\n")
+                    raise subprocess.CalledProcessError(1, command)
+
+            with (
+                patch.object(coverage, "TARGET", target),
+                patch.object(coverage.subprocess, "check_output", return_value=str(target / "lib")),
+                patch.object(coverage.subprocess, "run", side_effect=run),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                coverage.main()
+            self.assertEqual((diagnostics / "workspace-compile.log").read_text(), "compiler error\n")
+            self.assertFalse((diagnostics / "runtime-exclusions.log").exists())
+
+    @unittest.skipUnless(shutil.which("perl"), "the coverage renderer requires Perl")
+    def test_publishes_html_with_an_extensionless_perl_renderer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout with spaces"
+            root.mkdir()
+            genhtml = root / "genhtml"
+            genhtml.write_text('#!/usr/bin/perl\nuse File::Copy; mkdir $ARGV[-2] or die $!; '
+                               'copy $ARGV[-1], "$ARGV[-2]/index.html" or die $!;\n')
+            genhtml.chmod(0o755)
+            target = root / "target"
+            with (
+                patch.dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"]),
+                patch.object(coverage, "ROOT", root),
+                patch.object(coverage, "TARGET", target),
+                patch.object(coverage, "collect", return_value={"crates/probe/src/lib.rs": {1: True}}),
+            ):
+                coverage.main()
+            self.assertIn("DA:1,1", (target / "llvm-cov/html/index.html").read_text())
 
     def test_publishing_preserves_other_reports_and_restores_the_last_success_on_error(self):
         with tempfile.TemporaryDirectory() as directory:

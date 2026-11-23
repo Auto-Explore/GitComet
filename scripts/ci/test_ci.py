@@ -1632,7 +1632,7 @@ class RunnerTests(unittest.TestCase):
             shown = console.getvalue().split("\n", 2)[2]
             self.assertTrue(shown.startswith("running 2 tests\n. 1/2\ntest b ... FAILED\n"), shown)
             self.assertNotIn("test a ... ok", shown)
-            self.assertIn("dots.log in the uploaded", shown)
+            self.assertIn(str(Path(directory) / "dots.log"), shown)
 
     def test_failed_tests_become_error_annotations(self):
         suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"broken": {"ignored": False}}}
@@ -1717,6 +1717,7 @@ No writable second Windows volume; cross-volume assertion skipped
         self.assertIn("cross-volume assertion skipped", log)
         self.assertIn("3 runtime skip notice(s)", console.getvalue())
         self.assertIn("::warning title=Incomplete test coverage", console.getvalue())
+        self.assertIn(str(Path(directory) / "runtime-exclusions.log"), console.getvalue())
 
     def test_runner_supplies_its_python_and_preserves_an_explicit_interpreter(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \

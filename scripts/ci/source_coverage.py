@@ -18,6 +18,7 @@ TEST_CONTEXTS = ("workspace", "app-gui", "example")
 
 
 def trace_lines(root, trace):
+    root = root.resolve()
     source = None
     with trace.open(encoding="utf-8") as records:
         for record in records:
@@ -79,7 +80,7 @@ def write_reports(directory, files):
 
 def export_lines(llvm, executable, destination, profile=None):
     command = [llvm / ("llvm-cov" + EXE), "export", "-format=lcov", "-skip-functions",
-               r"-include-filename-regex=[/\\]crates[/\\][^/\\]+[/\\]src[/\\]",
+               r"-include-filename-regex=(^|[/\\])crates[/\\][^/\\]+[/\\]src[/\\]",
                f"-instr-profile={profile}" if profile else "-empty-profile", executable]
     with destination.open("wb") as out:
         subprocess.run(command, stdout=out, check=True)
@@ -134,14 +135,13 @@ def test_traces(llvm, raw, executables):
     return traces
 
 
-def collect(work):
+def collect(work, diagnostics):
     tool_lib = subprocess.check_output(["rustc", "--print", "target-libdir"], text=True).strip()
     llvm = Path(tool_lib).parent / "bin"
     if not (llvm / ("llvm-cov" + EXE)).is_file():
         raise ValueError("missing Rust LLVM tools; run rustup component add llvm-tools-preview")
-    inventories = work / "ci"
     setup = dict(os.environ, LLVM_PROFILE_FILE=str(work / "setup-%m.profraw"),
-                 GITCOMET_CI_REPORT_DIR=str(inventories))
+                 GITCOMET_CI_REPORT_DIR=str(diagnostics))
     setup.pop("GITHUB_STEP_SUMMARY", None)
     baselines, observations = [], []
     for variant, features in (("gui", []), ("headless", ["--no-default-features", "--features", "gix"])):
@@ -164,7 +164,7 @@ def collect(work):
                        env=setup, check=True)
         subprocess.run([*runner, "test", "--context", context],
                        env=dict(setup, LLVM_PROFILE_FILE=str(raw / pattern)), check=True)
-        executables = cargo_executables(inventories / context / "cargo-messages.jsonl")
+        executables = cargo_executables(diagnostics / context / "cargo-messages.jsonl")
         observations.extend(test_traces(llvm, raw, executables))
     return product_lines(ROOT, baselines, observations)
 
@@ -204,12 +204,21 @@ def main():
         lock_build(lock)
         with tempfile.TemporaryDirectory(prefix=".source-coverage-", dir=TARGET) as temp:
             work = Path(temp)
+            diagnostics = TARGET / "source-coverage-diagnostics"
+            if diagnostics.exists():
+                diagnostics.replace(work / "previous-diagnostics")
+            diagnostics.mkdir()
+            print(f"Test diagnostics: {diagnostics}", flush=True)
             report = work / "report"
             report.mkdir()
-            write_reports(report, collect(work))
-            subprocess.run(["genhtml", "--quiet", "--no-function-coverage", "--legend",
+            write_reports(report, collect(work, diagnostics))
+            # MSYS2 ships genhtml as an extensionless Perl script. Let Perl locate it on PATH.
+            staged = report.relative_to(ROOT)
+            subprocess.run(["perl", "-S", "genhtml",
+                            "--quiet", "--no-function-coverage", "--legend",
                             "--title", "GitComet source line coverage", "--output-directory",
-                            report / "html", report / "lcov.info"], check=True, cwd=ROOT)
+                            (staged / "html").as_posix(), (staged / "lcov.info").as_posix()],
+                           check=True, cwd=ROOT)
             publish_reports(report, output)
         print((output / "summary.md").read_text(encoding="utf-8"))
         print(f"LCOV: {output / 'lcov.info'}\nHTML: {output / 'html/index.html'}")
