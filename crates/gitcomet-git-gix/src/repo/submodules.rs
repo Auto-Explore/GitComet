@@ -1219,7 +1219,7 @@ fn git_numstat_counts(
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     push_read_only_diff_flags(&mut command);
-    command.arg("diff");
+    command.arg("diff").args(["--no-ext-diff", "--no-textconv"]);
     if cached {
         command.arg("--cached");
     }

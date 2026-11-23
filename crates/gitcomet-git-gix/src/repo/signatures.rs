@@ -7,7 +7,10 @@
 //! are always rechecked: keys, trust files and verifier configuration can change.
 
 use super::{GixRepo, with_object_cache};
-use crate::util::{run_git_with_stdin_capture, validate_hex_commit_id};
+use crate::util::{
+    git_command_failed_error, path_buf_from_git_bytes, run_git_preview_output,
+    run_git_with_stdin_capture, validate_hex_commit_id,
+};
 use gitcomet_core::domain::{
     CommitId, CommitSignature, SignatureFormat, SignatureFormats, SignatureStatus,
 };
@@ -15,6 +18,7 @@ use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +32,11 @@ const VERIFY_BATCH_SIZE: usize = 16;
 
 const FIELD_SEP: u8 = 0x1f;
 const RECORD_SEP: u8 = 0x1e;
+const VERIFIER_PROGRAMS: [(&str, &str); 3] = [
+    ("gpg.openpgp.program", "gpg"),
+    ("gpg.x509.program", "gpgsm"),
+    ("gpg.ssh.program", "ssh-keygen"),
+];
 
 /// One parsed `%H %G? %GS %GK %GG` record. The caller obtains its signature
 /// format from the commit object, since `git log` does not report it.
@@ -145,12 +154,17 @@ impl GixRepo {
             // A format without an installed verifier would only yield `N`.
             .filter(|(_, format)| verifiable.contains(*format))
             .collect();
+        if signed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let programs = self.signature_verifier_programs(cancellation)?;
         for chunk in signed.chunks(VERIFY_BATCH_SIZE) {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
             let formats = chunk.iter().copied().collect();
-            let verified = match self.run_verify_batch(&formats, VERIFY_TIMEOUT, cancellation) {
+            let batch = self.run_verify_batch(&formats, &programs, VERIFY_TIMEOUT, cancellation);
+            let verified = match batch {
                 Ok(verified) => verified,
                 Err(error) => {
                     let Some(failure) = interrupted_verification(&error) else {
@@ -165,7 +179,12 @@ impl GixRepo {
                         verified.iter().map(|(oid, _)| *oid).collect();
                     for (oid, format) in chunk.iter().filter(|(oid, _)| !completed.contains(oid)) {
                         let single = [(*oid, *format)].into_iter().collect();
-                        match self.run_verify_batch(&single, Duration::from_secs(2), cancellation) {
+                        match self.run_verify_batch(
+                            &single,
+                            &programs,
+                            Duration::from_secs(2),
+                            cancellation,
+                        ) {
                             Ok(result) => verified.extend(result),
                             Err(error) if interrupted_verification(&error).is_some() => {}
                             Err(error) => return Err(error),
@@ -191,6 +210,7 @@ impl GixRepo {
     fn run_verify_batch(
         &self,
         formats: &FxHashMap<gix::ObjectId, SignatureFormat>,
+        programs: &[OsString; 3],
         timeout: Duration,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Vec<(gix::ObjectId, Option<CommitSignature>)>> {
@@ -201,7 +221,40 @@ impl GixRepo {
             stdin.push(b'\n');
         }
 
+        let cmd = self.signature_verification_command(programs);
+        let output =
+            run_git_with_stdin_capture(cmd, stdin, "git log --stdin", timeout, cancellation)?;
+
+        Ok(signatures_from_output(formats, &output))
+    }
+
+    fn signature_verifier_programs(
+        &self,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<[OsString; 3]> {
+        let mut config = self.git_workdir_cmd();
+        config.args([
+            "--no-pager",
+            "config",
+            "--null",
+            "--show-scope",
+            "--get-regexp",
+            r"^gpg\.(program|(openpgp|x509|ssh)\.program)$",
+        ]);
+        let fallback = CancellationToken::new();
+        let label = "git config (signature verifier programs)";
+        let output = run_git_preview_output(config, label, cancellation.unwrap_or(&fallback))?;
+        if !output.status.success() && output.status.code() != Some(1) {
+            return Err(git_command_failed_error(label, output));
+        }
+        scoped_verifier_programs(&output.stdout)
+    }
+
+    fn signature_verification_command(&self, programs: &[OsString; 3]) -> std::process::Command {
         let mut cmd = self.git_workdir_cmd();
+        for program in programs {
+            cmd.arg("-c").arg(program);
+        }
         cmd.env("GIT_FLUSH", "1")
             .env("LC_ALL", "C")
             .arg("log")
@@ -213,11 +266,50 @@ impl GixRepo {
             .arg("--no-walk=unsorted")
             .arg("--stdin")
             .arg("--format=%H%x1f%G?%x1f%GS%x1f%GK%x1f%GG%x1e");
-        let output =
-            run_git_with_stdin_capture(cmd, stdin, "git log --stdin", timeout, cancellation)?;
-
-        Ok(signatures_from_output(formats, &output))
+        cmd
     }
+}
+
+fn scoped_verifier_programs(listing: &[u8]) -> Result<[OsString; 3]> {
+    let mut programs = VERIFIER_PROGRAMS.map(|(_, program)| OsString::from(program));
+    let invalid_listing = || {
+        Error::new(ErrorKind::Backend(
+            "invalid Git verifier configuration listing".into(),
+        ))
+    };
+    if !listing.is_empty() {
+        let mut fields = listing
+            .strip_suffix(b"\0")
+            .ok_or_else(invalid_listing)?
+            .split(|&byte| byte == 0);
+        while let Some(scope) = fields.next() {
+            let entry = fields.next().ok_or_else(invalid_listing)?;
+            if !matches!(scope, b"system" | b"global" | b"command") {
+                continue;
+            }
+            let separator = entry.find_byte(b'\n').ok_or_else(invalid_listing)?;
+            let (key, program) = (&entry[..separator], &entry[separator + 1..]);
+            let key = if key == b"gpg.program" {
+                b"gpg.openpgp.program"
+            } else {
+                key
+            };
+            if let Some(index) = VERIFIER_PROGRAMS
+                .iter()
+                .position(|(name, _)| name.as_bytes() == key)
+            {
+                programs[index] =
+                    path_buf_from_git_bytes(program, "Git signature verifier program")?
+                        .into_os_string();
+            }
+        }
+    }
+    Ok(std::array::from_fn(|index| {
+        let mut config = OsString::from(VERIFIER_PROGRAMS[index].0);
+        config.push("=");
+        config.push(&programs[index]);
+        config
+    }))
 }
 
 /// A verifier that stalls times out. One that exits without reading its payload
@@ -276,6 +368,42 @@ fn signature_format_of(repo: &gix::Repository, oid: &gix::ObjectId) -> Option<Si
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_command_uses_defaults_instead_of_repository_programs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        crate::test_support::init_test_repo(root);
+        crate::test_support::git_success(root, &["config", "gpg.program", "inert-local"]);
+        crate::test_support::git_success(root, &["config", "gpg.ssh.program", "inert-local"]);
+        let repo = crate::test_support::open_repo(root);
+        let programs = repo.signature_verifier_programs(None).unwrap();
+        let command = repo.signature_verification_command(&programs);
+        for expected in [
+            "gpg.openpgp.program=gpg",
+            "gpg.x509.program=gpgsm",
+            "gpg.ssh.program=ssh-keygen",
+        ] {
+            assert!(command.get_args().any(|arg| arg == expected), "{expected}");
+        }
+    }
+
+    #[test]
+    fn verifier_programs_preserve_trusted_config_and_alias_precedence() {
+        let programs = scoped_verifier_programs(
+            b"global\0gpg.openpgp.program\nlegacy-default\0local\0gpg.openpgp.program\nlocal-placeholder\0global\0gpg.program\nuser-verifier\0global\0gpg.ssh.program\nssh verifier\0worktree\0gpg.ssh.program\nworktree-placeholder\0",
+        )
+        .unwrap();
+        assert_eq!(
+            programs,
+            [
+                "gpg.openpgp.program=user-verifier",
+                "gpg.x509.program=gpgsm",
+                "gpg.ssh.program=ssh verifier",
+            ]
+            .map(OsString::from)
+        );
+    }
 
     #[test]
     fn a_cached_page_does_not_evict_itself_by_counting_hits_as_new_entries() {

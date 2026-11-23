@@ -979,7 +979,7 @@ fn a_resolved_conflict_side_is_written_as_git_checks_it_out() {
 }
 
 #[test]
-fn textconv_patch_decodes_its_output_without_reading_original_file_text() {
+fn built_in_patch_displays_file_text_when_a_converter_is_configured() {
     test_git_env::ensure_initialized();
     let dir = init_repo();
     let root = dir.path();
@@ -989,10 +989,11 @@ fn textconv_patch_decodes_its_output_without_reading_original_file_text() {
     fs::write(root.join("menu.txt"), "new\n").unwrap();
     git(
         root,
-        &["config", "diff.menu.textconv", "printf 'caf\\351\\n'; cat"],
+        &["config", "diff.menu.textconv", "unused-preview-converter"],
     );
     let diff = patch(&*open(root), &unstaged("menu.txt"), None);
-    assert!(diff.lines.iter().any(|line| line.text.as_ref() == " café"));
+    assert!(diff.lines.iter().any(|line| line.text.as_ref() == "-old"));
+    assert!(diff.lines.iter().any(|line| line.text.as_ref() == "+new"));
 }
 
 #[test]

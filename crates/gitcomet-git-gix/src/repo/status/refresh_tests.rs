@@ -186,6 +186,42 @@ fn empty_gitlinks_skip_git_but_child_initialization_and_dirt_restore_it() {
 }
 
 #[test]
+fn gitlink_status_disables_fsmonitor_in_parent_and_child() {
+    let dir = empty_gitlink_fixture();
+    let root = dir.path();
+    let child = root.join(CHILD);
+    init_test_repo(&child);
+    write_file(&child, "file.txt", "base\n");
+    git_success(&child, &["add", "."]);
+    git_success(&child, &["commit", "-qm", "child"]);
+    git_success(root, &["add", "--", CHILD]);
+    git_success(root, &["commit", "-qm", "initialize gitlink"]);
+    write_file(&child, "file.txt", "changed\n");
+
+    let trace = root.join(".git/config-trace.json");
+    let output = super::gitlink_status_command(root, super::GitlinkAsk::Repository(None))
+        .env("GIT_TRACE2_EVENT", &trace)
+        .env("GIT_TRACE2_CONFIG_PARAMS", "core.fsmonitor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.ends_with(format!("{CHILD}\0").as_bytes()));
+    let trace = std::fs::read_to_string(trace).unwrap();
+    let sessions: std::collections::HashSet<String> = trace
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| {
+            event["event"] == "def_param"
+                && event["param"] == "core.fsmonitor"
+                && event["scope"] == "command"
+                && event["value"] == "false"
+        })
+        .map(|event| event["sid"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(sessions.len(), 2, "{trace}");
+}
+
+#[test]
 fn gitlink_selection_keeps_uncertain_layouts_and_staged_changes() {
     let dir = empty_gitlink_fixture();
     let root = dir.path();
@@ -441,122 +477,87 @@ fn filesystem_cache_configuration_preserves_status_and_is_fresh_per_scan() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "existing Windows taskkill runner loses MSYS fork/exec parentage"
-)]
 fn cancellation_interrupts_the_gitlink_subprocess_in_every_status_lane() {
-    cancels_gitlink_subprocess(false, false);
-}
-
-#[test]
-fn pre_cancelled_gitlink_status_never_starts_the_subprocess() {
-    cancels_gitlink_subprocess(false, true);
-}
-
-#[cfg(windows)]
-#[test]
-#[ignore = "existing Windows taskkill runner cannot reach orphaned MSYS exec descendants"]
-fn cancellation_interrupts_a_gitlink_hook_with_an_orphaned_exec_descendant() {
-    cancels_gitlink_subprocess(true, false);
-}
-
-fn cancels_gitlink_subprocess(orphan_with_exec: bool, pre_cancelled: bool) {
     use gitcomet_core::error::ErrorKind;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = empty_gitlink_fixture();
     let workdir = dir.path();
-    init_test_repo(workdir);
-    write_file(workdir, "file.txt", "base\n");
-    git_success(workdir, &["add", "."]);
-    git_success(workdir, &["commit", "-qm", "seed"]);
-    let head = crate::refs::head_oid(&gix::open(workdir).unwrap())
-        .unwrap()
-        .unwrap();
-    git_success(
-        workdir,
-        &[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            "160000",
-            &head.to_string(),
-            "module",
-        ],
+    write_file(workdir, &format!("{CHILD}/note.txt"), "content\n");
+    let marker = workdir.join(".git/status-started");
+    let wrapper = format!(
+        "#!/bin/sh\nfor arg in \"$@\"; do\n    if [ \"$arg\" = status ]; then\n        printf started > {}\n        exec sleep 15\n    fi\ndone\nexec git \"$@\"\n",
+        shell_path(&marker),
     );
-    let marker = workdir.join(".git/fsmonitor-started");
-    let hook = workdir.join(".git/slow-fsmonitor.sh");
-    let sleep = if orphan_with_exec {
-        "exec sleep 15"
-    } else {
-        // Avoid intentionally replacing the shell. Windows MSYS can still
-        // lose native parentage during fork; the ignored tests retain both
-        // forms of that existing process-runner limitation.
-        "sleep 15\nprintf finished"
-    };
-    std::fs::write(
-        &hook,
-        format!("printf started > {}\n{sleep}\n", shell_path(&marker)),
-    )
-    .unwrap();
-    // Git runs command-valued hooks via an outer `sh -c` too. Prevent its
-    // final-command exec optimization in the ordinary hook case.
-    let outer_shell_tail = if orphan_with_exec { "" } else { "; :" };
-    git_success(
-        workdir,
-        &[
-            "config",
-            "core.fsmonitor",
-            &format!("sh {}{outer_shell_tail}", shell_path(&hook)),
-        ],
-    );
-
-    for lane in ["combined", "worktree", "staged"] {
-        let repo = open_repo(workdir);
-        let cancellation = CancellationToken::new();
-        if pre_cancelled {
-            cancellation.cancel();
-        }
-        std::thread::scope(|scope| {
-            let (tx, rx) = mpsc::channel();
-            let token = cancellation.clone();
-            let worker = scope.spawn(move || {
-                let result = match lane {
-                    "combined" => repo.status_cancellable_impl(&token).map(|_| ()),
-                    "worktree" => repo.worktree_status_cancellable_impl(&token).map(|_| ()),
-                    _ => repo.staged_status_cancellable_impl(&token).map(|_| ()),
-                };
-                tx.send(result).unwrap();
-            });
-            if !pre_cancelled {
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while !marker.exists() && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "cancellation_interrupts_the_gitlink_subprocess_in_every_status_lane",
+        &wrapper,
+        || {
+            for lane in ["combined", "worktree", "staged"] {
+                let repo = open_repo(workdir);
+                let cancellation = CancellationToken::new();
+                std::thread::scope(|scope| {
+                    let (tx, rx) = mpsc::channel();
+                    let token = cancellation.clone();
+                    let worker = scope.spawn(move || {
+                        tx.send(read_status_lane(&repo, lane, &token)).unwrap();
+                    });
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while !marker.exists() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    let started = marker.exists();
+                    cancellation.cancel();
+                    let result = rx.recv_timeout(Duration::from_secs(5));
+                    worker.join().unwrap();
+                    assert!(started, "{lane} subprocess did not start");
+                    let error = result
+                        .expect("cancelled Git must stop promptly")
+                        .unwrap_err();
+                    assert!(
+                        matches!(error.kind(), ErrorKind::Cancelled),
+                        "{lane}: {error:?}"
+                    );
+                });
+                std::fs::remove_file(&marker).unwrap();
             }
-            let started = marker.exists();
-            cancellation.cancel();
-            // Bounded hook sleep makes even a regression terminate; receive
-            // before joining proves cancellation, not natural completion.
-            let result = rx.recv_timeout(Duration::from_secs(5));
-            worker.join().unwrap();
-            assert_eq!(started, !pre_cancelled, "{lane} subprocess start");
-            let error = result
-                .expect("cancelled Git must stop promptly")
-                .unwrap_err();
-            assert!(
-                matches!(error.kind(), ErrorKind::Cancelled),
-                "{lane}: {error:?}"
-            );
-        });
-        if pre_cancelled {
-            assert!(!marker.exists(), "{lane} must not spawn after cancellation");
-        } else {
-            std::fs::remove_file(&marker).unwrap();
-        }
+        },
+    );
+}
+
+#[test]
+fn pre_cancelled_gitlink_status_never_starts_the_subprocess() {
+    let dir = empty_gitlink_fixture();
+    let workdir = dir.path();
+    write_file(workdir, &format!("{CHILD}/note.txt"), "content\n");
+    let repo = open_repo(workdir);
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    for lane in ["combined", "worktree", "staged"] {
+        let (result, commands) =
+            crate::command_trace::capture(|| read_status_lane(&repo, lane, &cancellation));
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            gitcomet_core::error::ErrorKind::Cancelled
+        ));
+        assert!(commands.is_empty(), "{lane}: {commands:?}");
+    }
+}
+
+fn read_status_lane(
+    repo: &super::super::GixRepo,
+    lane: &str,
+    token: &CancellationToken,
+) -> gitcomet_core::services::Result<()> {
+    match lane {
+        "combined" => repo.status_cancellable_impl(token).map(|_| ()),
+        "worktree" => repo.worktree_status_cancellable_impl(token).map(|_| ()),
+        "staged" => repo.staged_status_cancellable_impl(token).map(|_| ()),
+        _ => unreachable!("unknown status lane"),
     }
 }
 

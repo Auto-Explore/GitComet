@@ -168,6 +168,55 @@ fn attributes_fingerprint_keeps_lfs_and_drops_other_filter_drivers() {
 }
 
 #[test]
+fn unified_diff_previews_disable_external_diff_and_textconv() {
+    let temp = tempfile::tempdir().unwrap();
+    init_test_repo(temp.path());
+    let repo = open_repo(temp.path());
+    let commit = CommitId("0123456789012345678901234567890123456789".into());
+    let path = PathBuf::from("file.txt");
+    let targets = [
+        DiffTarget::working_tree(path.clone(), DiffArea::Unstaged),
+        DiffTarget::working_tree(path.clone(), DiffArea::Staged),
+        DiffTarget::commit(commit.clone(), path.clone()),
+        DiffTarget::commit_range(commit.clone(), None, Some(path.clone())),
+        DiffTarget::commit_range(commit.clone(), Some(commit), Some(path)),
+    ];
+    for target in targets {
+        let command = repo.build_unified_diff_command(&target);
+        for flag in ["--no-ext-diff", "--no-textconv", "--submodule=short"] {
+            assert!(
+                command.get_args().any(|arg| arg == flag),
+                "{target:?} preview omitted {flag}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unified_submodule_preview_shows_the_pointer_update() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    init_test_repo(root);
+    let child = root.join("module");
+    std::fs::create_dir(&child).unwrap();
+    init_test_repo(&child);
+    crate::test_support::write_file(&child, "note.txt", "first\n");
+    git_success(&child, &["add", "note.txt"]);
+    git_success(&child, &["commit", "-qm", "first"]);
+    git_success(root, &["add", "module"]);
+    git_success(root, &["commit", "-qm", "submodule"]);
+    crate::test_support::write_file(&child, "note.txt", "second\n");
+    git_success(&child, &["add", "note.txt"]);
+    git_success(&child, &["commit", "-qm", "second"]);
+    git_success(root, &["config", "diff.submodule", "diff"]);
+
+    let target = DiffTarget::working_tree(PathBuf::from("module"), DiffArea::Unstaged);
+    let patch = open_repo(root).diff_unified_impl(&target).unwrap();
+    assert!(patch.contains("-Subproject commit "), "{patch}");
+    assert!(patch.contains("+Subproject commit "), "{patch}");
+}
+
+#[test]
 fn worktree_diff_does_not_write_index() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

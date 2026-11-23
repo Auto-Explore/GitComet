@@ -1541,6 +1541,7 @@ fn gitlink_status_command(workdir: &Path, ask: GitlinkAsk<'_>) -> std::process::
     match ask {
         GitlinkAsk::Repository(paths) => {
             let mut command = git_workdir_cmd_for(workdir);
+            crate::util::disable_fsmonitor(&mut command);
             // Untracked files here are gix's to find, and preparing to look
             // for them costs Git as much as the rest of a query for a few
             // paths. Told not to ignore anything in submodules, Git still
@@ -1560,6 +1561,7 @@ fn gitlink_status_command(workdir: &Path, ask: GitlinkAsk<'_>) -> std::process::
         GitlinkAsk::Checkout(path) => {
             let checkout = workdir.join(path);
             let mut command = git_workdir_cmd_for(&checkout);
+            crate::util::disable_fsmonitor(&mut command);
             // Git answers for this checkout or not at all, never for a
             // repository above it.
             if let Some(above) = checkout.parent() {
