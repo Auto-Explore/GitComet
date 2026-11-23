@@ -19,7 +19,7 @@ pub(super) struct ConfigInputs {
 
 /// Config freshness needs metadata, not another read of every input. Include
 /// file identity and change time on Unix to catch replacements/backdated edits.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ConfigStamp {
     len: u64,
     modified: std::time::SystemTime,

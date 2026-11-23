@@ -2627,6 +2627,51 @@ fn a_new_commit_walks_the_renames_again() {
     assert_eq!(follow_walks(|| drop(resolve("e.txt", &ids[2]))), 0);
 }
 
+/// A fetch that deepens a shallow clone leaves `HEAD` where it was, and the
+/// commits it brings have names of their own.
+#[test]
+fn an_unshallowed_history_walks_the_renames_again() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let ids = renamed_file_history(&source, &RENAMED_NAMES);
+    let clone = tmp.path().join("clone");
+    let url = format!("file://{}", source.display());
+    git_success(
+        tmp.path(),
+        &["clone", "-q", "--depth", "3", &url, clone.to_str().unwrap()],
+    );
+    let repo = open_repo(&clone);
+    let resolve = |ix: usize| {
+        repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), &ids[ix])
+            .expect("resolve")
+    };
+    assert_eq!(resolve(6), Some(PathBuf::from("a.txt")));
+
+    git_success(&clone, &["fetch", "-q", "--unshallow"]);
+    assert_eq!(resolve(0), Some(PathBuf::from("a.txt")));
+    assert_eq!(resolve(2), Some(PathBuf::from("b/b.txt")));
+}
+
+/// A replace ref changes the history `git log` walks with `HEAD` and the
+/// shallow boundary as they were.
+#[test]
+fn a_replaced_history_walks_the_renames_again() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ids = renamed_file_history(tmp.path(), &RENAMED_NAMES);
+    let repo = open_repo(tmp.path());
+    let resolve = |ix: usize| {
+        repo.resolve_file_path_at_commit_impl(Path::new("d/d.txt"), &ids[ix])
+            .expect("resolve")
+    };
+    assert_eq!(resolve(0), Some(PathBuf::from("a.txt")));
+
+    // History now starts at the fifth commit.
+    git_success(tmp.path(), &["replace", "--graft", ids[4].as_ref()]);
+    assert_eq!(resolve(0), None);
+    assert_eq!(resolve(4), Some(PathBuf::from("c.txt")));
+}
+
 #[test]
 fn followed_names_keep_each_commits_first_status_line() {
     let (one, two, three) = ("1".repeat(40), "2".repeat(40), "3".repeat(40));

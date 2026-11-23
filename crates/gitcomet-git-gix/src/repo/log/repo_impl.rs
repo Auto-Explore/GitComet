@@ -93,14 +93,23 @@ impl GixRepo {
         });
     }
 
+    /// The key of `path`'s follow walk now, from a handle that sees packed
+    /// refs rewritten without a newer mtime.
     pub(super) fn log_file_follow_cache_key(
+        &self,
         path: &Path,
-        head_oid: Option<gix::ObjectId>,
-    ) -> super::LogFileFollowCacheKey {
-        super::LogFileFollowCacheKey {
-            head_oid,
+    ) -> Result<super::LogFileFollowCacheKey> {
+        let (repo, _) = self.current_history_store()?;
+        let repo = repo.to_thread_local();
+        let shallow = repo
+            .shallow_file()
+            .ok()
+            .and_then(|file| crate::repo::config::ConfigStamp::read(&file).ok());
+        Ok(super::LogFileFollowCacheKey {
+            head_oid: gix_head_id_or_none(&repo)?,
             path: path.to_path_buf(),
-        }
+            shallow,
+        })
     }
 
     pub(super) fn cached_log_file_follow_commits(
@@ -318,7 +327,7 @@ impl GixRepo {
     /// walk answers every commit, so it is kept until `HEAD` moves: selecting
     /// commits under older names would otherwise walk the history each time.
     fn followed_names(&self, path: &Path) -> Result<Arc<super::FollowedNames>> {
-        let key = Self::log_file_follow_cache_key(path, gix_head_id_or_none(&self.repo())?);
+        let key = self.log_file_follow_cache_key(path)?;
         let cache = &self.history_cache.followed_names;
         {
             let mut cache = cache.lock().expect("followed names cache");
@@ -342,6 +351,8 @@ impl GixRepo {
             // Record separator (0x1e) before each commit hash so records can be
             // split unambiguously from the name-status lines that follow.
             .arg("--format=%x1e%H");
+        // From the commit the key names, should `HEAD` move meanwhile.
+        cmd.args(key.head_oid.map(|id| id.to_string()));
         push_literal_paths(&mut cmd, [path]);
         let output = run_git_capture(cmd, "git log --follow --name-status")?;
         let names = Arc::new(super::FollowedNames::parse(&output));
@@ -476,9 +487,11 @@ impl GixRepo {
         Ok(renames)
     }
 
+    /// `path`'s history followed from `from`, or from `HEAD`.
     pub(super) fn log_follow_commits(
         &self,
         path: &Path,
+        from: Option<gix::ObjectId>,
         max_count: Option<usize>,
     ) -> Result<Vec<Commit>> {
         let mut cmd = self.git_workdir_cmd();
@@ -492,6 +505,7 @@ impl GixRepo {
         if let Some(max_count) = max_count {
             cmd.arg(format!("-n{max_count}"));
         }
+        cmd.args(from.map(|id| id.to_string()));
         push_literal_paths(&mut cmd, [path]);
 
         run_git_parsed_stdout(cmd, "git log --follow", false, |stdout| {
@@ -1010,17 +1024,15 @@ impl GixRepo {
         if cursor.is_none() {
             // One past the limit tells the page whether more follow; a limit
             // that cannot grow reads as "every commit" and drops the bound.
-            let commits = self.log_follow_commits(path, limit.checked_add(1))?;
+            let commits = self.log_follow_commits(path, None, limit.checked_add(1))?;
             return paginate_commits(commits.into_iter().map(Ok), limit, cursor).map(Arc::new);
         }
 
-        let repo = self.repo();
-        let head_oid = gix_head_id_or_none(&repo)?;
-        let cache_key = Self::log_file_follow_cache_key(path, head_oid);
+        let cache_key = self.log_file_follow_cache_key(path)?;
         let commits = if let Some(commits) = self.cached_log_file_follow_commits(&cache_key) {
             commits
         } else {
-            let commits = Arc::new(self.log_follow_commits(path, None)?);
+            let commits = Arc::new(self.log_follow_commits(path, cache_key.head_oid, None)?);
             self.store_log_file_follow_commits(cache_key, Arc::clone(&commits));
             commits
         };

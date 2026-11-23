@@ -34,6 +34,15 @@ impl HistoryCache {
         self.pages.lock().expect("log page cache").clear();
         *self.tips.lock().expect("all branches tips") = None;
         *self.authors.lock().expect("history authors") = None;
+        // Replace refs and alternates change what `git log` walks.
+        self.file_follow
+            .lock()
+            .expect("log file follow cache")
+            .clear();
+        self.followed_names
+            .lock()
+            .expect("followed names cache")
+            .clear();
     }
 
     /// The handle of the last fresh open while a reopen would read the same
@@ -136,10 +145,13 @@ pub(super) struct LogPageCacheEntry {
     pub(super) page: Arc<LogPage>,
 }
 
+/// What a `git log --follow` from `HEAD` walks: the shallow boundary moves
+/// with a fetch that leaves `HEAD` alone.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LogFileFollowCacheKey {
     pub(super) head_oid: Option<gix::ObjectId>,
     pub(super) path: PathBuf,
+    pub(super) shallow: Option<crate::repo::config::ConfigStamp>,
 }
 
 #[derive(Clone, Debug)]
