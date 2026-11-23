@@ -2,7 +2,7 @@
 //! already plain UTF-8 pass through untouched; anything else is transcoded
 //! once into a content-addressed UTF-8 cache file.
 
-use super::diff::persist_worktree_git_cache_file;
+use super::diff::{persist_worktree_git_cache_file, preview_cache_dir};
 use super::{DiskFileStamp, GixRepo, TEMP_FILE_MEMO_LIMIT};
 use gitcomet_core::domain::{FileDiffText, FileDiffTextSource};
 use gitcomet_core::error::Error;
@@ -273,8 +273,7 @@ impl GixRepo {
         }
 
         let file = std::fs::File::open(&source.path).map_err(Error::from)?;
-        let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
+        let mut tmp_file = tempfile::NamedTempFile::new_in(preview_cache_dir()?)?;
         let stats = transcode_to_utf8(
             std::io::BufReader::with_capacity(SNIFF_READ_BYTES, file),
             std::io::BufWriter::new(tmp_file.as_file_mut()),
@@ -292,7 +291,7 @@ impl GixRepo {
             format.format.encoding.name(),
             if format.format.bom { "+bom" } else { "" }
         ));
-        let cache_path = utf8_cache_path(logical_path, &identity);
+        let cache_path = utf8_cache_path(logical_path, &identity)?;
         let created = persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         // A file this call created is private to it (0600, content-addressed,
         // never rewritten), so its fresh timestamps cannot hide a later write.
@@ -364,7 +363,7 @@ pub(super) fn sniff_file(
     Ok((sniff, line_endings))
 }
 
-fn utf8_cache_path(logical_path: &Path, identity: &str) -> PathBuf {
+fn utf8_cache_path(logical_path: &Path, identity: &str) -> Result<PathBuf> {
     let mut hasher = FxHasher::default();
     identity.hash(&mut hasher);
     let suffix = logical_path
@@ -373,10 +372,7 @@ fn utf8_cache_path(logical_path: &Path, identity: &str) -> PathBuf {
         .filter(|ext| !ext.is_empty())
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "gitcomet-diff-utf8-{:016x}{suffix}",
-        hasher.finish()
-    ))
+    Ok(preview_cache_dir()?.join(format!("utf8-{:016x}{suffix}", hasher.finish())))
 }
 
 #[cfg(test)]

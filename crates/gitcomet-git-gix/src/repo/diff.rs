@@ -402,14 +402,13 @@ impl GixRepo {
         path: &Path,
         target: &[u8],
     ) -> Result<FileDiffTextSource> {
-        let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
+        let mut tmp_file = tempfile::NamedTempFile::new_in(preview_cache_dir()?)?;
         tmp_file.write_all(target).map_err(Error::from)?;
         tmp_file.flush().map_err(Error::from)?;
         let mut content_hasher = FxHasher::default();
         target.hash(&mut content_hasher);
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
-        let cache_path = worktree_git_cache_path(path, &identity);
+        let cache_path = worktree_git_cache_path(path, &identity)?;
         persist_worktree_git_cache_file(tmp_file, &cache_path)?;
         Ok(FileDiffTextSource::with_identity(
             cache_path,
@@ -507,8 +506,7 @@ impl GixRepo {
             })?
         };
 
-        let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
+        let mut tmp_file = tempfile::NamedTempFile::new_in(preview_cache_dir()?)?;
         let mut content_hasher = FxHasher::default();
         match normalized {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
@@ -529,7 +527,7 @@ impl GixRepo {
         tmp_file.flush().map_err(Error::from)?;
 
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
-        let cache_path = worktree_git_cache_path(path, &identity);
+        let cache_path = worktree_git_cache_path(path, &identity)?;
         // Capture the identity before comparing an existing output's contents.
         let cache_file_stamp =
             file_stamp.and_then(|_| DiskFileStamp::read_for_verification_memo(&cache_path));
@@ -932,7 +930,7 @@ impl GixRepo {
             return Ok(None);
         }
 
-        let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
+        let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id)?;
         if self.cached_preview_blob_matches(&repo, &cache_path, blob_id, cancellation) {
             return Ok(Some(cache_path));
         }
@@ -1554,8 +1552,7 @@ fn copy_git_stdout_to_temp_file(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<tempfile::NamedTempFile> {
-    let mut tmp_file =
-        tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
+    let mut tmp_file = tempfile::NamedTempFile::new_in(preview_cache_dir()?)?;
     let mut tmp_file = run_git_parsed_stdout_cancellable(
         command,
         label,
@@ -1940,11 +1937,7 @@ fn copy_and_hash(
 /// Whether `cache_path` is a regular file whose bytes hash to `blob_id` as a
 /// git blob.
 ///
-/// The cache lives in the shared temp directory under a name anyone can
-/// compute, so a pre-existing file only proves that *something* wrote it.
-/// Hashing is the check git itself would apply and needs no subprocess. A
-/// symlink is never trusted: the bytes it reaches are not ours to vouch for
-/// and can change after this check.
+/// Hashing detects changes made by tools that have opened the local preview.
 fn cached_preview_blob_matches(
     repo: &gix::Repository,
     cache_path: &Path,
@@ -2093,8 +2086,7 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
 }
 
 /// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
-/// regular file only when its bytes are identical. Shared by the worktree and
-/// preview caches, both of which live in the shared temp directory.
+/// regular file only when its bytes are identical.
 /// Returns whether this call created the file at `cache_path`.
 pub(super) fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
@@ -2109,9 +2101,9 @@ pub(super) fn persist_worktree_git_cache_file(
             let tmp_file = err.file;
             // A symlink is replaced even when the bytes it reaches match: its
             // target is outside our control and can change after the compare.
-            let existing_is_symlink = std::fs::symlink_metadata(cache_path)
-                .is_ok_and(|metadata| metadata.file_type().is_symlink());
-            if !existing_is_symlink && worktree_git_cache_files_match(&tmp_file, cache_path)? {
+            let existing_is_regular =
+                std::fs::symlink_metadata(cache_path).is_ok_and(|metadata| metadata.is_file());
+            if existing_is_regular && worktree_git_cache_files_match(&tmp_file, cache_path)? {
                 // The path is content-addressed. Keeping an identical winner is
                 // both cheaper and semantically important: replacing it changes
                 // filesystem metadata that open diff rows use as a freshness
@@ -2183,21 +2175,25 @@ fn worktree_source_identity(
     format!("{:016x}", hasher.finish())
 }
 
-fn worktree_git_cache_path(logical_path: &Path, identity: &str) -> std::path::PathBuf {
+pub(super) fn preview_cache_dir() -> Result<PathBuf> {
+    gitcomet_core::fs_utils::private_product_cache_dir("gitcomet-diff").map_err(Error::from)
+}
+
+fn worktree_git_cache_path(logical_path: &Path, identity: &str) -> Result<PathBuf> {
     let suffix = logical_path
         .extension()
         .and_then(|ext| ext.to_str())
         .filter(|ext| !ext.is_empty())
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
-    std::env::temp_dir().join(format!("gitcomet-diff-worktree-{identity}{suffix}"))
+    Ok(preview_cache_dir()?.join(format!("worktree-{identity}{suffix}")))
 }
 
 fn preview_blob_cache_path(
     workdir: &Path,
     logical_path: &Path,
     blob_id: &gix::ObjectId,
-) -> std::path::PathBuf {
+) -> Result<PathBuf> {
     let mut hasher = FxHasher::default();
     workdir.hash(&mut hasher);
     logical_path.hash(&mut hasher);
@@ -2209,7 +2205,7 @@ fn preview_blob_cache_path(
         .filter(|ext| !ext.is_empty())
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
-    std::env::temp_dir().join(format!("gitcomet-diff-preview-{hash:016x}{suffix}"))
+    Ok(preview_cache_dir()?.join(format!("preview-{hash:016x}{suffix}")))
 }
 
 pub(super) fn gix_first_parent_optional(

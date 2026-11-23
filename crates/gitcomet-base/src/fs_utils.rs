@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Create an application-owned directory, owner-only where the platform has
 /// Unix permissions.
@@ -32,6 +32,103 @@ pub fn ensure_private_dir(path: &Path) -> io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(path)
+}
+
+pub fn private_product_cache_dir(name: &str) -> io::Result<PathBuf> {
+    let root = crate::platform::dirs::state_dir()
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| io::Error::other("Cannot locate the user cache directory"))?;
+    #[cfg(unix)]
+    {
+        private_product_cache_dir_at(&root, &std::env::temp_dir(), name)
+    }
+    #[cfg(not(unix))]
+    {
+        private_cache_dir_in(&root, name)
+    }
+}
+
+#[cfg(unix)]
+fn private_product_cache_dir_at(root: &Path, temporary: &Path, name: &str) -> io::Result<PathBuf> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    match private_cache_dir_in(root, name) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            // Container mounts and shared home directories may fail the same
+            // ownership checks we need for the cache. Try a separate namespace
+            // in the system temporary directory, with the same checks.
+            let uid = rustix::process::geteuid().as_raw();
+            let product = crate::identity::current().directory_name();
+            let mut profile = DefaultHasher::new();
+            root.hash(&mut profile);
+            let namespace = format!("{product}-{uid}-cache-{:016x}", profile.finish());
+            let fallback = private_cache_dir_in(temporary, &namespace)?;
+            private_cache_dir_in(&fallback, name)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn private_cache_dir_in(root: &Path, name: &str) -> io::Result<PathBuf> {
+    if Path::new(name).file_name() != Some(std::ffi::OsStr::new(name)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid cache directory name",
+        ));
+    }
+    ensure_private_dir(root)?;
+    let root = std::fs::canonicalize(root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let owner = rustix::process::geteuid().as_raw();
+        for ancestor in root.ancestors() {
+            let metadata = std::fs::symlink_metadata(ancestor)?;
+            if !metadata.is_dir()
+                || ![0, owner].contains(&metadata.uid())
+                || (metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Cache parent is not trusted",
+                ));
+            }
+        }
+    }
+    let path = root.join(name);
+    ensure_private_dir(&path)?;
+    let metadata = std::fs::symlink_metadata(&path)?;
+    if !metadata.is_dir() || metadata.is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cache is not a regular directory",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Cache directory is not private",
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cache is a filesystem redirect",
+            ));
+        }
+    }
+    Ok(path)
 }
 
 /// The directory a private file lives in; a bare file name is refused.
@@ -173,6 +270,39 @@ mod tests {
     use super::ensure_private_dir;
     use super::{open_private_append, write_private_file};
     use std::io::Write as _;
+
+    #[cfg(unix)]
+    #[test]
+    fn product_cache_uses_a_private_fallback_for_an_untrusted_state_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let state_parent = fixture.path().join("mounted-home");
+        let temporary = fixture.path().join("system-temp");
+        std::fs::create_dir(&state_parent).unwrap();
+        std::fs::set_permissions(&state_parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::create_dir(&temporary).unwrap();
+
+        let state = state_parent.join("state");
+        let error = super::private_cache_dir_in(&state, "previews").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let cache = super::private_product_cache_dir_at(&state, &temporary, "previews").unwrap();
+        assert!(cache.starts_with(temporary.canonicalize().unwrap()));
+        assert_eq!(
+            std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(!state.join("previews").exists());
+        assert_eq!(
+            super::private_product_cache_dir_at(&state, &temporary, "previews").unwrap(),
+            cache
+        );
+
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let error =
+            super::private_product_cache_dir_at(&state, &temporary, "previews").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn private_replacement_retries_windows_conflicts_without_losing_contents() {
