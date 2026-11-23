@@ -60,10 +60,23 @@ impl GixRepo {
         if !commit_graph_is_behind(&repo, COMMIT_GRAPH_STALE_COMMITS) {
             return Ok(None);
         }
+        let lock = self
+            .common_dir_impl()
+            .join("objects")
+            .join(COMMIT_GRAPH_CHAIN_LOCK);
+        let held_before = lock.exists();
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["commit-graph", "write", "--reachable", "--split"]);
-        run_git_with_output_and_timeout(cmd, "git commit-graph write", MAINTENANCE_TIMEOUT)
-            .map(Some)
+        let result =
+            run_git_with_output_and_timeout(cmd, "git commit-graph write", MAINTENANCE_TIMEOUT);
+        if let Err(error) = &result
+            && was_killed(error.kind())
+            && !held_before
+        {
+            // Every later write would fail on the lock a killed one leaves.
+            let _ = std::fs::remove_file(lock);
+        }
+        result.map(Some)
     }
 
     /// `git maintenance is-needed --auto`: exit 0 when needed, 1 when not.
@@ -161,6 +174,9 @@ fn was_killed(kind: &ErrorKind) -> bool {
         _ => false,
     }
 }
+
+/// The lock of a split commit-graph write, below `objects`.
+const COMMIT_GRAPH_CHAIN_LOCK: &str = "info/commit-graphs/commit-graph-chain.lock";
 
 /// A killed run (Stop, timeout) skips git's lockfile cleanup, and a stale
 /// `maintenance.lock` makes every later run exit 0 without doing anything.
@@ -373,6 +389,23 @@ mod tests {
 
         remove_own_maintenance_lock(dir.path(), SystemTime::UNIX_EPOCH);
         assert!(!lock.exists());
+    }
+
+    /// A leftover chain lock fails every later split write, as Git words it.
+    #[test]
+    fn the_chain_lock_is_the_one_a_split_commit_graph_write_takes() {
+        use crate::test_support::{git_output, git_success, init_test_repo};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_test_repo(root);
+        git_success(root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_success(root, &["commit-graph", "write", "--reachable", "--split"]);
+        std::fs::write(root.join(".git/objects").join(COMMIT_GRAPH_CHAIN_LOCK), b"").unwrap();
+        git_success(root, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let output = git_output(root, &["commit-graph", "write", "--reachable", "--split"]);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("commit-graph-chain.lock"), "{stderr}");
     }
 
     /// gix reads no commit-graph while replace refs are in use, so writing
