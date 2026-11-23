@@ -119,11 +119,15 @@ impl GixRepo {
 }
 
 /// Whether at least `threshold` commits reachable from HEAD are outside the
-/// commit-graph. Repositories where git itself ignores the graph are left
-/// alone: `core.commitGraph=false`, and shallow clones.
+/// commit-graph. Repositories where the graph goes unread are left alone:
+/// `core.commitGraph=false`, shallow clones, and replace refs, with which gix
+/// reads no graph however current.
 fn commit_graph_is_behind(repo: &gix::Repository, threshold: usize) -> bool {
+    let replaced = !repo.objects.ignore_replacements
+        && repo.objects.store_ref().replacements().next().is_some();
     if repo.config_snapshot().boolean("core.commitGraph") == Some(false)
         || !matches!(repo.is_shallow(), Ok(false))
+        || replaced
     {
         return false;
     }
@@ -369,5 +373,21 @@ mod tests {
 
         remove_own_maintenance_lock(dir.path(), SystemTime::UNIX_EPOCH);
         assert!(!lock.exists());
+    }
+
+    /// gix reads no commit-graph while replace refs are in use, so writing
+    /// one would not take the recommendation away.
+    #[test]
+    fn replace_refs_leave_the_commit_graph_unrecommended() {
+        use crate::test_support::{git_success, init_test_repo};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_test_repo(root);
+        for message in ["one", "two", "three"] {
+            git_success(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        }
+        assert!(commit_graph_is_behind(&gix::open(root).unwrap(), 2));
+        git_success(root, &["replace", "--graft", "HEAD~1"]);
+        assert!(!commit_graph_is_behind(&gix::open(root).unwrap(), 2));
     }
 }
