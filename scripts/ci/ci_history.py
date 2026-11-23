@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ElementTree
 
 UNIT_DATA = re.compile(r"const UNIT_DATA = (\[.*?\]);\s*\n", re.S)
 COMMIT_FILE = "commit.txt"
-LIBTEST_RESULT = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)$", re.M)
+LIBTEST_RESULT = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED)$", re.M)
 
 
 def junit_outcomes(xml_text):
@@ -112,7 +112,15 @@ def test_reports(root):
         # Without the commit, every run counts as its own.
         commit = commit_file.read_text(encoding="utf-8").strip() if commit_file.exists() else run.name
         for path in sorted(run.rglob("junit.xml")):
-            reports.append((commit, lane_of(path, root), junit_outcomes(path.read_text(encoding="utf-8"))))
+            # nextest keeps a copy of each report in its own store.
+            if any(part.startswith("nextest-") for part in path.relative_to(run).parts):
+                continue
+            try:
+                outcomes = junit_outcomes(path.read_text(encoding="utf-8"))
+            except ElementTree.ParseError as error:
+                print(f"{path}: unreadable report: {error}", file=sys.stderr)
+                continue
+            reports.append((commit, lane_of(path, root), outcomes))
         for path in sorted(run.rglob("*.log")):
             # nextest logs repeat the libtest output of tests its JUnit report already counts.
             if "nextest" in path.name:

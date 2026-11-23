@@ -44,6 +44,27 @@ class CiHistoryTests(unittest.TestCase):
             ("ui-all", "view::b", True),
         ])
 
+    def test_libtest_logs_count_tests_that_should_panic(self):
+        log = "test view::a - should panic ... ok\ntest view::b - should panic ... FAILED\n"
+        self.assertEqual(ci_history.libtest_outcomes(log, "ui-all"), [
+            ("ui-all", "view::a", False),
+            ("ui-all", "view::b", True),
+        ])
+
+    def test_reports_count_each_junit_report_once_and_skip_unreadable_ones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = root / "100" / "ci-linux" / "ci-reports" / "workspace"
+            store = reports / "nextest-0123456789abcdef" / "ci"
+            store.mkdir(parents=True)
+            (reports / "junit.xml").write_text(JUNIT, encoding="utf-8")
+            (store / "junit.xml").write_text(JUNIT, encoding="utf-8")
+            broken = root / "100" / "ci-windows" / "ci-reports"
+            broken.mkdir(parents=True)
+            (broken / "junit.xml").write_text("<testsuites><testsuite>", encoding="utf-8")
+            found = ci_history.test_reports(root)
+            self.assertEqual([lane for _, lane, _ in found], ["ci-linux"])
+
     def test_reports_read_junit_and_libtest_logs_but_not_nextest_logs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
