@@ -387,11 +387,7 @@ pub(super) fn repo_externally_changed(
     effects
 }
 
-/// Reloads the first page after the user changed *what* the history shows —
-/// its scope or its author filter. The caller has already applied the change to
-/// `repo_state`; this holds the previous page on screen while the new walk runs,
-/// drops any pagination in progress, and persists the change. `persist` is given
-/// the repository's workdir.
+/// Asks for the shown history's next page, if it has one and no load is on its way.
 pub(super) fn load_more_history(
     state: &mut AppState,
     repo_id: crate::model::RepoId,

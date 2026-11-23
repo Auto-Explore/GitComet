@@ -21,6 +21,11 @@ pub(super) fn reduce(state: &mut AppState, message: HistoryFilterMsg) -> Vec<Eff
     }
 }
 
+/// Reloads the first page after the user changed *what* the history shows —
+/// its scope or its author filter. The caller has already applied the change to
+/// `repo_state`; this holds the previous page on screen while the new walk runs,
+/// drops any pagination in progress, and persists the change. `persist` is given
+/// the repository's workdir.
 fn restart_history_load(
     state: &mut AppState,
     repo_ix: usize,
