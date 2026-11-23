@@ -1,6 +1,8 @@
 use gitcomet_ui_gpui::{BrowserOpenRequest, BrowserOpenTarget};
 use gitcomet_ui_gpui::{BrowserRequestReceiver, BrowserRequestSender, browser_request_channel};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::fs::{self, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
@@ -11,7 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const PORT_BASE: u16 = 42_000;
 const PORT_SPAN: u16 = 20_000;
 const PORT_CANDIDATES: u16 = 16;
@@ -441,6 +443,7 @@ fn handle_connection(
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    identify_server(&mut stream, &descriptor.token)?;
     if let Err(error) = enqueue_request(&mut stream, descriptor, requests) {
         // Nothing was queued: say so, so the client may start a primary
         // instead of guessing whether the request was delivered.
@@ -504,6 +507,36 @@ fn enqueue_request(
     Ok(())
 }
 
+fn server_proof(token: &str, challenge: &[u8; 16]) -> Hmac<Sha256> {
+    let mut mac = Hmac::new_from_slice(token.as_bytes()).expect("HMAC accepts keys of any length");
+    mac.update(b"browser-instance-server-v2");
+    mac.update(challenge);
+    mac
+}
+
+fn identify_server(stream: &mut TcpStream, token: &str) -> io::Result<()> {
+    let mut challenge = [0; 16];
+    stream.read_exact(&mut challenge)?;
+    stream.write_all(&server_proof(token, &challenge).finalize().into_bytes())
+}
+
+fn verify_server(stream: &mut TcpStream, token: &str) -> io::Result<()> {
+    let challenge = Uuid::new_v4();
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    stream.write_all(challenge.as_bytes())?;
+    let mut proof = [0; 32];
+    stream.read_exact(&mut proof)?;
+    server_proof(token, challenge.as_bytes())
+        .verify_slice(&proof)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "unrecognized browser broker",
+            )
+        })
+}
+
 fn connect_to_descriptor(descriptor: &InstanceDescriptor) -> io::Result<TcpStream> {
     if descriptor.version != PROTOCOL_VERSION {
         return Err(io::Error::new(
@@ -519,7 +552,9 @@ fn connect_to_descriptor(descriptor: &InstanceDescriptor) -> io::Result<TcpStrea
         ));
     }
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, descriptor.port);
-    TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT)
+    let mut stream = TcpStream::connect_timeout(&address.into(), CONNECT_TIMEOUT)?;
+    verify_server(&mut stream, &descriptor.token)?;
+    Ok(stream)
 }
 
 #[cfg(test)]
@@ -551,11 +586,7 @@ fn send_request(
     // The broker queues a request only once it has read the whole line, so
     // a failure before the line is out (a broker closing its listener as it
     // shuts down, say) delivered nothing.
-    let sent = stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
-        .and_then(|()| stream.write_all(&line))
-        .and_then(|()| stream.flush());
+    let sent = stream.write_all(&line).and_then(|()| stream.flush());
     if sent.is_err() {
         return Ok(false);
     }
@@ -718,7 +749,7 @@ mod tests {
         let mut descriptor = InstanceDescriptor {
             version: PROTOCOL_VERSION + 1,
             port: listener.local_addr().unwrap().port(),
-            token: "probe-fixture".into(),
+            token: fixture_token(),
             pid: std::process::id(),
             product: this_product(),
         };
@@ -776,19 +807,21 @@ mod tests {
             let descriptor = InstanceDescriptor {
                 version: PROTOCOL_VERSION,
                 port: listener.local_addr().unwrap().port(),
-                token: "lost-ack-fixture".into(),
+                token: fixture_token(),
                 pid: std::process::id(),
                 product: this_product(),
             };
             write_descriptor(&path, &descriptor).unwrap();
             let published = fs::read(&path).unwrap();
+            let token = descriptor.token.clone();
             let server = thread::spawn(move || {
-                let (stream, _) = listener.accept().unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
                 stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+                identify_server(&mut stream, &token).unwrap();
                 let mut line = String::new();
                 BufReader::new(stream).read_line(&mut line).unwrap();
                 let wire: WireRequest = serde_json::from_str(&line).unwrap();
-                assert_eq!(wire.token, "lost-ack-fixture");
+                assert_eq!(wire.token, token);
             });
             let request = request("accepted-once".into(), BrowserOpenTarget::NewWindow);
             let result = if arbitrate {
@@ -804,22 +837,32 @@ mod tests {
         }
     }
 
+    fn fixture_token() -> String {
+        Uuid::new_v4().simple().to_string()
+    }
+
     // Answers one connection per reply (None closes silently); returns the tokens.
-    fn fake_broker(replies: Vec<Option<&'static [u8]>>) -> (u16, thread::JoinHandle<Vec<String>>) {
+    fn fake_broker(
+        token: String,
+        replies: Vec<Option<&'static [u8]>>,
+    ) -> (u16, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             replies
                 .into_iter()
-                .map(|reply| {
+                .filter_map(|reply| {
                     let (mut stream, _) = listener.accept().unwrap();
                     stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+                    identify_server(&mut stream, &token).unwrap();
                     let mut line = String::new();
-                    BufReader::new(&mut stream).read_line(&mut line).unwrap();
+                    if BufReader::new(&mut stream).read_line(&mut line).unwrap() == 0 {
+                        return None;
+                    }
                     if let Some(reply) = reply {
                         stream.write_all(reply).unwrap();
                     }
-                    serde_json::from_str::<WireRequest>(&line).unwrap().token
+                    Some(serde_json::from_str::<WireRequest>(&line).unwrap().token)
                 })
                 .collect()
         });
@@ -834,6 +877,42 @@ mod tests {
             pid,
             product: this_product(),
         }
+    }
+
+    #[test]
+    fn a_listener_must_identify_itself_before_receiving_a_repository_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("instance.json");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let descriptor = fake_descriptor(port, &fixture_token(), std::process::id());
+        write_descriptor(&path, &descriptor).unwrap();
+        let peer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+            stream.write_all(&[0; 32]).unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut received = Vec::new();
+            stream.read_to_end(&mut received).unwrap();
+            received
+        });
+        let mut built = false;
+        let delivered = forward_if_running_at(&path, || {
+            built = true;
+            request(
+                "example-repository".into(),
+                BrowserOpenTarget::ExistingWindow,
+            )
+        })
+        .unwrap();
+        let received = peer.join().unwrap();
+        assert!(!delivered);
+        assert!(!built);
+        assert!(
+            !received
+                .windows(descriptor.token.len())
+                .any(|w| w == descriptor.token.as_bytes())
+        );
     }
 
     #[test]
@@ -877,14 +956,11 @@ mod tests {
         let descriptor = read_descriptor(&path).unwrap();
         // The broker serves one connection at a time and waits IO_TIMEOUT
         // on this silent one, so the next is still queued when it stops.
-        let _stall = connect_to_descriptor(&descriptor).unwrap();
-        let queued = connect_to_descriptor(&descriptor).unwrap();
+        let address = (Ipv4Addr::LOCALHOST, descriptor.port);
+        let _stall = TcpStream::connect(address).unwrap();
+        let mut queued = TcpStream::connect(address).unwrap();
         drop(primary);
-        let late = request("late".into(), BrowserOpenTarget::NewWindow);
-        assert!(
-            !send_request(queued, &descriptor, &late).unwrap(),
-            "a closed broker queued nothing, so the launch may claim"
-        );
+        assert!(verify_server(&mut queued, &descriptor.token).is_err());
         assert!(receiver.try_recv().is_none());
     }
 
@@ -895,7 +971,11 @@ mod tests {
         let stale = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         stale.set_nonblocking(true).unwrap();
         let stale_port = stale.local_addr().unwrap().port();
-        write_descriptor(&path, &fake_descriptor(stale_port, "stale", u32::MAX)).unwrap();
+        write_descriptor(
+            &path,
+            &fake_descriptor(stale_port, &fixture_token(), u32::MAX),
+        )
+        .unwrap();
         let initial = request("initial".into(), BrowserOpenTarget::ExistingWindow);
         let StartResult::Primary(mut primary) = retry_while_reserved(|| {
             claim_or_forward_at(&path, initial.clone(), CLAIM_WAIT_TIMEOUT)
@@ -931,8 +1011,8 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = reserve_candidate_ports(dir.path()).0;
-            let (port, server) = fake_broker(vec![reply]);
-            write_descriptor(&path, &fake_descriptor(port, "stale", pid)).unwrap();
+            let (port, server) = fake_broker(fixture_token(), vec![reply]);
+            write_descriptor(&path, &fake_descriptor(port, &fixture_token(), pid)).unwrap();
             let launch = request("repo".into(), BrowserOpenTarget::ExistingWindow);
             let result = start_after_reservation(&path, launch);
             assert!(
@@ -940,7 +1020,7 @@ mod tests {
                 "{reply:?}: {:?}",
                 result.err()
             );
-            assert_eq!(server.join().unwrap(), ["stale"]);
+            assert!(server.join().unwrap().is_empty());
         }
     }
 
@@ -955,18 +1035,24 @@ mod tests {
             panic!("claim unexpectedly forwarded");
         };
         // The new primary rejects the stale token until it publishes its own.
-        let (stale_port, stale) = fake_broker(vec![Some(b"rejected\n")]);
-        write_descriptor(&path, &fake_descriptor(stale_port, "stale", u32::MAX)).unwrap();
+        let stale_token = fixture_token();
+        let (stale_port, stale) = fake_broker(stale_token.clone(), vec![Some(b"rejected\n")]);
+        write_descriptor(&path, &fake_descriptor(stale_port, &stale_token, u32::MAX)).unwrap();
         let waiter_path = path.clone();
         let waiter = thread::spawn(move || {
             start_or_forward_at(&waiter_path, launch, CLAIM_WAIT_TIMEOUT)
                 .map(|result| matches!(result, StartResult::Forwarded))
         });
-        assert_eq!(stale.join().unwrap(), ["stale"]);
-        let (port, published) = fake_broker(vec![Some(b"ok\n")]);
-        write_descriptor(&path, &fake_descriptor(port, "fresh", std::process::id())).unwrap();
+        assert_eq!(stale.join().unwrap(), [stale_token]);
+        let fresh_token = fixture_token();
+        let (port, published) = fake_broker(fresh_token.clone(), vec![Some(b"ok\n")]);
+        write_descriptor(
+            &path,
+            &fake_descriptor(port, &fresh_token, std::process::id()),
+        )
+        .unwrap();
         assert!(matches!(waiter.join().unwrap(), Ok(true)));
-        assert_eq!(published.join().unwrap(), ["fresh"]);
+        assert_eq!(published.join().unwrap(), [fresh_token]);
         drop(claim);
     }
 
@@ -1162,10 +1248,11 @@ mod tests {
         let listener =
             TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind listener");
         let port = listener.local_addr().expect("address").port();
+        let token = fixture_token();
         let foreign = InstanceDescriptor {
             version: PROTOCOL_VERSION,
             port,
-            token: "token".to_string(),
+            token: token.clone(),
             pid: std::process::id(),
             product: "comet-pro".to_string(),
         };
@@ -1176,7 +1263,7 @@ mod tests {
         let ours = InstanceDescriptor {
             version: PROTOCOL_VERSION,
             port,
-            token: "token".to_string(),
+            token,
             pid: std::process::id(),
             product: this_product(),
         };
@@ -1206,12 +1293,13 @@ mod tests {
     fn stale_descriptor_is_replaced_by_a_new_primary() {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor_path = reserve_candidate_ports(dir.path()).0;
+        let stale_token = fixture_token();
         write_descriptor(
             &descriptor_path,
             &InstanceDescriptor {
                 version: PROTOCOL_VERSION,
                 port: 1,
-                token: "stale".to_string(),
+                token: stale_token.clone(),
                 pid: u32::MAX,
                 product: this_product(),
             },
@@ -1231,7 +1319,7 @@ mod tests {
             StartResult::Forwarded => panic!("stale descriptor unexpectedly forwarded"),
         };
         let current = read_descriptor(&descriptor_path).expect("current descriptor");
-        assert_ne!(current.token, "stale");
+        assert_ne!(current.token, stale_token);
         drop(primary);
         assert!(!descriptor_path.exists());
     }
@@ -1404,7 +1492,7 @@ mod tests {
         let descriptor = InstanceDescriptor {
             version: PROTOCOL_VERSION,
             port: address.port(),
-            token: "token".to_string(),
+            token: fixture_token(),
             pid: std::process::id(),
             product: this_product(),
         };
@@ -1417,8 +1505,10 @@ mod tests {
         })
         .expect("serialize request");
         wire.push(b'\n');
+        let token = descriptor.token.clone();
         let client = thread::spawn(move || {
             let mut stream = TcpStream::connect(address).expect("connect");
+            verify_server(&mut stream, &token).expect("verify the listening broker");
             let (head, tail) = wire.split_at(wire.len() / 2);
             stream.write_all(head).expect("write first half");
             thread::sleep(Duration::from_millis(200));
