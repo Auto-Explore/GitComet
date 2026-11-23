@@ -1,6 +1,7 @@
 //! Running git: command setup, auth, timeouts, cancellation, and process-tree cleanup.
 
 use super::*;
+use gitcomet_core::remote_url::{RemoteUrlPolicy, restrict_native_git_transports};
 
 /// Poll cadence for a child wait: tight right after spawn so short commands
 /// return promptly, capped afterwards, never past the silence budget left.
@@ -99,6 +100,14 @@ pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
+}
+
+pub(crate) fn git_remote_cmd_for(workdir: &Path, policy: Option<RemoteUrlPolicy>) -> Command {
+    let mut command = git_workdir_cmd_for(workdir);
+    if let Some(policy) = policy {
+        restrict_native_git_transports(&mut command, policy, None);
+    }
+    command
 }
 
 pub(super) fn command_may_require_auth(cmd: &Command) -> bool {

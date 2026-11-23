@@ -45,6 +45,7 @@ fn register(
             workdir: PathBuf::from(path),
             common_dir: Some(PathBuf::from(common)),
             repository: None,
+            remote_url_policy: Default::default(),
             active: false,
             needs_refresh: true,
         }],
@@ -357,6 +358,7 @@ fn shutdown_cancels_and_waits_for_active_backend_cleanup() {
             workdir: PathBuf::from("/gated"),
             common_dir: None,
             repository: None,
+            remote_url_policy: Default::default(),
             active: false,
             needs_refresh: true,
         }],
@@ -636,6 +638,7 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
                 workdir: clone.clone(),
                 common_dir: None,
                 repository: None,
+                remote_url_policy: Default::default(),
                 // Selected, so quiet fetches keep the plain interval.
                 active: true,
                 needs_refresh: true,
@@ -962,6 +965,10 @@ fn refused_remote_url() -> String {
     format!("http://127.0.0.1:{port}/repository.git")
 }
 
+fn fixture_http_policy() -> RemoteUrlPolicy {
+    RemoteUrlPolicy::default().with_allowed(gitcomet_core::remote_url::RemoteProtocol::Http, true)
+}
+
 #[test]
 fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
     let temp = tempfile::tempdir().unwrap();
@@ -983,6 +990,7 @@ fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
                 workdir: workdir.clone(),
                 common_dir: None,
                 repository: None,
+                remote_url_policy: fixture_http_policy(),
                 active: false,
                 needs_refresh: true,
             }],
@@ -1086,6 +1094,7 @@ fn a_repository_fetched_recently_waits_but_loads_its_last_count_at_once() {
             workdir: clone.clone(),
             common_dir: None,
             repository: None,
+            remote_url_policy: Default::default(),
             active: false,
             needs_refresh: true,
         }],
@@ -1128,6 +1137,7 @@ fn a_store_fetched_through_a_sibling_worktree_waits_at_launch() {
             workdir,
             common_dir: None,
             repository: None,
+            remote_url_policy: Default::default(),
             active,
             needs_refresh: true,
         })
@@ -1196,6 +1206,7 @@ fn selected_tabs_fetch_first_then_the_least_recently_contacted_host() {
                 workdir: PathBuf::from(path),
                 common_dir: Some(PathBuf::from(format!("{path}/.git"))),
                 repository: None,
+                remote_url_policy: Default::default(),
                 active: path == "/selected",
                 needs_refresh: true,
             }],
@@ -1273,6 +1284,7 @@ fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
                 workdir: PathBuf::from(path),
                 common_dir: Some(PathBuf::from(format!("{path}/.git"))),
                 repository: None,
+                remote_url_policy: Default::default(),
                 active,
                 needs_refresh: true,
             }],
@@ -1409,6 +1421,7 @@ fn linked_worktrees_of_one_repository_contact_the_remote_once() {
             workdir,
             common_dir: None,
             repository: None,
+            remote_url_policy: Default::default(),
             active: false,
             needs_refresh: true,
         })
@@ -1460,6 +1473,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                     "/nonexistent/workspace/repositories/repo-{ix}/.git"
                 ))),
                 repository: None,
+                remote_url_policy: Default::default(),
                 active: false,
                 needs_refresh: true,
             })
@@ -1476,6 +1490,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                     workdir: registration.workdir.clone(),
                     common_dir: registration.common_dir.clone(),
                     repository: None,
+                    remote_url_policy: Default::default(),
                     active: false,
                     needs_refresh: true,
                 })
@@ -1539,6 +1554,7 @@ fn subscribe_unopened(
             workdir: workdir.to_path_buf(),
             common_dir: None,
             repository: None,
+            remote_url_policy: fixture_http_policy(),
             active: false,
             needs_refresh: true,
         })
@@ -1764,6 +1780,7 @@ fn turning_automatic_fetch_off_and_on_clears_a_sign_in_host_block() {
                 workdir: PathBuf::from("/repo"),
                 common_dir: Some(PathBuf::from("/repo/.git")),
                 repository: None,
+                remote_url_policy: Default::default(),
                 active: false,
                 needs_refresh: true,
             }],

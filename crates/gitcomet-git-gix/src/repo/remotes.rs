@@ -1142,7 +1142,7 @@ impl GixRepo {
         {
             return self.fetch_remotes_one_by_one(remotes, prune);
         }
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("fetch").arg("--progress");
         // `--all` would also try a git-annex special remote left without
         // `skipFetchAll`, and fail. Name the fetchable remotes instead. One
@@ -1344,7 +1344,7 @@ impl GixRepo {
             validate_ref_like_arg(refspec, "refspec")?;
         }
         let label = format!("git fetch {remote} {}", refspecs.join(" "));
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("fetch")
             .arg("--no-prune")
             .arg("--no-prune-tags")
@@ -1367,7 +1367,7 @@ impl GixRepo {
             return Ok(CommandOutput::empty_success(label));
         }
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("fetch")
             .arg("--progress")
             .arg("--prune")
@@ -1668,7 +1668,7 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let label = format!("git push --delete {remote} {branch}");
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         // Remote branch rows come from `refs/heads/` only. A short name would
         // let Git match a same-named tag once the branch is gone, or delete
         // the tag `v1.0` when the branch is literally named `refs/tags/v1.0`.
@@ -1709,7 +1709,7 @@ impl GixRepo {
         }
 
         let label = format!("git push --delete {remote} {}", branches.join(" "));
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push").arg("--delete").arg("--").arg(remote);
         for branch in branches {
             // Fully qualified for the reason given in the single-branch delete.
@@ -1753,7 +1753,7 @@ impl GixRepo {
     /// be live. Best-effort throughout: a failure here must never turn a partial
     /// push success into an error.
     fn prune_missing_remote_tracking_refs(&self, remote: &str, branches: &[String]) -> Vec<String> {
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("ls-remote").arg("--heads").arg("--").arg(remote);
         for branch in branches {
             cmd.arg(format!("refs/heads/{branch}"));
@@ -1783,7 +1783,7 @@ impl GixRepo {
         self.best_effort_delete_references(stale_refs.iter().map(String::as_str));
 
         if !present.is_empty() {
-            let mut cmd = self.git_workdir_cmd();
+            let mut cmd = self.git_remote_cmd();
             cmd.arg("fetch")
                 .arg("--no-prune")
                 .arg("--no-prune-tags")

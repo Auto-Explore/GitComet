@@ -245,6 +245,9 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
     }
     let refs_before = repo.refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
+        let _remote_url_policy = gitcomet_core::remote_url::ScopedRemoteUrlPolicy::set(Some(
+            job.subscriber.remote_url_policy,
+        ));
         repo.fetch_all_background_except(
             job.subscriber
                 .settings

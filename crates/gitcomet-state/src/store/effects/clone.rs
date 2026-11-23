@@ -7,7 +7,9 @@ use gitcomet_core::auth::askpass::{
 use gitcomet_core::auth::{AuthOutcome, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
-use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
+use gitcomet_core::remote_url::{
+    RemoteUrlPolicy, restrict_native_git_transports, validate_remote_url_with_policy,
+};
 use gitcomet_core::services::CommandOutput;
 use gitcomet_core::text_utils::redact_url_userinfo;
 use rustc_hash::FxHashMap;
@@ -134,8 +136,9 @@ fn clone_command_label(url: &str, dest: &Path) -> String {
 
 /// `--` keeps a URL or destination that starts with `-` from being parsed as
 /// a `git clone` option (`--upload-pack=<cmd>` would run `<cmd>` locally).
-fn build_clone_command(url: &str, dest: &Path) -> Command {
+fn build_clone_command(url: &str, dest: &Path, policy: RemoteUrlPolicy) -> Command {
     let mut cmd = git_command();
+    restrict_native_git_transports(&mut cmd, policy, Some(url));
     cmd.arg("-c")
         .arg("color.ui=false")
         .arg("clone")
@@ -291,7 +294,7 @@ pub(super) fn schedule_clone_repo(
             return;
         }
 
-        let mut cmd = build_clone_command(&url, &dest);
+        let mut cmd = build_clone_command(&url, &dest, remote_url_policy);
         // git-lfs is silent on a non-terminal stderr; its progress file is the
         // only sign of life while a large checkout downloads.
         let lfs_progress = tempfile::Builder::new()
@@ -612,7 +615,11 @@ mod tests {
             clone_command_label("https://user:s3cret@example.com/org/repo.git", dest),
             "git clone --progress https://user:***@example.com/org/repo.git /tmp/gitcomet-clone-dest"
         );
-        let cmd = build_clone_command("https://user:s3cret@example.com/org/repo.git", dest);
+        let cmd = build_clone_command(
+            "https://user:s3cret@example.com/org/repo.git",
+            dest,
+            RemoteUrlPolicy::default(),
+        );
         assert!(
             cmd.get_args()
                 .any(|arg| arg == "https://user:s3cret@example.com/org/repo.git"),
@@ -621,9 +628,41 @@ mod tests {
     }
 
     #[test]
+    fn clone_disables_unselected_native_transports_before_git_resolves_rewrites() {
+        let dest = Path::new("/tmp/gitcomet-clone-dest");
+        let cmd = build_clone_command(
+            "https://example.test/project.git",
+            dest,
+            RemoteUrlPolicy::default(),
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        let global = &args[..args.iter().position(|arg| *arg == "clone").unwrap()];
+        for blocked in ["http", "ftp", "ftps"] {
+            let value = format!("protocol.{blocked}.allow=never");
+            assert!(
+                global
+                    .windows(2)
+                    .any(|pair| pair[0] == "-c" && pair[1] == value.as_str())
+            );
+        }
+        for permitted in ["https", "ssh", "file", "git"] {
+            let prefix = format!("protocol.{permitted}.allow=");
+            assert!(
+                !global
+                    .iter()
+                    .any(|arg| arg.to_string_lossy().starts_with(&prefix))
+            );
+        }
+    }
+
+    #[test]
     fn build_clone_command_separates_positionals_from_options() {
         let dest = Path::new("/tmp/gitcomet-clone-dest");
-        let cmd = build_clone_command("git@github.com:org/repo.git", dest);
+        let cmd = build_clone_command(
+            "git@github.com:org/repo.git",
+            dest,
+            RemoteUrlPolicy::default(),
+        );
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(
             args,
@@ -632,6 +671,12 @@ mod tests {
                 std::ffi::OsStr::new("protocol.ext.allow=never"),
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("maintenance.auto=false"),
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.http.allow=never"),
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.ftp.allow=never"),
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.ftps.allow=never"),
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("color.ui=false"),
                 std::ffi::OsStr::new("clone"),

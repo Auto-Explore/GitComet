@@ -330,7 +330,7 @@ impl WorkerLoopContext<'_> {
             // O(tabs), so skip it while nothing it reads has changed.
             let sign_in_open = state.auth_prompt.is_some();
             let mut inputs = rustc_hash::FxHasher::default();
-            (allowed, settings, sign_in_open).hash(&mut inputs);
+            (allowed, settings, sign_in_open, state.remote_url_policy).hash(&mut inputs);
             for repo in registered.clone() {
                 repo.id.hash(&mut inputs);
                 repo.lifetime_id().hash(&mut inputs);
@@ -355,6 +355,7 @@ impl WorkerLoopContext<'_> {
                     workdir: repo.spec.workdir.clone(),
                     common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
                     repository: repos.repository(&repo.id).cloned(),
+                    remote_url_policy: state.remote_url_policy,
                     active: state.active_repo == Some(repo.id),
                     needs_refresh: repo.needs_auto_fetch_refresh(),
                 })

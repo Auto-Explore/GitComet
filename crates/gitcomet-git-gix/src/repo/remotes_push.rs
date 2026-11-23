@@ -130,7 +130,7 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let command_label = format!("git push --set-upstream {remote} HEAD:refs/heads/{branch}");
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push")
             .arg("--set-upstream")
             .arg("--")
@@ -164,7 +164,7 @@ impl GixRepo {
             format!("git push {remote} HEAD:refs/heads/{branch}")
         };
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push");
         if force_with_lease {
             cmd.arg("--force-with-lease");
@@ -301,7 +301,7 @@ impl GixRepo {
             target.remote, source, target.branch
         );
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push");
         if hooks.skipped() {
             cmd.arg("--no-verify");
@@ -369,7 +369,7 @@ impl GixRepo {
 
         let remote_ref = format!("refs/heads/{branch}");
         let label = format!("git fetch --no-prune --refmap= {remote} {remote_ref}");
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("fetch")
             .arg("--no-prune")
             .arg("--no-prune-tags")
@@ -409,7 +409,7 @@ impl GixRepo {
     /// other outcome leaves the failed fetch to speak for itself.
     fn remote_confirms_ref_missing(&self, remote: &str, remote_ref: &str) -> bool {
         let label = format!("git ls-remote --exit-code {remote} {remote_ref}");
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("ls-remote")
             .arg("--exit-code")
             .arg("--")
@@ -608,7 +608,7 @@ impl GixRepo {
             }
         }
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push");
         run_git_with_output(cmd, "git push")
     }
@@ -626,7 +626,7 @@ impl GixRepo {
             return Ok(output);
         }
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push").arg("--force-with-lease");
         run_git_with_output(cmd, "git push --force-with-lease")
     }

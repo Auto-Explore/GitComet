@@ -28,6 +28,7 @@ use crate::model::AppState;
 use crate::msg::{Effect, Msg};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::remote_url::ScopedRemoteUrlPolicy;
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use std::sync::{Arc, RwLock};
 
@@ -131,6 +132,12 @@ pub(super) fn schedule_effect(
     msg_tx: StoreWorkerSender,
     effect: Effect,
 ) {
+    let _remote_url_policy = ScopedRemoteUrlPolicy::set(Some(
+        thread_state
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .remote_url_policy,
+    ));
     #[cfg(any(test, feature = "test-support"))]
     let _test_scope = super::test_support::TestTaskScope::enter(Arc::clone(&msg_tx.test_tasks));
     let EffectExecutors {
