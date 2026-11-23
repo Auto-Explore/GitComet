@@ -13,6 +13,19 @@ pub fn running_under_test_harness() -> bool {
     *RUNNING.get_or_init(|| std::env::current_exe().is_ok_and(|exe| looks_like_test_binary(&exe)))
 }
 
+/// Whether this process's file is named the way Cargo names a test binary.
+/// Unlike [`running_under_test_harness`], a GitComet installed under a
+/// directory called `deps` is no test binary to this.
+pub fn named_like_test_binary() -> bool {
+    static NAMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NAMED.get_or_init(|| std::env::current_exe().is_ok_and(|exe| is_named_like_test_binary(&exe)))
+}
+
+fn is_named_like_test_binary(exe: &Path) -> bool {
+    exe.file_stem()
+        .is_some_and(looks_like_cargo_test_binary_name)
+}
+
 /// Whether `exe` is where Cargo or nextest puts a test binary, or is named
 /// like one.
 pub fn looks_like_test_binary(exe: &Path) -> bool {
@@ -63,5 +76,21 @@ mod tests {
             "/tmp/target/debug/gitcomet"
         )));
         assert!(running_under_test_harness());
+        assert!(named_like_test_binary());
+    }
+
+    #[test]
+    fn only_a_test_binary_name_counts_by_name() {
+        assert!(is_named_like_test_binary(Path::new(
+            "/tmp/target/debug/deps/gitcomet_state-3ad1b0fd3f0c0d3e"
+        )));
+        // GitComet installed where a directory has a test-like name.
+        for installed in ["/opt/deps/gitcomet", "/home/u/nextest/bin/gitcomet"] {
+            assert!(looks_like_test_binary(Path::new(installed)));
+            assert!(
+                !is_named_like_test_binary(Path::new(installed)),
+                "{installed}"
+            );
+        }
     }
 }

@@ -246,8 +246,10 @@ enum LockAdmission {
     Recovery,
 }
 
+/// By its name alone: where a binary lies decides nothing about whom it
+/// coordinates with.
 fn is_test_binary() -> bool {
-    cfg!(test) || gitcomet_core::platform::test_harness::running_under_test_harness()
+    cfg!(test) || gitcomet_core::platform::test_harness::named_like_test_binary()
 }
 
 fn coordination_root(common_dir: &Path) -> &Path {
