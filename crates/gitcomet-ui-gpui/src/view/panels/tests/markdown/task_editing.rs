@@ -49,6 +49,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
 
 #[gpui::test]
 fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
+    cx.background_executor.allow_parking();
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -146,5 +147,88 @@ fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
         );
     });
 
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn rapid_task_clicks_preserve_other_markers_and_in_flight_edits(cx: &mut gpui::TestAppContext) {
+    cx.background_executor.allow_parking();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(8811);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        repo_id,
+        "rapid-task-clicks",
+        "- [ ] first\n- [ ] second\n- [ ] third\n",
+    );
+    let marker = |label| fixture.document.rows[fixture.row_ix(label)].task.unwrap();
+    let file = fixture.workdir.join("docs/preview.md");
+    let pane = diff_renderer(cx, &view);
+    cx.update(|_, app| {
+        let root = view.read(app);
+        root.store.insert_repo_for_test(
+            repo_id,
+            Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                &fixture.workdir,
+            )),
+        );
+        pane.update(app, |pane, cx| {
+            for label in ["first", "first", "second"] {
+                pane.toggle_markdown_preview_task(DiffTextRegion::Inline, marker(label), cx);
+            }
+        });
+    });
+    let expected = "- [x] first\n- [x] second\n- [ ] third\n";
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "both checkbox writes acknowledged",
+        |pane| {
+            let _filesystem = pane
+                .store
+                .filesystem()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::fs::read_to_string(&file).ok().as_deref() == Some(expected)
+        },
+        |_| std::fs::read_to_string(&file).ok(),
+    );
+    let original = cx.update(|_, app| {
+        let root = view.read(app);
+        let store = root.store.clone();
+        let original = store.snapshot();
+        pane.update(app, |pane, cx| {
+            pane.toggle_markdown_preview_task(DiffTextRegion::Inline, marker("third"), cx);
+        });
+        let mut next = (*original).clone();
+        next.repos[0].diff_state.diff_target =
+            Some(gitcomet_core::domain::DiffTarget::working_tree(
+                "different.md".into(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
+        store.replace_snapshot_for_test(Arc::new(next));
+        original
+    });
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), expected);
+    cx.update(|_, app| {
+        view.read(app).store.replace_snapshot_for_test(original);
+        pane.update(app, |pane, cx| {
+            pane.toggle_markdown_preview_task(DiffTextRegion::Inline, marker("third"), cx);
+            pane.editor_documents.retain_for_tests(
+                gitcomet_core::filesystem::DocumentIdentity(file.clone()),
+                repo_id,
+                "unsaved editor text".into(),
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), expected);
     fixture.cleanup();
 }

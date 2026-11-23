@@ -176,6 +176,41 @@ impl PaneStore {
         })
     }
 
+    pub(in crate::view) fn preview_save_origin(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+        path: &std::path::Path,
+    ) -> Option<SaveOrigin> {
+        if !self.admits_save(false) {
+            return None;
+        }
+        let live = self.snapshot()?;
+        let repo = live
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)?;
+        if repo.is_bare() || repo.bare_mode_conversion.is_busy() {
+            return None;
+        }
+        let (diff, session) = match self.binding {
+            Some(binding) => (binding.diff(repo)?, Some(binding.view)),
+            None if live.active_repo == Some(repo_id) => (&repo.diff_state, None),
+            None => return None,
+        };
+        matches!(&diff.diff_target, Some(DiffTarget::WorkingTree {
+            path: current,
+            area: DiffArea::Unstaged,
+            worktree: None,
+            ..
+        }) if current == path)
+        .then_some(SaveOrigin::Repository {
+            repo_id,
+            lifetime,
+            session,
+        })
+    }
+
     pub fn snapshot(&self) -> Option<Arc<AppState>> {
         self.store.upgrade().map(|store| store.snapshot())
     }
