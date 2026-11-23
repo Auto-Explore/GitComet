@@ -35,7 +35,7 @@ jobs:
       - name: Install coverage tools and the repository test runner
         run: |
           rustup component add llvm-tools-preview
-          cargo install --locked --version 0.9.2 cargo-llvm-cov
+          cargo install --locked cargo-llvm-cov
           python3 scripts/ci/install-nextest.py --bin-dir "$RUNNER_TEMP/gitcomet-ci-bin"
       - name: Measure GitComet source coverage
         run: |

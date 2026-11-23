@@ -183,7 +183,7 @@ repository's pinned nextest, and the `genhtml` command from the LCOV package.
 
 ```bash
 rustup component add llvm-tools-preview
-cargo install --locked --version 0.9.2 cargo-llvm-cov
+cargo install --locked cargo-llvm-cov
 python3 scripts/ci/install-nextest.py --bin-dir "${CARGO_HOME:-$HOME/.cargo}/bin"
 bash scripts/coverage.sh
 ```
