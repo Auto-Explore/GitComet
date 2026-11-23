@@ -190,6 +190,9 @@ fn drain_stop_cancels_pending_acknowledgements() {
         MonitorConfig {
             debounce: Duration::from_secs(60),
             max_delay: Duration::from_secs(60),
+            // A lone change would otherwise flush after 50 ms, before Stop
+            // arrives on a busy machine.
+            lone_change: (Duration::from_secs(60), Duration::ZERO),
             ..Default::default()
         },
     );
