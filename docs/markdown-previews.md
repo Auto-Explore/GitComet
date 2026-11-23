@@ -8,7 +8,9 @@ In document previews and embedded descriptions, `<details>` starts closed unless
 
 Drag to select text, double-click to select a word, or triple-click to select a row. Copy and Select All use Cmd-C and Cmd-A on macOS, or Ctrl-C and Ctrl-A elsewhere. Copy includes only visible content. Closing a section clears a selection that includes its hidden content. Searching a document or following a heading link opens the enclosing sections before revealing the target.
 
-Click a link to open its menu; Cmd-click or Ctrl-click follows it directly. Dragging over link text selects it. Images obey the window's remote-image preference. Embedded descriptions have no local document path, so relative file links stay inert.
+Click a link to open its menu; Cmd-click or Ctrl-click follows it directly. Dragging over link text selects it. Embedded descriptions have no local document path, so relative file links stay inert.
+
+By default, remote images wait for approval. Loading one contacts the server named in the document, which can see your IP address and when you viewed the image. You can load a single image or all images in the current preview. To change this behavior, use the remote Markdown image setting in **Settings → Security / Privacy**. Upgrading preserves your saved choice.
 
 ## Embedding a preview
 
