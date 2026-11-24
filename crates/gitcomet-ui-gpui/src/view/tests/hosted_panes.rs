@@ -11,6 +11,8 @@ use gitcomet_state::msg::WorktreeSaveBaseline;
 
 #[path = "hosted_context.rs"]
 mod context;
+#[path = "hosted_one_sided.rs"]
+mod one_sided;
 #[path = "hosted_prefetch.rs"]
 mod prefetch;
 #[path = "hosted_views.rs"]

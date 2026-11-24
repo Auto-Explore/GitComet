@@ -20,6 +20,7 @@ enum DisplayRow {
 pub(in crate::view) struct HostedDiffDecor {
     pub view_id: u64,
     pub options: DiffPaneOptions,
+    layout_before_one_sided: Option<DiffViewMode>,
     pub annotations: Arc<DiffAnnotations>,
     /// The most people one annotation names, which the rows make room for.
     most_people: Option<usize>,
@@ -49,6 +50,38 @@ impl HostedDiffDecor {
 }
 
 impl DiffRenderer {
+    pub(in crate::view) fn hosted_one_sided_diff(&self) -> bool {
+        self.hosted_decor
+            .as_ref()
+            .is_some_and(|decor| decor.layout_before_one_sided.is_some())
+    }
+
+    pub(in crate::view) fn sync_hosted_layout(
+        &mut self,
+        requested: Option<DiffViewMode>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let one_sided = self.one_sided_change_side().is_some();
+        let Some(decor) = &mut self.hosted_decor else {
+            return;
+        };
+        let layout = requested
+            .or(decor.layout_before_one_sided)
+            .unwrap_or(self.diff_view);
+        if one_sided != decor.layout_before_one_sided.is_some() {
+            self.diff_surface_memo.get_mut().take();
+        }
+        decor.layout_before_one_sided = one_sided.then_some(layout);
+        self.set_diff_view_mode(
+            if one_sided {
+                DiffViewMode::Inline
+            } else {
+                layout
+            },
+            cx,
+        );
+    }
+
     /// The hosted decoration when the list's rows are its projection's.
     fn hosted_projection(&self) -> Option<&HostedDiffDecor> {
         self.hosted_decor.as_ref().filter(|decor| decor.projects())

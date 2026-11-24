@@ -90,6 +90,9 @@ impl DiffRenderer {
     /// added, deleted, or untracked file, which has no patch — has nothing to
     /// collapse and stays on Full however the setting is set.
     pub(in crate::view) fn effective_diff_content_mode(&self) -> DiffContentMode {
+        if self.hosted_one_sided_diff() {
+            return DiffContentMode::Full;
+        }
         if self.diff_content_mode == DiffContentMode::Collapsed
             && matches!(
                 self.rendered_patch_diff_loadable(),

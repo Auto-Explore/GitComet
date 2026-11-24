@@ -8,8 +8,8 @@
 
 use crate::model::{Loadable, RepoId, Shared};
 use gitcomet_core::domain::{
-    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextFile,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
+    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffLineKind, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileMode,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
@@ -48,6 +48,7 @@ pub struct DiffSession {
     pub open_request: Option<u64>,
     /// The complete diff state, shared with the built-in pane.
     pub diff_state: crate::model::DiffState,
+    pub(crate) patch_side: Option<DiffPreviewTextSide>,
     /// Once requested, blame follows subsequent reloads and retargets.
     pub(crate) blame_requested: bool,
     /// An external change during a load requests one more load on completion.
@@ -82,6 +83,7 @@ impl DiffSession {
                 diff_target: Some(target.clone()),
                 ..Default::default()
             },
+            patch_side: None,
             blame_requested: false,
             refresh_queued: false,
             pending: DiffSessionLoads::default(),
@@ -104,6 +106,64 @@ impl DiffSession {
     /// The linked worktree the target reads; `None` is the repository's own.
     pub fn worktree(&self) -> Option<&std::path::Path> {
         self.target.worktree()
+    }
+
+    /// The file side this pane displays, even when History and the file list
+    /// are closed. An unstaged untracked file has content but no Git patch.
+    pub fn present_file_side(&self) -> Option<DiffPreviewTextSide> {
+        let target = self.diff_target.as_ref()?;
+        if self.content_preview || target.file_path().is_none() || target.old_file_path().is_some()
+        {
+            return None;
+        }
+        let Some(patch) = self.diff.ready() else {
+            return self.one_sided_side;
+        };
+        if !patch.lines.is_empty() {
+            let side = self.patch_side?;
+            // The second section of a type change can fall beyond the patch limit.
+            if patch
+                .lines
+                .last()
+                .is_some_and(|line| line.text.starts_with(Diff::TRUNCATION_NOTICE_PREFIX))
+            {
+                return self.loaded_file_side().filter(|loaded| *loaded == side);
+            }
+            return Some(side);
+        }
+        if self.one_sided_side.is_some()
+            || !matches!(
+                target,
+                DiffTarget::WorkingTree {
+                    area: DiffArea::Unstaged,
+                    ..
+                }
+            )
+        {
+            return self.one_sided_side;
+        }
+        self.loaded_file_side()
+            .filter(|side| *side == DiffPreviewTextSide::New)
+    }
+
+    fn loaded_file_side(&self) -> Option<DiffPreviewTextSide> {
+        let (old, new) = if let Some(file) = self.diff_file.ready().and_then(Option::as_ref) {
+            (
+                file.old.is_some() || file.old_source.is_some() || file.old_large.is_some(),
+                file.new.is_some() || file.new_source.is_some() || file.new_large.is_some(),
+            )
+        } else {
+            let image = self.diff_file_image.ready()?.as_ref()?;
+            (
+                image.old.is_some() || image.old_large.is_some(),
+                image.new.is_some() || image.new_large.is_some(),
+            )
+        };
+        match (old, new) {
+            (true, false) => Some(DiffPreviewTextSide::Old),
+            (false, true) => Some(DiffPreviewTextSide::New),
+            _ => None,
+        }
     }
 
     /// Whether the target follows the working tree, so external edits
@@ -147,6 +207,36 @@ impl DiffSession {
         };
         Some((path, source))
     }
+}
+
+pub(crate) fn one_sided_patch(patch: &Diff) -> Option<DiffPreviewTextSide> {
+    patch.target.file_path()?;
+    if patch.target.old_file_path().is_some() {
+        return None;
+    }
+    let mut lines = patch.lines.iter();
+    let section = |line: &gitcomet_core::domain::DiffLine| {
+        line.kind == DiffLineKind::Header && line.text.starts_with("diff --git ")
+    };
+    if !section(lines.next()?) {
+        return None;
+    }
+    let (side, mode) = lines
+        .by_ref()
+        .take_while(|line| line.kind == DiffLineKind::Header && !section(line))
+        .find_map(|line| {
+            line.text
+                .strip_prefix("new file mode ")
+                .map(|mode| (DiffPreviewTextSide::New, mode))
+                .or_else(|| {
+                    line.text
+                        .strip_prefix("deleted file mode ")
+                        .map(|mode| (DiffPreviewTextSide::Old, mode))
+                })
+        })?;
+    // A type change can produce separate deletion and addition sections.
+    (FileMode::from_octal(mode.as_bytes())? != FileMode::Gitlink && !lines.any(section))
+        .then_some(side)
 }
 
 /// Outstanding parts of this generation, independent of retained content.

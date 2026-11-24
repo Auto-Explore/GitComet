@@ -293,7 +293,7 @@ impl DiffRenderer {
             .into_any_element(),
             None => components::empty_state_message(theme, "No diagram").into_any_element(),
         };
-        let content = if self.diff_surface().file_preview {
+        let content = if self.diff_surface().file_preview || self.hosted_one_sided_diff() {
             rendered_preview::PreviewContent::File(preview("diagram_file", new.or(old)))
         } else {
             rendered_preview::PreviewContent::Diff {

@@ -289,7 +289,7 @@ impl DiffRenderer {
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
-        let wants_markdown_preview = self.diff_content_mode == DiffContentMode::Full
+        let wants_markdown_preview = self.effective_diff_content_mode() == DiffContentMode::Full
             && rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
             && self
                 .rendered_preview_modes

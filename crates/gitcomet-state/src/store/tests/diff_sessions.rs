@@ -6,6 +6,8 @@ use crate::diff_session::{DiffSessionContent, DiffSessionMsg, DiffSessionWork, D
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
 
+mod one_sided;
+
 fn setup() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
     let mut repos: RepositoryRuntimes = Default::default();
     let repo_id = RepoId(1);
