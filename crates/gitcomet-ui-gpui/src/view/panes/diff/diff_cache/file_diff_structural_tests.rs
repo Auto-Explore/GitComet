@@ -455,7 +455,7 @@ fn a_cancelled_difftastic_build_yields_no_rows() {
         Some(Arc::from("call(a, c);\n")),
     );
     let build = |cancellation: &CancellationToken| {
-        super::super::file_diff::build_file_diff_cache_with_engine(
+        super::super::build_file_diff_cache_with_engine(
             &file,
             std::path::Path::new("/repo"),
             None,
