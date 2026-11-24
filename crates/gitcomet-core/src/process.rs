@@ -7,6 +7,9 @@ use std::process::Command;
 use std::sync::{Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum GitExecutablePreference {
     #[default]
@@ -388,7 +391,6 @@ pub fn configure_background_command(command: &mut std::process::Command) {
     {
         use std::os::windows::process::CommandExt as _;
 
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
 

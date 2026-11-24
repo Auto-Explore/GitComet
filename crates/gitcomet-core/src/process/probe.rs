@@ -20,11 +20,9 @@ pub(crate) fn probe_output(
         .stderr(Stdio::piped());
     let mut command = CommandWrap::from(command);
     #[cfg(windows)]
-    {
-        let mut flags = CreationFlags(Default::default());
-        flags.0.0 = 0x0800_0000; // CREATE_NO_WINDOW
-        command.wrap(flags).wrap(JobObject);
-    }
+    command
+        .wrap(CreationFlags(super::CREATE_NO_WINDOW))
+        .wrap(JobObject);
     #[cfg(unix)]
     command.wrap(ProcessGroup::leader());
     let deadline = Instant::now() + timeout;
