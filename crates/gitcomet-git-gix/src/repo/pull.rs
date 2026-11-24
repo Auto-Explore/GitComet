@@ -76,7 +76,6 @@ fn automatic_upstream_tracking_ref(
             "The pull source needs one tracking destination. Configure its fetch mapping and upstream before pulling.",
         )));
     };
-    let null = repo.object_hash().null();
     for remote_name in repo.remote_names() {
         let remote = repo.find_remote(remote_name.as_bstr()).map_err(|error| {
             Error::new(ErrorKind::Unsupported(
@@ -93,7 +92,7 @@ fn automatic_upstream_tracking_ref(
         )
         .match_rhs(std::iter::once(gix::refspec::match_group::Item {
             full_ref_name: tracking_ref.as_bytes().as_bstr(),
-            target: &null,
+            target: None,
             object: None,
         }));
         for mapping in matches.mappings {

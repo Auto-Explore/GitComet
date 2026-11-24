@@ -168,32 +168,31 @@ filetime = "0.2.30"
 fnv = "1.0.7"
 fontdb = "0.24.0"
 futures = "0.3.34"
-gix = { version = "0.90.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+gix = { version = "0.91.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+gix-fs = "1.0.0"
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
-gix-quote = "0.10.1"
+gix-quote = "0.10.2"
 # Git's ref-name rules for branch names the UI is about to hand to git. Already
 # in the graph through gix, so this adds no new compilation.
-gix-validate = "0.13.1"
+gix-validate = "0.13.2"
 hmac = "0.13.0"
 glob = "0.3.4"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", default-features = false }
 # The portable glyph rasterizer the kit's test text backend paints with.
-gpui_render = { package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c", features = ["swash"] }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "a9e015bcb0568d1403de23b3b16f42fc8060698c" }
-hashbrown = "0.17.1"
+gpui_render = { package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", features = ["swash"] }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
+hashbrown = "0.17.2"
 humansize = "2.1.3"
 image = "0.25.10"
 imara-diff = { version = "0.2.0", default-features = false }
 fast_image_resize = { version = "6.2.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"
-# Already in the tree via gix-date; used directly for system-timezone lookups.
-# Stays on 0.2 while gix-date does: jiff 1.0 would compile a second copy.
-jiff = "0.2"
+jiff = "1.0"
 json5 = "1.3"
 lazy_static = "1.5.1"
 libc = "0.2"
@@ -207,14 +206,14 @@ md-5 = "0.11"
 memchr = "2.8.3"
 metal = "0.33"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.9"
+notify = "9.0.0"
 objc2-core-foundation = { version = "0.3.2", default-features = false }
 objc2-core-services = { version = "0.3.2", default-features = false }
 once_cell = "1.21.4"
 palette = "0.7.7"
 percent-encoding = "2.3.2"
 pretty_assertions = "1.4.1"
-process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
+process-wrap = { version = "11.0.0", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 radix-heap = "0.4.2"
 raw-window-handle = "0.6"
 regex = "1.13.2"
@@ -410,12 +409,12 @@ tree-sitter-zig = "1.1.2"
 unicode-normalization = "0.1.26"
 unicode-segmentation = "1.13.3"
 ureq = { version = "3.5.2", default-features = false, features = ["rustls", "gzip"] }
-url = "2.5.8"
+url = "2.5.9"
 wayland-client = "0.31.15"
 winapi-util = "0.1.11"
 windows-sys = "0.61.2"
 x11-clipboard = "0.9.3"
-yaml-rust2 = { version = "0.13.1", default-features = false }
+yaml-rust2 = { version = "0.13.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

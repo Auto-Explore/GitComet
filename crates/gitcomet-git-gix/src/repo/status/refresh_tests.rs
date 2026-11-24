@@ -281,7 +281,7 @@ fn gitlink_selection_keeps_sparse_intent_to_add_and_conflicted_entries() {
     ] {
         let mut index = (*original).clone();
         index.entries_mut()[position].flags = flags;
-        index.write(Default::default()).unwrap();
+        index.write(Default::default(), Default::default()).unwrap();
         assert_eq!(selected_gitlinks(root, &[]), Some(vec![CHILD.into()]));
     }
 }
@@ -834,7 +834,7 @@ fn checked_out_submodules_are_asked_directly_and_the_rest_through_the_repository
         .position(|entry| entry.path(&index) == "absorbed")
         .unwrap();
     index.entries_mut()[position].flags |= Flags::ASSUME_VALID;
-    index.write(Default::default()).unwrap();
+    index.write(Default::default(), Default::default()).unwrap();
     let (checkouts, paths) = select(&[]);
     assert_eq!(checkouts, both[1..]);
     assert_eq!(

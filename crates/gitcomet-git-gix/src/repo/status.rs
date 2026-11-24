@@ -704,7 +704,7 @@ pub(super) fn index_as_on_disk(
     let fresh = repo
         .open_index()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-    Ok(gix::worktree::Index::new(gix::fs::FileSnapshot::new(fresh)))
+    Ok(gix::worktree::Index::new(gix_fs::FileSnapshot::new(fresh)))
 }
 
 #[cfg(unix)]

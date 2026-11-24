@@ -86,18 +86,7 @@ pub(crate) fn map_open_error(error: gix::Error, context: &str, path: &Path) -> E
     });
     let kind = match io_kind {
         Some(kind) => ErrorKind::Io(kind),
-        None => {
-            // The top frame is generic ("configuration could not be loaded");
-            // the innermost names the offending key or file.
-            let mut message = error.to_string();
-            if let Some(cause) = error.iter_errors().last().map(ToString::to_string)
-                && !message.contains(&cause)
-            {
-                message.push_str(": ");
-                message.push_str(&cause);
-            }
-            ErrorKind::Backend(message)
-        }
+        None => ErrorKind::Backend(format!("{error:#}")),
     };
     Error::new(kind)
         .with_source(error)

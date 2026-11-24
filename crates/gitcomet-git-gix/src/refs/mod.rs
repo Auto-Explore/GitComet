@@ -81,9 +81,9 @@ pub(crate) struct Reference<'r> {
 impl<'r> Reference<'r> {
     fn from_gix(inner: gix::Reference<'r>) -> Self {
         Self {
-            repo: inner.repo,
-            raw: inner.inner.target.clone(),
-            name: matches!(inner.inner.target, gix::refs::Target::Symbolic(_))
+            repo: inner.repo(),
+            raw: inner.inner().target.clone(),
+            name: matches!(inner.inner().target, gix::refs::Target::Symbolic(_))
                 .then(|| inner.name().to_owned()),
             inner,
         }
@@ -586,7 +586,7 @@ impl<'r> Iterator for RefIter<'_, 'r> {
                 if *peel
                     && !(*records_peeled
                         && packed.is_some_and(|packed| {
-                            files::packed_entry_is_no_tag(packed, &reference.inner.inner)
+                            files::packed_entry_is_no_tag(packed, reference.inner.inner())
                         }))
                     && let Err(error) = reference.inner.peel_to_id_packed(packed)
                 {

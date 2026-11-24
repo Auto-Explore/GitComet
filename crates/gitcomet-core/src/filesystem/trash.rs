@@ -61,7 +61,7 @@ pub(super) fn prepare_in(source: &Path, root: &Path) -> io::Result<Receipt> {
         unique,
         "[Trash Info]\nPath={}\nDeletionDate={}",
         encoded_path(source),
-        jiff::Zoned::now().strftime("%Y-%m-%dT%H:%M:%S")
+        jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S")
     )?;
     unique.as_file().sync_all()?;
     unique.keep().map_err(|e| e.error)?;

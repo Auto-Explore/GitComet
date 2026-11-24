@@ -452,7 +452,7 @@ impl LockableLookup<'_> {
 /// Only descriptors are cached: attribute contents are read afresh each scan.
 /// A weak key cannot retain the parsed index, and cannot match another snapshot.
 pub(super) struct AttributeSources {
-    index: Weak<gix::fs::FileSnapshot<gix::index::File>>,
+    index: Weak<gix_fs::FileSnapshot<gix::index::File>>,
     sources: Arc<[(PathBuf, gix::ObjectId)]>,
 }
 

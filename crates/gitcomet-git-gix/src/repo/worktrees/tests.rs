@@ -154,7 +154,7 @@ fn native_single_worktree_defers_reduced_trust_to_git() {
         repo.spec.workdir.join(".git"),
         gix::open::Options::default()
             .permissions(gix::open::Permissions::isolated())
-            .with(gix::sec::Trust::Reduced),
+            .with_trust(gix::sec::Trust::Reduced),
     )
     .unwrap();
     assert_eq!(reduced.git_dir_trust(), gix::sec::Trust::Reduced);

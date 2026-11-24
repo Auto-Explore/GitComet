@@ -27,7 +27,7 @@ impl WholeFileOptions {
 }
 
 enum AttributeIndex {
-    Index(Weak<gix::fs::FileSnapshot<gix::index::File>>),
+    Index(Weak<gix_fs::FileSnapshot<gix::index::File>>),
     HeadTree(gix::ObjectId),
 }
 

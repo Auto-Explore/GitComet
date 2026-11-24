@@ -47,6 +47,7 @@ fnv = { workspace = true }
 gitcomet-core = { workspace = true }
 filetime = { workspace = true }
 gix = { workspace = true }
+gix-fs = { workspace = true }
 itertools = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }

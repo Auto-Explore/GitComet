@@ -193,7 +193,6 @@ pub(super) fn tracking_refs_for_remote_branch(
         )))
     })?;
     let source_ref = format!("refs/heads/{}", upstream.branch);
-    let null = repo.object_hash().null();
     let matches = gix::refspec::MatchGroup::from_fetch_specs(
         remote
             .refspecs(gix::remote::Direction::Fetch)
@@ -203,7 +202,7 @@ pub(super) fn tracking_refs_for_remote_branch(
     .match_lhs(
         Some(gix::refspec::match_group::Item {
             full_ref_name: source_ref.as_bytes().as_bstr(),
-            target: &null,
+            target: None,
             object: None,
         })
         .into_iter(),
@@ -1940,7 +1939,7 @@ fn tracking_ref_owners(
         .match_rhs(tracking_refs.iter().map(|(name, target)| {
             gix::refspec::match_group::Item {
                 full_ref_name: name.as_bstr(),
-                target: target.as_ref(),
+                target: Some(target.as_ref()),
                 object: None,
             }
         }));
