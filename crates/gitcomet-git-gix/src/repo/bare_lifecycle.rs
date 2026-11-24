@@ -233,8 +233,6 @@ impl Drop for HeldFileLock {
 
 /// A lock file made this long ago is removed when nothing holds it.
 const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
-/// The same for a test binary, whose repositories last as long as a test.
-const TEST_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// Times a lock file may lose its name while it is being locked.
 const LOCK_ATTEMPTS: usize = 8;
 /// Milliseconds an operation waits for a lock file nothing converts.
@@ -244,12 +242,6 @@ const PRUNER_WAITS: usize = 200;
 enum LockAdmission {
     NewConversion,
     Recovery,
-}
-
-/// By its name alone: where a binary lies decides nothing about whom it
-/// coordinates with.
-fn is_test_binary() -> bool {
-    cfg!(test) || gitcomet_core::platform::test_harness::named_like_test_binary()
 }
 
 fn coordination_root(common_dir: &Path) -> &Path {
@@ -266,21 +258,18 @@ fn coordination_root(common_dir: &Path) -> &Path {
 pub(super) fn coordination_path(common_dir: &Path) -> Result<PathBuf> {
     use gitcomet_core::identity::ProductIdentity;
     use gitcomet_core::platform::dirs::{Platform, ProductDirs};
-    // Every profile of one user coordinates through one directory. A test
-    // binary's is under the temporary directory instead: each repository a
-    // test opens leaves a lock file, which is not the user's state to keep.
+    // Every profile of one user coordinates through one directory.
     let identity = ProductIdentity::gitcomet();
-    let environment = |key: &str| match key {
-        "GITCOMET_PROFILE_ROOT" => is_test_binary().then(|| {
-            // Each user's own, where the temporary directory is shared.
-            let user = std::env::var("USER")
-                .or_else(|_| std::env::var("USERNAME"))
-                .unwrap_or_default();
-            let profile = format!("{}-test-profile-{user}", identity.directory_name());
-            std::env::temp_dir().join(profile).into()
-        }),
-        "XDG_STATE_HOME" => None,
-        key => std::env::var_os(key),
+    let environment = |key: &str| {
+        #[cfg(any(test, feature = "test-support"))]
+        if key == "GITCOMET_PROFILE_ROOT" {
+            return crate::test_support::coordination::profile_root(&identity);
+        }
+
+        match key {
+            "GITCOMET_PROFILE_ROOT" | "XDG_STATE_HOME" => None,
+            key => std::env::var_os(key),
+        }
     };
     let directories = ProductDirs::new(&identity, Platform::current(), &environment);
     let directory = directories
@@ -296,9 +285,12 @@ pub(super) fn coordination_path(common_dir: &Path) -> Result<PathBuf> {
     static PRUNE: std::sync::Once = std::sync::Once::new();
     PRUNE.call_once(|| {
         let directory = directory.clone();
+        let stale_after = STALE_AFTER;
+        #[cfg(any(test, feature = "test-support"))]
+        let stale_after = crate::test_support::coordination::stale_after(stale_after);
         let _ = std::thread::Builder::new()
             .name("repository-lock-prune".into())
-            .spawn(move || prune_when_due(&directory, stale_after()));
+            .spawn(move || prune_when_due(&directory, stale_after));
     });
     let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha256);
     hasher.update(coordination_root(common_dir).as_os_str().as_encoded_bytes());
@@ -373,14 +365,6 @@ fn names(_path: &Path, _file: &File) -> bool {
 /// How long ago `file` was written, if it can be told.
 fn age(file: &File) -> Option<std::time::Duration> {
     file.metadata().ok()?.modified().ok()?.elapsed().ok()
-}
-
-fn stale_after() -> std::time::Duration {
-    if is_test_binary() {
-        TEST_STALE_AFTER
-    } else {
-        STALE_AFTER
-    }
 }
 
 /// Its modification time is when the directory was last pruned.

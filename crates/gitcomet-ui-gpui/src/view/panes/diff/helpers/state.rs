@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
+use gitcomet_core::file_diff::LineToRowMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
@@ -37,7 +38,6 @@ pub(in crate::view) struct VersionedCachedDiffStyledText {
 #[derive(Clone, Debug)]
 pub(in crate::view) struct StashedResolvedOutlineState {
     pub(in crate::view) text: TextModelSnapshot,
-    pub(in crate::view) line_starts: Arc<[usize]>,
     pub(in crate::view) marker_segments: Vec<conflict_resolver::ConflictSegment>,
     pub(in crate::view) view_mode: ConflictResolverViewMode,
     pub(in crate::view) outline: ResolvedOutlineData,
@@ -113,6 +113,27 @@ pub(in crate::view) enum PreparedSyntaxViewMode {
     FileDiffSplitLeft,
     FileDiffSplitRight,
     WorktreePreview,
+}
+
+#[derive(Default)]
+pub(in crate::view) struct ViewportSyntax {
+    pub(in crate::view) file: FileSyntaxViewports,
+    pub(in crate::view) preview: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) conflict: ConflictSyntaxViewports,
+    pub(in crate::view) poll: Option<gpui::Task<()>>,
+}
+
+#[derive(Default)]
+pub(in crate::view) struct ConflictSyntaxViewports {
+    pub(in crate::view) columns: ThreeWaySides<gitcomet_syntax::PreparedSyntaxViewport>,
+    pub(in crate::view) compare: gitcomet_syntax::PreparedSyntaxViewport,
+}
+
+#[derive(Default)]
+pub(in crate::view) struct FileSyntaxViewports {
+    pub(in crate::view) inline: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) old: gitcomet_syntax::PreparedSyntaxViewport,
+    pub(in crate::view) new: gitcomet_syntax::PreparedSyntaxViewport,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -814,14 +835,14 @@ pub(crate) struct DiffRenderer {
     /// Empty when the side is source-backed; `file_diff_old_source_path` says so.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
-    pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_old_line_to_row: Arc<LineToRowMap>,
+    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<LineToRowMap>,
     /// Real new-side file text used for split and inline syntax projection.
     /// Empty when the side is source-backed; `file_diff_new_source_path` says so.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
-    pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
-    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_new_line_to_row: Arc<LineToRowMap>,
+    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<LineToRowMap>,
     pub(in crate::view) file_diff_inline_cache: Arc<[AnnotatedDiffLine]>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::super::diff_cache::PagedFileDiffInlineRows>>,
@@ -843,7 +864,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) file_diff_syntax_availability: [Option<bool>; 2],
     pub(in crate::view) file_diff_resident_syntax_inflight: bool,
-    pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
+    pub(in crate::view) viewport_syntax: ViewportSyntax,
     pub(in crate::view) prepared_syntax_documents:
         FxHashMap<PreparedSyntaxDocumentKey, CachedPreparedSyntaxDocument>,
     pub(in crate::view) prepared_syntax_document_insert_sequence: u64,
@@ -875,7 +896,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_image_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_image_diff_cache_seq: u64,
-    pub(in crate::view) file_image_diff_cache_inflight: Option<u64>,
+    pub(in crate::view) file_image_diff_cache_inflight: Option<(Arc<()>, gpui::Task<()>)>,
     pub(in crate::view) file_image_diff_cache_complete: bool,
     pub(in crate::view) file_image_diff_cache_failed: bool,
     pub(in crate::view) file_image_diff_cache_path: Option<std::path::PathBuf>,
@@ -1059,7 +1080,6 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
-    pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
     /// The editable resolved output's tree-sitter document. Owned here rather
     /// than in the shared thread-local cache because there is exactly one of
     /// them at a time and it must survive every keystroke — which is precisely

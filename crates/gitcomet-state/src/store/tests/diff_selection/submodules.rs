@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn unavailable_git_finishes_every_load_for_an_inline_svg_diff() {
+    use crate::model::{ForeignDiffOrigin, InlineSubmoduleDiffEntry, InlineSubmoduleDiffSection};
+    use gitcomet_core::process::GitExecutableAvailability;
+
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.git_runtime.availability = GitExecutableAvailability::Unavailable {
+        detail: "Git is disabled for this repository view".into(),
+    };
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/repo".into(),
+        },
+    );
+    repo.set_open(Loadable::Ready(()));
+    state.repos.push(repo);
+    state.active_repo = Some(repo_id);
+    let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+    store.disable_repo_monitors_for_test();
+    store.replace_snapshot_for_test(Arc::new(state));
+
+    let path = PathBuf::from("logo.svg");
+    let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
+    store.dispatch(Msg::OpenInlineSubmoduleDiff {
+        origin: ForeignDiffOrigin::Submodule,
+        repo_id,
+        submodule_repo_path: "/repo/nested".into(),
+        parent_submodule_path: "nested".into(),
+        entries: vec![InlineSubmoduleDiffEntry {
+            path,
+            kind: FileStatusKind::Modified,
+            target: target.clone(),
+            section: InlineSubmoduleDiffSection::LiveUnstaged,
+        }]
+        .into(),
+        selected_ix: 0,
+    });
+    store
+        .barrier_for_test()
+        .recv()
+        .expect("selection dispatched");
+    store.barrier_for_test().recv().expect("failures reduced");
+
+    let state = store.snapshot();
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("inline diff opened");
+    assert_eq!(inline.target, target);
+    assert!(matches!(&inline.diff, Loadable::Error(error) if error.contains("Git is disabled")));
+    assert!(
+        matches!(&inline.diff_file, Loadable::Error(error) if error.contains("Git is disabled"))
+    );
+    assert!(
+        matches!(&inline.diff_file_image, Loadable::Error(error) if error.contains("Git is disabled"))
+    );
+}
+
+#[test]
 fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let submodule_path = PathBuf::from("vendor/submodule");

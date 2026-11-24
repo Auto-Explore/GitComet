@@ -1243,7 +1243,7 @@ pub(in crate::view) use self::markdown_document::{
     render_markdown_diff_split, render_markdown_document, render_markdown_document_with_blocks,
 };
 #[cfg(test)]
-pub(in crate::view) use self::markdown_flow_text::{
+pub(in crate::view) use self::markdown_flow_text::test_support::{
     MarkdownFlowPaintPhase, begin_markdown_flow_font_capture_for_tests,
     begin_markdown_flow_paint_phase_capture_for_tests,
     clear_markdown_selection_paint_log_for_tests, markdown_flow_fonts_for_tests,

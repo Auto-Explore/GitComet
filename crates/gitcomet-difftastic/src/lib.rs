@@ -36,7 +36,7 @@ pub enum Request<'a> {
 }
 
 impl<'a> Request<'a> {
-    fn token(self) -> &'a CancellationToken {
+    pub fn token(self) -> &'a CancellationToken {
         match self {
             Self::Visible(token) | Self::Prefetch(token) => token,
         }

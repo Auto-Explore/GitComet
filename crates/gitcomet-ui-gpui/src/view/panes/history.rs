@@ -531,6 +531,7 @@ fn decide_pending_history_reveal(
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
+    active_repo_index: ActiveRepoIndex,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: DateTimeFormat,
@@ -579,6 +580,7 @@ pub(in super::super) struct HistoryView {
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     selected_branch: Option<SelectedBranch>,
     pending_history_reveal: Option<PendingHistoryReveal>,
+    last_page_request: std::sync::Weak<AppState>,
     /// Last browse-point commit we scrolled to, so a new one is revealed only when
     /// the historical browse point actually changes.
     last_browse_commit: Option<CommitId>,
@@ -759,7 +761,20 @@ impl HistoryView {
         text.into()
     }
 
+    #[cfg(test)]
     fn notify_fingerprint_for(state: &AppState, show_history_tags: bool) -> u64 {
+        Self::fingerprint_with_repo(
+            state,
+            ActiveRepoIndex::default().get(state),
+            show_history_tags,
+        )
+    }
+
+    fn fingerprint_with_repo(
+        state: &AppState,
+        repo: Option<&RepoState>,
+        show_history_tags: bool,
+    ) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
         state
@@ -767,9 +782,7 @@ impl HistoryView {
             .verify_commit_signatures
             .hash(&mut hasher);
 
-        if let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
-        {
+        if let Some(repo) = repo {
             repo.repository_mode.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
@@ -802,6 +815,99 @@ impl HistoryView {
         hasher.finish()
     }
 
+    fn observe_model(&mut self, model: Entity<AppUiModel>, cx: &mut gpui::Context<Self>) {
+        let next = Arc::clone(&model.read(cx).state);
+        let next_repo = self.active_repo_index.get(&next);
+        let next_fingerprint =
+            Self::fingerprint_with_repo(&next, next_repo, self.history_show_tags);
+        let changed = next_fingerprint != self.notify_fingerprint;
+        let switched_repo = self.state.active_repo != next.active_repo;
+        let previous_repo = self.active_repo();
+        // Badges, find results, dropped selections and the index build's
+        // status line repaint without invalidating refs menus.
+        let signatures_changed = previous_repo.map(|repo| repo.history_state.commit_signatures_rev)
+            != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
+        let comparison_mark_changed = previous_repo.map(|repo| &repo.navigation.comparison_mark)
+            != next_repo.map(|repo| &repo.navigation.comparison_mark);
+        let index_status_changed = previous_repo.map(|repo| repo.history_state.indexed.status_rev)
+            != next_repo.map(|repo| repo.history_state.indexed.status_rev);
+        let find_changed = self.history_find_is_open()
+            && previous_repo.map(|repo| repo.history_state.find.rev)
+                != next_repo.map(|repo| repo.history_state.find.rev);
+        let selection_ack = next_repo.and_then(|repo| repo.history_state.selection_ack);
+        let selection_ack_changed =
+            previous_repo.and_then(|repo| repo.history_state.selection_ack) != selection_ack;
+        if switched_repo {
+            self.history_find_repo_changed();
+            self.pending_history_selections.clear();
+        } else if selection_ack_changed
+            && let Some(ix) = self
+                .pending_history_selections
+                .iter()
+                .position(|pending| Some(pending.request_id) == selection_ack)
+        {
+            // Snapshots can coalesce replies. Retire through the acknowledged
+            // request, even when its outcome repeated a row or was a no-op.
+            self.pending_history_selections.drain(..=ix);
+        }
+        self.state = next;
+        self.prune_retained_indexed_history();
+        if selected_remote_branch_is_missing(&self.state, self.selected_branch.as_ref()) {
+            self.selected_branch = None;
+        }
+
+        if switched_repo {
+            // These memos describe the selection in the tab we just left.
+            // Their keys also include repository identity, but dropping
+            // them here makes the transition atomic even when sibling
+            // workspaces expose an identical commit page.
+            self.history_selected_list_index_cache = None;
+            self.history_selected_lane_color_cache = None;
+        }
+
+        // When the historical browse point changes, scroll the history to that
+        // commit (its row is highlighted purple by the canvas).
+        let browse_commit = self
+            .active_repo()
+            .and_then(|repo| repo.browsing_commit().cloned());
+        if browse_commit != self.last_browse_commit {
+            self.last_browse_commit = browse_commit.clone();
+            // A browse point that follows the selection is already the
+            // visible row; revealing it would only scroll, page, or widen
+            // the scope on every arrow key.
+            let is_selected_row = self
+                .active_repo()
+                .is_some_and(|repo| repo.history_state.selected_commit == browse_commit);
+            if !is_selected_row
+                && let (Some(repo_id), Some(commit_id)) = (self.active_repo_id(), browse_commit)
+            {
+                self.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
+            }
+        }
+
+        let hovered_badge_changed = match self.row_hover {
+            Some((_, HistoryRowHoverArea::Signature)) => signatures_changed,
+            Some((_, HistoryRowHoverArea::ComparisonMark)) => comparison_mark_changed,
+            Some((_, HistoryRowHoverArea::Date | HistoryRowHoverArea::Author)) | None => false,
+        };
+        if hovered_badge_changed {
+            // A badge can be removed or replaced under a resting pointer.
+            // Its old text must not survive in the tooltip.
+            self.update_history_row_hover(None, None, cx);
+        }
+        if changed {
+            self.notify_fingerprint = next_fingerprint;
+            self.dismiss_history_refs_hover(cx);
+            cx.notify();
+        } else if signatures_changed
+            || find_changed
+            || selection_ack_changed
+            || index_status_changed
+        {
+            cx.notify();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
@@ -827,104 +933,12 @@ impl HistoryView {
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
         let history_branch_names = ui_model.read(cx).preferences.history.branch_names;
-        let initial_fingerprint = Self::notify_fingerprint_for(&state, history_show_tags);
-        let subscription = cx.observe(&ui_model, |this, model, cx| {
-            let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
-            let changed = next_fingerprint != this.notify_fingerprint;
-            let switched_repo = this.state.active_repo != next.active_repo;
-            let previous_repo = this.active_repo();
-            let next_repo = next
-                .repos
-                .iter()
-                .find(|repo| Some(repo.id) == next.active_repo);
-            // Badges, find results, dropped selections and the index build's
-            // status line repaint without invalidating refs menus.
-            let signatures_changed = previous_repo
-                .map(|repo| repo.history_state.commit_signatures_rev)
-                != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
-            let comparison_mark_changed = previous_repo
-                .map(|repo| &repo.navigation.comparison_mark)
-                != next_repo.map(|repo| &repo.navigation.comparison_mark);
-            let index_status_changed = previous_repo
-                .map(|repo| repo.history_state.indexed.status_rev)
-                != next_repo.map(|repo| repo.history_state.indexed.status_rev);
-            let find_changed = this.history_find_is_open()
-                && previous_repo.map(|repo| repo.history_state.find.rev)
-                    != next_repo.map(|repo| repo.history_state.find.rev);
-            let selection_ack = next_repo.and_then(|repo| repo.history_state.selection_ack);
-            let selection_ack_changed =
-                previous_repo.and_then(|repo| repo.history_state.selection_ack) != selection_ack;
-            if switched_repo {
-                this.history_find_repo_changed();
-                this.pending_history_selections.clear();
-            } else if selection_ack_changed
-                && let Some(ix) = this
-                    .pending_history_selections
-                    .iter()
-                    .position(|pending| Some(pending.request_id) == selection_ack)
-            {
-                // Snapshots can coalesce replies. Retire through the acknowledged
-                // request, even when its outcome repeated a row or was a no-op.
-                this.pending_history_selections.drain(..=ix);
-            }
-            this.state = next;
-            this.prune_retained_indexed_history();
-            if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
-                this.selected_branch = None;
-            }
-
-            if switched_repo {
-                // These memos describe the selection in the tab we just left.
-                // Their keys also include repository identity, but dropping
-                // them here makes the transition atomic even when sibling
-                // workspaces expose an identical commit page.
-                this.history_selected_list_index_cache = None;
-                this.history_selected_lane_color_cache = None;
-            }
-
-            // When the historical browse point changes, scroll the history to that
-            // commit (its row is highlighted purple by the canvas).
-            let browse_commit = this
-                .active_repo()
-                .and_then(|repo| repo.browsing_commit().cloned());
-            if browse_commit != this.last_browse_commit {
-                this.last_browse_commit = browse_commit.clone();
-                // A browse point that follows the selection is already the
-                // visible row; revealing it would only scroll, page, or widen
-                // the scope on every arrow key.
-                let is_selected_row = this
-                    .active_repo()
-                    .is_some_and(|repo| repo.history_state.selected_commit == browse_commit);
-                if !is_selected_row
-                    && let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit)
-                {
-                    this.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
-                }
-            }
-
-            let hovered_badge_changed = match this.row_hover {
-                Some((_, HistoryRowHoverArea::Signature)) => signatures_changed,
-                Some((_, HistoryRowHoverArea::ComparisonMark)) => comparison_mark_changed,
-                Some((_, HistoryRowHoverArea::Date | HistoryRowHoverArea::Author)) | None => false,
-            };
-            if hovered_badge_changed {
-                // A badge can be removed or replaced under a resting pointer.
-                // Its old text must not survive in the tooltip.
-                this.update_history_row_hover(None, None, cx);
-            }
-            if changed {
-                this.notify_fingerprint = next_fingerprint;
-                this.dismiss_history_refs_hover(cx);
-                cx.notify();
-            } else if signatures_changed
-                || find_changed
-                || selection_ack_changed
-                || index_status_changed
-            {
-                cx.notify();
-            }
-        });
+        let initial_fingerprint = Self::fingerprint_with_repo(
+            &state,
+            ui_model.read(cx).active_repo_index.get(&state),
+            history_show_tags,
+        );
+        let subscription = cx.observe(&ui_model, Self::observe_model);
 
         let history_panel_focus_handle = crate::kit::focus_order::field(cx);
         let default_design_widths = default_history_column_design_widths();
@@ -938,6 +952,7 @@ impl HistoryView {
             history_annotations,
             store: store.into(),
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
             date_time_format,
@@ -981,6 +996,7 @@ impl HistoryView {
             history_selected_list_index_cache: None,
             selected_branch: None,
             pending_history_reveal: None,
+            last_page_request: Default::default(),
             last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_list_plan_cache: None,
@@ -1033,8 +1049,7 @@ impl HistoryView {
     }
 
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     /// Visible commit ids in log order for shift-click range selection.
@@ -1584,7 +1599,8 @@ impl HistoryView {
         self.history_show_tags = show_tags;
         self.history_auto_fetch_tags_on_repo_activation = auto_fetch_tags_on_repo_activation;
         if show_tags_changed {
-            self.notify_fingerprint = Self::notify_fingerprint_for(&self.state, show_tags);
+            self.notify_fingerprint =
+                Self::fingerprint_with_repo(&self.state, self.active_repo(), show_tags);
             self.history_cache_inflight = None;
         }
         cx.notify();
@@ -1842,12 +1858,17 @@ impl HistoryView {
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         } else if decision.load_more
-            && self.active_repo().is_none_or(|repo| {
-                !repo.history_state.indexed.loading && repo.history_state.indexed.index.is_none()
-            })
+            && let Some((repo_id, page)) = self.next_history_page()
         {
-            self.store.dispatch(Msg::LoadMoreHistory {
-                repo_id: pending.repo_id,
+            let page = Arc::clone(page);
+            let reveal = pending.clone();
+            let view = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = view.update(cx, |view, _| {
+                    if view.pending_history_reveal.as_ref() == Some(&reveal) {
+                        view.load_next_history_page(repo_id, &page);
+                    }
+                });
             });
         }
 

@@ -76,9 +76,8 @@ impl SidebarPaneView {
                 "Files".into(),
             ));
         }
-        if self.file_history_visible(cx) {
-            let title = self
-                .file_history_pane
+        if let Some(pane) = self.visible_file_history(cx) {
+            let title = pane
                 .read(cx)
                 .target
                 .as_ref()

@@ -421,7 +421,6 @@ impl DiffRenderer {
             let output_snapshot = self
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
-            self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
             self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
             self.conflict_resolved_output_measure_row =
                 resolved_output_measure_row(&output_snapshot);
@@ -446,6 +445,19 @@ impl DiffRenderer {
             input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         cx.notify();
+    }
+
+    fn fonts_registered(&mut self, cx: &mut gpui::Context<Self>) {
+        self.invalidate_diff_wrap_visible_cache();
+        self.diff_horizontal_scroll.reset();
+        self.forget_hosted_line_end_text();
+        if let Some(decor) = &mut self.hosted_decor {
+            decor.views.invalidate_text_measurements();
+        }
+        self.diff_markdown.change_extents_key = None;
+        self.diff_markdown.change_extents_requested = None;
+        self.conflict_text_hitboxes.clear();
+        self.invalidate_font_metrics(cx);
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
@@ -646,7 +658,6 @@ impl DiffRenderer {
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count = projection.len();
-        self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = projection.widest_line_ix();
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_output_visible_dirty = true;
@@ -845,11 +856,11 @@ impl DiffRenderer {
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language = None;
         self.conflict_resolved_preview_line_count = 0;
-        self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = 0;
         self.conflict_resolved_outline_stash = None;
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
+        self.viewport_syntax.conflict = Default::default();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_three_way_query_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
@@ -907,6 +918,7 @@ impl DiffRenderer {
         }
 
         self.diff_view = next;
+        self.viewport_syntax.file = Default::default();
         // Inline keys styled segments by `row_ix` while split keys them by
         // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
         // the same `split_left`/`split_right` epochs, so the two key spaces
@@ -1021,6 +1033,7 @@ impl DiffRenderer {
         }
 
         self.diff_content_mode = next;
+        self.viewport_syntax.file = Default::default();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.clear_diff_text_style_caches();
@@ -1661,11 +1674,12 @@ impl DiffRenderer {
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
         let context_line = line_ix.min(self.conflict_resolved_preview_line_count.saturating_sub(1));
-        let cursor_offset = line_start_offset_for_index(
-            self.conflict_resolved_preview_line_starts.as_ref(),
-            content.len(),
-            context_line,
-        );
+        let cursor_offset = self
+            .conflict_resolver_input
+            .read(cx)
+            .text_snapshot()
+            .line_range_with_terminator(context_line)
+            .start;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_cursor_offset(cursor_offset, cx);
         });
@@ -1823,40 +1837,6 @@ impl DiffRenderer {
                 cx,
             );
         }
-    }
-
-    /// Raise the unresolved-conflict confirmation if staging `paths` would mark
-    /// files resolved while they still contain conflict markers. Returns whether
-    /// the dialog took over, in which case the caller must not stage: the dialog
-    /// dispatches it if the user goes ahead. Unstaging never marks anything
-    /// resolved, so it is left alone.
-    pub(in crate::view) fn confirm_stage_conflict_markers(
-        &mut self,
-        repo_id: RepoId,
-        area: DiffArea,
-        paths: Vec<std::path::PathBuf>,
-        clear_selection: bool,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if area != DiffArea::Unstaged {
-            return false;
-        }
-        let Some(state) = self.input.repository_state() else {
-            return false;
-        };
-        let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-            state,
-            repo_id,
-            paths,
-            clear_selection,
-        ) else {
-            return false;
-        };
-        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-        self.open_popover_at(confirm, anchor, window, cx);
-        cx.notify();
-        true
     }
 
     pub(in crate::view) fn clear_status_multi_selection(

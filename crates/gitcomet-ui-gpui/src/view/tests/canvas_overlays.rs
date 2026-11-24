@@ -131,7 +131,7 @@ fn open(cx: &mut gpui::TestAppContext, initial: Arc<AppState>) -> Opened<'_> {
     ])
     .expect("valid registration");
     cx.update(|app| extension_host::install(registry, app));
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(test_support::StandaloneBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {

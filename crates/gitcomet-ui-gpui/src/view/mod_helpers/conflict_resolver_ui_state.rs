@@ -389,7 +389,6 @@ pub(crate) struct ConflictResolverUiState {
     /// Resolved-output outline metadata (provenance, conflict markers, source index).
     pub(crate) resolved_outline: ResolvedOutlineData,
     /// Cached per-line gutter render state for resolved-output preview rows.
-    pub(crate) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(crate) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -459,7 +458,6 @@ impl Default for ConflictResolverUiState {
             visible_projection_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
-            resolved_outline_gutter_rows: Vec::new(),
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
             output_context_fold_reveals: FxHashMap::default(),

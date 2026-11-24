@@ -13,6 +13,21 @@ use std::{
     time::Instant,
 };
 
+fn progress_context(
+    started: Instant,
+    events: &Arc<Mutex<Vec<serde_json::Value>>>,
+) -> GitOperationContext {
+    let sink = Arc::clone(events);
+    GitOperationContext::new("interaction-probe", move |_, event| {
+        if let GitOperationEvent::Output { chunks } = event {
+            sink.lock().unwrap().push(json!({
+                "at_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "bytes": chunks.iter().map(|chunk| chunk.text.len()).sum::<usize>()
+            }));
+        }
+    })
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     assert!(args.len() >= 6, "REPO OP PATH SAMPLES WARMUPS [context]");
@@ -27,20 +42,16 @@ fn main() {
     let mut observations = Vec::new();
     for ix in 0..warmups + samples {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let sink = events.clone();
         let started = Instant::now();
-        let context = GitOperationContext::new("interaction-probe", move |_, event| {
-            if let GitOperationEvent::Output { chunks } = event {
-                sink.lock()
-                    .unwrap()
-                    .push(json!({"at_ms": started.elapsed().as_secs_f64() * 1000.0,
-                    "bytes": chunks.iter().map(|chunk| chunk.text.len()).sum::<usize>()}));
-            }
-        });
+        let context = progress_context(started, &events);
         let _scope = (args.get(6).map(String::as_str) == Some("context"))
             .then(|| git_operation::attach(&context));
         let (witness, commands) = gitcomet_git_gix::command_trace::capture(|| {
             match operation.as_str() {
+                "committed-blame" => {
+                    let lines = repo.blame_file(&path, Some("HEAD")).unwrap();
+                    json!({"rows": lines.len(), "first": lines.first().map(|line| line.commit_id.as_ref())})
+                }
                 "diff" => {
                     let diff = repo
                         .diff_file_text(

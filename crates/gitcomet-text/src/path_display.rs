@@ -1,7 +1,4 @@
 use gpui_shared_string::SharedString;
-#[cfg(windows)]
-use rustc_hash::FxHashMap;
-#[cfg(not(windows))]
 use rustc_hash::FxHashMap;
 #[cfg(not(windows))]
 use rustc_hash::FxHasher;
@@ -32,6 +29,7 @@ type PathDisplayCacheMap = FxHashMap<PathBuf, SharedString>;
 
 /// A bounded two-generation cache. Keeping the previous generation avoids the
 /// all-or-nothing cliff when a large repo first crosses the cache cap.
+#[derive(Default)]
 pub struct PathDisplayCache {
     recent: PathDisplayCacheMap,
     previous: PathDisplayCacheMap,
@@ -43,45 +41,10 @@ pub struct PathDisplayCache {
     overflow_tail_active: bool,
 }
 
-impl Default for PathDisplayCache {
-    fn default() -> Self {
-        Self {
-            #[cfg(not(windows))]
-            recent: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(windows)]
-            recent: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(not(windows))]
-            previous: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(windows)]
-            previous: FxHashMap::with_capacity_and_hasher(
-                Self::RECENT_MAX_ENTRIES,
-                Default::default(),
-            ),
-            recent_entries: 0,
-            previous_entries: 0,
-            #[cfg(not(windows))]
-            present_hash_counts: FxHashMap::with_capacity_and_hasher(
-                Self::MAX_ENTRIES,
-                Default::default(),
-            ),
-            #[cfg(not(windows))]
-            overflow_tail_active: false,
-        }
-    }
-}
-
 impl PathDisplayCache {
     const MAX_ENTRIES: usize = 8_192;
     const RECENT_MAX_ENTRIES: usize = Self::MAX_ENTRIES / 2;
+    const INITIAL_CAPACITY: usize = 256;
 
     pub fn len(&self) -> usize {
         self.recent_entries + self.previous_entries
@@ -108,6 +71,13 @@ impl PathDisplayCache {
         }
     }
 
+    fn reserve_recent(&mut self, capacity: usize) {
+        self.recent.reserve(capacity - self.recent.len());
+        #[cfg(not(windows))]
+        self.present_hash_counts
+            .reserve((capacity * 2).saturating_sub(self.present_hash_counts.len()));
+    }
+
     fn rotate_generations(&mut self) {
         #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
@@ -120,6 +90,7 @@ impl PathDisplayCache {
         self.previous_entries = 0;
         std::mem::swap(&mut self.previous, &mut self.recent);
         std::mem::swap(&mut self.previous_entries, &mut self.recent_entries);
+        self.reserve_recent(Self::RECENT_MAX_ENTRIES);
         debug_assert!(self.recent.is_empty());
         debug_assert_eq!(self.recent_entries, 0);
     }
@@ -312,6 +283,14 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
         return s.clone();
     }
 
+    match cache.recent_entries {
+        0 => cache.reserve_recent(PathDisplayCache::INITIAL_CAPACITY),
+        PathDisplayCache::INITIAL_CAPACITY => {
+            cache.reserve_recent(PathDisplayCache::RECENT_MAX_ENTRIES)
+        }
+        _ => {}
+    }
+
     // Skip the previous-generation lookup entirely when it is empty.
     // This avoids a redundant hash + probe on cold caches and after clear().
     #[cfg(not(windows))]
@@ -469,7 +448,7 @@ thread_local! {
     static PATH_DISPLAY_BENCH_COUNTERS: PathDisplayBenchCounters = PathDisplayBenchCounters::new();
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn format_windows_path_for_display(mut path: String) -> String {
     if let Some(stripped) = path.strip_prefix(r"\\?\UNC\") {
         path = format!(r"\\{stripped}");
@@ -479,287 +458,5 @@ fn format_windows_path_for_display(mut path: String) -> String {
     path.replace('\\', "/")
 }
 
-#[cfg(not(windows))]
-#[allow(dead_code)] // cross-platform stub; only called from tests on non-windows
-fn format_windows_path_for_display(path: String) -> String {
-    path
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        PathDisplayBenchSnapshot, PathDisplayCache, bench_reset, bench_snapshot,
-        cached_path_display, format_windows_path_for_display, path_display_string, repo_path_name,
-    };
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Barrier};
-
-    #[cfg(not(windows))]
-    fn cache_contains(cache_map: &super::PathDisplayCacheMap, path: &Path) -> bool {
-        let path_key = path.to_str().expect("test paths should be utf-8");
-        let path_key_hash = super::path_display_cache_key(path_key);
-        cache_map
-            .get(&path_key_hash)
-            .is_some_and(|bucket| bucket.iter().any(|label| label.as_ref() == path_key))
-    }
-
-    #[cfg(not(windows))]
-    fn cache_contains_recent(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache_contains(&cache.recent, path)
-    }
-
-    #[cfg(windows)]
-    fn cache_contains_recent(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache.recent.contains_key(path)
-    }
-
-    #[cfg(not(windows))]
-    fn cache_contains_previous(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache_contains(&cache.previous, path)
-    }
-
-    #[cfg(windows)]
-    fn cache_contains_previous(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache.previous.contains_key(path)
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn strips_verbatim_disk_prefix_and_uses_forward_slashes() {
-        let formatted =
-            format_windows_path_for_display(r"\\?\C:\Users\sanni\git\GitComet".to_string());
-        assert_eq!(formatted, "C:/Users/sanni/git/GitComet");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn strips_verbatim_unc_prefix_and_uses_forward_slashes() {
-        let formatted = format_windows_path_for_display(r"\\?\UNC\server\share\repo".to_string());
-        assert_eq!(formatted, "//server/share/repo");
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn leaves_non_windows_path_unchanged() {
-        let formatted = format_windows_path_for_display("/tmp/repo".to_string());
-        assert_eq!(formatted, "/tmp/repo");
-    }
-
-    #[test]
-    fn bench_counters_track_hits_misses_and_clears() {
-        bench_reset();
-
-        let mut cache = PathDisplayCache::default();
-        let path = PathBuf::from("src/lib.rs");
-        let _ = cached_path_display(&mut cache, &path);
-        let _ = cached_path_display(&mut cache, &path);
-
-        for ix in 0..8_193 {
-            let extra = PathBuf::from(format!("src/module_{ix}/file_{ix}.rs"));
-            let _ = cached_path_display(&mut cache, &extra);
-        }
-
-        assert_eq!(
-            bench_snapshot(),
-            PathDisplayBenchSnapshot {
-                cache_hits: 1,
-                cache_misses: 8_194,
-                cache_clears: 1,
-            }
-        );
-        assert!(cache.len() <= PathDisplayCache::MAX_ENTRIES);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn utf8_cache_reuses_shared_string_for_entry_and_return_value() {
-        let mut cache = PathDisplayCache::default();
-        // `SharedString` is backed by `SmolStr`, which stores strings up to 23
-        // bytes inline (copied, not `Arc`-shared). To exercise the zero-copy
-        // path the label must exceed that inline capacity.
-        let path = PathBuf::from("src/deeply/nested/module/path/file.rs");
-        let display = cached_path_display(&mut cache, &path);
-
-        let cached = cache
-            .recent
-            .values()
-            .next()
-            .and_then(|bucket| bucket.first())
-            .cloned()
-            .expect("cached recent label");
-        let cached_arc: Arc<str> = cached.into();
-        let display_arc: Arc<str> = display.into();
-
-        assert!(Arc::ptr_eq(&cached_arc, &display_arc));
-    }
-
-    #[test]
-    fn previous_generation_hit_promotes_into_recent() {
-        let mut cache = PathDisplayCache::default();
-        let promoted = PathBuf::from("src/promoted.rs");
-
-        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
-            let path = if ix == 0 {
-                promoted.clone()
-            } else {
-                PathBuf::from(format!("src/previous_{ix}.rs"))
-            };
-            let _ = cached_path_display(&mut cache, &path);
-        }
-        let _ = cached_path_display(&mut cache, Path::new("src/rotate.rs"));
-
-        assert!(
-            !cache_contains_recent(&cache, &promoted),
-            "promoted path should start in the previous generation"
-        );
-        assert!(cache_contains_previous(&cache, &promoted));
-
-        let display = cached_path_display(&mut cache, &promoted);
-        assert_eq!(display.as_ref(), promoted.to_str().unwrap_or_default());
-        assert!(
-            cache_contains_recent(&cache, &promoted),
-            "previous-generation hits should be promoted into recent"
-        );
-        assert!(
-            !cache_contains_previous(&cache, &promoted),
-            "promoted entries should be removed from the previous generation"
-        );
-    }
-
-    #[test]
-    fn overflow_miss_preserves_full_two_generation_hot_set() {
-        bench_reset();
-
-        let mut cache = PathDisplayCache::default();
-        let previous_hot = PathBuf::from("src/previous_hot.rs");
-        let recent_hot = PathBuf::from("src/recent_hot.rs");
-
-        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
-            let path = if ix == 0 {
-                previous_hot.clone()
-            } else {
-                PathBuf::from(format!("src/previous_{ix}.rs"))
-            };
-            let _ = cached_path_display(&mut cache, &path);
-        }
-        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
-            let path = if ix == 0 {
-                recent_hot.clone()
-            } else {
-                PathBuf::from(format!("src/recent_{ix}.rs"))
-            };
-            let _ = cached_path_display(&mut cache, &path);
-        }
-
-        let before = bench_snapshot();
-        assert_eq!(cache.len(), PathDisplayCache::MAX_ENTRIES);
-        assert!(cache_contains_previous(&cache, &previous_hot));
-        assert!(cache_contains_recent(&cache, &recent_hot));
-
-        let overflow = PathBuf::from("src/overflow.rs");
-        let _ = cached_path_display(&mut cache, &overflow);
-
-        let after = bench_snapshot();
-        assert_eq!(cache.len(), PathDisplayCache::MAX_ENTRIES);
-        assert_eq!(
-            after.cache_clears, before.cache_clears,
-            "overflow misses should not rotate a full two-generation cache"
-        );
-        assert_eq!(after.cache_misses, before.cache_misses + 1);
-        assert!(cache_contains_previous(&cache, &previous_hot));
-        assert!(cache_contains_recent(&cache, &recent_hot));
-        assert!(!cache_contains_recent(&cache, &overflow));
-        assert!(!cache_contains_previous(&cache, &overflow));
-    }
-
-    #[test]
-    fn overflow_tail_misses_still_allow_cached_hits() {
-        bench_reset();
-
-        let mut cache = PathDisplayCache::default();
-        let previous_hot = PathBuf::from("src/previous_hot.rs");
-        let recent_hot = PathBuf::from("src/recent_hot.rs");
-
-        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
-            let path = if ix == 0 {
-                previous_hot.clone()
-            } else {
-                PathBuf::from(format!("src/previous_{ix}.rs"))
-            };
-            let _ = cached_path_display(&mut cache, &path);
-        }
-        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
-            let path = if ix == 0 {
-                recent_hot.clone()
-            } else {
-                PathBuf::from(format!("src/recent_{ix}.rs"))
-            };
-            let _ = cached_path_display(&mut cache, &path);
-        }
-
-        let _ = cached_path_display(&mut cache, Path::new("src/overflow_a.rs"));
-        let _ = cached_path_display(&mut cache, Path::new("src/overflow_b.rs"));
-
-        let display = cached_path_display(&mut cache, &recent_hot);
-        assert_eq!(display.as_ref(), recent_hot.to_str().unwrap_or_default());
-        assert!(cache_contains_recent(&cache, &recent_hot));
-        assert!(cache_contains_previous(&cache, &previous_hot));
-    }
-
-    #[test]
-    fn repo_path_name_uses_last_path_component_when_available() {
-        assert_eq!(
-            repo_path_name(Path::new("/tmp/repo-name")).as_ref(),
-            "repo-name"
-        );
-    }
-
-    #[test]
-    fn repo_path_name_falls_back_to_full_path_when_file_name_is_missing() {
-        #[cfg(not(windows))]
-        let path = Path::new("/");
-        #[cfg(windows)]
-        let path = Path::new(r"C:\");
-
-        assert_eq!(repo_path_name(path).as_ref(), path_display_string(path));
-    }
-
-    #[test]
-    fn bench_counters_are_isolated_per_thread() {
-        bench_reset();
-
-        let ready = Arc::new(Barrier::new(2));
-        let ready_thread = ready.clone();
-        let handle = std::thread::spawn(move || {
-            bench_reset();
-            let mut cache = PathDisplayCache::default();
-            let path = PathBuf::from("src/thread.rs");
-            let _ = cached_path_display(&mut cache, &path);
-            let _ = cached_path_display(&mut cache, &path);
-            ready_thread.wait();
-            assert_eq!(
-                bench_snapshot(),
-                PathDisplayBenchSnapshot {
-                    cache_hits: 1,
-                    cache_misses: 1,
-                    cache_clears: 0,
-                }
-            );
-        });
-
-        let mut cache = PathDisplayCache::default();
-        let path = PathBuf::from("src/main.rs");
-        let _ = cached_path_display(&mut cache, &path);
-        ready.wait();
-        assert_eq!(
-            bench_snapshot(),
-            PathDisplayBenchSnapshot {
-                cache_hits: 0,
-                cache_misses: 1,
-                cache_clears: 0,
-            }
-        );
-
-        handle.join().expect("join path_display test thread");
-    }
-}
+mod tests;

@@ -90,8 +90,8 @@ gpui_wgpu = { workspace = true }
 
 [dev-dependencies]
 gitcomet-diagrams = { workspace = true, features = ["test-support"] }
-# Activate the optional backend for history activation tests with real Git data.
-gitcomet-git-gix = { workspace = true }
+# Use the real backend with isolated test storage for history activation tests.
+gitcomet-git-gix = { workspace = true, features = ["test-support"] }
 # Activate the optional sidecar writer for the measurement tests.
 gitcomet-perf = { workspace = true }
 gitcomet-conflict-resolver = { workspace = true, features = ["test-support"] }

@@ -470,6 +470,32 @@ fn build_file_diff_cache_rebuild_reports_invalid_source_file() {
 }
 
 #[test]
+fn a_cancelled_line_diff_skips_the_file_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = gitcomet_core::domain::FileDiffText::new_sources(
+        PathBuf::from("missing.txt"),
+        None,
+        Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+            dir.path().join("missing.txt"),
+            "pending-source",
+        )),
+    );
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    cancellation.cancel();
+    assert!(matches!(
+        build_file_diff_cache_with_engine(
+            &file,
+            dir.path(),
+            None,
+            DiffWhitespaceMode::Show,
+            DiffEngine::LineByLine,
+            gitcomet_difftastic::Request::Visible(&cancellation)
+        ),
+        Err(FileDiffCacheError::Cancelled)
+    ));
+}
+
+#[test]
 fn build_file_diff_cache_rebuild_reports_unreadable_source_as_message() {
     let file = gitcomet_core::domain::FileDiffText::new_sources(
         PathBuf::from("missing.txt"),

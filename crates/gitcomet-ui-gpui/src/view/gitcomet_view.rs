@@ -675,7 +675,6 @@ impl GitCometView {
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
-        let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let initial_state = store.snapshot();
         // The worker queued Git adoption before the restore. If it is already
         // reflected here, no later snapshot needs to suppress that transition.
@@ -800,17 +799,6 @@ impl GitCometView {
             cx.new(|cx| BottomStatusBarView::new(ui_model.clone(), weak_view.clone(), cx));
         panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
-        let file_history_pane = cx.new(|cx| {
-            panes::file_history::FileHistoryPaneView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                panes::file_history::FileHistoryPaneInit {
-                    root_view: weak_view.clone(),
-                },
-                window,
-                cx,
-            )
-        });
         let sidebar_pane = cx.new(|cx| {
             let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
@@ -819,7 +807,6 @@ impl GitCometView {
                 ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
-                file_history_pane.clone(),
                 cx,
             );
             pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
@@ -831,7 +818,10 @@ impl GitCometView {
         );
         let diff_renderer = cx.new(|cx| {
             DiffRenderer::new(
-                super::panes::diff::input::DiffPaneInput::selected(initial_state.clone()),
+                super::panes::diff::input::DiffPaneInput::selected_with_index(
+                    initial_state.clone(),
+                    &ui_model.read(cx).active_repo_index,
+                ),
                 &ui_preferences,
                 diff_environment.services.clone(),
                 DiffRendererInit {
@@ -1186,6 +1176,10 @@ impl GitCometView {
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
+            repositories: WindowRepositories {
+                active: ui_model.read(cx).active_repo_index.clone(),
+                registered_workdirs: Default::default(),
+            },
             window_handle: window.window_handle(),
             ui_model,
             store,
@@ -1253,7 +1247,6 @@ impl GitCometView {
             splash_backdrop_image: splash::load_splash_backdrop_image(initial_theme.is_dark),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
-            synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
             workspace_persist_seq: 0,
             #[cfg(test)]
@@ -1268,7 +1261,7 @@ impl GitCometView {
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
             signing_tools_probe_cancellation: Default::default(),
-            large_file_tools_probe: Default::default(),
+            startup_work: Default::default(),
             _large_file_tools_window_closed: large_file_tools_window_closed,
             #[cfg(test)]
             large_file_tools_detector_for_test: None,
@@ -1284,10 +1277,8 @@ impl GitCometView {
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             reflog_pane,
-            file_history_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
-            commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
@@ -1388,7 +1379,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
-        view.schedule_large_file_tools_after_initial_frame(window, cx);
+        view.schedule_after_initial_frame(window, cx);
 
         view.sync_workspace_and_registry(cx);
         if view.is_home_screen_active() {
@@ -1677,10 +1668,16 @@ impl GitCometView {
         // is selected, since changing the view may select a sidebar tab of
         // its own.
         self.show_history_view(window, cx);
-        self.file_history_pane
-            .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.show_file_history(window, cx));
+        self.sidebar_pane.update(cx, |sidebar, cx| {
+            sidebar.open_file_history(
+                self.store.clone(),
+                self.ui_model.clone(),
+                repo_id,
+                path,
+                window,
+                cx,
+            );
+        });
     }
 
     pub(super) fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
@@ -1862,8 +1859,28 @@ impl GitCometView {
     }
 
     pub(super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|repo| repo.id == repo_id)
+        self.repositories.active.get(&self.state)
+    }
+
+    fn schedule_after_initial_frame(&self, window: &mut Window, cx: &gpui::Context<Self>) {
+        let view = cx.weak_entity();
+        // GPUI draws once while opening a window without presenting it. Its
+        // next-frame callbacks run before that platform frame's presentation,
+        // so one callback would still compete with the first submitted frame.
+        // A second callback leaves that platform presentation attempt free to
+        // finish, even when startup is slow. This is not a GPU completion fence:
+        // a lost device or stale atlas can still require a later presentation.
+        window.on_next_frame(move |window, _cx| {
+            window.on_next_frame(move |_window, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.startup_work.initial_frame_complete = true;
+                    // Read the current snapshot/runtime: preferences or a
+                    // Settings result may have changed while frames were pending.
+                    view.refresh_large_file_tools(cx);
+                    view.warm_active_repository_syntax(cx);
+                });
+            });
+        });
     }
 
     pub(super) fn drive_focused_mergetool_bootstrap(&mut self) {
@@ -2610,42 +2627,16 @@ impl GitCometView {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn is_popover_open(&self, app: &App) -> bool {
-        self.popover_host.read(app).is_open()
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn tooltip_host_for_test(&self) -> Entity<TooltipHost> {
         self.tooltip_host.clone()
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host
             .read(app)
             .tooltip_text_for_test()
             .or_else(tooltip::tooltip_text_for_test)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn open_repo_panel_visible_for_test(&self) -> bool {
-        self.open_repo_panel
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn show_timezone_for_test(&self) -> bool {
-        self.show_timezone
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
-        self.change_tracking_view
     }
 
     #[cfg(test)]
@@ -2738,12 +2729,6 @@ impl GitCometView {
                 self.store.dispatch(Msg::ReloadRepo { repo_id });
             }
         }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
-        self.diff_scroll_sync
     }
 
     pub(super) fn set_external_drag_payload(

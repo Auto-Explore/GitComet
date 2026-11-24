@@ -276,6 +276,7 @@ impl DiffRenderer {
 
 impl DiffRenderer {
     pub(in crate::view) fn advance_file_diff_syntax_generation(&mut self) {
+        self.viewport_syntax.file = Default::default();
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_pair_syntax_text.clear();
         self.file_diff_click_syntax_inflight.clear();
@@ -499,27 +500,14 @@ impl DiffRenderer {
         self.file_diff_cache_inflight_signature = content_signature;
         let whitespace_mode = self.diff_whitespace_mode;
         let shared_file = self.hosted_decor.as_mut().map(|decor| {
-            if !decor.file_cache.as_ref().is_some_and(|cache| {
-                cache.matches_engine(
-                    &file,
-                    patch_diff.as_ref(),
-                    &workdir,
-                    engine,
-                    whitespace_mode,
-                )
-            }) {
-                if let Some(cache) = decor.file_cache.take() {
-                    cache.cancel();
-                }
-                decor.file_cache = Some(Arc::new(SharedFileDiffCache::with_engine(
-                    file.clone(),
-                    patch_diff.as_ref(),
-                    workdir.clone(),
-                    engine,
-                    whitespace_mode,
-                )));
-            }
-            decor.file_cache.as_ref().unwrap().clone()
+            SharedFileDiffCache::get_or_replace(
+                &mut decor.file_cache,
+                &file,
+                patch_diff.as_ref(),
+                &workdir,
+                engine,
+                whitespace_mode,
+            )
         });
 
         cx.spawn(
@@ -537,11 +525,17 @@ impl DiffRenderer {
                         gitcomet_difftastic::Request::Visible(&cancellation),
                     )
                 };
-                let rebuild_result = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(rebuild_cache).await
+                let priority = if keep_rows_while_rebuilding {
+                    gpui::Priority::default()
                 } else {
-                    rebuild_cache()
+                    gpui::Priority::High
                 };
+                let rebuild_result = crate::ui_runtime::background_compute_with_priority(
+                    cx.background_executor(),
+                    priority,
+                    rebuild_cache,
+                )
+                .await;
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_cache_inflight != Some(seq) {

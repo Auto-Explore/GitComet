@@ -2122,6 +2122,13 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// A bounded sample of tracked files for speculative work after opening a repository.
+    fn sample_tracked_file_paths(&self, _limit: std::num::NonZeroUsize) -> Result<Vec<PathBuf>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tracked file sampling is not implemented for this backend",
+        )))
+    }
+
     fn list_tree_files_at_commit(&self, _commit_id: &CommitId) -> Result<Vec<FileEntry>> {
         Err(Error::new(ErrorKind::Unsupported(
             "tree file listing at commit is not implemented for this backend",

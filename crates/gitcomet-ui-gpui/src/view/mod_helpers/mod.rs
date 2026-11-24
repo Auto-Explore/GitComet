@@ -973,9 +973,23 @@ pub(super) struct FocusedDiffPane {
     pub(super) labels: [SharedString; 2],
 }
 
+pub(super) struct WindowRepositories {
+    pub(super) active: ActiveRepoIndex,
+    pub(super) registered_workdirs: Arc<[std::path::PathBuf]>,
+}
+
+#[derive(Default)]
+pub(super) struct WindowStartupWork {
+    pub(super) initial_frame_complete: bool,
+    pub(super) syntax_warmups:
+        FxHashMap<RepoId, (gitcomet_state::model::RepoLifetime, gpui::Task<()>)>,
+    pub(super) large_file_tools: super::large_file_tools_probe::LargeFileToolsProbeOwner,
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
+    pub(super) repositories: WindowRepositories,
     pub(super) window_handle: gpui::AnyWindowHandle,
     pub(super) ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
@@ -1057,9 +1071,6 @@ pub struct GitCometView {
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
-    /// Workdirs last published to the window registry; rebuilt only when the
-    /// repo list changes rather than collected on every store snapshot.
-    pub(super) synced_repo_paths: std::sync::Arc<[std::path::PathBuf]>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) workspace_persist_seq: u64,
     #[cfg(test)]
@@ -1072,8 +1083,7 @@ pub struct GitCometView {
     pub(super) signing_tools_probe_seq: u64,
     pub(super) signing_tools_probe_in_flight: bool,
     pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
-    /// Background `git lfs` / `git annex` detection; rerun after a Git change.
-    pub(super) large_file_tools_probe: super::large_file_tools_probe::LargeFileToolsProbeOwner,
+    pub(super) startup_work: WindowStartupWork,
     pub(super) _large_file_tools_window_closed: gpui::Subscription,
     #[cfg(test)]
     pub(super) large_file_tools_detector_for_test:
@@ -1094,13 +1104,11 @@ pub struct GitCometView {
     /// scroll, selection) — a separate entity so that hovering one of its rows
     /// repaints the panel instead of the whole application window.
     pub(super) reflog_pane: Entity<ReflogPaneView>,
-    pub(super) file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.
     pub(super) bottom_panel_providers: super::bottom_panel_providers::Providers,
     pub(super) active_bottom_panel: FxHashMap<RepoId, BottomPanelTab>,
-    pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,

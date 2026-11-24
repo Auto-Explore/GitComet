@@ -18,6 +18,7 @@ impl DiffRenderer {
             return;
         }
         self.conflict_resolver.view_mode = view_mode;
+        self.viewport_syntax.conflict.columns = Default::default();
         self.set_mergetool_view_three_way_and_persist(
             view_mode == ConflictResolverViewMode::ThreeWay,
             cx,
@@ -52,9 +53,8 @@ impl DiffRenderer {
         let output_line_count = if self.conflict_resolved_output_is_streamed() {
             self.conflict_resolved_preview_line_count.max(1)
         } else {
-            self.conflict_resolver_input.read_with(cx, |input, _| {
-                input.text_snapshot().shared_line_starts().len().max(1)
-            })
+            self.conflict_resolver_input
+                .read_with(cx, |input, _| input.text_snapshot().line_count())
         };
         if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
             // The existing marker overlay remains valid across view-mode switches,
@@ -65,7 +65,6 @@ impl DiffRenderer {
                 .resolved_outline
                 .sources_index
                 .clear();
-            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         } else {
             self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
         }

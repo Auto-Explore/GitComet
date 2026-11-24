@@ -122,7 +122,7 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         label: "staging/stage_all_10k_files",
         estimate_path: "staging/stage_all_10k_files/new/estimates.json",
         // Single StagePaths dispatch for 10k paths — reducer increments
-        // local_actions_in_flight and emits one Effect::StagePaths. The cost
+        // local_actions_in_flight and emits one Effect::Stage. The cost
         // is dominated by the path Vec clone. Budget generous for CI variance.
         threshold_ns: 5.0 * NANOS_PER_MILLISECOND,
     },

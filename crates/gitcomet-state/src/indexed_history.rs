@@ -5,6 +5,26 @@ use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HistoryViewport {
+    pub blocks: Vec<usize>,
+    /// The leading blocks that intersect the viewport. Remaining blocks are prefetch.
+    pub visible_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryReadPriority {
+    Visible,
+    Prefetch,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingRange {
+    pub(crate) seq: u64,
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) priority: HistoryReadPriority,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct IndexedHistoryState {
     pub index: Option<HistoryIndexHandle>,
@@ -27,8 +47,8 @@ pub struct IndexedHistoryState {
     pub epoch: RepoLoadEpoch,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
-    pub(crate) desired: Vec<usize>,
-    pub(crate) pending: BTreeMap<usize, (u64, CancellationToken)>,
+    pub(crate) desired: HistoryViewport,
+    pub(crate) pending: BTreeMap<usize, PendingRange>,
     pub(crate) range_seq: u64,
     pub(crate) lru: VecDeque<usize>,
 }
@@ -68,8 +88,8 @@ impl IndexedHistoryState {
     }
     pub fn cancel(&mut self) {
         self.cancellation.cancel();
-        for (_, token) in self.pending.values() {
-            token.cancel();
+        for pending in self.pending.values() {
+            pending.cancellation.cancel();
         }
         self.pending.clear();
     }
@@ -98,6 +118,12 @@ pub enum IndexedHistoryMsg {
         repo_id: RepoId,
         snapshot: HistorySnapshot,
         blocks: Vec<usize>,
+        retry: bool,
+    },
+    RequestViewport {
+        repo_id: RepoId,
+        snapshot: HistorySnapshot,
+        viewport: HistoryViewport,
         retry: bool,
     },
     Progress {
@@ -135,6 +161,7 @@ pub enum IndexedHistoryEffect {
         seq: u64,
         index: HistoryIndexHandle,
         start: usize,
+        priority: HistoryReadPriority,
         cancellation: CancellationToken,
     },
 }

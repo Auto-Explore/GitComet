@@ -52,27 +52,7 @@ impl TreesitterCachedDocument {
     }
 
     pub(crate) fn into_drop_payload(self) -> SyntaxCacheDropPayload {
-        if self.line_token_chunks.is_empty() {
-            return SyntaxCacheDropPayload::new(Vec::new(), self.line_token_bytes);
-        }
-
-        let mut chunks = self.line_token_chunks.into_iter().collect::<Vec<_>>();
-        chunks.sort_by_key(|(chunk_ix, _)| *chunk_ix);
-        let line_capacity = chunks
-            .iter()
-            .map(|(_, chunk)| chunk.len())
-            .fold(0usize, |acc, len| acc.saturating_add(len));
-        let mut out = Vec::with_capacity(line_capacity);
-        for (_, chunk) in chunks {
-            out.extend(chunk);
-        }
-        let payload = SyntaxCacheDropPayload::new(out, self.line_token_bytes);
-        debug_assert_eq!(
-            payload.estimated_bytes,
-            estimated_line_tokens_allocation_bytes(&payload.line_tokens),
-            "cached line-token byte accounting should match flattened drop payloads"
-        );
-        payload
+        SyntaxCacheDropPayload::new(self.line_token_chunks, self.line_token_bytes)
     }
 }
 
@@ -182,7 +162,7 @@ pub(crate) struct TreesitterDocumentCache {
     pub(crate) by_cache_key: FxHashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
     pub(crate) by_source_identity: FxHashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
     pub(crate) lru_order: LruTouchQueue<PreparedSyntaxCacheKey>,
-    pub(crate) pending_chunk_requests: FxHashSet<PreparedSyntaxChunkKey>,
+    pending_chunk_requests: FxHashMap<PreparedSyntaxChunkKey, (Option<u64>, ChunkPriority)>,
     pub(crate) pending_chunk_request_counts: FxHashMap<PreparedSyntaxCacheKey, usize>,
     pub(crate) metrics: PreparedSyntaxCacheMetrics,
 }
@@ -200,7 +180,7 @@ impl TreesitterDocumentCache {
             by_cache_key: FxHashMap::default(),
             by_source_identity: FxHashMap::default(),
             lru_order: LruTouchQueue::default(),
-            pending_chunk_requests: FxHashSet::default(),
+            pending_chunk_requests: FxHashMap::default(),
             pending_chunk_request_counts: FxHashMap::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
         }
@@ -215,10 +195,14 @@ impl TreesitterDocumentCache {
         self.touch_key(cache_key);
     }
 
-    pub(crate) fn insert_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) {
-        if !self.pending_chunk_requests.insert(chunk_key) {
-            return;
-        }
+    fn insert_pending_chunk_request(
+        &mut self,
+        chunk_key: PreparedSyntaxChunkKey,
+        sequence: Option<u64>,
+        priority: ChunkPriority,
+    ) {
+        self.pending_chunk_requests
+            .insert(chunk_key, (sequence, priority));
         *self
             .pending_chunk_request_counts
             .entry(chunk_key.cache_key)
@@ -229,7 +213,7 @@ impl TreesitterDocumentCache {
         &mut self,
         chunk_key: PreparedSyntaxChunkKey,
     ) -> bool {
-        if !self.pending_chunk_requests.remove(&chunk_key) {
+        if self.pending_chunk_requests.remove(&chunk_key).is_none() {
             return false;
         }
         if let std::collections::hash_map::Entry::Occupied(mut entry) =
@@ -529,12 +513,32 @@ impl TreesitterDocumentCache {
         merge_shared_prepared_document_chunk(cache_key, chunk_ix, shared_chunk_tokens);
     }
 
-    pub(crate) fn queue_chunk_build_request_nonblocking(
+    fn subscribe_pending(&mut self, key: PreparedSyntaxChunkKey, priority: ChunkPriority) -> bool {
+        let Some(previous) = self.pending_chunk_requests.get_mut(&key) else {
+            return false;
+        };
+        let sequence = PreparedSyntaxViewportRequest::current_sequence();
+        if (previous.0 != sequence || previous.1 < priority)
+            && let Some(worker) = syntax_chunk_worker()
+        {
+            let _ = worker.sender.send(ChunkCommand::Subscribe(
+                key,
+                std::thread::current().id(),
+                PreparedSyntaxViewportRequest::current(),
+                priority,
+            ));
+            *previous = (sequence, priority);
+        }
+        true
+    }
+
+    fn queue_chunk_build_request_nonblocking(
         &mut self,
         chunk_key: PreparedSyntaxChunkKey,
         line_count: usize,
         thread_id: std::thread::ThreadId,
         tree_state: &Arc<PreparedSyntaxTreeState>,
+        priority: ChunkPriority,
     ) -> bool {
         if self
             .by_cache_key
@@ -543,7 +547,7 @@ impl TreesitterDocumentCache {
         {
             return true;
         }
-        if self.pending_chunk_requests.contains(&chunk_key) {
+        if self.subscribe_pending(chunk_key, priority) {
             return true;
         }
 
@@ -556,10 +560,16 @@ impl TreesitterDocumentCache {
             thread_id,
             tree_state: Arc::clone(tree_state),
         };
-        if worker.sender.send(request).is_err() {
+        let viewport = PreparedSyntaxViewportRequest::current();
+        let sequence = viewport.sequence();
+        if worker
+            .sender
+            .send(ChunkCommand::Build(request, viewport, priority))
+            .is_err()
+        {
             return false;
         }
-        self.insert_pending_chunk_request(chunk_key);
+        self.insert_pending_chunk_request(chunk_key, sequence, priority);
         true
     }
 
@@ -594,6 +604,7 @@ impl TreesitterDocumentCache {
                 line_count,
                 thread_id,
                 tree_state,
+                ChunkPriority::Prefetch,
             );
         }
     }
@@ -626,7 +637,7 @@ impl TreesitterDocumentCache {
             cache_key,
             chunk_ix,
         };
-        if self.pending_chunk_requests.contains(&chunk_key) {
+        if self.subscribe_pending(chunk_key, ChunkPriority::Visible) {
             self.touch_key(cache_key);
             return Some(PreparedSyntaxLineTokensRequest::Pending);
         }
@@ -649,8 +660,13 @@ impl TreesitterDocumentCache {
         }
 
         let thread_id = std::thread::current().id();
-        if self.queue_chunk_build_request_nonblocking(chunk_key, line_count, thread_id, &tree_state)
-        {
+        if self.queue_chunk_build_request_nonblocking(
+            chunk_key,
+            line_count,
+            thread_id,
+            &tree_state,
+            ChunkPriority::Visible,
+        ) {
             self.prefetch_adjacent_chunk_builds_nonblocking(
                 cache_key,
                 line_count,
@@ -883,11 +899,7 @@ impl TreesitterDocumentCache {
                 if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
                     continue;
                 }
-                merge_shared_prepared_document_chunk(
-                    result.chunk_key.cache_key,
-                    result.chunk_key.chunk_ix,
-                    result.chunk_tokens.clone(),
-                );
+                result.share_built_chunk();
                 if should_apply_chunk_build_result(&result, current_thread, target_cache_key) {
                     ready_results.push(result);
                 } else {
@@ -917,11 +929,7 @@ impl TreesitterDocumentCache {
                 if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
                     continue;
                 }
-                merge_shared_prepared_document_chunk(
-                    result.chunk_key.cache_key,
-                    result.chunk_key.chunk_ix,
-                    result.chunk_tokens.clone(),
-                );
+                result.share_built_chunk();
                 if should_apply_chunk_build_result(&result, current_thread, target_cache_key) {
                     ready_results.push(result);
                 } else {
@@ -932,12 +940,18 @@ impl TreesitterDocumentCache {
 
         let mut applied = 0usize;
         for result in ready_results {
-            self.remove_pending_chunk_request(result.chunk_key);
+            let was_pending = self.remove_pending_chunk_request(result.chunk_key);
+            let Some(built) = result.built else {
+                // A viewport may have requested the chunk again just after
+                // the worker retired it. Let the owner retry on its next draw.
+                applied += usize::from(was_pending);
+                continue;
+            };
             self.metrics.chunk_build_ms = self
                 .metrics
                 .chunk_build_ms
-                .saturating_add(result.chunk_build_ms);
-            let shared_chunk_tokens = result.chunk_tokens.clone();
+                .saturating_add(built.milliseconds);
+            let shared_chunk_tokens = built.tokens.clone();
             let Some(document) = self.by_cache_key.get_mut(&result.chunk_key.cache_key) else {
                 merge_shared_prepared_document_chunk(
                     result.chunk_key.cache_key,
@@ -958,7 +972,7 @@ impl TreesitterDocumentCache {
                 );
                 continue;
             }
-            insert_line_token_chunk(document, result.chunk_key.chunk_ix, result.chunk_tokens);
+            insert_line_token_chunk(document, result.chunk_key.chunk_ix, built.tokens);
             merge_shared_prepared_document_chunk(
                 result.chunk_key.cache_key,
                 result.chunk_key.chunk_ix,

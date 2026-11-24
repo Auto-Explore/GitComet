@@ -30,6 +30,70 @@ impl GitCometView {
         }
     }
 
+    fn stage_all_from_command(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let paths: Vec<_> = self
+            .active_repo()
+            .and_then(|repo| repo.worktree_status_entries())
+            .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return;
+        }
+        let offer_confirmation = window.is_some();
+        let stage = move |this: &mut Self, window: &mut Window, cx: &mut gpui::Context<Self>| {
+            crate::view::conflict_markers::check(
+                this,
+                repo_id,
+                paths,
+                crate::view::conflict_markers::StageIntent::Command { offer_confirmation },
+                window,
+                cx,
+                move |this, paths, check, window, cx| {
+                    if let crate::view::conflict_markers::MarkerCheck::Clear(guard) = check {
+                        crate::view::status_actions::stage_checked(
+                            &this.store,
+                            repo_id,
+                            gitcomet_state::msg::StageSelection::Paths(paths.into()),
+                            guard,
+                        );
+                    } else if let crate::view::conflict_markers::MarkerCheck::Marked(unresolved) =
+                        check
+                        && offer_confirmation
+                    {
+                        this.open_popover_centered(
+                            PopoverKind::StageConflictMarkersConfirm {
+                                repo_id,
+                                paths,
+                                unresolved,
+                                clear_selection: false,
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            );
+        };
+        if let Some(window) = window {
+            stage(self, window, cx);
+        } else {
+            let window = self.window_handle;
+            let view = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    view.update(cx, |view, cx| stage(view, window, cx))
+                });
+            });
+        }
+    }
+
     fn execute_builtin_command(
         &mut self,
         command: Command,
@@ -498,44 +562,7 @@ impl GitCometView {
                     .detach();
                 });
             }
-            Command::StageAll => {
-                let Some(repo_id) = self.active_repo_id() else {
-                    return;
-                };
-                let paths: Vec<_> = self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .and_then(|repo| repo.worktree_status_entries())
-                    .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                if paths.is_empty() {
-                    return;
-                }
-                // Staging is what marks a conflict resolved, so confirm first if
-                // any of it still has conflict markers in the worktree. With no
-                // window there is nothing to confirm in, and staging unasked is
-                // the one outcome this must not have.
-                // No row selection is involved here, so there is none to consume.
-                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &self.state,
-                    repo_id,
-                    paths.clone(),
-                    false,
-                ) {
-                    if let Some(window) = window {
-                        self.open_popover_centered(confirm, window, cx);
-                    }
-                    return;
-                }
-                crate::view::status_actions::stage_or_unstage_paths(
-                    &self.store,
-                    repo_id,
-                    DiffArea::Unstaged,
-                    paths,
-                );
-            }
+            Command::StageAll => self.stage_all_from_command(window, cx),
             Command::UnstageAll => {
                 // An empty list unstages from the index, like the Unstage all
                 // button; the status list omits a staged rename's source path.

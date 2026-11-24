@@ -66,7 +66,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 && right_doc.is_some_and(|document| {
                     !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
                 })
-                && pane.syntax_chunk_poll_task.is_none()
+                && pane.viewport_syntax.poll.is_none()
         },
         |pane| {
             let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
@@ -85,7 +85,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 right_doc,
                 left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
                 right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
-                pane.syntax_chunk_poll_task.is_some(),
+                pane.viewport_syntax.poll.is_some(),
                 pane.active_repo().map(|repo| repo.diff_state.diff_file_rev),
                 pane.active_repo()
                     .and_then(|repo| repo.diff_state.diff_target.clone()),
@@ -199,7 +199,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                     && right_doc.is_some_and(|document| {
                         !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
                     })
-                    && pane.syntax_chunk_poll_task.is_none()
+                    && pane.viewport_syntax.poll.is_none()
             },
             |pane| {
                 let left_doc =
@@ -214,7 +214,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                     right_doc,
                     left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
                     right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
-                    pane.syntax_chunk_poll_task.is_some(),
+                    pane.viewport_syntax.poll.is_some(),
                 )
             },
         );

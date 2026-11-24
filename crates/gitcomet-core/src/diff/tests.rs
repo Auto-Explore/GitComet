@@ -1,0 +1,396 @@
+use super::*;
+use crate::domain::{DiffArea, DiffTarget};
+use std::path::PathBuf;
+
+#[test]
+fn git_quoted_paths_decode_controls_and_keep_the_remaining_header() {
+    assert_eq!(
+        split_quoted_git_path(r#""a/\303\244\t\n\"\\\377" b/other"#),
+        Some(("a/ä\t\n\"\\\u{fffd}".into(), " b/other"))
+    );
+    assert_eq!(
+        split_quoted_git_path(r#""" suffix"#),
+        Some((String::new(), " suffix"))
+    );
+    for malformed in [r#""unterminated"#, r#""bad\q""#, r#""bad\40""#] {
+        assert!(split_quoted_git_path(malformed).is_none());
+        assert_eq!(unquote_git_path(malformed), malformed);
+    }
+}
+
+#[test]
+fn annotate_tracks_line_numbers_through_hunks() {
+    let diff = Diff::from_unified(
+        DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged),
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,3 +10,4 @@ fn main() {
+ line1
+-line2
++line2 changed
+ line3
++line4
+",
+    );
+
+    let annotated = annotate_unified(&diff);
+    let mut rows = annotated
+        .iter()
+        .filter(|l| {
+            matches!(
+                l.kind,
+                DiffLineKind::Context | DiffLineKind::Add | DiffLineKind::Remove
+            )
+        })
+        .map(|l| (l.kind, l.old_line, l.new_line, l.text.as_ref()))
+        .collect::<Vec<_>>();
+
+    // Context lines include a leading space in unified diff.
+    // `Diff::from_unified` keeps the raw line text.
+    assert_eq!(
+        rows.remove(0),
+        (DiffLineKind::Context, Some(10), Some(10), " line1")
+    );
+    assert_eq!(
+        rows.remove(0),
+        (DiffLineKind::Remove, Some(11), None, "-line2")
+    );
+    assert_eq!(
+        rows.remove(0),
+        (DiffLineKind::Add, None, Some(11), "+line2 changed")
+    );
+    assert_eq!(
+        rows.remove(0),
+        (DiffLineKind::Context, Some(12), Some(12), " line3")
+    );
+    assert_eq!(
+        rows.remove(0),
+        (DiffLineKind::Add, None, Some(13), "+line4")
+    );
+}
+
+#[test]
+fn parse_hunk_header_variants() {
+    let range = |start, count| crate::domain::UnifiedHunkRange { start, count };
+    let starts_and_counts = |text: &str| {
+        parse_unified_hunk_header(text.as_bytes())
+            .map(|header| (header.parents.to_vec(), header.result))
+    };
+    assert_eq!(
+        starts_and_counts("@@ -1 +2 @@"),
+        Some((vec![range(1, 1)], range(2, 1)))
+    );
+    assert_eq!(
+        starts_and_counts("@@ -1,0 +2,10 @@"),
+        Some((vec![range(1, 0)], range(2, 10)))
+    );
+    assert_eq!(
+        starts_and_counts("@@ -42,7 +100,8 @@ fn x"),
+        Some((vec![range(42, 7)], range(100, 8)))
+    );
+    assert_eq!(
+        starts_and_counts("@@@ -1,2 -3,4 +5,6 @@@"),
+        Some((vec![range(1, 2), range(3, 4)], range(5, 6)))
+    );
+    for malformed in [
+        "@@ -1 @@",
+        "@@ +1 -2 @@",
+        "@@ -1 +2",
+        "@@@ -1 +2 @@@",
+        "@ -1 +1 @",
+    ] {
+        assert_eq!(starts_and_counts(malformed), None, "{malformed:?}");
+    }
+}
+
+fn file_path_of(section: &str) -> Option<String> {
+    unified_diff_file_path(section.lines())
+}
+
+#[test]
+fn file_path_reads_a_plain_modification() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+",
+        ),
+        Some("src/lib.rs".to_string())
+    );
+}
+
+/// The whole point of the header pair: `diff --git` alone cannot be split
+/// correctly here, but the TAB-terminated `+++` line is unambiguous.
+#[test]
+fn file_path_reads_a_name_containing_spaces() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/src/rules - Copy - Copy.rs b/src/rules - Copy - Copy.rs
+index 313043d..74a9311 100644
+--- a/src/rules - Copy - Copy.rs\t
++++ b/src/rules - Copy - Copy.rs\t
+@@ -1 +1 @@
+",
+        ),
+        Some("src/rules - Copy - Copy.rs".to_string())
+    );
+}
+
+/// Without any `---`/`+++` pair the header line has to carry the name, and
+/// there both halves are identical whatever spaces they contain.
+#[test]
+fn file_path_falls_back_to_the_git_header_line() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/src/lib.rs b/src/lib.rs
+old mode 100644
+new mode 100755
+",
+        ),
+        Some("src/lib.rs".to_string())
+    );
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/my notes.md b/my notes.md
+old mode 100644
+new mode 100755
+",
+        ),
+        Some("my notes.md".to_string())
+    );
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/logo.png b/logo.png
+index 1111111..2222222 100644
+Binary files a/logo.png and b/logo.png differ
+",
+        ),
+        Some("logo.png".to_string())
+    );
+}
+
+#[test]
+fn file_path_prefers_the_post_image_name_of_a_rename() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/src/rules.rs b/src/rules - Copy.rs
+similarity index 94%
+rename from src/rules.rs
+rename to src/rules - Copy.rs
+index 1e0101a..313043d 100644
+--- a/src/rules.rs
++++ b/src/rules - Copy.rs\t
+@@ -1 +1 @@
+",
+        ),
+        Some("src/rules - Copy.rs".to_string())
+    );
+}
+
+/// Copy detection (`-C`) writes `copy from`/`copy to` where a rename
+/// writes `rename from`/`rename to`.
+#[test]
+fn file_path_reads_a_pure_copy() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+copy from old name.txt
+copy to new name.txt
+",
+        ),
+        Some("new name.txt".to_string())
+    );
+}
+
+/// A rename with no content change carries neither `---` nor `+++`, and its
+/// header halves differ, so only `rename to` can answer.
+#[test]
+fn file_path_reads_a_pure_rename() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+rename from old name.txt
+rename to new name.txt
+",
+        ),
+        Some("new name.txt".to_string())
+    );
+}
+
+#[test]
+fn file_path_handles_added_and_deleted_files() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/new file.txt b/new file.txt
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/new file.txt\t
+@@ -0,0 +1 @@
+",
+        ),
+        Some("new file.txt".to_string())
+    );
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/gone file.txt b/gone file.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/gone file.txt\t
++++ /dev/null
+@@ -1 +0,0 @@
+",
+        ),
+        Some("gone file.txt".to_string())
+    );
+}
+
+/// With `core.quotePath` left at its default, git octal-escapes non-ASCII
+/// bytes and wraps the name in double quotes.
+#[test]
+fn file_path_unquotes_c_style_names() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git \"a/h\\303\\251llo.txt\" \"b/h\\303\\251llo.txt\"
+index 1111111..2222222 100644
+--- \"a/h\\303\\251llo.txt\"
++++ \"b/h\\303\\251llo.txt\"
+@@ -1 +1 @@
+",
+        ),
+        Some("héllo.txt".to_string())
+    );
+    // Quotes and backslashes stay quoted whatever `core.quotePath` says.
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git \"a/we\\\"ird\\tname.txt\" \"b/we\\\"ird\\tname.txt\"
+index 1111111..2222222 100644
+--- \"a/we\\\"ird\\tname.txt\"
++++ \"b/we\\\"ird\\tname.txt\"
+@@ -1 +1 @@
+",
+        ),
+        Some("we\"ird\tname.txt".to_string())
+    );
+}
+
+/// `a/` and `b/` are ordinary directory names, and only the header lines
+/// carry them as prefixes — `rename to` writes the path bare.
+#[test]
+fn file_path_keeps_a_leading_directory_called_a_or_b() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/a/notes.md b/a/notes.md
+index 1111111..2222222 100644
+--- a/a/notes.md
++++ b/a/notes.md
+@@ -1 +1 @@
+",
+        ),
+        Some("a/notes.md".to_string())
+    );
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/b/old.md b/b/new name.md
+similarity index 100%
+rename from b/old.md
+rename to b/new name.md
+",
+        ),
+        Some("b/new name.md".to_string())
+    );
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/a/notes.md b/a/notes.md
+old mode 100644
+new mode 100755
+",
+        ),
+        Some("a/notes.md".to_string())
+    );
+}
+
+#[test]
+fn file_path_keeps_names_written_without_a_prefix() {
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git src/lib.rs src/lib.rs
+index 1111111..2222222 100644
+--- src/lib.rs
++++ src/lib.rs
+@@ -1 +1 @@
+",
+        ),
+        Some("src/lib.rs".to_string())
+    );
+}
+
+/// Scanning must not run past the section it was asked about.
+#[test]
+fn file_path_stops_at_the_next_section_and_at_the_first_hunk() {
+    let two_files = "\
+diff --git a/first.txt b/first.txt
+old mode 100644
+new mode 100755
+diff --git a/second.txt b/second.txt
+--- a/second.txt
++++ b/second.txt
+@@ -1 +1 @@
+";
+    assert_eq!(
+        unified_diff_file_path(two_files.lines()),
+        Some("first.txt".to_string())
+    );
+
+    // A `+++ ` inside hunk content must not be mistaken for a header.
+    assert_eq!(
+        file_path_of(
+            "\
+diff --git a/notes.txt b/notes.txt
+--- a/notes.txt
++++ b/notes.txt
+@@ -1,2 +1,2 @@
+-+++ b/decoy.txt
+++++ b/other decoy.txt
+",
+        ),
+        Some("notes.txt".to_string())
+    );
+}
+
+#[test]
+fn file_path_rejects_malformed_headers() {
+    for text in [
+        "",
+        "diff --git",
+        "diff --git ",
+        "index 1111111..2222222 100644",
+        "diff --git a/one.txt b/two.txt",
+    ] {
+        assert_eq!(unified_diff_file_path([text]), None, "{text:?}");
+    }
+}

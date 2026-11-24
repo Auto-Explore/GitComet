@@ -234,9 +234,11 @@ impl StageGutterSpec {
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
-        RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES),
+            || GUTTER_TEXT_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
     static STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE: RefCell<FxHashMap<u64, Pixels>> =
-        RefCell::new(FxHashMap::default());
+        crate::bundled_fonts::layout_cache(FxHashMap::default(),
+            || STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE.with_borrow_mut(FxHashMap::clear));
 }
 
 #[derive(Clone)]
@@ -247,6 +249,7 @@ pub(super) enum StreamedDiffTextSyntaxSource {
         mode: rows::DiffSyntaxMode,
     },
     Prepared {
+        viewport: gitcomet_syntax::PreparedSyntaxViewportRequest,
         document_text: Arc<str>,
         line_starts: Arc<[usize]>,
         document: rows::PreparedDiffSyntaxDocument,

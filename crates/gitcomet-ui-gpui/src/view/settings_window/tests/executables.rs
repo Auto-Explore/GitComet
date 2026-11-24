@@ -56,10 +56,14 @@ fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::
             settings.runtime_info.environment.graphics.clear();
             settings.copy_environment_details(window, cx);
             assert_eq!(settings.runtime_info.environment.graphics.len(), 1);
-            assert_eq!(
-                crate::clipboard::read_text(cx),
-                Some(settings.runtime_info.environment.summary())
-            );
+            let copied = crate::clipboard::read_text(cx).expect("environment details copied");
+            let timings = copied
+                .strip_prefix(&settings.runtime_info.environment.summary())
+                .expect("all displayed environment details are included");
+            assert!(timings.starts_with("\n\nResponsiveness across open windows"));
+            assert!(timings.contains("Frame draw"));
+            assert!(timings.contains("Input to frame"));
+            assert!(timings.contains("Recent foreground stalls of 200 ms or more"));
         });
         let _ = window.draw(cx);
     });
@@ -142,7 +146,8 @@ fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAp
     let summary = view.update(cx, |settings, _| {
         settings.runtime_info.environment.summary()
     });
-    assert_eq!(clipboard_text(cx), Some(summary));
+    let copied = clipboard_text(cx).expect("environment details copied");
+    assert!(copied.starts_with(&format!("{summary}\n\nResponsiveness across open windows")));
 }
 
 #[test]

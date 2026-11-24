@@ -122,7 +122,6 @@ pub(super) struct BackgroundResolvedOutlineRecomputeRequest {
 
 pub(super) struct ResolvedOutlineIncrementalBase<'a> {
     text: &'a TextModelSnapshot,
-    line_starts: &'a Arc<[usize]>,
     marker_segments: &'a [conflict_resolver::ConflictSegment],
     view_mode: ConflictResolverViewMode,
 }
@@ -359,8 +358,7 @@ pub(super) fn update_line_sources_index_for_range(
     index: &mut FxHashSet<conflict_resolver::SourceLineKey>,
     view_mode: ConflictResolverViewMode,
     meta: &[conflict_resolver::ResolvedLineMeta],
-    text: &str,
-    line_starts: &[usize],
+    text: &TextModelSnapshot,
     line_range: Range<usize>,
     insert: bool,
 ) {
@@ -381,7 +379,7 @@ pub(super) fn update_line_sources_index_for_range(
             view_mode,
             line_meta.source,
             line_no,
-            rows::resolved_output_line_text(text, line_starts, line_ix),
+            text.line_text(line_ix).as_ref(),
         );
         if insert {
             index.insert(key);
@@ -449,7 +447,7 @@ impl DiffRenderer {
         output_snapshot: &TextModelSnapshot,
     ) -> BackgroundResolvedOutlineRecomputeRequest {
         let output_text: Arc<str> = output_snapshot.as_shared_string().into();
-        let output_line_count = output_snapshot.shared_line_starts().len().max(1);
+        let output_line_count = output_snapshot.line_count();
         let sources = match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => OwnedResolvedOutlineSourceData::ThreeWay {
                 base_text: self.conflict_resolver.three_way_text.base.clone().into(),
@@ -497,7 +495,6 @@ impl DiffRenderer {
 
         self.conflict_resolved_outline_stash = Some(StashedResolvedOutlineState {
             text: self.conflict_resolved_preview_text.clone(),
-            line_starts: self.conflict_resolved_preview_line_starts.clone(),
             marker_segments: self.conflict_resolver.marker_segments.clone(),
             view_mode: self.conflict_resolver.view_mode,
             outline: self.conflict_resolver.resolved_outline.clone(),
@@ -513,7 +510,6 @@ impl DiffRenderer {
         if let Some(stash) = self.conflict_resolved_outline_stash.as_ref() {
             return Some(ResolvedOutlineIncrementalBase {
                 text: &stash.text,
-                line_starts: &stash.line_starts,
                 marker_segments: &stash.marker_segments,
                 view_mode: stash.view_mode,
             });
@@ -529,7 +525,6 @@ impl DiffRenderer {
 
         Some(ResolvedOutlineIncrementalBase {
             text: &self.conflict_resolved_preview_text,
-            line_starts: &self.conflict_resolved_preview_line_starts,
             marker_segments: &self.conflict_resolver.marker_segments,
             view_mode: self.conflict_resolver.view_mode,
         })
@@ -547,7 +542,6 @@ impl DiffRenderer {
         }
         self.conflict_resolved_preview_source_revision =
             Some(ResolvedOutputSourceRevision::from_snapshot(output_snapshot));
-        self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
@@ -565,7 +559,6 @@ impl DiffRenderer {
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
             self.conflict_resolver.resolved_output_visible_dirty = true;
-            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
 
@@ -578,7 +571,6 @@ impl DiffRenderer {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
 
@@ -598,7 +590,7 @@ impl DiffRenderer {
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         let output_text = output_snapshot.as_ref();
-        let output_line_count = output_snapshot.shared_line_starts().len().max(1);
+        let output_line_count = output_snapshot.line_count();
         let computed = compute_resolved_outline_computation(
             output_text,
             output_line_count,
@@ -631,13 +623,8 @@ impl DiffRenderer {
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         let output_text = output_snapshot.as_ref();
-        let old_line_starts = base.line_starts.clone();
-        let old_line_count = old_line_starts.len().max(1);
-        let new_line_starts = output_snapshot.shared_line_starts();
-        let new_line_count = new_line_starts.len().max(1);
-        if old_line_starts.is_empty() {
-            return false;
-        }
+        let old_line_count = old_text_snapshot.line_count();
+        let new_line_count = output_snapshot.line_count();
         let used_stash = self.conflict_resolved_outline_stash.is_some();
         let delta = if used_stash {
             resolved_outline_delta_between_texts(old_text, output_text)
@@ -655,16 +642,10 @@ impl DiffRenderer {
             return false;
         }
 
-        let old_dirty_lines = dirty_byte_range_to_line_range(
-            old_line_starts.as_ref(),
-            old_text.len(),
-            delta.old_range.clone(),
-        );
-        let new_dirty_lines = dirty_byte_range_to_line_range(
-            new_line_starts.as_ref(),
-            output_text.len(),
-            delta.new_range.clone(),
-        );
+        let old_dirty_lines =
+            dirty_byte_range_to_line_range(&old_text_snapshot, delta.old_range.clone());
+        let new_dirty_lines =
+            dirty_byte_range_to_line_range(&output_snapshot, delta.new_range.clone());
         let mut old_affected = old_dirty_lines.clone();
         let mut new_affected = new_dirty_lines.clone();
         old_affected.start = old_affected.start.saturating_sub(1);
@@ -783,10 +764,9 @@ impl DiffRenderer {
 
             let mut middle_meta = Vec::with_capacity(new_affected.len());
             for line_ix in new_affected.clone() {
-                let output_line =
-                    rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
+                let output_line = output_snapshot.line_text(line_ix);
                 let (mut source, mut input_line) = source_lookup
-                    .get(output_line)
+                    .get(output_line.as_ref())
                     .copied()
                     .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
                 if new_dirty_lines.contains(&line_ix) {
@@ -887,8 +867,7 @@ impl DiffRenderer {
             &mut next_sources_index,
             old_view_mode,
             old_meta.as_slice(),
-            old_text,
-            old_line_starts.as_ref(),
+            &old_text_snapshot,
             old_affected.clone(),
             false,
         );
@@ -896,8 +875,7 @@ impl DiffRenderer {
             &mut next_sources_index,
             new_view_mode,
             next_meta.as_slice(),
-            output_text,
-            new_line_starts.as_ref(),
+            &output_snapshot,
             new_affected.clone(),
             true,
         );
@@ -908,7 +886,6 @@ impl DiffRenderer {
             ResolvedOutputSourceRevision::from_snapshot(&output_snapshot),
         );
         self.conflict_resolved_preview_line_count = new_line_count;
-        self.conflict_resolved_preview_line_starts = new_line_starts;
         self.conflict_resolved_output_measure_row = resolved_output_measure_row(&output_snapshot);
         // The text already reached the live tree on the keystroke. This call is
         // here for what the outline recompute itself changed: the language (the
@@ -923,7 +900,6 @@ impl DiffRenderer {
             sources_index: next_sources_index,
         };
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
     }

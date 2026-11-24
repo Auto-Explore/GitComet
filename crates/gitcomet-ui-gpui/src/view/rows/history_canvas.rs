@@ -165,7 +165,8 @@ fn history_canvas_column_layout(
 
 thread_local! {
     static HISTORY_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
-        RefCell::new(new_fx_lru_cache(HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(new_fx_lru_cache(HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES),
+            || HISTORY_TEXT_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
 }
 
 /// Which part of a line that overflows its width gives way.

@@ -263,9 +263,12 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         stage.as_slice(),
-        [Effect::StagePath {
+        [Effect::Stage {
             repo_id: RepoId(1),
-            ..
+            request: crate::msg::StageRequest {
+                selection: crate::msg::StageSelection::Path(_),
+                guard: None
+            },
         }]
     ));
 
@@ -745,9 +748,12 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::StagePaths {
+        [Effect::Stage {
             repo_id: RepoId(1),
-            ..
+            request: crate::msg::StageRequest {
+                selection: crate::msg::StageSelection::Paths(_),
+                guard: None
+            },
         }]
     ));
 

@@ -3,17 +3,14 @@ use crate::model::{
     HiddenRefSettings, RepoId,
 };
 use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
-use gitcomet_core::platform::dirs;
-use gitcomet_core::platform::test_harness::running_under_test_harness;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::{env, fs, io};
+use std::{fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UiSession {
@@ -106,7 +103,6 @@ pub struct UiSession {
     pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
     pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
-    pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub auto_fetch_enabled: Option<bool>,
@@ -323,8 +319,6 @@ pub(crate) struct UiSessionFile {
     #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
     #[serde(default, deserialize_with = "lenient")]
-    commit_push_after_enabled: Option<bool>,
-    #[serde(default, deserialize_with = "lenient")]
     default_tag_type: Option<DefaultTagType>,
     #[serde(default, deserialize_with = "lenient")]
     fetch_prune_deleted_remote_branches: Option<bool>,
@@ -400,9 +394,6 @@ const MAX_UI_SCALE_PERCENT: u32 = 200;
 const SESSION_PATH_BYTES_PREFIX: &str = "gitcomet-path-bytes:";
 #[cfg(windows)]
 const SESSION_PATH_WIDE_PREFIX: &str = "gitcomet-path-utf16le:";
-
-const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
-const DISABLE_SESSION_PERSIST_ENV: &str = "GITCOMET_DISABLE_SESSION_PERSIST";
 
 pub fn load() -> UiSession {
     let Some(path) = default_session_file_path() else {
@@ -592,7 +583,6 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_hidden_ref_presets: file.history_hidden_ref_presets,
         history_hidden_ref_prefixes: file.history_hidden_ref_prefixes,
         default_history_mode: file.default_history_mode.map(Into::into),
-        commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         auto_fetch_enabled: file.auto_fetch_enabled,
@@ -613,37 +603,6 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
     pub(crate) repo_history_focus: BTreeMap<String, HistoryFocusSet>,
-}
-
-#[cfg(test)]
-thread_local! {
-    static TEST_SESSION_FILE_PATH_OVERRIDE: RefCell<Vec<Option<PathBuf>>> = const { RefCell::new(Vec::new()) };
-}
-
-#[cfg(test)]
-pub(crate) struct TestSessionFilePathGuard;
-
-#[cfg(test)]
-pub(crate) fn push_test_session_file_path_override(
-    path: impl Into<Option<PathBuf>>,
-) -> TestSessionFilePathGuard {
-    TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| stack.borrow_mut().push(path.into()));
-    TestSessionFilePathGuard
-}
-
-#[cfg(test)]
-impl Drop for TestSessionFilePathGuard {
-    fn drop(&mut self) {
-        TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| {
-            let popped = stack.borrow_mut().pop();
-            debug_assert!(popped.is_some(), "session path override stack underflow");
-        });
-    }
-}
-
-#[cfg(test)]
-fn test_session_file_path_override() -> Option<Option<PathBuf>> {
-    TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| stack.borrow().last().cloned())
 }
 
 static SESSION_FILE_PERSIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -822,63 +781,6 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
-fn default_session_file_path() -> Option<PathBuf> {
-    #[cfg(test)]
-    if let Some(path) = test_session_file_path_override() {
-        return path;
-    }
-
-    if let Some(path) = env::var_os(SESSION_FILE_ENV)
-        && !path.is_empty()
-    {
-        return Some(PathBuf::from(path));
-    }
-
-    if env::var_os(DISABLE_SESSION_PERSIST_ENV).is_some() {
-        return None;
-    }
-
-    // Avoid reading/writing user state dir during test binaries (e.g. `cargo test`, `cargo nextest`).
-    // `cfg!(test)` only applies to this crate's own unit tests; dependencies built for tests do not
-    // have `cfg(test)` set, so we also use a runtime heuristic.
-    if cfg!(test) || running_under_test_harness() {
-        return None;
-    }
-
-    Some(dirs::state_dir()?.join("session.json"))
-}
-
-/// Per-user rendezvous file used by the browser-process broker. Test binaries
-/// intentionally receive no path so they cannot touch a developer's live app
-/// state; broker unit tests inject an explicit temporary path instead.
-pub fn browser_instance_file_path() -> Option<PathBuf> {
-    if cfg!(test) || running_under_test_harness() {
-        return None;
-    }
-    Some(dirs::state_dir()?.join("browser-instance.json"))
-}
-
-/// Where the filesystem service keeps undo and staging areas, beside the
-/// session rather than in a worktree. Test binaries get none, like the session.
-pub fn journal_storage_dir() -> Option<PathBuf> {
-    if cfg!(test) || running_under_test_harness() {
-        return None;
-    }
-    Some(dirs::state_dir()?.join("journal"))
-}
-
-pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
-    default_session_file_path()
-}
-
-pub fn user_themes_dir() -> Option<PathBuf> {
-    if cfg!(test) || running_under_test_harness() {
-        return None;
-    }
-
-    Some(dirs::data_dir()?.join("themes"))
-}
-
 pub use extensions::{
     ExtensionNamespaceError, ExtensionNamespaces, MAX_EXTENSION_NAMESPACE_BYTES,
     check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
@@ -893,16 +795,21 @@ use workspaces::*;
 mod documents;
 mod extensions;
 mod history_mode;
+mod locations;
 mod maintenance;
 mod parse;
 mod paths;
 mod repos;
 mod settings;
 mod survey;
+#[cfg(test)]
+mod test_support;
 mod workspaces;
 
 pub use documents::*;
 pub use history_mode::*;
+pub(crate) use locations::default_session_file_path;
+pub use locations::{browser_instance_file_path, journal_storage_dir, user_themes_dir};
 pub use maintenance::{
     MAINTENANCE_CHECK_INTERVAL_SECONDS, MAINTENANCE_SNOOZE_SECONDS, claim_repo_maintenance_check,
     claim_repo_maintenance_check_to_path, persist_repo_maintenance_snooze,
@@ -912,6 +819,8 @@ pub use paths::*;
 pub use repos::*;
 pub use settings::*;
 pub use survey::*;
+#[cfg(test)]
+pub(crate) use test_support::{TestSessionFilePathGuard, push_test_session_file_path_override};
 pub use workspaces::*;
 
 pub(crate) use history_mode::persist_repo_history_modes_batch_to_path;

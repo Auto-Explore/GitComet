@@ -97,7 +97,7 @@ fn assert_razor_prepared_diff_styles(cx: &mut gpui::TestAppContext, filename: &s
                                 )
                             })
                     })
-                    && pane.syntax_chunk_poll_task.is_none()
+                    && pane.viewport_syntax.poll.is_none()
                     && razor_rendered_diff_rows(pane).is_some()
             },
             |pane| {
@@ -1524,7 +1524,7 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
                 && right_doc.is_some_and(|document| {
                     !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
                 })
-                && pane.syntax_chunk_poll_task.is_none()
+                && pane.viewport_syntax.poll.is_none()
         },
         |pane| {
             let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
@@ -1538,7 +1538,7 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
                 right_doc,
                 left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
                 right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
-                pane.syntax_chunk_poll_task.is_some(),
+                pane.viewport_syntax.poll.is_some(),
             )
         },
     );

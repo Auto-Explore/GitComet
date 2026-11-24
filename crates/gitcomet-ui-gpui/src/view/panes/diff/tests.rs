@@ -4,7 +4,7 @@ use super::{
     VersionedCachedDiffStyledText, apply_conflict_choice_provenance_hints,
     apply_focused_mergetool_output, apply_resolved_output_unresolved_highlights,
     apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
-    build_line_starts, build_resolved_output_conflict_markers,
+    build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges, clear_diff_selection_action,
     coalesce_resolved_output_edit_deltas, conflict_file_is_binary,
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
@@ -824,9 +824,9 @@ fn resolved_outline_delta_for_snapshot_transition_defers_after_multiple_revision
 #[test]
 fn dirty_byte_range_to_line_range_includes_line_join_delete() {
     let text = "a\nb\nc";
-    let line_starts = build_line_starts(text);
+    let snapshot = TextModel::from_large_text(text).snapshot();
     // Delete the newline between "a" and "b".
-    let dirty = dirty_byte_range_to_line_range(&line_starts, text.len(), 1..2);
+    let dirty = dirty_byte_range_to_line_range(&snapshot, 1..2);
     assert_eq!(dirty, 0..2);
 }
 

@@ -667,9 +667,16 @@ fn plan_metadata_helpers_match_materialized_rows() {
         plan_changed_line_masks(&plan, old_line_count, new_line_count),
         changed_line_masks_from_rows(&rows, old_line_count, new_line_count)
     );
+    let (old_rows, new_rows) = line_to_row_maps_from_rows(&rows, old_line_count, new_line_count);
+    let (compact_old, compact_new) = LineToRowMap::for_plan(&plan, old_line_count, new_line_count);
+    for (map, reference) in [(&compact_old, &old_rows), (&compact_new, &new_rows)] {
+        for (line, expected) in reference.iter().enumerate() {
+            assert_eq!(map.get(line), *expected);
+        }
+    }
     assert_eq!(
         plan_line_to_row_maps(&plan, old_line_count, new_line_count),
-        line_to_row_maps_from_rows(&rows, old_line_count, new_line_count)
+        (old_rows, new_rows)
     );
     assert_eq!(
         plan_emitted_line_prefix_counts(&plan),

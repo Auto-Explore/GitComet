@@ -619,7 +619,8 @@ fn worktree_badge_cache_follows_a_repositorys_workdir_moving() {
         badges.listed_path("feature"),
         Some(&PathBuf::from("/tmp/repo-feature"))
     );
-    let fingerprint = cache.active_worktree_badges_fingerprint(&state);
+    let fingerprint = cache
+        .active_worktree_badges_fingerprint(ActiveRepoIndex::default().get(&state), &state.repos);
 
     // The same worktree list, the same open repositories -- only the
     // repository's own path moved.
@@ -645,7 +646,10 @@ fn worktree_badge_cache_follows_a_repositorys_workdir_moving() {
     );
     assert_ne!(
         fingerprint,
-        cache.active_worktree_badges_fingerprint(&state),
+        cache.active_worktree_badges_fingerprint(
+            ActiveRepoIndex::default().get(&state),
+            &state.repos
+        ),
         "the sidebar has to repaint for it"
     );
 }

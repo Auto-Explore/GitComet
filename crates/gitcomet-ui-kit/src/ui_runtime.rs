@@ -206,6 +206,22 @@ pub async fn background_compute<O: Send + 'static>(
     }
 }
 
+/// Schedule work with the window's background executor, or run it inline in a
+/// deterministic runtime. The priority applies to the computation itself.
+pub async fn background_compute_with_priority<O: Send + 'static>(
+    executor: &gpui::BackgroundExecutor,
+    priority: gpui::Priority,
+    compute: impl FnOnce() -> O + Send + 'static,
+) -> O {
+    if current().uses_background_compute() {
+        executor
+            .spawn_with_priority(priority, async move { compute() })
+            .await
+    } else {
+        compute()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

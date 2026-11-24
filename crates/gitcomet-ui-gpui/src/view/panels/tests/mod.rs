@@ -700,7 +700,7 @@ pub(super) fn file_image_diff_cache_debug_snapshot(pane: &DiffRenderer) -> Strin
     format!(
         "seq={} inflight={:?} repo_id={:?} cache_rev={} signature={:?} cache_target={:?} cache_path={:?} old_ready={} new_ready={} old_svg={:?} new_svg={:?} active_diff_file_rev={:?} active_diff_target={:?} active={}",
         pane.file_image_diff_cache_seq,
-        pane.file_image_diff_cache_inflight,
+        pane.file_image_diff_cache_inflight.is_some(),
         pane.file_image_diff_cache_repo_id,
         pane.file_image_diff_cache_rev,
         pane.file_image_diff_cache_content_signature,

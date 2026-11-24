@@ -32,10 +32,13 @@ fn bare_fast_stage_and_unstage_refuse_before_counters_or_effects() {
             let mut effects = reducer::PathActionEffects::new();
             let path = PathBuf::from("config");
             let effect = match action {
-                0 => Effect::StagePath { repo_id, path },
-                1 => Effect::StagePaths {
+                0 => Effect::Stage {
                     repo_id,
-                    paths: RepoPathList::from(vec![path]),
+                    request: crate::msg::StageRequest::path(path),
+                },
+                1 => Effect::Stage {
+                    repo_id,
+                    request: vec![path].into(),
                 },
                 2 => Effect::UnstagePath { repo_id, path },
                 3 => Effect::UnstagePaths {
@@ -458,9 +461,9 @@ fn queued_stage_rechecks_native_mode_before_touching_index() {
         &mut repos,
         state,
         sender,
-        Effect::StagePath {
+        Effect::Stage {
             repo_id,
-            path: "tracked".into(),
+            request: crate::msg::StageRequest::path("tracked".into()),
         },
     );
     executor.join();

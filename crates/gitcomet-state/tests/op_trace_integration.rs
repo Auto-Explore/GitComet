@@ -15,6 +15,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[path = "support/poll.rs"]
+mod poll;
+
 struct FailingBackend;
 
 impl GitBackend for FailingBackend {
@@ -47,7 +50,6 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
 
     let mut records: Vec<Record> = Vec::new();
     let mut threads = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
     let stages = |records: &[Record]| {
         records
             .iter()
@@ -55,7 +57,7 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
             .map(|record| (record.stage, record.label))
             .collect::<Vec<_>>()
     };
-    loop {
+    let completed = poll::until(Duration::from_secs(10), Duration::from_millis(5), || {
         let drained = op_trace::drain();
         records.extend(drained.records);
         threads.extend(drained.threads);
@@ -64,12 +66,13 @@ fn a_traced_dispatch_is_followed_through_the_store_worker_and_its_tasks() {
             .iter()
             .filter(|(stage, _)| *stage == Stage::Received)
             .count();
-        if received >= 2 && seen.contains(&(Stage::TaskFinished, "OpenRepo")) {
-            break;
-        }
-        assert!(Instant::now() < deadline, "incomplete trace: {seen:?}");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        (received >= 2 && seen.contains(&(Stage::TaskFinished, "OpenRepo"))).then_some(())
+    });
+    assert!(
+        completed.is_some(),
+        "incomplete trace: {:?}",
+        stages(&records)
+    );
 
     let seen = stages(&records);
     for expected in [

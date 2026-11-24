@@ -134,6 +134,10 @@ pub(in crate::view) struct HostedLineEnd {
 }
 
 impl HostedViews {
+    pub(super) fn invalidate_text_measurements(&mut self) {
+        self.text = None;
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.views.is_empty()
     }

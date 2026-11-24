@@ -173,7 +173,6 @@ impl PopoverHost {
         let show_timezone = preferences.appearance.show_timezone;
         let history_relative_dates = preferences.history.relative_dates;
         let change_tracking_view = preferences.change_tracking.view;
-        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
         let diff_content_mode = preferences.diff.content_mode;
         let diff_whitespace_mode = preferences.diff.whitespace_mode;
         let diff_reveal_whitespace_chars = preferences.diff.reveal_whitespace_chars;
@@ -810,15 +809,13 @@ impl PopoverHost {
             main_pane,
             extension_dialog: None,
             state,
+            active_repo_index: ui_model.read(cx).active_repo_index.clone(),
             theme_mode,
             date_time_format,
             timezone,
             show_timezone,
             history_relative_dates,
             change_tracking_view,
-            commit_amend_enabled: false,
-            commit_push_after_enabled,
-            commit_skip_hooks_enabled: false,
             diff_content_mode,
             diff_whitespace_mode,
             diff_reveal_whitespace_chars,
@@ -1664,7 +1661,6 @@ impl PopoverHost {
                 Some(*repo_id)
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
-            PopoverKind::CommitOptionsMenu { repo_id } => Some(*repo_id),
             PopoverKind::BranchPicker { .. } => self.state.active_repo,
             PopoverKind::UpstreamPicker { repo_id, .. } => Some(*repo_id),
             _ => None,
@@ -1690,10 +1686,7 @@ impl PopoverHost {
             return;
         }
 
-        if matches!(
-            kind,
-            PopoverKind::PreviousCommitMessagesMenu { .. } | PopoverKind::CommitOptionsMenu { .. }
-        ) {
+        if matches!(kind, PopoverKind::PreviousCommitMessagesMenu { .. }) {
             if matches!(
                 repo.recent_commit_messages,
                 Loadable::NotLoaded | Loadable::Error(_)
@@ -2444,8 +2437,7 @@ impl PopoverHost {
         if let Some(binding) = self.store.binding {
             return binding.repository(&self.state);
         }
-        let repo_id = self.state.active_repo?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+        self.active_repo_index.get(&self.state)
     }
 
     pub(super) fn bound_diff_state<'a>(

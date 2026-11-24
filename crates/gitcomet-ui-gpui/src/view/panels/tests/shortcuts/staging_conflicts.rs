@@ -1514,3 +1514,224 @@ fn a_read_only_file_view_offers_no_staging(cx: &mut gpui::TestAppContext) {
         );
     }
 }
+
+#[gpui::test]
+fn repeated_stage_scans_share_work_and_reopening_the_repository_drops_the_reply(
+    cx: &mut gpui::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflict.txt");
+    std::fs::write(directory.path().join(&path), "resolved\n").unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70619);
+    let make_state = || {
+        let mut repo =
+            shortcut_fixture_repo(repo_id, directory.path(), &CommitId("3428abc".into()));
+        set_test_conflict_status(&mut repo, path.clone(), DiffArea::Unstaged);
+        app_state_with_active_repo(repo)
+    };
+    apply_state(cx, &view, make_state());
+    let completions = std::rc::Rc::new(std::cell::Cell::new(0));
+    let queue = |cx: &mut gpui::VisualTestContext, reopen_view: bool, reopen_store: bool| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                for _ in 0..2 {
+                    let completed = completions.clone();
+                    crate::view::conflict_markers::check(
+                        this,
+                        repo_id,
+                        vec![path.clone()],
+                        crate::view::conflict_markers::StageIntent::Command {
+                            offer_confirmation: true,
+                        },
+                        window,
+                        cx,
+                        move |_, _, unresolved, _, _| {
+                            assert!(matches!(
+                                unresolved,
+                                crate::view::conflict_markers::MarkerCheck::Clear(_)
+                            ));
+                            completed.set(completed.get() + 1);
+                        },
+                    );
+                }
+                if reopen_store {
+                    this.store.replace_snapshot_for_test(make_state());
+                }
+                if reopen_view {
+                    this.apply_state_snapshot(make_state(), cx);
+                }
+            });
+        });
+        cx.run_until_parked();
+    };
+    queue(cx, false, false);
+    assert_eq!(completions.get(), 1);
+    queue(cx, false, true);
+    assert_eq!(completions.get(), 1);
+    apply_state(cx, &view, make_state());
+    queue(cx, true, false);
+    assert_eq!(completions.get(), 1);
+}
+
+#[gpui::test]
+fn escape_cancels_only_the_staging_scan_in_its_own_window(cx: &mut gpui::TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflict.txt");
+    std::fs::write(
+        directory.path().join(&path),
+        "<<<<<<< ours\none\n=======\ntwo\n>>>>>>> theirs\n",
+    )
+    .unwrap();
+    let repo_id = RepoId(70621);
+    let mut repo = shortcut_fixture_repo(repo_id, directory.path(), &CommitId("4242abc".into()));
+    set_test_conflict_status(&mut repo, path.clone(), DiffArea::Unstaged);
+    let state = app_state_with_active_repo(repo);
+    let open = |window: &mut Window, cx: &mut gpui::Context<GitCometView>| {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        GitCometView::new(store, events, None, window, cx)
+    };
+    let (first, first_cx) = cx.add_window_view(open);
+    apply_state(first_cx, &first, state.clone());
+    let first_window = first_cx.update(|window, _| window.window_handle());
+    let (second, cx) = first_cx.add_window_view(open);
+    apply_state(cx, &second, state);
+    let queue = |owner: &gpui::Entity<GitCometView>, window: &mut Window, app: &mut gpui::App| {
+        owner.update(app, |this, cx| {
+            this.execute_command("stage-all", Some(window), cx)
+        });
+    };
+    first_window
+        .update(cx, |_, window, app| queue(&first, window, app))
+        .unwrap();
+    cx.update(|window, app| queue(&second, window, app));
+    first_window
+        .update(cx, |_, window, app| {
+            window.dispatch_keystroke(gpui::Keystroke::parse("escape").unwrap(), app);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert!(crate::view::test_support::popover_kind(first.read(app), app).is_none());
+        assert!(matches!(crate::view::test_support::popover_kind(second.read(app), app),
+            Some(PopoverKind::StageConflictMarkersConfirm { unresolved, .. }) if unresolved == [path]));
+    });
+}
+
+#[gpui::test]
+fn staging_rechecks_new_conflicts_and_retains_marker_warnings_while_status_loads(
+    cx: &mut gpui::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let first = std::path::PathBuf::from("first");
+    let second = std::path::PathBuf::from("second");
+    std::fs::write(directory.path().join(&first), "resolved\n").unwrap();
+    std::fs::write(
+        directory.path().join(&second),
+        "<<<<<<< ours\none\n=======\ntwo\n>>>>>>> theirs\n",
+    )
+    .unwrap();
+    let repo_id = RepoId(70622);
+    let mut repo = shortcut_fixture_repo(repo_id, directory.path(), &CommitId("4242abc".into()));
+    set_test_conflict_status(&mut repo, first.clone(), DiffArea::Unstaged);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    let result = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let observed = result.clone();
+            crate::view::conflict_markers::check(
+                this,
+                repo_id,
+                vec![first.clone(), second.clone()],
+                crate::view::conflict_markers::StageIntent::Command {
+                    offer_confirmation: true,
+                },
+                window,
+                cx,
+                move |_, _, unresolved, _, _| {
+                    let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                    else {
+                        panic!("expected a marker confirmation")
+                    };
+                    *observed.borrow_mut() = paths;
+                },
+            );
+            let mut next = (*this.store.snapshot()).clone();
+            set_test_conflict_status(&mut next.repos[0], second.clone(), DiffArea::Unstaged);
+            this.store.replace_snapshot_for_test(Arc::new(next));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(&*result.borrow(), std::slice::from_ref(&second));
+    result.borrow_mut().clear();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let observed = result.clone();
+            crate::view::conflict_markers::check(
+                this,
+                repo_id,
+                vec![second.clone()],
+                crate::view::conflict_markers::StageIntent::Command {
+                    offer_confirmation: true,
+                },
+                window,
+                cx,
+                move |_, _, unresolved, _, _| {
+                    let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                    else {
+                        panic!("expected a marker confirmation")
+                    };
+                    *observed.borrow_mut() = paths;
+                },
+            );
+            let mut next = (*this.store.snapshot()).clone();
+            next.repos[0].worktree_status = Loadable::Loading;
+            next.repos[0].status = Loadable::Loading;
+            this.store.replace_snapshot_for_test(Arc::new(next));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(&*result.borrow(), &[second]);
+    result.borrow_mut().clear();
+    std::fs::write(
+        directory.path().join(&first),
+        "<<<<<<< ours\none\n=======\ntwo\n>>>>>>> theirs\n",
+    )
+    .unwrap();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            for attempt in 0..2 {
+                let observed = result.clone();
+                crate::view::conflict_markers::check(
+                    this,
+                    repo_id,
+                    vec![first.clone()],
+                    crate::view::conflict_markers::StageIntent::Command {
+                        offer_confirmation: true,
+                    },
+                    window,
+                    cx,
+                    move |_, _, unresolved, _, _| {
+                        let crate::view::conflict_markers::MarkerCheck::Marked(paths) = unresolved
+                        else {
+                            panic!("expected a marker confirmation")
+                        };
+                        assert_eq!(paths.len(), 1);
+                        observed.borrow_mut().extend(paths);
+                    },
+                );
+                if attempt == 0 {
+                    this.apply_state_snapshot(this.store.snapshot(), cx);
+                }
+            }
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(&*result.borrow(), &[first]);
+}

@@ -15,7 +15,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::view) struct BufferId(u64);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum SaveOrigin {
     Detached,
     Repository {

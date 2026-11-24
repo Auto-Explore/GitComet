@@ -227,8 +227,10 @@ impl TextInput {
         }
 
         let has_content = !content.is_empty();
-        let display_text = substitute_text.unwrap_or_else(|| content.as_shared_string());
-        let line_source = LineTextSource::whole(display_text.as_ref(), &line_starts);
+        let line_source = match substitute_text.as_deref() {
+            Some(text) => LineTextSource::whole(text, &line_starts),
+            None => LineTextSource::Document(&content),
+        };
         let mut rows_changed = false;
         for line_ix in dirty_ranges.into_iter().flatten() {
             let line_start = line_starts.line_start(line_ix).unwrap_or(0);
@@ -247,7 +249,7 @@ impl TextInput {
                 LineShapeInput {
                     line_ix,
                     line_start,
-                    line_text,
+                    line_text: &line_text,
                 },
                 wrap_width,
                 None,

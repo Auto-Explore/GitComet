@@ -223,7 +223,7 @@ pub(crate) fn status_section_is_loading(repo: &RepoState, section: StatusSection
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct StatusMultiSelection {
     /// An explicit empty selection must not fall back to the previewed file.
     pub(crate) explicit_section: Option<StatusSection>,

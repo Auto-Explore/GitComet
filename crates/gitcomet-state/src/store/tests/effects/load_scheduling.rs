@@ -1740,6 +1740,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        interactive_executor: &crate::store::executor::interactive_queue(),
         worktree_scan_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
@@ -2124,6 +2125,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
         let executors = super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            interactive_executor: &crate::store::executor::interactive_queue(),
             worktree_scan_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
@@ -2546,16 +2548,16 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::StagePath {
+            Effect::Stage {
                 repo_id,
-                path: PathBuf::from("tracked.txt"),
+                request: crate::msg::StageRequest::path(PathBuf::from("tracked.txt")),
             },
             1,
         ),
         (
-            Effect::StagePaths {
+            Effect::Stage {
                 repo_id,
-                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
+                request: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
             },
             1,
         ),
@@ -2893,6 +2895,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        interactive_executor: &crate::store::executor::interactive_queue(),
         worktree_scan_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
@@ -3009,6 +3012,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     let executors = EffectExecutors {
         executor: &other,
         repo_load_executor: &foreground,
+        interactive_executor: &crate::store::executor::interactive_queue(),
         worktree_scan_executor: &scans,
         session_persist_executor: &other,
         metadata_executor: &other,

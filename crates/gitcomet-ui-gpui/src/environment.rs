@@ -3,6 +3,8 @@ use gitcomet_core::environment::{EnvironmentSnapshot, GraphicsDetails, Rendering
 use gpui::{App, Context, GpuSpecs, Window};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+mod responsiveness;
+
 #[derive(Clone, Default)]
 pub(crate) struct Environment(pub EnvironmentSnapshot);
 impl gpui::Global for Environment {}
@@ -12,6 +14,7 @@ pub(crate) fn initialize(cx: &mut App) {
         return;
     }
     cx.set_global(Environment::default());
+    responsiveness::initialize(cx);
     cx.on_window_closed(|cx, _| request_refresh(cx)).detach();
     if cfg!(test) {
         return;
@@ -28,6 +31,12 @@ pub(crate) fn initialize(cx: &mut App) {
         });
     })
     .detach();
+}
+
+pub(crate) fn summary_for_copy(window: &Window, cx: &mut App) -> String {
+    let mut summary = cx.global::<Environment>().0.summary();
+    responsiveness::append_summary(&mut summary, window, cx);
+    summary
 }
 
 /// Call once from each root view's constructor. Defer the first capture until

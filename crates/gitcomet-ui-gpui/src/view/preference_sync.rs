@@ -329,9 +329,11 @@ impl GitCometView {
         self.reflog_pane.update(cx, |pane, cx| {
             pane.set_date_settings(format, timezone, show_timezone, cx)
         });
-        self.file_history_pane.update(cx, |pane, cx| {
-            pane.set_date_settings(format, timezone, show_timezone, cx)
-        });
+        if let Some(pane) = self.sidebar_pane.read(cx).file_history_pane().cloned() {
+            pane.update(cx, |pane, cx| {
+                pane.set_date_settings(format, timezone, show_timezone, cx)
+            });
+        }
         self.popover_host.update(cx, |host, cx| {
             host.set_date_time_format(format, cx);
             host.set_timezone(timezone, cx);
@@ -444,57 +446,6 @@ impl GitCometView {
         self.details_pane
             .update(cx, |pane, cx| pane.set_default_file_list_sort(next, cx));
         self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        self.update_ui_preferences(cx, move |preferences| {
-            preferences.repository.commit_push_after_enabled = enabled;
-        });
-        self.details_pane.update(cx, |pane, cx| {
-            pane.set_commit_push_after_enabled(enabled, cx)
-        });
-        self.popover_host.update(cx, |host, cx| {
-            host.sync_commit_push_after_enabled(enabled, cx)
-        });
-        self.schedule_ui_settings_persist(cx);
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_commit_amend_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.details_pane
-            .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
-        cx.notify();
-    }
-
-    /// Lasts while the window is open and is never saved: a forgotten skip
-    /// would silently bypass every hook from then on.
-    pub(in crate::view) fn set_commit_skip_hooks_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.details_pane.update(cx, |pane, cx| {
-            pane.set_commit_skip_hooks_enabled(enabled, cx)
-        });
-        self.popover_host.update(cx, |host, cx| {
-            host.sync_commit_skip_hooks_enabled(enabled, cx)
-        });
-        cx.notify();
     }
 
     pub(in crate::view) fn set_diff_scroll_sync(
@@ -908,8 +859,9 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_relative_dates(enabled, cx);
         });
-        self.file_history_pane
-            .update(cx, |pane, cx| pane.set_relative_dates(enabled, cx));
+        if let Some(pane) = self.sidebar_pane.read(cx).file_history_pane().cloned() {
+            pane.update(cx, |pane, cx| pane.set_relative_dates(enabled, cx));
+        }
         self.popover_host
             .update(cx, |host, cx| host.set_history_relative_dates(enabled, cx));
         self.schedule_ui_settings_persist(cx);

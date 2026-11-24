@@ -79,13 +79,14 @@ impl GitCometView {
             .state
             .repos
             .iter()
-            .map(|repo| repo.spec.workdir.clone())
+            .map(|repo| &repo.spec.workdir)
             .collect();
+        let mut live_paths: FxHashSet<_> = live_repo_paths.iter().copied().collect();
 
         // Reservations read the latest store snapshot; the view can still be
         // behind it when a failed open is retried.
         self.pending_repo_open_reservations.retain(|path, pending| {
-            !live_repo_paths.contains(path)
+            !live_paths.contains(path)
                 && self
                     .state
                     .repo_open_failures
@@ -137,12 +138,16 @@ impl GitCometView {
         }
 
         let mut workspace_repo_paths = self.persisted_workspace_repo_paths.clone();
-        for (path, pending) in &self.pending_repo_open_reservations {
-            if pending.persist_in_workspace && !workspace_repo_paths.contains(path) {
-                workspace_repo_paths.push(path.clone());
-            }
-            if !live_repo_paths.contains(path) {
-                live_repo_paths.push(path.clone());
+        if !self.pending_repo_open_reservations.is_empty() {
+            let workspace_paths: FxHashSet<_> =
+                self.persisted_workspace_repo_paths.iter().collect();
+            for (path, pending) in &self.pending_repo_open_reservations {
+                if pending.persist_in_workspace && !workspace_paths.contains(path) {
+                    workspace_repo_paths.push(path.clone());
+                }
+                if live_paths.insert(path) {
+                    live_repo_paths.push(path);
+                }
             }
         }
         let synchronized_active_repository = self
@@ -152,10 +157,11 @@ impl GitCometView {
 
         // Saved bootstrap paths own their window before their tabs load too.
         for path in &workspace_repo_paths {
-            if !live_repo_paths.contains(path) {
-                live_repo_paths.push(path.clone());
+            if live_paths.insert(path) {
+                live_repo_paths.push(path);
             }
         }
+        let live_repo_paths: Vec<_> = live_repo_paths.into_iter().cloned().collect();
         let workspace_id = if self.view_mode == GitCometViewMode::Normal {
             crate::workspaces::sync_window(
                 cx,
@@ -169,8 +175,8 @@ impl GitCometView {
         };
         self.set_workspace_id(workspace_id, cx);
         // Live routing includes provisional tabs; durable membership above does not.
-        if self.synced_repo_paths.as_ref() != live_repo_paths.as_slice() {
-            self.synced_repo_paths = live_repo_paths.into();
+        if self.repositories.registered_workdirs.as_ref() != live_repo_paths.as_slice() {
+            self.repositories.registered_workdirs = live_repo_paths.into();
         }
         crate::app::sync_gitcomet_window_registry(
             cx,
@@ -180,7 +186,7 @@ impl GitCometView {
             self.documents.downgrade(),
             self.view_mode,
             self.workspace_id,
-            Arc::clone(&self.synced_repo_paths),
+            Arc::clone(&self.repositories.registered_workdirs),
         );
         self.sync_workspace_theme_override(cx);
         if let Some(placement) = self.window_placement.clone() {
@@ -227,7 +233,13 @@ impl GitCometView {
     pub(super) fn consume_initial_store_feedback(&mut self, cx: &mut gpui::Context<Self>) {
         let initial = Arc::clone(&self.state);
         let mut follow_up_msgs = Vec::new();
-        self.consume_store_feedback(None, &initial, &mut follow_up_msgs, cx);
+        self.consume_store_feedback(
+            None,
+            &FxHashMap::default(),
+            &initial,
+            &mut follow_up_msgs,
+            cx,
+        );
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }
@@ -235,7 +247,8 @@ impl GitCometView {
 
     fn consume_store_feedback(
         &mut self,
-        previous: Option<&AppState>,
+        previous_notifications_seq: Option<u64>,
+        previous_repos: &FxHashMap<RepoId, &RepoState>,
         next: &AppState,
         follow_up_msgs: &mut Vec<Msg>,
         cx: &mut gpui::Context<Self>,
@@ -248,7 +261,7 @@ impl GitCometView {
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
         let new_notifications = next
-            .notifications_after(previous.map_or(0, |state| state.notifications_seq))
+            .notifications_after(previous_notifications_seq.unwrap_or_default())
             .to_vec();
         if !new_notifications.is_empty() {
             follow_up_msgs.push(Msg::AcknowledgeNotifications {
@@ -272,10 +285,9 @@ impl GitCometView {
         for next_repo in &next.repos {
             let feedback = &next_repo.feedback;
             // The numbering restarts with each lifetime of the repository.
-            let (old_diagnostics_seq, old_command_log_seq) = previous
-                .into_iter()
-                .flat_map(|state| state.repos.iter())
-                .find(|r| r.id == next_repo.id && r.lifetime() == next_repo.lifetime())
+            let previous_repo = previous_repos.get(&next_repo.id).copied();
+            let (old_diagnostics_seq, old_command_log_seq) = previous_repo
+                .filter(|r| r.lifetime() == next_repo.lifetime())
                 .map_or((0, 0), |r| {
                     (r.feedback.diagnostics_seq, r.feedback.command_log_seq)
                 });
@@ -334,14 +346,10 @@ impl GitCometView {
                 }
             }
 
-            let previous_repo = previous
-                .into_iter()
-                .flat_map(|state| state.repos.iter())
-                .find(|repo| repo.id == next_repo.id);
             for operation in next_repo.feedback.hook_activity.iter().filter(|operation| {
                 // Hook activity is retained history, not an unacknowledged
                 // feedback buffer. Attachment must not replay old completions.
-                previous.is_some()
+                previous_notifications_seq.is_some()
                     && operation.is_reportable()
                     && !operation.status.is_active()
                     && !operation.handled_by_prompt
@@ -410,32 +418,18 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        let previous = Arc::clone(&self.state);
+        let previous_repos: FxHashMap<_, _> =
+            previous.repos.iter().map(|repo| (repo.id, repo)).collect();
+        let open_ids: FxHashSet<_> = next.repos.iter().map(|repo| repo.id).collect();
         note_opened_repos_for_activation(
-            &self.state,
+            &previous_repos,
             &next,
+            &open_ids,
             &mut self.last_repo_activation_dispatch_at,
             Instant::now(),
         );
-        let workspace_membership_changed = self.state.active_repo != next.active_repo
-            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
-            || !self
-                .state
-                .repos
-                .iter()
-                .map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                })
-                .eq(next.repos.iter().map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                }));
+        let workspace_membership_changed = workspace_membership_changed(&previous, &next);
         let repo_open_failed =
             next.repo_open_failure_revision > self.state.repo_open_failure_revision;
         let git_runtime_changed = self.state.git_runtime != next.git_runtime;
@@ -448,10 +442,20 @@ impl GitCometView {
         let prev_force_remove_worktree_prompt = self.state.force_remove_worktree_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
-        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
+        let merge_view_active = self
+            .repositories
+            .active
+            .get(&next)
+            .and_then(active_merge_view_target)
+            .is_some();
         let mut follow_up_msgs = Vec::new();
-        let previous = Arc::clone(&self.state);
-        self.consume_store_feedback(Some(previous.as_ref()), &next, &mut follow_up_msgs, cx);
+        self.consume_store_feedback(
+            Some(previous.notifications_seq),
+            &previous_repos,
+            &next,
+            &mut follow_up_msgs,
+            cx,
+        );
 
         let next_submodule_add_progress = next
             .repos
@@ -475,10 +479,6 @@ impl GitCometView {
             .repos
             .iter()
             .flat_map(|repo| {
-                let name = repo.spec.workdir.file_name().map_or_else(
-                    || repo.spec.workdir.display().to_string(),
-                    |name| name.to_string_lossy().into_owned(),
-                );
                 repo.feedback
                     .hook_activity
                     .iter()
@@ -488,6 +488,10 @@ impl GitCometView {
                             && operation.status.is_active()
                     })
                     .map(move |operation| {
+                        let name = repo.spec.workdir.file_name().map_or_else(
+                            || repo.spec.workdir.display().to_string(),
+                            |name| name.to_string_lossy().into_owned(),
+                        );
                         super::operation_progress::OperationProgress::from_operation(
                             repo.id, &name, operation,
                         )
@@ -517,17 +521,14 @@ impl GitCometView {
         self.minimized_hook_activity_chains
             .retain(|chain| active_hook_chains.contains(chain));
         self.minimized_hook_activity_repos
-            .retain(|repo_id| next.repos.iter().any(|repo| repo.id == *repo_id));
+            .retain(|repo_id| open_ids.contains(repo_id));
         self.sync_minimized_hook_activity_indicator(cx);
 
         let newly_started_hook_chains = next_hook_progress
             .iter()
             .filter(|(repo_id, operation)| {
-                !self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == *repo_id)
+                !previous_repos
+                    .get(repo_id)
                     .and_then(|repo| {
                         repo.feedback
                             .hook_activity
@@ -575,17 +576,17 @@ impl GitCometView {
 
         #[cfg(target_os = "macos")]
         if self.view_mode == GitCometViewMode::Normal {
-            let next_mode = next
-                .repos
-                .iter()
-                .find(|repo| Some(repo.id) == next.active_repo)
+            let next_mode = self
+                .repositories
+                .active
+                .get(&next)
                 .and_then(|repo| repo.repository_mode);
             if self.state.active_repo != next.active_repo
                 || self.active_repo().and_then(|repo| repo.repository_mode) != next_mode
             {
                 cx.defer(crate::app::refresh_macos_app_menus);
             }
-            for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
+            for path in newly_opened_repo_paths(&previous_repos, next.as_ref()) {
                 cx.add_recent_document(&path);
             }
             // Every publication lands here; re-read the session file (a read
@@ -598,11 +599,7 @@ impl GitCometView {
             }
         }
 
-        let repos_closed = self
-            .state
-            .repos
-            .iter()
-            .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
+        let repos_closed = previous_repos.keys().any(|id| !open_ids.contains(id));
         // Asking for the repository's canvas, as opening a file or commit
         // does, takes the main slot back from the document viewer or an overlay.
         let uncover = (self.documents_active || self.canvas_overlay_shown())
@@ -630,12 +627,8 @@ impl GitCometView {
         }
         if repos_closed {
             // A closed repo's errors name what no longer exists.
-            let repos = Arc::clone(&self.state);
             self.toast_host.update(cx, |host, cx| {
-                host.retain_errors_of_open_repos(
-                    |repo_id| repos.repos.iter().any(|repo| repo.id == repo_id),
-                    cx,
-                )
+                host.retain_errors_of_open_repos(|repo_id| open_ids.contains(&repo_id), cx)
             });
         }
         if self.state.git_log_settings.verify_commit_signatures
@@ -765,8 +758,12 @@ impl GitCometView {
         self.drive_submodule_diff_bootstrap();
 
         if workspace_membership_changed {
+            self.startup_work
+                .syntax_warmups
+                .retain(|id, _| open_ids.contains(id));
             self.sync_workspace_and_registry(cx);
         }
+        self.warm_active_repository_syntax(cx);
 
         git_runtime_changed
             || prev_annex_rail != annex_rail
@@ -777,8 +774,28 @@ impl GitCometView {
     }
 }
 
+fn workspace_membership_changed(previous: &AppState, next: &AppState) -> bool {
+    fn member(repo: &RepoState) -> (RepoId, &std::path::Path, bool) {
+        (
+            repo.id,
+            &repo.spec.workdir,
+            repo.is_provisional_external_drop_open(),
+        )
+    }
+    previous.active_repo != next.active_repo
+        || !Arc::ptr_eq(&previous.repo_open_failures, &next.repo_open_failures)
+        || !previous
+            .repos
+            .iter()
+            .map(member)
+            .eq(next.repos.iter().map(member))
+}
+
 #[cfg(target_os = "macos")]
-fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::PathBuf> {
+fn newly_opened_repo_paths(
+    prev: &FxHashMap<RepoId, &RepoState>,
+    next: &AppState,
+) -> Vec<std::path::PathBuf> {
     next.repos
         .iter()
         .filter_map(|next_repo| {
@@ -786,9 +803,7 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
                 return None;
             }
             let was_ready = prev
-                .repos
-                .iter()
-                .find(|repo| repo.id == next_repo.id)
+                .get(&next_repo.id)
                 .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())));
             (!was_ready).then(|| next_repo.spec.workdir.clone())
         })
@@ -930,7 +945,10 @@ mod tests {
         };
 
         assert_eq!(
-            newly_opened_repo_paths(&prev, &next),
+            newly_opened_repo_paths(
+                &prev.repos.iter().map(|repo| (repo.id, repo)).collect(),
+                &next
+            ),
             vec![PathBuf::from("/tmp/repo-a")]
         );
     }
@@ -948,7 +966,10 @@ mod tests {
         };
 
         assert_eq!(
-            newly_opened_repo_paths(&prev, &next),
+            newly_opened_repo_paths(
+                &prev.repos.iter().map(|repo| (repo.id, repo)).collect(),
+                &next
+            ),
             vec![PathBuf::from("/tmp/repo-new")]
         );
     }

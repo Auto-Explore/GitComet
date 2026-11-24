@@ -183,6 +183,7 @@ impl DiffRenderer {
         if diff_state.content_preview {
             return false;
         }
+        let target_revision = diff_state.diff_target_rev;
         let Some(diff_target) = diff_state.diff_target.clone() else {
             return false;
         };
@@ -191,91 +192,116 @@ impl DiffRenderer {
         };
         let path = path.clone();
         let area = *area;
-        let change_tracking_view = self.active_change_tracking_view(cx);
-        let status_section_order =
-            self.active_status_section_order(repo_id, change_tracking_view, cx);
-        let next_path_in_section = status_nav::status_navigation_context_for_repo(
-            repo,
-            &diff_target,
-            change_tracking_view,
-            status_section_order.as_deref(),
-        )
-        .and_then(|navigation| navigation.next_or_prev_path());
-        let status_ready =
-            !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
-
-        // A multi-file status selection wins over the single shown file, so
-        // the shortcut matches what the status row button and context menu
-        // already do with the same selection.
-        if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
-            if self.confirm_stage_conflict_markers(repo_id, area, paths.clone(), true, window, cx) {
-                return true;
-            }
-            self.clear_status_selection_for_shortcut(repo_id, cx);
-            crate::view::status_actions::stage_or_unstage_paths(&self.store, repo_id, area, paths);
-            self.rebuild_diff_cache(cx);
-            return true;
-        }
-
+        let selected = self.status_selection_for_shortcut(repo_id, area, &path, cx);
+        let multi = selected.is_some();
         let consumes_selection =
-            self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
-        if self.confirm_stage_conflict_markers(
-            repo_id,
-            area,
-            vec![path.clone()],
-            consumes_selection,
-            window,
-            cx,
-        ) {
-            return true;
-        }
-
-        if consumes_selection {
-            self.clear_status_selection_for_shortcut(repo_id, cx);
-        }
-        match (status_ready, area) {
-            (true, DiffArea::Unstaged) => {
-                self.store.dispatch(Msg::StagePath {
-                    repo_id,
-                    path: path.clone(),
-                });
-                if let Some(next_path) = next_path_in_section {
-                    self.store.dispatch(Msg::SelectDiff {
+            multi || self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
+        let paths = selected.unwrap_or_else(|| vec![path.clone()]);
+        let finish = move |this: &mut Self,
+                           paths: Vec<std::path::PathBuf>,
+                           check: crate::view::conflict_markers::MarkerCheck,
+                           window: &mut Window,
+                           cx: &mut gpui::Context<Self>| {
+            let Some(repo) = this.active_repo() else {
+                return;
+            };
+            if this.bound_diff_state(repo).diff_target.as_ref() != Some(&diff_target)
+                || this.bound_diff_state(repo).diff_target_rev != target_revision
+            {
+                return;
+            }
+            let status_ready =
+                !this.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
+            let next_path = if status_ready && !multi {
+                let tracking = this.active_change_tracking_view(cx);
+                let order = this.active_status_section_order(repo_id, tracking, cx);
+                status_nav::status_navigation_context_for_repo(
+                    repo,
+                    &diff_target,
+                    tracking,
+                    order.as_deref(),
+                )
+                .and_then(|navigation| navigation.next_or_prev_path())
+            } else {
+                None
+            };
+            let clear_selection = consumes_selection
+                && if multi {
+                    this.status_selection_for_shortcut(repo_id, area, &path, cx)
+                        .as_ref()
+                        == Some(&paths)
+                } else {
+                    this.status_single_selection_for_shortcut(repo_id, area, &path, cx)
+                };
+            let guard = match check {
+                crate::view::conflict_markers::MarkerCheck::Clear(guard) => guard,
+                crate::view::conflict_markers::MarkerCheck::Marked(unresolved) => {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                    this.open_popover_at(
+                        PopoverKind::StageConflictMarkersConfirm {
+                            repo_id,
+                            paths,
+                            unresolved,
+                            clear_selection,
+                        },
+                        anchor,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                    return;
+                }
+            };
+            if clear_selection {
+                this.clear_status_selection_for_shortcut(repo_id, cx);
+            }
+            let selection = if multi {
+                gitcomet_state::msg::StageSelection::Paths(paths.into())
+            } else {
+                gitcomet_state::msg::StageSelection::Path(path)
+            };
+            crate::view::status_actions::toggle_checked_stage(
+                &this.store,
+                repo_id,
+                area,
+                selection,
+                guard,
+            );
+            if !multi && status_ready {
+                if let Some(next_path) = next_path {
+                    this.store.dispatch(Msg::SelectDiff {
                         repo_id,
-                        target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
+                        target: DiffTarget::working_tree(next_path, area),
                     });
                 } else {
-                    self.clear_diff_selection_or_exit(repo_id, cx);
+                    this.clear_diff_selection_or_exit(repo_id, cx);
                 }
             }
-            (true, DiffArea::Staged) => {
-                self.store.dispatch(Msg::UnstagePath {
-                    repo_id,
-                    path: path.clone(),
-                });
-                if let Some(next_path) = next_path_in_section {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::working_tree(next_path, DiffArea::Staged),
-                    });
-                } else {
-                    self.clear_diff_selection_or_exit(repo_id, cx);
-                }
-            }
-            (false, DiffArea::Unstaged) => {
-                self.store.dispatch(Msg::StagePath {
-                    repo_id,
-                    path: path.clone(),
-                });
-            }
-            (false, DiffArea::Staged) => {
-                self.store.dispatch(Msg::UnstagePath {
-                    repo_id,
-                    path: path.clone(),
-                });
-            }
+            this.rebuild_diff_cache(cx);
+        };
+        if area == DiffArea::Unstaged {
+            crate::view::conflict_markers::check(
+                self,
+                repo_id,
+                paths,
+                crate::view::conflict_markers::StageIntent::Diff {
+                    target_revision,
+                    multi,
+                    consumes_selection,
+                },
+                window,
+                cx,
+                finish,
+            );
+        } else {
+            finish(
+                self,
+                paths,
+                crate::view::conflict_markers::MarkerCheck::Clear(None),
+                window,
+                cx,
+            );
         }
-        self.rebuild_diff_cache(cx);
         true
     }
 
@@ -569,150 +595,12 @@ impl DiffRenderer {
         {
             let path = path.clone();
             let area = *area;
-            let status_ready =
-                !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
-
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
-                    let change_tracking_view = self.active_change_tracking_view(cx);
-                    let status_section_order =
-                        self.active_status_section_order(repo_id, change_tracking_view, cx);
-                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                        repo,
-                        &diff_target,
-                        change_tracking_view,
-                        status_section_order.as_deref(),
-                    )
-                    .and_then(|navigation| navigation.next_or_prev_path());
-
-                    // A multi-file status selection wins over the single shown
-                    // file, matching the status row button and context menu.
-                    // Resolved before confirming, or the dialog would describe —
-                    // and then stage — only the shown file out of the selection.
-                    if let Some(paths) =
-                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
-                    {
-                        if self.confirm_stage_conflict_markers(
-                            repo_id,
-                            area,
-                            paths.clone(),
-                            true,
-                            window,
-                            cx,
-                        ) {
-                            return true;
-                        }
-                        self.clear_status_selection_for_shortcut(repo_id, cx);
-                        crate::view::status_actions::stage_or_unstage_paths(
-                            &self.store,
-                            repo_id,
-                            area,
-                            paths,
-                        );
-                        self.rebuild_diff_cache(cx);
-                        return true;
-                    }
-
-                    let consumes_selection =
-                        self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
-                    if self.confirm_stage_conflict_markers(
-                        repo_id,
-                        area,
-                        vec![path.clone()],
-                        consumes_selection,
-                        window,
-                        cx,
-                    ) {
-                        return true;
-                    }
-
-                    if consumes_selection {
-                        self.clear_status_selection_for_shortcut(repo_id, cx);
-                    }
-                    if status_ready {
-                        self.store.dispatch(Msg::StagePath {
-                            repo_id,
-                            path: path.clone(),
-                        });
-                        if let Some(next_path) = next_path_in_section {
-                            self.store.dispatch(Msg::SelectDiff {
-                                repo_id,
-                                target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
-                            });
-                        } else {
-                            self.clear_diff_selection_or_exit(repo_id, cx);
-                        }
-                    } else {
-                        self.store.dispatch(Msg::StagePath {
-                            repo_id,
-                            path: path.clone(),
-                        });
-                    }
-                    self.rebuild_diff_cache(cx);
-                    handled = true;
+                    handled = self.toggle_stage_shown_file(window, cx);
                 }
                 "u" if area == DiffArea::Staged && !mods.shift => {
-                    let change_tracking_view = self.active_change_tracking_view(cx);
-                    let status_section_order =
-                        self.active_status_section_order(repo_id, change_tracking_view, cx);
-                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                        repo,
-                        &diff_target,
-                        change_tracking_view,
-                        status_section_order.as_deref(),
-                    )
-                    .and_then(|navigation| navigation.next_or_prev_path());
-
-                    // A multi-file status selection wins over the single shown
-                    // file, matching the status row button and context menu.
-                    if let Some(paths) =
-                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
-                    {
-                        if self.confirm_stage_conflict_markers(
-                            repo_id,
-                            area,
-                            paths.clone(),
-                            true,
-                            window,
-                            cx,
-                        ) {
-                            return true;
-                        }
-                        self.clear_status_selection_for_shortcut(repo_id, cx);
-                        crate::view::status_actions::stage_or_unstage_paths(
-                            &self.store,
-                            repo_id,
-                            area,
-                            paths,
-                        );
-                        self.rebuild_diff_cache(cx);
-                        return true;
-                    }
-
-                    if self.status_single_selection_for_shortcut(repo_id, area, &path, cx) {
-                        self.clear_status_selection_for_shortcut(repo_id, cx);
-                    }
-                    if status_ready {
-                        self.store.dispatch(Msg::UnstagePath {
-                            repo_id,
-                            path: path.clone(),
-                        });
-                        if let Some(next_path) = next_path_in_section {
-                            self.store.dispatch(Msg::SelectDiff {
-                                repo_id,
-                                target: DiffTarget::working_tree(next_path, DiffArea::Staged),
-                            });
-                        } else {
-                            self.clear_diff_selection_or_exit(repo_id, cx);
-                        }
-                    } else {
-                        self.store.dispatch(Msg::UnstagePath {
-                            repo_id,
-                            path: path.clone(),
-                        });
-                    }
-                    self.rebuild_diff_cache(cx);
-                    handled = true;
+                    handled = self.toggle_stage_shown_file(window, cx);
                 }
                 // Ctrl/Cmd+U discards in an unstaged diff (unstage, above, is
                 // the staged diff's); Ctrl/Cmd+D no longer does, D being next to S.

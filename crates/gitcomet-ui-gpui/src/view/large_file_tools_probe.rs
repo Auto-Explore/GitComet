@@ -31,7 +31,6 @@ pub(super) struct LargeFileToolsPublication {
 /// One window's request lifetime; results continue to live in AppState.
 #[derive(Default)]
 pub(super) struct LargeFileToolsProbeOwner {
-    initial_frame_complete: bool,
     sequence: u64,
     closed: bool,
     runtime: Option<GitRuntimeState>,
@@ -132,50 +131,30 @@ pub(super) struct HeldLargeFileToolsDetector {
 }
 
 impl GitCometView {
-    pub(super) fn schedule_large_file_tools_after_initial_frame(
-        &self,
-        window: &mut Window,
-        cx: &gpui::Context<Self>,
-    ) {
-        let view = cx.weak_entity();
-        // GPUI draws once while opening a window without presenting it. Its
-        // next-frame callbacks run before that platform frame's presentation,
-        // so one callback would still compete with the first submitted frame.
-        // A second callback leaves that platform presentation attempt free to
-        // finish, even when startup is slow. This is not a GPU completion fence:
-        // a lost device or stale atlas can still require a later presentation.
-        window.on_next_frame(move |window, _cx| {
-            window.on_next_frame(move |_window, cx| {
-                let _ = view.update(cx, |view, cx| {
-                    view.large_file_tools_probe.initial_frame_complete = true;
-                    // Read the current snapshot/runtime: preferences or a
-                    // Settings result may have changed while frames were pending.
-                    view.refresh_large_file_tools(cx);
-                });
-            });
-        });
-    }
-
     pub(super) fn close_large_file_tools_probe(&mut self) {
-        self.large_file_tools_probe.close();
+        self.startup_work.large_file_tools.close();
     }
 
     pub(super) fn cancel_large_file_tools_probe(&mut self) {
-        self.large_file_tools_probe.cancel();
+        self.startup_work.large_file_tools.cancel();
     }
 
     pub(super) fn invalidate_large_file_tools_probe_for_runtime(
         &mut self,
         runtime: &GitRuntimeState,
     ) {
-        self.large_file_tools_probe.invalidate_for_runtime(runtime);
+        self.startup_work
+            .large_file_tools
+            .invalidate_for_runtime(runtime);
     }
 
     pub(super) fn reconcile_large_file_tools_runtime(&mut self) {
         let runtime = self.large_file_tools_runtime();
         // A newer request or Settings result can arrive before its store snapshot.
         if self.state.git_runtime == runtime {
-            self.large_file_tools_probe.invalidate_for_runtime(&runtime);
+            self.startup_work
+                .large_file_tools
+                .invalidate_for_runtime(&runtime);
         }
     }
 
@@ -189,7 +168,11 @@ impl GitCometView {
         {
             return;
         }
-        if self.large_file_tools_probe.settle(publication.runtime) {
+        if self
+            .startup_work
+            .large_file_tools
+            .settle(publication.runtime)
+        {
             self.store
                 .dispatch(Msg::SetLargeFileToolsState(publication.tools));
         }
@@ -213,7 +196,7 @@ impl GitCometView {
         if self.large_file_tools_detector_for_test.is_none() {
             return;
         }
-        if !self.large_file_tools_probe.initial_frame_complete
+        if !self.startup_work.initial_frame_complete
             || self.state.repos.is_empty()
             || !matches!(
                 self.state.large_file_tools.git_lfs,
@@ -230,7 +213,7 @@ impl GitCometView {
             self.cancel_large_file_tools_probe();
             return;
         }
-        let Some(request) = self.large_file_tools_probe.begin(runtime) else {
+        let Some(request) = self.startup_work.large_file_tools.begin(runtime) else {
             return;
         };
         // The test driver holds the same request and releases it through the
@@ -276,7 +259,7 @@ impl GitCometView {
         tools: LargeFileToolsState,
     ) {
         let runtime = self.large_file_tools_runtime();
-        if self.large_file_tools_probe.finish(request, &runtime) {
+        if self.startup_work.large_file_tools.finish(request, &runtime) {
             self.store.dispatch(Msg::SetLargeFileToolsState(tools));
         }
     }

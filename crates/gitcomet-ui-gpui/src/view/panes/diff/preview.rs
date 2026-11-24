@@ -696,6 +696,7 @@ impl DiffRenderer {
     /// still needs to set identity fields (path, loadable state, syntax
     /// language) separately.
     pub(in crate::view) fn reset_worktree_preview_source_state(&mut self) {
+        self.viewport_syntax.preview = Default::default();
         self.worktree_preview_source_path = None;
         self.worktree_preview_decode_key = None;
         self.worktree_preview_text_format = None;
@@ -2254,6 +2255,48 @@ fn build_conflict_markdown_preview_documents(
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+struct MarkdownTaskFile {
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    absolute: std::path::PathBuf,
+    origin: crate::view::documents::buffers::SaveOrigin,
+    format: gitcomet_core::text_format::TextFormat,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct MarkdownTaskWrite {
+    file: MarkdownTaskFile,
+    task: MarkdownTaskMarker,
+}
+
+struct PreparedTaskWrite {
+    baseline: WorktreeSaveBaseline,
+    contents: gitcomet_state::msg::ContentBytes,
+    preview: SharedString,
+    line_starts: Arc<[usize]>,
+    line_flags: Arc<[u8]>,
+}
+
+impl MarkdownTaskWrite {
+    fn prepare(&self) -> Result<PreparedTaskWrite, &'static str> {
+        let bytes = std::fs::read(&self.file.absolute)
+            .map_err(|_| "Couldn't read the file to update the checkbox")?;
+        let baseline = WorktreeSaveBaseline::Present(Arc::from(bytes.as_slice()));
+        let (text, contents) = toggle_task_marker_in_format(bytes, self.task, self.file.format)
+            .ok_or("The file changed on disk; the preview is catching up")?;
+        let line_starts: Arc<[usize]> = build_line_starts(&text).into();
+        let line_flags = preview_line_flags_from_source(&text, &line_starts);
+        Ok(PreparedTaskWrite {
+            baseline,
+            contents,
+            preview: text.into(),
+            line_starts,
+            line_flags,
+        })
+    }
+}
+
 impl DiffRenderer {
     /// The working-tree file whose markdown the preview can write task toggles
     /// into: an unstaged file that exists, whose preview — or diff's new side —
@@ -2287,73 +2330,138 @@ impl DiffRenderer {
         self.markdown_preview_task_file().is_some()
     }
 
-    /// Flip one task-list checkbox in the file on disk.
-    ///
-    /// The file is re-read rather than trusting the preview's text, and the
-    /// marker must still sit where it was parsed, so an edit made elsewhere
-    /// since the preview loaded is never overwritten.
+    fn current_task_file(&self) -> Option<MarkdownTaskFile> {
+        let (repo_id, path, absolute) = self.markdown_preview_task_file()?;
+        let repo = self.active_repo()?;
+        let origin = self
+            .store
+            .preview_save_origin(repo_id, repo.lifetime(), &path)?;
+        let format = self
+            .worktree_preview_text_format
+            .map_or(gitcomet_core::text_format::TextFormat::UTF_8, |format| {
+                format.format
+            });
+        Some(MarkdownTaskFile {
+            repo_id,
+            path,
+            absolute,
+            origin,
+            format,
+        })
+    }
+
     pub(in crate::view) fn toggle_markdown_preview_task(
         &mut self,
         region: DiffTextRegion,
         task: MarkdownTaskMarker,
         cx: &mut gpui::Context<Self>,
     ) {
-        // The old side of a diff is not the file.
         if matches!(region, DiffTextRegion::SplitLeft) {
             return;
         }
-        let Some((repo_id, path, abs_path)) = self.markdown_preview_task_file() else {
+        let Some(file) = self.current_task_file() else {
             return;
         };
-        let error = if self.file_edits_are_unsaved_for(repo_id, &path) {
-            Some("Save or discard your unsaved edits to this file first")
-        } else {
-            let format = self
-                .worktree_preview_text_format
-                .map_or(gitcomet_core::text_format::TextFormat::UTF_8, |format| {
-                    format.format
-                });
-            match std::fs::read(&abs_path) {
-                Ok(bytes) => {
-                    let expected_contents =
-                        WorktreeSaveBaseline::Present(Arc::<[u8]>::from(bytes.as_slice()));
-                    match toggle_task_marker_in_format(bytes, task, format) {
-                        Some((contents, bytes)) => {
-                            self.store.dispatch(Msg::SaveWorktreeFile {
-                                repo_id,
-                                path,
-                                contents: bytes,
-                                expected_contents,
-                                stage: false,
-                                completion: None,
-                            });
-                            // The file preview only reloads when its target
-                            // changes, and re-reading now could beat the write:
-                            // show the text being written, as a fresh read would.
-                            if self.worktree_preview_source_path.as_ref() == Some(&abs_path) {
-                                let line_starts: Arc<[usize]> = build_line_starts(&contents).into();
-                                self.set_worktree_preview_ready_source(
-                                    abs_path,
-                                    contents.into(),
-                                    line_starts,
-                                    cx,
-                                );
-                            }
-                            None
-                        }
-                        None => Some("The file changed on disk; the preview is catching up"),
+        if self.file_edits_are_unsaved_for(file.repo_id, &file.path) {
+            self.commands.send(
+                DiffCommand::Toast(
+                    components::ToastKind::Error,
+                    "Save or discard your unsaved edits to this file first".into(),
+                ),
+                cx,
+            );
+            return;
+        }
+        let request = MarkdownTaskWrite { file, task };
+        if self.worktree_markdown.task_writes.contains(&request) {
+            return;
+        }
+        self.worktree_markdown
+            .task_writes
+            .push_back(request.clone());
+        if self.worktree_markdown.task_writes.len() != 1 {
+            return;
+        }
+        let background = cx.background_executor().clone();
+        cx.spawn(async move |view, cx| {
+            let mut request = request;
+            loop {
+                let work = request.clone();
+                let prepared = background.spawn(async move { work.prepare() }).await;
+                let Ok(completion) = view.update(cx, |view, cx| {
+                    view.apply_task_write(&request.file, prepared, cx)
+                }) else {
+                    break;
+                };
+                let failed = if let Some(completion) = completion {
+                    completion.recv().await != Ok(true)
+                } else {
+                    false
+                };
+                let Ok(Some(next)) = view.update(cx, |view, cx| {
+                    if failed
+                        && view.current_task_file().as_ref() == Some(&request.file)
+                        && !view
+                            .file_edits_are_unsaved_for(request.file.repo_id, &request.file.path)
+                    {
+                        view.reload_worktree_preview_keeping_scroll(cx);
                     }
-                }
-                Err(_) => Some("Couldn't read the file to update the checkbox"),
+                    view.worktree_markdown.task_writes.pop_front();
+                    view.worktree_markdown.task_writes.front().cloned()
+                }) else {
+                    break;
+                };
+                request = next;
+            }
+        })
+        .detach();
+    }
+
+    fn apply_task_write(
+        &mut self,
+        file: &MarkdownTaskFile,
+        result: Result<PreparedTaskWrite, &'static str>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<smol::channel::Receiver<bool>> {
+        if self.current_task_file().as_ref() != Some(file) {
+            return None;
+        }
+        let result = if self.file_edits_are_unsaved_for(file.repo_id, &file.path) {
+            Err("Save or discard your unsaved edits to this file first")
+        } else {
+            result
+        };
+        let write = match result {
+            Ok(write) => write,
+            Err(message) => {
+                self.commands.send(
+                    DiffCommand::Toast(components::ToastKind::Error, message.into()),
+                    cx,
+                );
+                return None;
             }
         };
-        if let Some(message) = error {
-            self.commands.send(
-                DiffCommand::Toast(components::ToastKind::Error, message.into()),
+        let (send, receive) = smol::channel::bounded(1);
+        self.store.dispatch(Msg::SaveWorktreeFile {
+            repo_id: file.repo_id,
+            path: file.path.clone(),
+            contents: write.contents,
+            expected_contents: write.baseline,
+            stage: false,
+            completion: Some(send),
+        });
+        if self.worktree_preview_source_path.as_ref() == Some(&file.absolute) {
+            self.set_worktree_preview_ready_materialized_source(
+                file.absolute.clone(),
+                file.absolute.clone(),
+                write.preview,
+                write.line_starts,
+                write.line_flags,
                 cx,
             );
         }
         cx.notify();
+        Some(receive)
     }
 }
 

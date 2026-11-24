@@ -1237,8 +1237,10 @@ impl StandaloneBuffer {
             .map(|visual_ix| {
                 let (ix, is_continuation) =
                     file_editor_line_for_visual_row(&this.wrap_row_starts, visual_ix);
-                div()
-                    .h(row_height)
+                let row = div();
+                #[cfg(test)]
+                let row = row.debug_selector(move || format!("document_gutter_row_{visual_ix}"));
+                row.h(row_height)
                     .px_2()
                     .flex()
                     .items_center()

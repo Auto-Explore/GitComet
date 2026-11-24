@@ -188,7 +188,8 @@ thread_local! {
     /// that path (the canvas shapes the same line again through
     /// `CONFLICT_TEXT_LAYOUT_CACHE`).
     static CONFLICT_ROW_WIDTH_CACHE: std::cell::RefCell<super::FxLruCache<u64, Pixels>> =
-        std::cell::RefCell::new(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES));
+        crate::bundled_fonts::layout_cache(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES),
+            || CONFLICT_ROW_WIDTH_CACHE.with_borrow_mut(super::FxLruCache::clear));
 }
 
 fn conflict_row_text_width(
@@ -345,6 +346,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.base.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Base, window, cx)
     }
 
@@ -354,6 +356,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.ours.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Ours, window, cx)
     }
 
@@ -363,6 +366,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.theirs.begin();
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
@@ -439,6 +443,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.ours.begin();
         Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Ours, window, cx)
     }
 
@@ -448,6 +453,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.columns.theirs.begin();
         Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Theirs, window, cx)
     }
 
@@ -1355,48 +1361,7 @@ impl DiffRenderer {
         // so leave the height these rows actually lay out at where it can read it.
         this.conflict_resolved_gutter_row_height = theme.editor_row_height(ui_scale_percent);
 
-        if this.conflict_resolver.resolved_outline_gutter_rows.len() != line_count {
-            let meta = &this.conflict_resolver.resolved_outline.meta;
-            let markers = &this.conflict_resolver.resolved_outline.markers;
-            let line_starts = &this.conflict_resolved_preview_line_starts;
-            // A placeholder row is unresolved by definition, so read that off
-            // the row's own text rather than trusting the marker array, which
-            // is rebuilt incrementally and can lag a resolve/unresolve.
-            let placeholder_rows: Vec<bool> =
-                this.conflict_resolver_input.read_with(cx, |input, _| {
-                    let text = input.text();
-                    (0..line_count)
-                        .map(|ix| {
-                            conflict_resolver::line_is_unresolved_conflict_placeholder(
-                                resolved_output_line_text(text, line_starts, ix),
-                            )
-                        })
-                        .collect()
-                });
-            let mut gutter_rows = Vec::with_capacity(line_count);
-            for ix in 0..line_count {
-                let source = meta
-                    .get(ix)
-                    .map(|entry| entry.source)
-                    .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
-                let marker = markers.get(ix).copied().flatten();
-                let row = conflict_resolver::ResolvedOutputGutterRow::new(
-                    source,
-                    marker.map(|entry| entry.conflict_ix),
-                    marker.is_some_and(|entry| entry.is_start),
-                    marker.is_some_and(|entry| entry.is_end),
-                    marker.is_some_and(|entry| entry.unresolved),
-                );
-                let is_placeholder = placeholder_rows.get(ix).copied().unwrap_or(false);
-                gutter_rows.push(if is_placeholder {
-                    row.with_unresolved_placeholder()
-                } else {
-                    row
-                });
-            }
-            this.conflict_resolver.resolved_outline_gutter_rows = gutter_rows;
-        }
-
+        let output = this.conflict_resolver_input.read(cx).text_snapshot();
         let fold_bg = with_alpha(
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.14 } else { 0.10 },
@@ -1433,12 +1398,19 @@ impl DiffRenderer {
                     }
                 };
 
-                let gutter_row = this
-                    .conflict_resolver
-                    .resolved_outline_gutter_rows
-                    .get(ix)
-                    .copied()
-                    .unwrap_or_default();
+                let outline = &this.conflict_resolver.resolved_outline;
+                let source = outline.meta.get(ix).map_or(conflict_resolver::ResolvedLineSource::Manual, |entry| entry.source);
+                let marker = outline.markers.get(ix).copied().flatten();
+                let mut gutter_row = conflict_resolver::ResolvedOutputGutterRow::new(
+                    source, marker.map(|entry| entry.conflict_ix),
+                    marker.is_some_and(|entry| entry.is_start), marker.is_some_and(|entry| entry.is_end),
+                    marker.is_some_and(|entry| entry.unresolved),
+                );
+                // The outline can lag an edit. An unresolved placeholder in
+                // the live row keeps its marker while the outline catches up.
+                if conflict_resolver::line_is_unresolved_conflict_placeholder(output.line_text(ix).as_ref()) {
+                    gutter_row = gutter_row.with_unresolved_placeholder();
+                }
                 let source = gutter_row.source();
                 let (_, badge_fg) = resolved_output_source_badge_colors(theme, source);
                 // Outside marker regions the badge is provenance of
@@ -1808,6 +1780,7 @@ impl DiffRenderer {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _syntax_pass = this.viewport_syntax.conflict.compare.begin();
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();

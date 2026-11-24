@@ -215,26 +215,20 @@ impl PopoverHost {
                     .read(cx)
                     .status_folder_subtree_paths(repo_id, section, &key);
                 let area = section.diff_area();
-                if area == DiffArea::Unstaged
-                    && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                        &self.state,
-                        repo_id,
-                        paths.clone(),
-                        // No selection was consumed, so cancelling must leave it.
-                        false,
-                    )
-                {
-                    let anchor = self.popover_anchor_point();
-                    self.open_popover_at(confirm, anchor, window, cx);
-                    return;
-                }
                 if !paths.is_empty() {
-                    crate::view::status_actions::stage_or_unstage_paths(
-                        &self.store,
-                        repo_id,
-                        area,
-                        paths,
-                    );
+                    if area == DiffArea::Unstaged {
+                        let anchor = self.popover_anchor_point();
+                        self.details_pane.update(cx, |details, cx| {
+                            details.stage_status_paths(repo_id, paths, false, anchor, window, cx)
+                        });
+                    } else {
+                        crate::view::status_actions::stage_or_unstage_paths(
+                            &self.store,
+                            repo_id,
+                            area,
+                            paths,
+                        );
+                    }
                 }
             }
             // The branch tree's collapse state is view-owned rather than a
@@ -866,30 +860,6 @@ impl PopoverHost {
                     crate::app::set_window_ui_scale_percent(cx, window_id, percent);
                 });
             }
-            ContextMenuAction::SetCommitAmendEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_amend_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
-                });
-            }
-            ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_push_after_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.request(RootRequest::SetCommitPushAfter(enabled), None, cx);
-                });
-            }
-            ContextMenuAction::SetCommitSkipHooksEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_skip_hooks_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.request(RootRequest::SetCommitSkipHooks(enabled), None, cx);
-                });
-            }
             ContextMenuAction::UseCommitMessage { message } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_commit_message_from_history(message, window, cx);
@@ -906,25 +876,10 @@ impl PopoverHost {
                 // takes over responsibility for.
                 let (paths, used_selection) =
                     self.status_paths_for_action(repo_id, area, &path, cx);
-                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &self.state,
-                    repo_id,
-                    paths.clone(),
-                    used_selection,
-                ) {
-                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-                    self.open_popover_at(confirm, anchor, window, cx);
-                    return;
-                }
-                if used_selection {
-                    self.clear_status_multi_selection(repo_id, cx);
-                }
-                crate::view::status_actions::stage_or_unstage_paths(
-                    &self.store,
-                    repo_id,
-                    DiffArea::Unstaged,
-                    paths,
-                );
+                let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                self.details_pane.update(cx, |details, cx| {
+                    details.stage_status_paths(repo_id, paths, used_selection, anchor, window, cx)
+                });
             }
             ContextMenuAction::UnstageSelectionOrPath {
                 repo_id,

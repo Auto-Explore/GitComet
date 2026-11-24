@@ -1,6 +1,69 @@
 use super::*;
 
 #[gpui::test]
+fn retargeting_before_the_worker_runs_skips_the_obsolete_image_decode(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo = gitcomet_state::model::RepoId(150);
+    let workdir = tempfile::tempdir().unwrap();
+    let old = std::path::Path::new("old.svg");
+    let new = std::path::Path::new("new.svg");
+    let old_bytes = format!("test SVG fallback {}", workdir.path().display());
+    let new_bytes = image_diff_svg_fixture(20, 20, "#ff0000");
+    let show = |cx: &mut gpui::VisualTestContext, rev, path: &std::path::Path, bytes: &[u8]| {
+        seed_file_image_diff_state_with_rev(
+            cx,
+            &view,
+            repo,
+            workdir.path(),
+            path,
+            rev,
+            None,
+            Some(bytes),
+        );
+        cx.update(|_, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.ensure_file_image_diff_cache(cx);
+                });
+        });
+    };
+
+    // The SVG fallback leaves a file only when its decoder actually ran.
+    show(cx, 1, old, old_bytes.as_bytes());
+    let fallback = cx.update(|_, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .file_image_diff_cache_new_svg_path
+            .clone()
+            .unwrap()
+    });
+    show(cx, 2, new, &new_bytes);
+    std::fs::remove_file(&fallback).unwrap();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        show(cx, 3, old, old_bytes.as_bytes());
+        show(cx, 4, new, &new_bytes);
+        cx.run_until_parked();
+    });
+    assert!(!fallback.exists(), "superseded SVG was decoded");
+    cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(
+            pane.file_image_diff_cache_path.as_deref(),
+            Some(workdir.path().join(new).as_path())
+        );
+        assert!(pane.file_image_diff_cache_new.is_some());
+    });
+}
+
+#[gpui::test]
 fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {

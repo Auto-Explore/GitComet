@@ -1,10 +1,9 @@
-//! Growing a date-ordered history when it only gained commits on top.
+//! Growing a date-ordered history from a previous index and newly reachable commits.
 //!
 //! Date order shows a commit once all its children are shown, newest first.
-//! When every added commit is at least as new as the older order's first row,
-//! they all come before it and the older rows follow unchanged: the walk for
-//! the larger history reaches the older walk's starting state after them.
-//! Both the history index and the header topology grow this way.
+//! A single old tip and distinct, strictly newer additions give an unambiguous
+//! leading run. Otherwise replay the combined date-order queue until its
+//! remaining old rows can be reused in order.
 
 use super::index::{HistoryQuery, StashShapes, retain_probable_stashes};
 use super::walk::log_paged_walk_handle;
@@ -16,6 +15,8 @@ use gitcomet_core::history_perf::{Work, record};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
 use gix::objs::FindExt as _;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+mod interleave;
 
 impl HistoryQuery {
     /// Whether an index for `older` can be grown into this query's: the same
@@ -152,9 +153,20 @@ impl Added {
         false
     }
 
-    /// The added commits in date order, or `None` when one of them is older
-    /// than `floor`, the time of the older index's first row.
-    pub(super) fn date_order(&self, floor: i64) -> Option<Vec<u32>> {
+    /// A singleton old frontier has no heap tie state to disturb. Unique
+    /// added times above it cannot have their relative order changed by an
+    /// old entry becoming ready while they are emitted.
+    pub(super) fn can_prepend(&self, older_tips: &[gix::ObjectId], floor: i64) -> bool {
+        if older_tips.len() != 1 {
+            return false;
+        }
+        let mut times = FxHashSet::default();
+        self.times
+            .iter()
+            .all(|&time| time > floor && times.insert(time))
+    }
+
+    pub(super) fn date_order(&self, tips: &[gix::ObjectId]) -> Option<Vec<u32>> {
         let mut children = vec![0u32; self.ids.len()];
         for parent in self.parents.iter().flatten() {
             if let Some(&row) = self.rows.get(parent) {
@@ -163,16 +175,15 @@ impl Added {
         }
         // The queue the full walk uses, so equal times fall the same way.
         let mut ready = gix::revwalk::PriorityQueue::new();
-        for (row, &count) in children.iter().enumerate() {
-            if count == 0 {
-                ready.insert(self.times[row], row as u32);
+        for tip in tips {
+            if let Some(&row) = self.rows.get(tip)
+                && children[row as usize] == 0
+            {
+                ready.insert(self.times[row as usize], row);
             }
         }
         let mut order = Vec::with_capacity(self.ids.len());
         while let Some(row) = ready.pop_value() {
-            if self.times[row as usize] < floor {
-                return None;
-            }
             order.push(row);
             for parent in &self.parents[row as usize] {
                 if let Some(&parent) = self.rows.get(parent) {
@@ -187,10 +198,8 @@ impl Added {
     }
 }
 
-/// The index for `query`: `older`, built for `older_query`, with the commits
-/// `query` adds in front. `None` when a rebuild could differ: `older` holds
-/// commits `query` no longer reaches, or an added commit is dated before
-/// `older`'s first row and belongs among its rows.
+/// Extends an index for a compatible walk that still reaches all its old rows.
+/// Returns `None` when the bounded walk cannot establish a reusable suffix.
 pub(in crate::repo) fn extend_history_index(
     store: &gix::ThreadSafeRepository,
     query: &HistoryQuery,
@@ -228,8 +237,14 @@ pub(in crate::repo) fn extend_history_index(
         &mut Vec::new(),
         Work::IndexObjectRead,
     )?;
-    let Some(order) = added.date_order(floor) else {
+    let Some(order) = added.date_order(&query.tips) else {
         return Ok(None);
+    };
+    let interleaves = !added.can_prepend(&older_query.tips, floor);
+    let times: Vec<_> = if interleaves {
+        order.iter().map(|&row| added.times[row as usize]).collect()
+    } else {
+        Vec::new()
     };
 
     let repo = store.to_thread_local();
@@ -261,7 +276,25 @@ pub(in crate::repo) fn extend_history_index(
         shapes.passed(id, parents.as_deref());
     }
     retain_probable_stashes(&mut builder, &repo, &shapes, false, cancellation)?;
-    let index = builder.finish_before(older, cancellation)?;
+    let mut index = builder.finish_before(older, cancellation)?;
+    if interleaves {
+        let graph = repo.commit_graph_if_enabled().ok().flatten();
+        let Some(order) = interleave::prefix(
+            &objects,
+            graph.as_ref(),
+            &index,
+            &times,
+            &query.tips,
+            cancellation,
+        )?
+        else {
+            return Ok(None);
+        };
+        std::sync::Arc::get_mut(&mut index)
+            .expect("unpublished index")
+            .reorder_prefix(&order)?;
+        cancellation.check_cancelled()?;
+    }
     record(Work::HistoryIndexExtend);
     Ok(Some(index))
 }

@@ -275,14 +275,7 @@ struct WorkerLoopContext<'a> {
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     thread_msg_tx: &'a StoreWorkerSender,
-    executor: &'a TaskExecutor,
-    repo_load_executor: &'a TaskExecutor,
-    worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
-    metadata_executor: &'a TaskExecutor,
-    signature_executor: &'a TaskExecutor,
-    history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
-    session_persist_executor: &'a TaskExecutor,
-    filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
+    executors: EffectExecutors<'a>,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
     /// Feedback acknowledgements held for the next reducer pass; see
@@ -618,16 +611,7 @@ impl WorkerLoopContext<'_> {
             let _label =
                 gitcomet_core::op_trace::label_scope(repo_load_trace::effect_name(&effect));
             schedule_effect(
-                EffectExecutors {
-                    executor: self.executor,
-                    repo_load_executor: self.repo_load_executor,
-                    worktree_scan_executor: self.worktree_scan_executor,
-                    session_persist_executor: self.session_persist_executor,
-                    metadata_executor: self.metadata_executor,
-                    signature_executor: self.signature_executor,
-                    history_find_executor: self.history_find_executor,
-                    filesystem_executor: self.filesystem_executor,
-                },
+                self.executors,
                 self.thread_state,
                 self.backend,
                 repos,
@@ -747,22 +731,6 @@ impl AppStore {
         self.msg_tx.set_auto_fetch_allowed(allowed);
     }
 
-    /// Acknowledge queued reductions and return their publication sequence.
-    /// Effects scheduled by those reductions can still finish afterwards.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
-        self.msg_tx.barrier_for_test()
-    }
-
-    /// Stop this store and acknowledge its worker, private pools, and effects.
-    /// This stops all clones of the store; shared pools remain available.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn shutdown_for_test(&self) -> mpsc::Receiver<()> {
-        let completion = self.msg_tx.test_tasks.completion();
-        self.msg_tx.shutdown();
-        completion
-    }
-
     pub fn reducer_diagnostics() -> StoreReducerDiagnostics {
         reducer_diagnostics::snapshot()
     }
@@ -774,33 +742,6 @@ impl AppStore {
             repository_preferences::PreferenceHub::shared(),
             auto_fetch::AutoFetchCoordinator::shared(),
             FilesystemScope::Process,
-        )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(
-            backend,
-            AppState::test_default(),
-            repository_preferences::PreferenceHub::new(
-                crate::session::default_session_file_path_for_effect(),
-            ),
-            auto_fetch::AutoFetchCoordinator::new(),
-            FilesystemScope::Store,
-        )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_test_sharing_preferences(
-        backend: Arc<dyn GitBackend>,
-        other: &Self,
-    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(
-            backend,
-            AppState::test_default(),
-            Arc::clone(&other.msg_tx.preferences),
-            Arc::clone(&other.msg_tx.auto_fetch),
-            FilesystemScope::Store,
         )
     }
 
@@ -849,6 +790,8 @@ impl AppStore {
             #[allow(unused_mut)]
             let mut repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
+            #[allow(unused_mut)]
+            let mut interactive_executor = executor::interactive_queue();
             #[allow(unused_mut)]
             let mut worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
                 std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
@@ -1062,14 +1005,17 @@ impl AppStore {
                     event_tx: &event_tx,
                     repo_monitors: &mut repo_monitors,
                     thread_msg_tx: &thread_msg_tx,
-                    executor: &executor,
-                    repo_load_executor: &repo_load_executor,
-                    worktree_scan_executor: &worktree_scan_executor,
-                    metadata_executor: &metadata_executor,
-                    signature_executor: &signature_executor,
-                    history_find_executor: &history_find_executor,
-                    session_persist_executor: &session_persist_executor,
-                    filesystem_executor,
+                    executors: EffectExecutors {
+                        executor: &executor,
+                        repo_load_executor: &repo_load_executor,
+                        interactive_executor: &interactive_executor,
+                        worktree_scan_executor: &worktree_scan_executor,
+                        metadata_executor: &metadata_executor,
+                        signature_executor: &signature_executor,
+                        history_find_executor: &history_find_executor,
+                        session_persist_executor: &session_persist_executor,
+                        filesystem_executor,
+                    },
                     backend: &backend,
                     publication: &thread_publication,
                     deferred_acknowledgements: &mut deferred_acknowledgements,
@@ -1134,7 +1080,7 @@ impl AppStore {
                     Msg::StagePath { repo_id, path } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             let mut effects = reducer::PathActionEffects::new();
-                            let effect = crate::msg::Effect::StagePath { repo_id, path };
+                            let effect = crate::msg::Effect::Stage { repo_id, request: crate::msg::StageRequest::path(path) };
                             fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
@@ -1142,7 +1088,7 @@ impl AppStore {
                     Msg::StagePaths { repo_id, paths } => {
                         worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             let mut effects = reducer::PathActionEffects::new();
-                            let effect = crate::msg::Effect::StagePaths { repo_id, paths };
+                            let effect = crate::msg::Effect::Stage { repo_id, request: paths };
                             fill_path_action_inline(app_state, repo_id, effect, &mut effects);
                             effects
                         });
@@ -1237,15 +1183,10 @@ impl AppStore {
             #[cfg(any(test, feature = "test-support"))]
             {
                 repo_load_executor.join_workers();
-                if let Some(executor) = std::sync::LazyLock::get_mut(&mut worktree_scan_executor) {
-                    executor.join_workers();
-                }
-                if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
-                    executor.join_workers();
-                }
-                if let Some(executor) = store_filesystem_executor
-                    .as_mut()
-                    .and_then(std::sync::LazyLock::get_mut)
+                for executor in [&mut interactive_executor, &mut worktree_scan_executor, &mut history_find_executor]
+                    .into_iter()
+                    .chain(store_filesystem_executor.as_mut())
+                    .filter_map(std::sync::LazyLock::get_mut)
                 {
                     executor.join_workers();
                 }
@@ -1364,14 +1305,6 @@ impl AppStore {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn history_find_dispatch_count_for_test(&self) -> u64 {
-        self.public_lifetime
-            .history_find_dispatches
-            .load(Ordering::Relaxed)
-    }
-
     /// The filesystem engine this store's file operations journal into.
     pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
         self.msg_tx.filesystem
@@ -1382,13 +1315,22 @@ impl AppStore {
         Arc::clone(&state)
     }
 
+    /// Get this lifetime's currently open backend. Waits for the store worker.
+    pub fn attached_repository(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+    ) -> Option<Arc<dyn GitRepository>> {
+        self.msg_tx.repository(repo_id, lifetime)
+    }
+
     /// Reads a backend handle for this repository lifetime on a worker thread.
     /// This waits for the store worker; do not call from the UI thread or a reducer.
     /// An old handle never resolves to a reopened repository with the same id.
     /// A parked tab is read through a handle opened for the caller, which
     /// leaves the tab parked.
     pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
-        self.msg_tx.repository(repo_id, lifetime).or_else(|| {
+        self.attached_repository(repo_id, lifetime).or_else(|| {
             let workdir = self
                 .snapshot()
                 .repos
@@ -1434,38 +1376,6 @@ impl AppStore {
     pub fn snapshot_with_publication(&self) -> (Arc<AppState>, u64) {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         (Arc::clone(&state), self.publication.load(Ordering::Relaxed))
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn record_planned_one_sided_sides_for_test(state: &mut AppState) {
-        reducer::record_planned_one_sided_sides(state);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
-        // Reduce what is already queued first (a new view's settings
-        // bootstrap), so a slow worker cannot apply it over the replacement.
-        let _ = self
-            .barrier_for_test()
-            .recv_timeout(std::time::Duration::from_secs(5));
-        let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
-        *current = state;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
-        self.msg_tx.insert_repo_for_test(repo_id, repo);
-    }
-
-    /// Never starts a filesystem monitor for any repository. For tests over
-    /// real repositories whose assertions a watcher refresh would disturb.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn disable_repo_monitors_for_test(&self) {
-        self.msg_tx.disable_repo_monitors_for_test();
     }
 }
 

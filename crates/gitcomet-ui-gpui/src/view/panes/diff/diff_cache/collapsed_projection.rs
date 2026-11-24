@@ -1,9 +1,10 @@
 use super::*;
+use gitcomet_core::file_diff::LineToRowMap;
 
 impl DiffRenderer {
     pub(super) fn current_file_diff_line_to_row_maps(
         &self,
-    ) -> (&[Option<usize>], &[Option<usize>], usize) {
+    ) -> (&LineToRowMap, &LineToRowMap, usize) {
         let row_len = self.file_diff_row_len();
         match self.diff_view {
             DiffViewMode::Inline => (
@@ -26,19 +27,19 @@ impl DiffRenderer {
         let (old_line_to_row, new_line_to_row, _row_count) =
             self.current_file_diff_line_to_row_maps();
 
-        let map_range_start = |line_to_row: &[Option<usize>], start_line: u32, line_count: u32| {
+        let map_range_start = |line_to_row: &LineToRowMap, start_line: u32, line_count: u32| {
             (line_count > 0)
                 .then_some(start_line)
                 .filter(|line| *line > 0)
                 .and_then(|line| usize::try_from(line.saturating_sub(1)).ok())
-                .and_then(|line_ix| line_to_row.get(line_ix).copied().flatten())
+                .and_then(|line_ix| line_to_row.get(line_ix))
         };
-        let map_range_end = |line_to_row: &[Option<usize>], start_line: u32, line_count: u32| {
+        let map_range_end = |line_to_row: &LineToRowMap, start_line: u32, line_count: u32| {
             (line_count > 0)
                 .then_some(start_line.saturating_add(line_count).saturating_sub(1))
                 .filter(|line| *line > 0)
                 .and_then(|line| usize::try_from(line.saturating_sub(1)).ok())
-                .and_then(|line_ix| line_to_row.get(line_ix).copied().flatten())
+                .and_then(|line_ix| line_to_row.get(line_ix))
                 .map(|row_ix| row_ix.saturating_add(1))
         };
 

@@ -42,7 +42,10 @@ pub fn with_stage_path_sync<T>(
     crate::store::with_path_action_inline_for_bench(
         state,
         repo_id,
-        Effect::StagePath { repo_id, path },
+        Effect::Stage {
+            repo_id,
+            request: crate::msg::StageRequest::path(path),
+        },
         f,
     )
 }
@@ -57,7 +60,10 @@ pub fn with_stage_paths_sync<T>(
     crate::store::with_path_action_inline_for_bench(
         state,
         repo_id,
-        Effect::StagePaths { repo_id, paths },
+        Effect::Stage {
+            repo_id,
+            request: paths.into(),
+        },
         f,
     )
 }

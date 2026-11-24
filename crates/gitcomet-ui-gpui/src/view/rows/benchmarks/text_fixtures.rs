@@ -125,7 +125,7 @@ impl StagingFixture {
                     total_effects += effects.len() as u64;
                     for effect in effects {
                         match effect {
-                            Effect::StagePaths { .. } | Effect::StagePath { .. } => {
+                            Effect::Stage { .. } => {
                                 stage_effect_count += 1;
                             }
                             _ => {}
@@ -155,7 +155,7 @@ impl StagingFixture {
                         total_effects += effects.len() as u64;
                         for effect in effects {
                             match effect {
-                                Effect::StagePaths { .. } | Effect::StagePath { .. } => {
+                                Effect::Stage { .. } => {
                                     stage_effect_count += 1;
                                 }
                                 Effect::UnstagePaths { .. } | Effect::UnstagePath { .. } => {

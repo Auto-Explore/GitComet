@@ -47,6 +47,7 @@ use load_tokens::repo_load_context;
 pub(super) struct EffectExecutors<'a> {
     pub(super) executor: &'a TaskExecutor,
     pub(super) repo_load_executor: &'a TaskExecutor,
+    pub(super) interactive_executor: &'a std::sync::LazyLock<TaskExecutor>,
     /// Status scans of other checkouts must not occupy foreground load workers.
     pub(super) worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
     pub(super) session_persist_executor: &'a TaskExecutor,
@@ -57,6 +58,18 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     /// Disk writes and explorer mutations, in submission order.
     pub(super) filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
+}
+
+impl<'a> EffectExecutors<'a> {
+    fn for_diff_session(self, work: &crate::diff_session::DiffSessionWork) -> &'a TaskExecutor {
+        use crate::diff_session::DiffSessionWork;
+        match work {
+            DiffSessionWork::Content { .. } => self.interactive_executor,
+            DiffSessionWork::Changes { .. } | DiffSessionWork::Blame { .. } => {
+                self.repo_load_executor
+            }
+        }
+    }
 }
 
 fn selected_diff_target(
@@ -107,20 +120,16 @@ fn selected_conflict_file_path(
 fn selected_inline_submodule_diff(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
-) -> Option<(std::path::PathBuf, DiffTarget, u64)> {
+    inline_rev: u64,
+) -> Option<(std::path::PathBuf, DiffTarget)> {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
-        .map(|inline| {
-            (
-                inline.submodule_repo_path.clone(),
-                inline.target.clone(),
-                inline.rev,
-            )
-        })
+        .filter(|inline| inline.rev == inline_rev)
+        .map(|inline| (inline.submodule_repo_path.clone(), inline.target.clone()))
 }
 
 pub(super) fn schedule_effect(
@@ -136,12 +145,11 @@ pub(super) fn schedule_effect(
     let EffectExecutors {
         executor,
         repo_load_executor,
-        worktree_scan_executor,
         session_persist_executor,
         metadata_executor,
-        signature_executor,
         history_find_executor,
         filesystem_executor,
+        ..
     } = executors;
 
     if effect.requires_available_git() {
@@ -325,7 +333,7 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repos, msg_tx, repo_id)
             {
-                indexed_history::schedule(repo_load_executor, repos, msg_tx, work, cancellation);
+                indexed_history::schedule(executors, repos, msg_tx, work, cancellation);
             }
         }
         Effect::DiffSession(work) => {
@@ -334,7 +342,7 @@ pub(super) fn schedule_effect(
                     repo_load_context(thread_state, repos, msg_tx, work.repo_id)
             {
                 diff_session::schedule(
-                    repo_load_executor,
+                    executors.for_diff_session(&work.work),
                     repos,
                     Arc::clone(backend),
                     msg_tx,
@@ -496,7 +504,7 @@ pub(super) fn schedule_effect(
                     load_tokens::worktree_list_load_context(thread_state, repos, msg_tx, repo_id)
             {
                 repo_load::schedule_load_worktree_dirty(
-                    worktree_scan_executor,
+                    executors.worktree_scan_executor,
                     backend.clone(),
                     repos,
                     msg_tx,
@@ -639,7 +647,7 @@ pub(super) fn schedule_effect(
             // Signature requests have their own lifetime: staging and tab switches
             // cancel repo loads, but must not silently lose pending verification.
             repo_load::schedule_verify_commit_signatures(
-                signature_executor,
+                executors.signature_executor,
                 repos,
                 msg_tx,
                 repo_id,
@@ -794,48 +802,39 @@ pub(super) fn schedule_effect(
         Effect::LoadInlineSubmoduleSelectedDiff {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Patch,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFile {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff_file(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Text,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFileImage {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff_file_image(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Image,
+        ),
         Effect::LoadDiffFileImage { repo_id, target } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
@@ -973,11 +972,8 @@ pub(super) fn schedule_effect(
             remote_url_policy,
             auth,
         } => clone::schedule_clone_repo(executor, msg_tx, url, dest, remote_url_policy, auth),
-        Effect::StagePath { repo_id, path } => {
-            repo_actions::schedule_stage_path(executor, repos, msg_tx, repo_id, path);
-        }
-        Effect::StagePaths { repo_id, paths } => {
-            repo_actions::schedule_stage_paths(executor, repos, msg_tx, repo_id, paths);
+        Effect::Stage { repo_id, request } => {
+            repo_actions::schedule_stage(executor, repos, msg_tx, repo_id, request)
         }
         Effect::UnstagePath { repo_id, path } => {
             repo_actions::schedule_unstage_path(executor, repos, msg_tx, repo_id, path);

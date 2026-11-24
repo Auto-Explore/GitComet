@@ -258,7 +258,7 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         },
     );
 
-    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    let diff_renderer = super::super::diff_renderer(cx, &view);
 
     // Take "ours" for the single whole-file conflict. This is the step the old
     // ceiling refused: it expands a one-line placeholder into the full file.
@@ -318,6 +318,21 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         format!("{before}edited"),
         "a keystroke in a large resolved output should land and persist"
     );
+
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.recompute_conflict_resolved_outline_for_tests(cx);
+            let edited = pane.conflict_resolver_input.read(cx).text_snapshot();
+            assert!(
+                !edited.is_line_index_built(),
+                "the edited merge output should locate its rows through the rope"
+            );
+            assert_eq!(
+                pane.conflict_resolved_preview_line_count,
+                edited.line_count()
+            );
+        });
+    });
 
     fixture.cleanup();
 }

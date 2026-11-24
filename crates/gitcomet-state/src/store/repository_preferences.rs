@@ -37,7 +37,7 @@ impl PreferenceHub {
     pub(super) fn shared() -> Arc<Self> {
         static HUBS: OnceLock<Mutex<HashMap<Option<PathBuf>, Arc<PreferenceHub>>>> =
             OnceLock::new();
-        let path = crate::session::default_session_file_path_for_effect();
+        let path = crate::session::default_session_file_path();
         let mut hubs = HUBS
             .get_or_init(Mutex::default)
             .lock()

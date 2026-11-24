@@ -36,12 +36,14 @@ pub(super) const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN: usize = 1;
 pub(super) const UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES: usize = 3;
 
 mod edits;
+mod line_map;
 mod plan;
 mod rows;
 pub mod structural;
 mod text;
 
 pub(crate) use edits::*;
+pub use line_map::LineToRowMap;
 pub use plan::*;
 pub use rows::*;
 pub use text::*;

@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn canceled_paint_leaves_the_chunk_available_for_a_new_viewport() {
+    let document = prepare_test_document(DiffSyntaxLanguage::Rust, "fn viewport() {}");
+    let mut viewport = PreparedSyntaxViewport::default();
+    let stale = {
+        let _pass = viewport.begin();
+        PreparedSyntaxViewportRequest::current()
+    };
+    drop(viewport.begin());
+    {
+        // A streamed row from the previous frame reaches paint after its owner
+        // is gone. The acknowledgment must not install an empty token chunk.
+        let _paint = stale.enter();
+        assert_eq!(
+            request_syntax_tokens_for_prepared_document_line(document, 0),
+            Some(PreparedSyntaxLineTokensRequest::Pending)
+        );
+    }
+    wait_for_all_background_chunk_builds_for_document(document, Duration::from_secs(5));
+    assert_eq!(prepared_syntax_loaded_chunk_count(document), 0);
+    assert!(!has_pending_prepared_syntax_chunk_builds_for_document(
+        document
+    ));
+    let _pass = viewport.begin();
+    assert_eq!(
+        request_syntax_tokens_for_prepared_document_line(document, 0),
+        Some(PreparedSyntaxLineTokensRequest::Pending)
+    );
+    wait_for_all_background_chunk_builds_for_document(document, Duration::from_secs(5));
+    let Some(PreparedSyntaxLineTokensRequest::Ready(tokens)) =
+        request_syntax_tokens_for_prepared_document_line(document, 0)
+    else {
+        panic!("the revisited viewport should have highlighted its line");
+    };
+    assert!(!tokens.is_empty());
+}
+
+#[test]
 fn prepared_document_cache_keeps_multiple_documents_available() {
     let first_doc = prepare_test_document(DiffSyntaxLanguage::Rust, "/* one */ let a = 1;");
     let second_doc = prepare_test_document(DiffSyntaxLanguage::Rust, "/* two */ let b = 2;");

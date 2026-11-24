@@ -664,6 +664,12 @@ impl DiffRenderer {
         self.request_file_diff_side_syntax_document(side, cx);
     }
 
+    fn finish_file_diff_side_syntax_request(&mut self, side: DiffTextRegion, generation: u64) {
+        if self.file_diff_click_syntax_inflight.get(&side) == Some(&generation) {
+            self.file_diff_click_syntax_inflight.remove(&side);
+        }
+    }
+
     /// Prepares one side off the UI thread. Render requests, retries and cold
     /// clicks share the same ownership, size and source-freshness checks.
     pub(in crate::view) fn request_file_diff_side_syntax_document(
@@ -740,11 +746,7 @@ impl DiffRenderer {
                     .unwrap_or(false);
                 if !still_current {
                     let _ = view.update(cx, |this, _| {
-                        if this.file_diff_click_syntax_inflight.get(&side)
-                            == Some(&syntax_generation)
-                        {
-                            this.file_diff_click_syntax_inflight.remove(&side);
-                        }
+                        this.finish_file_diff_side_syntax_request(side, syntax_generation);
                     });
                     return;
                 }
@@ -806,11 +808,12 @@ impl DiffRenderer {
                         .ok_or(Failure::Unparsed)?;
                     Ok((text, document))
                 };
-                let prepared = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(prepare_document).await
-                } else {
-                    prepare_document()
-                };
+                let prepared = crate::ui_runtime::background_compute_with_priority(
+                    cx.background_executor(),
+                    gpui::Priority::High,
+                    prepare_document,
+                )
+                .await;
                 #[cfg(test)]
                 if prepared.is_ok()
                     && let Some(hook) = after_prepare_hook
@@ -822,9 +825,7 @@ impl DiffRenderer {
                     if let Some(hook) = before_complete_hook {
                         hook(this);
                     }
-                    if this.file_diff_click_syntax_inflight.get(&side) == Some(&syntax_generation) {
-                        this.file_diff_click_syntax_inflight.remove(&side);
-                    }
+                    this.finish_file_diff_side_syntax_request(side, syntax_generation);
                     if this.file_diff_syntax_generation != syntax_generation
                         || this.file_diff_cache_repo_id != repo_id
                         || this.file_diff_cache_target != diff_target
@@ -1129,6 +1130,7 @@ impl DiffRenderer {
         self.worktree_preview_segments_cache_path = Some(display_path);
         self.worktree_preview_cache_write_blocked_until_rev = None;
         if source_changed || cache_binding_changed {
+            self.viewport_syntax.preview = Default::default();
             self.worktree_preview_segments_cache.clear();
         }
 
@@ -1322,12 +1324,12 @@ impl DiffRenderer {
                                 None,
                             )
                         };
-                        let parsed_document =
-                            if crate::ui_runtime::current().uses_background_compute() {
-                                smol::unblock(prepare_document).await
-                            } else {
-                                prepare_document()
-                            };
+                        let parsed_document = crate::ui_runtime::background_compute_with_priority(
+                            cx.background_executor(),
+                            gpui::Priority::High,
+                            prepare_document,
+                        )
+                        .await;
 
                         let _ = view.update(cx, |this, cx| {
                             let Some(parsed_document) = parsed_document else {

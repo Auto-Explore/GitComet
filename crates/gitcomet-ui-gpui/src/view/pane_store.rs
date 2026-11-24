@@ -13,7 +13,14 @@ pub(crate) struct DiffBinding {
 
 impl DiffBinding {
     pub(in crate::view) fn repository(self, state: &AppState) -> Option<&RepoState> {
-        state.repos.iter().find(|repo| {
+        self.repository_with_index(state).map(|(_, repo)| repo)
+    }
+
+    pub(in crate::view) fn repository_with_index(
+        self,
+        state: &AppState,
+    ) -> Option<(usize, &RepoState)> {
+        state.repos.iter().enumerate().find(|(_, repo)| {
             repo.id == self.repo_id
                 && repo.lifetime() == self.lifetime
                 && repo.diff_sessions.contains_key(&self.view)
@@ -72,6 +79,12 @@ fn bound_worktree(state: &AppState, binding: DiffBinding) -> Option<std::path::P
 }
 
 impl PaneStore {
+    pub(in crate::view) fn stage_status_store(&self) -> Option<Arc<AppStore>> {
+        self.store
+            .upgrade()
+            .filter(|_| !self.read_only && self.policy.allow_stage)
+    }
+
     pub fn repository(
         &self,
         repo_id: RepoId,
@@ -163,6 +176,41 @@ impl PaneStore {
             None
         };
         Some(SaveOrigin::Repository {
+            repo_id,
+            lifetime,
+            session,
+        })
+    }
+
+    pub(in crate::view) fn preview_save_origin(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+        path: &std::path::Path,
+    ) -> Option<SaveOrigin> {
+        if !self.admits_save(false) {
+            return None;
+        }
+        let live = self.snapshot()?;
+        let repo = live
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)?;
+        if repo.is_bare() || repo.bare_mode_conversion.is_busy() {
+            return None;
+        }
+        let (diff, session) = match self.binding {
+            Some(binding) => (binding.diff(repo)?, Some(binding.view)),
+            None if live.active_repo == Some(repo_id) => (&repo.diff_state, None),
+            None => return None,
+        };
+        matches!(&diff.diff_target, Some(DiffTarget::WorkingTree {
+            path: current,
+            area: DiffArea::Unstaged,
+            worktree: None,
+            ..
+        }) if current == path)
+        .then_some(SaveOrigin::Repository {
             repo_id,
             lifetime,
             session,

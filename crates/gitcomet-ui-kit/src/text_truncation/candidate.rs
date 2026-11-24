@@ -2,10 +2,7 @@ use super::path::truncate_path_like;
 use super::projection::{
     ProjectionSegment, TruncationProjection, ellipsis_x_for_projection_and_line,
 };
-use super::{
-    TRUNCATION_ELLIPSIS, TextTruncationProfile, char_boundaries, compute_highlight_runs,
-    record_measure_candidate_call_for_test,
-};
+use super::{TRUNCATION_ELLIPSIS, TextTruncationProfile, char_boundaries, compute_highlight_runs};
 use gpui::{App, HighlightStyle, Pixels, SharedString, TextStyle, Window, px};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
@@ -826,7 +823,8 @@ pub(super) fn measure_candidate(
     candidate: &CandidateLayout,
 ) -> (Pixels, Option<Pixels>) {
     gitcomet_base::history_perf::record(gitcomet_base::history_perf::Work::TextMeasurement);
-    record_measure_candidate_call_for_test();
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    super::measurement::record_measure_candidate_call();
 
     let runs = compute_highlight_runs(
         &candidate.display_text,

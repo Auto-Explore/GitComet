@@ -518,7 +518,7 @@ fn recent_duplicate_line_tokens_reuse_existing_arcs() {
 }
 
 #[test]
-fn cached_document_drop_payload_bytes_match_flattened_chunks() {
+fn cached_document_drop_payload_retains_chunks_and_their_byte_counts() {
     let mut document =
         TreesitterCachedDocument::from_chunked_line_tokens(128, FxHashMap::default(), None);
     let first_chunk = benchmark_line_tokens_payload(64, 4, 0)
@@ -538,14 +538,16 @@ fn cached_document_drop_payload_bytes_match_flattened_chunks() {
         "reinserting an existing chunk should not double-count drop bytes"
     );
 
+    let lines_ptr = second_chunk.as_ptr();
     insert_line_token_chunk(&mut document, 1, Some(second_chunk));
     let payload = document.into_drop_payload();
     assert_eq!(
         payload.estimated_bytes,
-        estimated_line_tokens_allocation_bytes(&payload.line_tokens),
-        "cached drop bytes should match the flattened payload"
+        estimated_chunked_line_tokens_allocation_bytes(&payload.chunks),
+        "cached drop bytes should match the payload"
     );
-    assert_eq!(payload.line_tokens.len(), 128);
+    assert_eq!(payload.chunks.values().map(Vec::len).sum::<usize>(), 128);
+    assert_eq!(payload.chunks[&1].as_ptr(), lines_ptr);
 }
 
 #[test]

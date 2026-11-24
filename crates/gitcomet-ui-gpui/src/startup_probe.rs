@@ -127,15 +127,21 @@ pub(crate) fn mark_home_ready() -> bool {
     mark_once(StartupProbeEvent::HomeReady, &HOME_READY_EMITTED)
 }
 
-pub(crate) fn mark_first_paint() -> bool {
-    mark_once(StartupProbeEvent::FirstPaint, &FIRST_PAINT_EMITTED)
+pub(crate) fn waiting_for_first_presentation() -> bool {
+    is_enabled() && !FIRST_PAINT_EMITTED.load(Ordering::SeqCst)
 }
 
-pub(crate) fn mark_first_interactive() -> bool {
-    mark_once(
-        StartupProbeEvent::FirstInteractive,
-        &FIRST_INTERACTIVE_EMITTED,
-    )
+pub(crate) fn record_first_presentation(cx: &mut gpui::App) {
+    if mark_once(StartupProbeEvent::FirstPaint, &FIRST_PAINT_EMITTED) {
+        mark_once(
+            StartupProbeEvent::FirstInteractive,
+            &FIRST_INTERACTIVE_EMITTED,
+        );
+        if should_exit_after_first_interactive() {
+            crate::app::mark_clean_shutdown_requested(cx);
+            cx.quit();
+        }
+    }
 }
 
 fn config() -> &'static StartupProbeConfig {

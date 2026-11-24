@@ -100,6 +100,7 @@ pub(super) fn prepared_streamed_diff_text_spec(
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
     let syntax = match (language, prepared_line.document) {
         (Some(language), Some(document)) => diff_canvas::StreamedDiffTextSyntaxSource::Prepared {
+            viewport: gitcomet_syntax::PreparedSyntaxViewportRequest::current(),
             document_text,
             line_starts,
             document,

@@ -11,7 +11,7 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-test-support = []
+test-support = ["gitcomet-base/test-support"]
 # The Levenshtein comparison benchmarks also measure strsim.
 benchmarks = ["gitcomet-base/benchmarks", "dep:strsim"]
 

@@ -140,6 +140,7 @@ pub(in crate::view) struct MarkdownDocumentLayoutCache(Rc<std::cell::RefCell<Mar
 struct MarkdownItemHeights {
     /// The items the heights describe: the document's address and how many.
     key: (usize, usize),
+    fonts: crate::bundled_fonts::FontGeneration,
     /// The width they were measured at; text re-flows at another.
     width: Option<Pixels>,
     measured: Vec<Option<Pixels>>,
@@ -190,6 +191,11 @@ impl MarkdownDocumentLayoutCache {
                 window_height: inner.window_height,
                 ..MarkdownItemHeights::default()
             };
+        }
+        let fonts = crate::bundled_fonts::FontGeneration::current();
+        if inner.fonts != fonts {
+            inner.fonts = fonts;
+            inner.measured.fill(None);
         }
         let width = inner.width;
         let heights: Vec<Pixels> = inner
@@ -2638,7 +2644,8 @@ fn render_table_image(
                         .selection_range(region, row_ix, range.clone(), cx)
                         .is_some_and(|selected| !selected.is_empty());
                     if selected {
-                        super::markdown_flow_text::record_selection_paint_for_tests(
+                        #[cfg(test)]
+                        super::markdown_flow_text::test_support::record_selection_paint_for_tests(
                             row_ix,
                             &[bounds],
                         );

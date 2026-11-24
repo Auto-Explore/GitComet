@@ -403,7 +403,7 @@ impl DiffRenderer {
         });
         let output_line_count = output_snapshot
             .as_ref()
-            .map(|snapshot| snapshot.shared_line_starts().len().max(1))
+            .map(|snapshot| snapshot.line_count())
             .unwrap_or_else(|| self.conflict_resolved_preview_line_count.max(1));
         if let Some(output_line) = self.conflict_resolver_output_line_for_nav_target(
             &target,

@@ -8,6 +8,19 @@ pub(in crate::view) struct DiffRendererInit {
 }
 
 impl DiffRenderer {
+    fn register_renderer(services: &DiffServices, cx: &mut gpui::Context<Self>) {
+        services
+            .documents
+            .register_repository(cx.entity().downgrade());
+        let fonts =
+            cx.observe_global::<crate::bundled_fonts::FontGeneration>(Self::fonts_registered);
+        cx.on_release(move |pane, cx| {
+            drop(fonts);
+            pane.release_document_presenter(cx);
+        })
+        .detach();
+    }
+
     pub(in crate::view) fn external_editor_available(&self) -> bool {
         self.extension_editor_available || crate::external_editor::configured_setting().is_some()
     }
@@ -26,11 +39,7 @@ impl DiffRenderer {
             focused_mergetool_labels,
             focused_mergetool_exit_code,
         } = init;
-        services
-            .documents
-            .register_repository(cx.entity().downgrade());
-        cx.on_release(|pane, cx| pane.release_document_presenter(cx))
-            .detach();
+        Self::register_renderer(&services, cx);
         let date_time_format = preferences.appearance.date_time_format;
         let diff_scroll_sync = preferences.diff.scroll_sync;
         let diff_content_mode = preferences.diff.content_mode;
@@ -471,7 +480,7 @@ impl DiffRenderer {
             file_diff_cache_inflight_signature: 0,
             file_diff_syntax_generation: 0,
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
-            syntax_chunk_poll_task: None,
+            viewport_syntax: Default::default(),
             prepared_syntax_documents: FxHashMap::default(),
             prepared_syntax_document_insert_sequence: 0,
             file_diff_syntax_availability: [None; 2],
@@ -603,7 +612,6 @@ impl DiffRenderer {
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
             conflict_resolved_preview_line_count: 0,
-            conflict_resolved_preview_line_starts: Arc::default(),
             conflict_resolved_output_live_syntax: None,
             conflict_resolved_output_live_syntax_reparse: None,
             conflict_resolved_output_live_syntax_reparsing: None,

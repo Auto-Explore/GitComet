@@ -48,7 +48,27 @@ fn blame_file_reports_head_and_explicit_revision() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
+    let noncanonical = Path::new("story.txt/.");
+    let cold_error = opened.blame_file(noncanonical, None).unwrap_err();
     let head_blame = opened.blame_file(Path::new("story.txt"), None).unwrap();
+    let warm_error = opened.blame_file(noncanonical, None).unwrap_err();
+    assert_eq!(cold_error.to_string(), warm_error.to_string());
+    let explicit = opened
+        .blame_file(Path::new("story.txt"), Some(head_id.as_str()))
+        .unwrap();
+    assert!(
+        std::sync::Arc::ptr_eq(&head_blame[0].commit_id, &explicit[0].commit_id),
+        "HEAD and its resolved revision should reuse the same attribution"
+    );
+    std::fs::write(repo.join(".git/info/attributes"), "story.txt label-a\n").unwrap();
+    let attributed = opened.blame_file(Path::new("story.txt"), None).unwrap();
+    std::fs::write(repo.join(".git/info/attributes"), "story.txt label-b\n").unwrap();
+    let changed = opened.blame_file(Path::new("story.txt"), None).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(
+        &attributed[0].commit_id,
+        &changed[0].commit_id
+    ));
+    assert_eq!(attributed, changed);
     assert_eq!(head_blame.len(), 2);
     assert_eq!(
         head_blame

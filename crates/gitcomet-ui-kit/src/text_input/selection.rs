@@ -53,6 +53,7 @@ impl TextInput {
         if self.selection.range == next && !self.selection.reversed {
             if autoscroll {
                 self.queue_cursor_autoscroll();
+                cx.notify();
             }
             return;
         }

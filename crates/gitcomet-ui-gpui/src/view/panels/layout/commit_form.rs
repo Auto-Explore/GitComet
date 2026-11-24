@@ -92,7 +92,7 @@ impl DetailsPaneView {
         let message = self
             .commit_message_input
             .read_with(cx, |input, _| input.text().to_string());
-        let options = self.commit_options();
+        let options = self.commit_options(push_after_commit);
         if !self.can_submit_commit(&message) {
             return false;
         }
@@ -106,21 +106,16 @@ impl DetailsPaneView {
                 message.trim().to_string().into(),
             ),
         );
-        self.store.dispatch(
-            CommitOptions {
-                push_after: push_after_commit,
-                ..options
-            }
-            .msg(repo_id, message.trim().to_string()),
-        );
+        self.store
+            .dispatch(options.msg(repo_id, message.trim().to_string()));
         cx.notify();
         true
     }
 
-    pub(super) fn commit_options(&self) -> CommitOptions {
+    fn commit_options(&self, push_after: bool) -> CommitOptions {
         CommitOptions {
             amend: self.commit_amend_enabled,
-            push_after: self.commit_push_after_enabled,
+            push_after,
             skip_hooks: self.commit_skip_hooks_enabled,
         }
     }
@@ -162,18 +157,10 @@ impl DetailsPaneView {
         let spinner = |id: (&'static str, u64)| {
             components::ButtonSlot::spinner(id, icon_color, scaled_px(14.0))
         };
-        let options = self.commit_options();
+        let options = self.commit_options(false);
         let amend = options.amend;
-        let (commit_label, commit_tooltip) = CommitOptions {
-            push_after: false,
-            ..options
-        }
-        .button_text();
-        let (push_label, push_tooltip) = CommitOptions {
-            push_after: true,
-            ..options
-        }
-        .button_text();
+        let (commit_label, commit_tooltip) = options.button_text();
+        let (push_label, push_tooltip) = self.commit_options(true).button_text();
         let previous_messages_invoker: SharedString = "previous_commit_messages".into();
         let previous_messages_active = self
             .active_context_menu_invoker

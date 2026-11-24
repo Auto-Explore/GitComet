@@ -926,13 +926,22 @@ fn ctrl_h_opens_file_history_tab(cx: &mut gpui::TestAppContext) {
         let view = view.read(app);
         (
             view.sidebar_pane.read(app).file_history_selected,
-            view.file_history_pane.read(app).target.clone(),
+            view.sidebar_pane
+                .read(app)
+                .file_history_pane()
+                .and_then(|pane| pane.read(app).target.clone()),
         )
     });
     assert!(selected, "expected Ctrl+H to select the History tab");
     assert_eq!(target, Some((repo_id, path.clone())));
     let focus = cx.update(|_w, app| {
-        let pane = view.read(app).file_history_pane.clone();
+        let pane = view
+            .read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .expect("opened file history")
+            .clone();
         let input = pane.read(app).filter_input();
         input.read(app).focus_handle()
     });
@@ -973,7 +982,10 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
         let view = view.read(app);
         (
             view.sidebar_pane.read(app).file_history_selected,
-            view.file_history_pane.read(app).target.clone(),
+            view.sidebar_pane
+                .read(app)
+                .file_history_pane()
+                .and_then(|pane| pane.read(app).target.clone()),
         )
     });
     assert!(selected, "expected Ctrl+H to select the History tab");
@@ -1080,7 +1092,13 @@ fn picked_history_target(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Option<(RepoId, std::path::PathBuf)> {
-    cx.update(|_window, app| view.read(app).file_history_pane.read(app).target.clone())
+    cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .and_then(|pane| pane.read(app).target.clone())
+    })
 }
 
 fn type_in_picker(
@@ -1444,7 +1462,10 @@ fn file_history_context_menu_action_opens_the_tab(cx: &mut gpui::TestAppContext)
         let view = view.read(app);
         (
             view.sidebar_pane.read(app).file_history_selected,
-            view.file_history_pane.read(app).target.clone(),
+            view.sidebar_pane
+                .read(app)
+                .file_history_pane()
+                .and_then(|pane| pane.read(app).target.clone()),
         )
     });
     assert!(
@@ -1453,7 +1474,13 @@ fn file_history_context_menu_action_opens_the_tab(cx: &mut gpui::TestAppContext)
     );
     assert_eq!(target, Some((repo_id, path)));
     let focus = cx.update(|_w, app| {
-        let pane = view.read(app).file_history_pane.clone();
+        let pane = view
+            .read(app)
+            .sidebar_pane
+            .read(app)
+            .file_history_pane()
+            .expect("opened file history")
+            .clone();
         let input = pane.read(app).filter_input();
         input.read(app).focus_handle()
     });

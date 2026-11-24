@@ -18,6 +18,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(super) mod cache;
+
 struct BlameCommitMetadata {
     commit_id_text: Arc<str>,
     author: Arc<str>,
@@ -427,23 +429,66 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
 
 impl GixRepo {
     pub(super) fn blame_file_impl(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
-        const BLOB_LINE_MISMATCH: &str = "gix blame blob line count did not match blame entries";
-
-        let repo = self.repo();
+        let (repo, generation) = {
+            let store = self.store.read().expect("repo store");
+            (store.repo.to_thread_local(), store.generation)
+        };
         let spec = rev.unwrap_or("HEAD");
         let suspect = crate::refs::resolve_required(&repo, spec)
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
             })?
             .detach();
+        let options = cache::WholeFileOptions {
+            algorithm: repo.diff_algorithm().map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix blame {}: {error}",
+                    path.display()
+                )))
+            })?,
+            rewrites: configured_rewrites(&repo),
+        };
+        let key = || cache::Key::read(&repo, generation, suspect, path, options);
+        let before = key();
+        if let Some(key) = &before {
+            let cached = self
+                .committed_blame
+                .lock()
+                .expect("committed blame")
+                .get(key);
+            if let Some(lines) = cached {
+                return Ok((*lines).clone());
+            }
+        }
+        let lines = Self::committed_blame_lines(&repo, path, suspect, options)?;
+        if let Some(before) = before
+            && key().as_ref() == Some(&before)
+        {
+            let lines = Arc::new(lines);
+            if let Some(entry) = cache::Entry::new(before, &lines) {
+                let evicted = self
+                    .committed_blame
+                    .lock()
+                    .expect("committed blame")
+                    .insert(entry);
+                drop(evicted);
+            }
+            return Ok(Arc::unwrap_or_clone(lines));
+        }
+        Ok(lines)
+    }
+
+    fn committed_blame_lines(
+        repo: &gix::Repository,
+        path: &Path,
+        suspect: gix::ObjectId,
+        options: cache::WholeFileOptions,
+    ) -> Result<Vec<BlameLine>> {
+        const BLOB_LINE_MISMATCH: &str = "gix blame blob line count did not match blame entries";
         let git_path = gix::path::os_str_into_bstr(path.as_os_str())
             .map(gix::path::to_unix_separators_on_windows)
             .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
-        let options = gix::repository::blame_file::Options {
-            rewrites: configured_rewrites(&repo),
-            ..Default::default()
-        };
-        let outcome = match repo.blame_file(git_path.as_ref(), suspect, options) {
+        let outcome = match repo.blame_file(git_path.as_ref(), suspect, options.gix()) {
             Ok(outcome) => outcome,
             Err(e) => {
                 let msg = format!("gix blame {}: {e}", path.display());
@@ -482,7 +527,7 @@ impl GixRepo {
                 .transpose()?
                 .filter(|source| source.as_path() != path);
             let metadata = blame_commit_metadata(
-                &repo,
+                repo,
                 &mut metadata_cache,
                 entry.commit_id,
                 source_path.as_deref(),
