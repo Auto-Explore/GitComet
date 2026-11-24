@@ -155,7 +155,7 @@ impl DiffRenderer {
                 DiffBody::FilePreview => toggle_kind == Some(RenderedPreviewKind::Markdown),
                 // As the file diff draws it: the Full diff only.
                 DiffBody::FileDiff => {
-                    self.diff_content_mode == DiffContentMode::Full
+                    self.effective_diff_content_mode() == DiffContentMode::Full
                         && rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
                 }
                 _ => false,
@@ -180,6 +180,15 @@ impl DiffRenderer {
     /// Whether a whole-file preview applies to the target: an untracked,
     /// added, or deleted file, or content opened from the file browser.
     fn file_preview_target(&self) -> bool {
+        // Hosted source rows carry the owner's line actions and comment views.
+        if self.hosted_one_sided_diff()
+            && matches!(
+                self.rendered_file_diff_loadable(),
+                Some(Loadable::Ready(Some(_)))
+            )
+        {
+            return false;
+        }
         // Judged by the side's own source: a blob copy has text whatever now
         // sits at the path in the checkout; only a live source can be a folder.
         let preview_text_file_available = self.active_repo().is_some_and(|repo| {

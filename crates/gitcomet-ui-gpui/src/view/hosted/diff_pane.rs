@@ -286,7 +286,7 @@ impl DiffPaneView {
                 );
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
-                pane.diff_view = diff_view_mode(self.options.layout, preferred);
+                pane.sync_hosted_layout(Some(diff_view_mode(self.options.layout, preferred)), cx);
                 pane.diff_engine_override = self
                     .options
                     .engine_override
@@ -400,6 +400,7 @@ impl DiffPaneView {
                         .set_linked(pane.store.shows_linked_worktree(state));
                 }
                 pane.apply_input(input, cx);
+                pane.sync_hosted_layout(None, cx);
             });
         }
     }
@@ -1293,7 +1294,7 @@ impl DiffPaneImpl for HostedDiffPane {
             let preferred = pane.preferred_view_mode(cx);
             if let Some(renderer) = &pane.renderer {
                 renderer.update(cx, |pane, cx| {
-                    pane.set_diff_view_mode(diff_view_mode(layout, preferred), cx)
+                    pane.sync_hosted_layout(Some(diff_view_mode(layout, preferred)), cx)
                 });
             }
             cx.notify();

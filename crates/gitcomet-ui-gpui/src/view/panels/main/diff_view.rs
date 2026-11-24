@@ -781,7 +781,7 @@ impl DiffRenderer {
                     // `render_markdown_diff_preview`), so these switch it just
                     // like the text diff. The single-pane file preview has no
                     // old/new pair to split, so it stays excluded.
-                    } else if !self.is_file_preview_active() {
+                    } else if !self.is_file_preview_active() && !self.hosted_one_sided_diff() {
                         let new_mode = if key == "i" {
                             DiffViewMode::Inline
                         } else {
@@ -1788,7 +1788,7 @@ impl DiffRenderer {
                 theme,
                 cx,
             );
-        } else if !is_file_preview && !is_file_editor {
+        } else if !is_file_preview && !is_file_editor && !self.hosted_one_sided_diff() {
             let view_toggle_selected_bg = with_alpha(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.26 } else { 0.20 },

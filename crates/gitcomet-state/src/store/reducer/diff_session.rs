@@ -8,7 +8,7 @@ use crate::diff_session::{
     DiffSessionMsg as Event, DiffSessionWork, DiffViewId, Refreshable,
 };
 use crate::model::RepoState;
-use gitcomet_core::domain::DiffTarget;
+use gitcomet_core::domain::{Diff, DiffTarget};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::sync::Arc;
 
@@ -567,7 +567,7 @@ fn reduce_event(state: &mut AppState, event: Event) -> Vec<Effect> {
                 DiffSessionContent::Patch(result) => {
                     session.pending.patch = false;
                     session.diff_rev = session.diff_rev.wrapping_add(1);
-                    settle(&mut session.diff, result.map(Arc::new))
+                    settle_patch(session, result)
                 }
                 DiffSessionContent::FileText(result) => {
                     session.pending.file_text = false;
@@ -754,6 +754,13 @@ fn load_changes(
         },
         cancellation,
     })]
+}
+
+fn settle_patch(session: &mut DiffSession, result: gitcomet_core::services::Result<Diff>) -> bool {
+    if let Ok(patch) = &result {
+        session.patch_side = crate::diff_session::one_sided_patch(patch);
+    }
+    settle(&mut session.diff, result.map(Arc::new))
 }
 
 /// Applies a reply to its slot. A cancelled load (its repository was

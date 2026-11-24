@@ -119,6 +119,22 @@ impl DiffPaneInput {
         }
     }
 
+    pub fn present_file_side(&self) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+        if let Self::Repository {
+            binding: Some(binding),
+            ..
+        } = self
+            && let Some(view) = binding.session
+        {
+            return self
+                .repository()?
+                .diff_sessions
+                .get(&view)?
+                .present_file_side();
+        }
+        self.diff()?.one_sided_side
+    }
+
     pub fn workdir(&self) -> Option<&Path> {
         match self {
             Self::Repository { binding, .. } => {

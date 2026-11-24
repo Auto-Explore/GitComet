@@ -1917,8 +1917,7 @@ impl DiffRenderer {
     pub(in crate::view) fn one_sided_change_side(
         &self,
     ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
-        let repo = self.active_repo()?;
-        self.bound_diff_state(repo).one_sided_side
+        self.input.present_file_side()
     }
 
     /// The selected file's path in the workdir when its change has only `side`.
@@ -1926,15 +1925,12 @@ impl DiffRenderer {
         &self,
         side: gitcomet_core::domain::DiffPreviewTextSide,
     ) -> Option<std::path::PathBuf> {
-        if self.one_sided_change_side()? != side {
+        let state = self.input.diff()?;
+        if state.one_sided_side != Some(side) {
             return None;
         }
-        let repo = self.active_repo()?;
         let workdir = self.input.workdir()?;
-        let path = match self.bound_diff_state(repo).diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => path,
-            DiffTarget::CommitRange { path, .. } => path.as_ref()?,
-        };
+        let path = state.diff_target.as_ref()?.file_path()?;
         Some(workdir.join(path))
     }
 
