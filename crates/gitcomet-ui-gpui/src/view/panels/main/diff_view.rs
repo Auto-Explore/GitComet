@@ -2739,15 +2739,6 @@ impl DiffRenderer {
                     .child(body),
             )
             .when_some(diff_bar, |d, bar| d.child(bar))
-            .child(crate::view::review_navigation::hint(
-                theme,
-                crate::ui_scale::UiScale::from_percent(ui_scale_percent),
-                if cfg!(target_os = "macos") {
-                    "↑↓ Changes · Option ↑↓ Files · Esc Back"
-                } else {
-                    "↑↓ Changes · Alt ↑↓ Files · Esc Back"
-                },
-            ))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker {
                 view: cx.entity().into(),

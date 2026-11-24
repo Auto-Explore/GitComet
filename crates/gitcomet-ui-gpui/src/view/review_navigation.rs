@@ -3,22 +3,6 @@ use super::*;
 use crate::view::panes::main::MainPaneContent;
 use crate::view::repository_views::MainSlot;
 
-pub(in crate::view) fn hint(
-    theme: AppTheme,
-    scale: crate::ui_scale::UiScale,
-    text: &'static str,
-) -> gpui::Div {
-    div()
-        .flex_shrink_0()
-        .px(scale.px(8.0))
-        .py(scale.px(3.0))
-        .text_size(scale.px(10.0))
-        .text_color(theme.colors.foreground.secondary)
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .child(text)
-}
-
 #[derive(Clone, Copy)]
 pub(in crate::view) enum ReviewNavigation {
     Files { from_graph: bool },
