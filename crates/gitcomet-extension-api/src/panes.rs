@@ -623,6 +623,7 @@ pub trait DiffPaneImpl {
     /// The repository target shown; `None` for a snapshot pane.
     fn target(&self, cx: &App) -> Option<DiffTarget>;
     fn set_target(&self, target: DiffTarget, cx: &mut App);
+    fn prefetch_target(&self, _target: Option<DiffTarget>, _cx: &mut App) {}
     fn set_snapshot(&self, snapshot: DiffSnapshot, cx: &mut App);
     fn set_encoding(&self, encoding: Option<TextEncoding>, cx: &mut App);
     /// Whether the current target is still loading.
@@ -700,6 +701,13 @@ impl DiffPane {
 
     pub fn set_target(&self, target: DiffTarget, cx: &mut App) {
         self.0.set_target(target, cx)
+    }
+
+    /// Hint which file the owner expects to open next. The pane can prepare
+    /// it in the background without changing the selection. A new hint
+    /// replaces the previous one; `None` withdraws it.
+    pub fn prefetch_target(&self, target: Option<DiffTarget>, cx: &mut App) {
+        self.0.prefetch_target(target, cx);
     }
 
     pub fn set_snapshot(&self, snapshot: DiffSnapshot, cx: &mut App) {

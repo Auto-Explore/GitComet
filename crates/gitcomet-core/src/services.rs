@@ -1275,6 +1275,17 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Read an upcoming committed file with automatic decoding. Skip the file
+    /// if either Git blob exceeds the bound or represents managed large-file content.
+    fn prefetch_file_text(
+        &self,
+        _target: &DiffTarget,
+        _max_blob_bytes: u64,
+        _cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        Ok(None)
+    }
+
     /// `.gitattributes` and git config deciding how `path`'s content reads.
     fn text_attributes(&self, _path: &Path) -> Result<TextAttributes> {
         Ok(TextAttributes::default())

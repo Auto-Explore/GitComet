@@ -304,6 +304,58 @@ fn read_worktree_image_file_bytes_rejects_oversized_file_before_reading() {
 }
 
 #[test]
+fn prefetch_checks_both_blob_sizes_before_extracting_either_side_and_skips_pointers() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    init_test_repo(root);
+    std::fs::write(root.join("old.rs"), "oversized".repeat(100)).unwrap();
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-m", "old"]);
+    std::fs::rename(root.join("old.rs"), root.join("new.rs")).unwrap();
+    std::fs::write(root.join("new.rs"), "fn small() {}\n").unwrap();
+    std::fs::write(
+        root.join("asset"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 100000000\n",
+            "a".repeat(64)
+        ),
+    )
+    .unwrap();
+    git_success(root, &["add", "-A"]);
+    git_success(root, &["commit", "-m", "new"]);
+    let repo = open_repo(root);
+    let target = |path: &str| DiffTarget::commit(CommitId("HEAD".into()), path.into());
+    let renamed = target("new.rs").with_old_path(Some("old.rs".into()));
+    let cancel = CancellationToken::new();
+    assert!(
+        repo.prefetch_file_text_impl(&renamed, 200, &cancel)
+            .unwrap()
+            .is_none()
+    );
+    for (rev, path) in [("HEAD^", "old.rs"), ("HEAD", "new.rs")] {
+        let id = gix_revision_path_blob_object_id_optional(&repo.repo(), rev, Path::new(path))
+            .unwrap()
+            .unwrap();
+        assert!(!preview_blob_cache_path(root, Path::new(path), &id).exists());
+    }
+    assert!(
+        repo.prefetch_file_text_impl(&target("asset"), 200, &cancel)
+            .unwrap()
+            .is_none()
+    );
+    let text = repo
+        .prefetch_file_text_impl(&renamed, 1000, &cancel)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        text,
+        repo.diff_file_text_decoded_impl(&renamed, None, &cancel)
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[test]
 fn read_worktree_image_file_bytes_allows_file_at_size_limit() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let bytes = vec![7; MAX_IMAGE_DIFF_SIDE_BYTES as usize];

@@ -31,7 +31,6 @@ strum = { workspace = true }
 hashbrown = { workspace = true }
 humansize = { workspace = true }
 line-numbers = { workspace = true }
-smallvec = { workspace = true }
 streaming-iterator = { workspace = true }
 
 tree-sitter = { workspace = true }

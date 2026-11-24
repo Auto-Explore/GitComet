@@ -139,6 +139,13 @@ Changes against the baseline (`git log -- vendor/difftastic`):
   rescanning them for every line, and `display/hunks.rs` scans a hunk's
   matched lines forward from its start instead of back from the end. A 1 MB
   release diff took 11 s before and 2.4 s after.
+- The graph search stores its first vertex as the hash table key and retains
+  a second vertex only when the same position has a different delimiter stack.
+  It visits outgoing edges as it generates them and recovers the first cheapest
+  edge to an equivalent neighbour along the winning route. Reconstructing that
+  route reuses the comment and string similarity scores from the search. Those
+  scores use edit distance on the changed middle and the original Unicode
+  character count.
 - 0.72.0 is taken in full for the files GitComet keeps (`diff/unchanged.rs`,
   `display/hunks.rs`, `parse/tree_sitter_parser.rs`), except where it removes
   languages: F# and Smali stay, since GitComet ships both grammars anyway, and
