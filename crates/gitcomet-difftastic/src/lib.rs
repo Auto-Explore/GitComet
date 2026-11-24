@@ -22,18 +22,37 @@ const NESTING_LIMIT: usize = 1000;
 const STACK_SIZE: usize = 4 << 20;
 // One comparison can peak at ~0.9 GB (the graph-limit case), so they run one
 // at a time; a cancelled one frees its slot within ~0.5 s.
-const CONCURRENT_LIMIT: usize = 1;
 const QUEUE_POLL: Duration = Duration::from_millis(5);
 static NEXT_OPERATION: AtomicU64 = AtomicU64::new(1);
-static WORKERS: LazyLock<(Mutex<usize>, Condvar)> =
-    LazyLock::new(|| (Mutex::new(0), Condvar::new()));
+static WORKER: LazyLock<WorkerSlot> = LazyLock::new(WorkerSlot::default);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cancelled;
 
+#[derive(Clone, Copy)]
+pub enum Request<'a> {
+    Visible(&'a CancellationToken),
+    Prefetch(&'a CancellationToken),
+}
+
+impl<'a> Request<'a> {
+    pub fn token(self) -> &'a CancellationToken {
+        match self {
+            Self::Visible(token) | Self::Prefetch(token) => token,
+        }
+    }
+}
+
 pub fn compare(
     input: Input<'_>,
     cancellation: &CancellationToken,
+) -> Result<StructuralDiffOutcome, Cancelled> {
+    compare_requested(input, Request::Visible(cancellation))
+}
+
+pub fn compare_requested(
+    input: Input<'_>,
+    request: Request<'_>,
 ) -> Result<StructuralDiffOutcome, Cancelled> {
     let operation = NEXT_OPERATION.fetch_add(1, Ordering::Relaxed);
     let started = Instant::now();
@@ -42,7 +61,7 @@ pub fn compare(
         input.old.len(),
         input.new.len()
     );
-    let result = compare_queued(input, cancellation, operation);
+    let result = compare_queued(input, request, operation);
     let outcome = match &result {
         Ok(StructuralDiffOutcome::Compared(_)) => "compared",
         Ok(StructuralDiffOutcome::Unchanged) => "unchanged",
@@ -58,7 +77,7 @@ pub fn compare(
 
 fn compare_queued(
     input: Input<'_>,
-    cancellation: &CancellationToken,
+    request: Request<'_>,
     operation: u64,
 ) -> Result<StructuralDiffOutcome, Cancelled> {
     if input.old == input.new {
@@ -70,11 +89,11 @@ fn compare_queued(
             DiffEngineFallback::UnsupportedLanguage,
         ));
     }
-    let _worker = Worker::acquire(cancellation)?;
+    let _worker = WORKER.acquire(request)?;
     let deadline = Instant::now() + DEADLINE;
     compare_until(
         input,
-        cancellation,
+        request.token(),
         deadline,
         operation,
         |input, should_stop| api::compare(input, NESTING_LIMIT, should_stop),
@@ -125,33 +144,66 @@ fn compare_until<'a>(
     )
 }
 
-struct Worker;
+#[derive(Default)]
+struct WorkerSlot {
+    state: Mutex<SlotState>,
+    available: Condvar,
+}
 
-impl Worker {
-    fn acquire(cancellation: &CancellationToken) -> Result<Self, Cancelled> {
-        let (count, available) = &*WORKERS;
-        let mut count = count.lock().unwrap_or_else(|error| error.into_inner());
-        loop {
-            if cancellation.is_cancelled() {
+#[derive(Default)]
+struct SlotState {
+    active: Option<ActiveComparison>,
+    waiting: usize,
+}
+
+enum ActiveComparison {
+    Visible,
+    Prefetch(CancellationToken),
+}
+
+struct Worker<'a>(&'a WorkerSlot);
+
+impl WorkerSlot {
+    fn acquire(&self, request: Request<'_>) -> Result<Worker<'_>, Cancelled> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if request.token().is_cancelled() {
+            return Err(Cancelled);
+        }
+        if let Request::Prefetch(token) = request {
+            if state.active.is_some() || state.waiting != 0 {
                 return Err(Cancelled);
             }
-            if *count < CONCURRENT_LIMIT {
-                *count += 1;
-                return Ok(Self);
-            }
-            count = available
-                .wait_timeout(count, QUEUE_POLL)
+            state.active = Some(ActiveComparison::Prefetch(token.clone()));
+            return Ok(Worker(self));
+        }
+        if let Some(ActiveComparison::Prefetch(token)) = &state.active {
+            token.cancel();
+        }
+        state.waiting += 1;
+        while state.active.is_some() && !request.token().is_cancelled() {
+            state = self
+                .available
+                .wait_timeout(state, QUEUE_POLL)
                 .unwrap_or_else(|error| error.into_inner())
                 .0;
         }
+        state.waiting -= 1;
+        if request.token().is_cancelled() {
+            return Err(Cancelled);
+        }
+        state.active = Some(ActiveComparison::Visible);
+        Ok(Worker(self))
     }
 }
 
-impl Drop for Worker {
+impl Drop for Worker<'_> {
     fn drop(&mut self) {
-        let (count, available) = &*WORKERS;
-        *count.lock().unwrap_or_else(|error| error.into_inner()) -= 1;
-        available.notify_one();
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active = None;
+        self.0.available.notify_one();
     }
 }
 

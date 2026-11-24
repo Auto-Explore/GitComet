@@ -11,14 +11,16 @@ mod image_cache;
 mod patch_diff;
 mod shared_file;
 mod word_highlight;
-pub(in crate::view) use shared_file::SharedFileDiffCache;
+pub(in crate::view) use shared_file::{PrefetchedFileDiff, SharedFileDiffCache};
 
 pub(in crate::view) use self::file_diff::FileDiffCacheError;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
 pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
-use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
+use self::file_diff::{
+    file_diff_source_identity, file_diff_source_len, file_diff_text_signature, line_starts_describe,
+};
 pub(in crate::view) use self::image_cache::render_raster_conflict_preview;
 pub(in crate::view) use self::image_cache::{
     render_raster_image_diff_preview, render_svg_image_diff_preview,
@@ -520,7 +522,7 @@ impl DiffRenderer {
                         patch_diff.as_deref(),
                         whitespace_mode,
                         engine,
-                        &cancellation,
+                        gitcomet_difftastic::Request::Visible(&cancellation),
                     )
                 };
                 let priority = if keep_rows_while_rebuilding {
@@ -740,9 +742,8 @@ impl DiffRenderer {
         let old_legacy_text = file.old.clone();
         let new_legacy_text = file.new.clone();
 
-        let combined_len =
-            file_diff_markdown_source_len(old_source.as_ref(), old_legacy_text.as_ref())
-                + file_diff_markdown_source_len(new_source.as_ref(), new_legacy_text.as_ref());
+        let combined_len = file_diff_source_len(old_source.as_ref(), old_legacy_text.as_ref())
+            + file_diff_source_len(new_source.as_ref(), new_legacy_text.as_ref());
         if combined_len > markdown_preview::MAX_DIFF_PREVIEW_SOURCE_BYTES {
             self.diff_markdown.preview = Loadable::Error(
                 markdown_preview::diff_preview_unavailable_reason(combined_len).to_string(),

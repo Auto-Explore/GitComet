@@ -1289,6 +1289,16 @@ impl GitRepository for GixRepo {
         self.text_attributes_impl(path)
     }
 
+    fn prefetch_file_text(
+        &self,
+        target: &DiffTarget,
+        max_blob_bytes: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        let _operation = self.operation_lease()?;
+        self.prefetch_file_text_impl(target, max_blob_bytes, cancellation)
+    }
+
     fn diff_file_image(
         &self,
         target: &DiffTarget,

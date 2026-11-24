@@ -47,7 +47,7 @@ use bumpalo::Bump;
 use radix_heap::RadixHeapMap;
 
 use crate::diff::changes::ChangeMap;
-use crate::diff::graph::{compute_neighbours, populate_change_map, Edge, Vertex};
+use crate::diff::graph::{allocate_if_new, populate_change_map, visit_neighbours, Edge, Vertex};
 use crate::hash::DftHashMap;
 use crate::parse::syntax::Syntax;
 
@@ -60,20 +60,20 @@ pub(crate) enum SearchStop {
 // GitComet: how many vertices the search visits between stop checks.
 const STOP_CHECK_INTERVAL: usize = 1024;
 
-/// Return the shortest route from `start` to the end vertex.
-fn shortest_vertex_path<'s, 'v>(
-    start: &'v Vertex<'s, 'v>,
+/// Return each edge on the shortest route together with the vertex it leaves.
+fn shortest_path<'s, 'v>(
+    start: Vertex<'s, 'v>,
     vertex_arena: &'v Bump,
     size_hint: usize,
     graph_limit: usize,
     should_stop: &dyn Fn() -> bool,
-) -> Result<Vec<&'v Vertex<'s, 'v>>, SearchStop> {
+) -> Result<Vec<(Edge, &'v Vertex<'s, 'v>)>, SearchStop> {
     // We want to visit nodes with the shortest distance first, but
     // RadixHeapMap is a max-heap. Ensure nodes are wrapped with
     // Reverse to flip comparisons.
     let mut heap: RadixHeapMap<Reverse<_>, &'v Vertex<'s, 'v>> = RadixHeapMap::new();
 
-    heap.push(Reverse(0), start);
+    heap.push(Reverse(0), vertex_arena.alloc(start));
 
     let mut seen = DftHashMap::default();
     seen.reserve(size_hint);
@@ -90,30 +90,26 @@ fn shortest_vertex_path<'s, 'v>(
                     break current;
                 }
 
-                let neighbours = match current.neighbours.get() {
-                    Some(neighbours) => *neighbours,
-                    None => {
-                        let neighbours =
-                            compute_neighbours(current, vertex_arena, &mut seen, should_stop)
-                                .map_err(|_| SearchStop::Interrupted)?;
-                        *current.neighbours.get_or_init(|| neighbours)
-                    }
-                };
-
-                for neighbour in neighbours {
-                    let (edge, next) = neighbour;
+                if current
+                    .predecessor
+                    .get()
+                    .is_some_and(|(best, _)| best < distance)
+                {
+                    continue;
+                }
+                visit_neighbours(current, vertex_arena, should_stop, |edge, candidate| {
+                    let next = allocate_if_new(candidate, vertex_arena, &mut seen);
                     let distance_to_next = distance + edge.cost();
-
-                    let found_shorter_route = match next.predecessor.get() {
-                        Some((prev_shortest, _)) => distance_to_next < prev_shortest,
-                        None => true,
-                    };
-
-                    if found_shorter_route {
-                        next.predecessor.replace(Some((distance_to_next, current)));
+                    if next
+                        .predecessor
+                        .get()
+                        .is_none_or(|(best, _)| distance_to_next < best)
+                    {
+                        next.predecessor.set(Some((distance_to_next, current)));
                         heap.push(Reverse(distance_to_next), next);
                     }
-                }
+                })
+                .map_err(|_| SearchStop::Interrupted)?;
 
                 if seen.len() > graph_limit {
                     info!(
@@ -135,91 +131,38 @@ fn shortest_vertex_path<'s, 'v>(
         heap.len(),
     );
 
-    let mut current = Some((0, end));
-    let mut vertex_route: Vec<&'v Vertex<'s, 'v>> = vec![];
-    while let Some((_, node)) = current {
-        vertex_route.push(node);
-        current = node.predecessor.get();
-    }
-
-    vertex_route.reverse();
-    Ok(vertex_route)
-}
-
-fn shortest_path_with_edges<'s, 'v>(
-    route: &[&'v Vertex<'s, 'v>],
-) -> Vec<(Edge, &'v Vertex<'s, 'v>)> {
-    let mut prev = route.first().expect("Expected non-empty route");
-
-    let mut cost = 0;
-    let mut res = vec![];
-
-    for vertex in route.iter().skip(1) {
-        let edge = edge_between(prev, vertex);
-        res.push((edge, *prev));
-        cost += edge.cost();
-
-        prev = vertex;
-    }
-    debug!("Found a path of {} with cost {}.", route.len(), cost);
-
-    res
-}
-
-/// Return the shortest route from the `start` to the end vertex.
-///
-/// The vec returned does not return the very last vertex. This is
-/// necessary because a route of N vertices only has N-1 edges.
-fn shortest_path<'s, 'v>(
-    start: Vertex<'s, 'v>,
-    vertex_arena: &'v Bump,
-    size_hint: usize,
-    graph_limit: usize,
-    should_stop: &dyn Fn() -> bool,
-) -> Result<Vec<(Edge, &'v Vertex<'s, 'v>)>, SearchStop> {
-    let start: &'v Vertex<'s, 'v> = vertex_arena.alloc(start);
-    let vertex_path =
-        shortest_vertex_path(start, vertex_arena, size_hint, graph_limit, should_stop)?;
-    Ok(shortest_path_with_edges(&vertex_path))
-}
-
-fn edge_between<'s, 'v>(before: &Vertex<'s, 'v>, after: &Vertex<'s, 'v>) -> Edge {
-    assert!(before != after, "a route edge joins two distinct vertices");
-
-    let mut shortest_edge: Option<Edge> = None;
-    if let Some(neighbours) = before.neighbours.get() {
-        for neighbour in *neighbours {
-            let (edge, next) = *neighbour;
-            // If there are multiple edges that can take us to `next`,
-            // prefer the shortest.
-            if *next == *after {
-                let is_shorter = match shortest_edge {
-                    Some(prev_edge) => edge.cost() < prev_edge.cost(),
-                    None => true,
-                };
-
-                if is_shorter {
-                    shortest_edge = Some(edge);
-                }
-            }
+    let mut current = end;
+    let mut route = Vec::new();
+    let mut scratch = Bump::new();
+    while let Some((_, previous)) = current.predecessor.get() {
+        if route.len().is_multiple_of(STOP_CHECK_INTERVAL) && should_stop() {
+            return Err(SearchStop::Interrupted);
         }
+        let edge = route_edge(previous, current, &scratch, should_stop)?;
+        route.push((edge, previous));
+        scratch.reset();
+        current = previous;
     }
+    route.reverse();
+    Ok(route)
+}
 
-    if let Some(edge) = shortest_edge {
-        return edge;
-    }
-
-    let content = |vertex: &Vertex<'s, 'v>| {
-        (
-            vertex.lhs_syntax.map(Syntax::dbg_content),
-            vertex.rhs_syntax.map(Syntax::dbg_content),
-        )
-    };
-    panic!(
-        "Expected a route between the two vertices {:?} and {:?}",
-        content(before),
-        content(after)
-    );
+// Distinct parent stacks can compare equal as vertices. Recover the first
+// cheapest edge to the selected position, replaying only the winning route.
+fn route_edge<'s>(
+    from: &Vertex<'s, '_>,
+    to: &Vertex<'s, '_>,
+    arena: &Bump,
+    should_stop: &dyn Fn() -> bool,
+) -> Result<Edge, SearchStop> {
+    let mut cheapest: Option<Edge> = None;
+    visit_neighbours(from, arena, should_stop, |edge, next| {
+        if &next == to && cheapest.is_none_or(|best| edge.cost() < best.cost()) {
+            cheapest = Some(edge);
+        }
+    })
+    .map_err(|_| SearchStop::Interrupted)?;
+    Ok(cheapest.expect("the predecessor has an edge to its successor"))
 }
 
 /// What is the total number of AST nodes?
@@ -317,6 +260,46 @@ mod tests {
             start_col: 0,
             end_col: 1,
         }]
+    }
+
+    #[test]
+    fn route_uses_the_cheapest_edge_to_equivalent_empty_lists() {
+        let syntax = Arena::new();
+        let list = || Syntax::new_list(&syntax, "(", pos_helper(0), vec![], ")", pos_helper(0));
+        let (lhs, rhs) = (list(), list());
+        init_all_info(&[lhs], &[rhs]);
+        let from = Vertex::new(Some(lhs), Some(rhs));
+        let to = Vertex::new(None, None);
+        assert_eq!(
+            route_edge(&from, &to, &Bump::new(), &never_stop).unwrap(),
+            UnchangedNode {
+                depth_difference: 0,
+                probably_punctuation: false
+            },
+        );
+    }
+
+    #[test]
+    fn replay_reuses_the_similarity_from_the_search() {
+        let syntax = Arena::new();
+        let comment = |text: &str| {
+            Syntax::new_atom(&syntax, pos_helper(0), text.to_owned(), AtomKind::Comment)
+        };
+        let (lhs, rhs) = (comment("hello"), comment("hallo"));
+        init_all_info(&[lhs], &[rhs]);
+        let from = Vertex::new(Some(lhs), Some(rhs));
+        let to = Vertex::new(None, None);
+        let scratch = Bump::new();
+        visit_neighbours(&from, &scratch, &never_stop, |_, _| {}).unwrap();
+        let edge = route_edge(&from, &to, &scratch, &|| {
+            panic!("rescored a visited comment")
+        });
+        assert_eq!(
+            edge.unwrap(),
+            ReplacedComment {
+                levenshtein_pct: 80
+            }
+        );
     }
 
     #[test]

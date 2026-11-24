@@ -7,7 +7,6 @@ use gitcomet_core::diff_engine::{StructuralDiff, StructuralDiffOutcome};
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::LineToRowMap;
 use gitcomet_core::file_diff::{FileDiffPlan, FileDiffRowKind};
-use gitcomet_core::services::CancellationToken;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,7 +26,7 @@ pub(super) fn compare(
     old: &mut IndexedFileDiffSource,
     new: &mut IndexedFileDiffSource,
     engine: DiffEngine,
-    cancellation: &CancellationToken,
+    request: gitcomet_difftastic::Request<'_>,
 ) -> Result<Comparison, FileDiffCacheError> {
     let mut result = Comparison {
         plan: None,
@@ -43,13 +42,13 @@ pub(super) fn compare(
     }
     let old_text = file_diff_source_plan_text(old)?;
     let new_text = file_diff_source_plan_text(new)?;
-    let outcome = gitcomet_difftastic::compare(
+    let outcome = gitcomet_difftastic::compare_requested(
         gitcomet_difftastic::Input {
             path: &file.path,
             old: &old_text,
             new: &new_text,
         },
-        cancellation,
+        request,
     )
     .map_err(|gitcomet_difftastic::Cancelled| FileDiffCacheError::Cancelled)?;
     match outcome {

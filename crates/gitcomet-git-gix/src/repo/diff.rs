@@ -230,6 +230,59 @@ impl GixRepo {
         let Some(text) = self.diff_file_text_impl_cancellable(target, cancellation)? else {
             return Ok(None);
         };
+        self.decode_diff_sources(text, encoding, cancellation)
+    }
+
+    pub(super) fn prefetch_file_text_impl(
+        &self,
+        target: &DiffTarget,
+        max_blob_bytes: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        cancellation.check_cancelled()?;
+        let repo = self.large_file_read_repo();
+        let Some((path, base, tip)) = commit_path_diff_revisions(target, &repo)? else {
+            return Ok(None);
+        };
+        let old_path = target.old_file_path().unwrap_or(&path);
+        let old = match base {
+            Some(base) => gix_revision_path_blob_entry_optional(&repo, &base, old_path)?,
+            None => None,
+        };
+        let new = gix_revision_path_blob_entry_optional(&repo, &tip, &path)?;
+        if old
+            .iter()
+            .chain(&new)
+            .any(|entry| entry.size > max_blob_bytes)
+        {
+            return Ok(None);
+        }
+        let source = |entry: Option<RevisionPathBlobEntry>, path: &Path| match entry {
+            Some(entry) => self.file_diff_source_from_blob_id(entry.object_id, path, cancellation),
+            None => Ok(None),
+        };
+        let old = source(old, old_path)?;
+        let new = source(new, &path)?;
+        if old
+            .iter()
+            .chain(&new)
+            .any(|source| super::large_files::read_pointer_candidate(&source.path).is_some())
+        {
+            return Ok(None);
+        }
+        self.decode_diff_sources(
+            FileDiffText::new_sources(path, old, new),
+            None,
+            cancellation,
+        )
+    }
+
+    fn decode_diff_sources(
+        &self,
+        text: FileDiffText,
+        encoding: Option<TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
         let attributes = self.text_attributes_impl(&text.path).unwrap_or_default();
         self.decode_file_diff_text(text, &attributes, encoding, cancellation)
             .map(Some)

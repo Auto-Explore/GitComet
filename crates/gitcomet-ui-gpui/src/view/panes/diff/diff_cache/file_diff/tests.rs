@@ -480,8 +480,8 @@ fn a_cancelled_line_diff_skips_the_file_read() {
             "pending-source",
         )),
     );
-    let request = gitcomet_core::services::CancellationToken::new();
-    request.cancel();
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    cancellation.cancel();
     assert!(matches!(
         build_file_diff_cache_with_engine(
             &file,
@@ -489,7 +489,7 @@ fn a_cancelled_line_diff_skips_the_file_read() {
             None,
             DiffWhitespaceMode::Show,
             DiffEngine::LineByLine,
-            &request
+            gitcomet_difftastic::Request::Visible(&cancellation)
         ),
         Err(FileDiffCacheError::Cancelled)
     ));
