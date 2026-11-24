@@ -397,7 +397,7 @@ fn amend_prefills_commit_message_from_previous_commit_when_empty(cx: &mut gpui::
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                pane.set_commit_amend_enabled(true, cx);
+                pane.toggle_commit_amend(cx);
             });
         });
     });
@@ -447,7 +447,7 @@ fn amend_does_not_overwrite_existing_commit_message(cx: &mut gpui::TestAppContex
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                pane.set_commit_amend_enabled(true, cx);
+                pane.toggle_commit_amend(cx);
             });
         });
     });
@@ -486,7 +486,7 @@ fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAp
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                pane.set_commit_amend_enabled(true, cx);
+                pane.toggle_commit_amend(cx);
             });
         });
     });
@@ -1234,7 +1234,7 @@ fn failed_amend_keeps_commit_message_and_amend_toggle(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.details_pane
-                .update(cx, |pane, cx| pane.set_commit_amend_enabled(true, cx));
+                .update(cx, |pane, cx| pane.toggle_commit_amend(cx));
         });
     });
     set_commit_box_text(cx, &view, "amend me");

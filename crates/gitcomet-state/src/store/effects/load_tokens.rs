@@ -2,13 +2,13 @@
 //! the contexts load effects are scheduled under, and the effects that manage them.
 
 use super::worktree_list::WorktreeListPublisher;
-use super::{repo_load, selected_diff_target};
+use super::{repo_load, selected_diff_target, selected_inline_submodule_diff};
 use crate::model::{AppState, Loadable, LogLoadSeq, RepoId};
 use crate::store::executor::{LatestTaskSlot, TaskExecutor};
 use crate::store::repository_runtime::{RepoTaskScope, RepositoryRuntimes};
 use crate::store::worker_channel::StoreWorkerSender;
 use gitcomet_core::domain::{DiffPreviewTextSide, LogCursor};
-use gitcomet_core::services::CancellationToken;
+use gitcomet_core::services::{CancellationToken, GitBackend};
 use std::sync::{Arc, RwLock};
 
 fn ensure_repo_task_scope(
@@ -179,6 +179,30 @@ pub(super) fn load_selected_diff(
                 load_submodule_summary,
                 load_file_image,
             },
+        );
+    }
+}
+
+pub(super) fn load_inline_submodule_diff(
+    executor: &TaskExecutor,
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    backend: &Arc<dyn GitBackend>,
+    repos: &mut RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    (repo_id, inline_rev): (RepoId, u64),
+    read: repo_load::InlineDiffRead,
+) {
+    if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id)
+        && let Some(selected) = selected_inline_submodule_diff(thread_state, repo_id, inline_rev)
+    {
+        repo_load::schedule_load_inline_submodule_diff(
+            executor,
+            backend.clone(),
+            msg_tx,
+            repo_id,
+            inline_rev,
+            selected,
+            read,
         );
     }
 }

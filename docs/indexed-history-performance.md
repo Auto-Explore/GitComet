@@ -602,7 +602,7 @@ author-filtered, merge-filtered and shallow walks.
 
 A later change replays a bounded prefix when older fetched commits interleave
 with existing rows. On the two-million-commit fixture, that refresh took
-69.19 ms. [Older-fetch measurements](ui-responsiveness.md#repository-and-renderer-work).
+69.19 ms.
 
 Rows that are in both indexes keep their relative order. Among equal committer
 times a rebuild may order rows differently; both are valid date orders.

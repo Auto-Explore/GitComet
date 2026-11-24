@@ -28,6 +28,7 @@ ui-gpui-runtime = [
 ]
 ui-gpui = ["ui-gpui-runtime"]
 gix = ["dep:gitcomet-git-gix"]
+test-support = ["gitcomet-git-gix?/test-support", "gitcomet-state/test-support"]
 
 [dependencies]
 clap = { workspace = true }
@@ -59,4 +60,5 @@ rustix = { workspace = true, features = ["stdio"], optional = true }
 gitcomet-win32-window-utils = { workspace = true, optional = true }
 
 [dev-dependencies]
+gitcomet-app = { workspace = true, features = ["test-support"] }
 gitcomet-core = { workspace = true, features = ["test-support"] }

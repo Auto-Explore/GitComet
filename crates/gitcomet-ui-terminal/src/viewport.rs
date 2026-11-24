@@ -1,13 +1,19 @@
 use super::*;
+use crate::backend::{
+    keyboard::{
+        encode_alacritty_key_input, terminal_alt_screen_scroll_bytes, terminal_paste_bytes,
+    },
+    mouse::{terminal_mouse_button_report, terminal_mouse_moved_report, terminal_scroll_report},
+    text_input::TerminalTextInputHandler,
+};
 use crate::painting::{
     TerminalCanvasPaintState, TerminalGridGeometry, TerminalPaintCursor,
     paint_terminal_canvas_state, terminal_cursor_width, terminal_row_fingerprint,
     terminal_snap_to_device_pixels,
 };
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell as AlacCell, Flags};
 use gitcomet_ui_kit::theme::{AppTheme, ThemeGeneration};
 use gitcomet_ui_kit::{Scrollbar, ScrollbarAxis, ScrollbarDriver};
 use gpui::prelude::*;
@@ -131,7 +137,6 @@ pub struct TerminalViewportView {
     /// See [`gitcomet_ui_kit::text_selection_owner`].
     pub(crate) selection_owner: gitcomet_ui_kit::text_selection_owner::SelectionOwnerToken,
     pub(crate) _selection_owner_observer: gpui::Subscription,
-    pub(crate) ime_state: Option<crate::backend::TerminalImeState>,
 }
 
 /// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
@@ -205,16 +210,7 @@ impl ScrollbarDriver for TerminalScrollbarDriver {
             history.saturating_sub(((scroll_y / self.line_height).round() as usize).min(history));
         let delta = target as i32 - current as i32;
         if delta != 0 {
-            let steps = delta.unsigned_abs() as usize;
-            if delta > 0 {
-                for _ in 0..steps {
-                    term.scroll_display(Scroll::Delta(1));
-                }
-            } else {
-                for _ in 0..steps {
-                    term.scroll_display(Scroll::Delta(-1));
-                }
-            }
+            term.scroll_display(Scroll::Delta(delta));
         }
     }
 }
@@ -423,7 +419,6 @@ impl TerminalViewportView {
             selection_last_mouse_pos: point(px(0.0), px(0.0)),
             selection_drag_moved: false,
             selection_autoscroll_seq: 0,
-            ime_state: None,
             selection_owner: Default::default(),
             _selection_owner_observer: selection_owner_observer,
         }
@@ -483,7 +478,6 @@ impl TerminalViewportView {
         }
         self.pressed_mouse_button = None;
         self.last_motion_cell = None;
-        self.ime_state = None;
         self.took_press = false;
         cx.notify();
     }
@@ -665,8 +659,7 @@ impl TerminalViewportView {
             .as_ref()
             .map(|c| c.mode.contains(TerminalModes::APP_CURSOR))
             .unwrap_or(false);
-        let option_as_meta = true;
-        if let Some(bytes) = encode_alacritty_key_input(keystroke, app_cursor, option_as_meta) {
+        if let Some(bytes) = encode_alacritty_key_input(keystroke, app_cursor) {
             // Typing clears any active selection / select-all so the highlight
             // doesn't linger and `selected_text()` stops copying the whole buffer.
             if self.clear_selection() {
@@ -785,32 +778,23 @@ impl TerminalViewportView {
     }
 
     pub(super) fn copy_visible_screen(&self) -> String {
-        let Some(term_lock) = &self.term_lock else {
-            return String::new();
-        };
-        let term = term_lock.lock();
-        let grid = term.grid();
-        // Live dimensions, not the `last_content` snapshot: a shrinking resize
-        // between paint and copy would otherwise index the grid out of range.
-        let display_offset = grid.display_offset();
-        let cols = grid.columns();
-        let rows = grid.screen_lines();
-        let mut text = String::new();
-        for row in 0..rows {
-            let grid_row = row as i32 - display_offset as i32;
-            push_row_text(&mut text, &grid[Line(grid_row)], 0..cols);
-            if row + 1 < rows && !terminal_row_wraps(&grid[Line(grid_row)], cols) {
-                text.push('\n');
-            }
-        }
-        drop(term);
-        trim_terminal_copy(&text)
+        self.copy_full_rows(|grid| {
+            let top = -(grid.display_offset() as i32);
+            top..top + grid.screen_lines() as i32
+        })
     }
 
     /// Copies the entire terminal buffer, including the scrollback history above
     /// the visible screen. The buffer spans `Line(-history_size)` (oldest) to
     /// `Line(screen_lines - 1)` (newest).
     pub fn copy_entire_buffer(&self) -> String {
+        self.copy_full_rows(|grid| -(grid.history_size() as i32)..grid.screen_lines() as i32)
+    }
+
+    fn copy_full_rows(
+        &self,
+        row_range: impl FnOnce(&Grid<AlacCell>) -> std::ops::Range<i32>,
+    ) -> String {
         let Some(term_lock) = &self.term_lock else {
             return String::new();
         };
@@ -819,14 +803,13 @@ impl TerminalViewportView {
         // Live dimensions, not the `last_content` snapshot: a shrinking resize
         // between paint and copy would otherwise index the grid out of range.
         let cols = grid.columns();
-        let screen_lines = grid.screen_lines();
-        let history_size = grid.history_size();
+        let rows = row_range(grid);
+        let end = rows.end;
         let mut text = String::new();
-        let top = -(history_size as i32);
-        let bottom = screen_lines as i32 - 1;
-        for row in top..=bottom {
-            push_row_text(&mut text, &grid[Line(row)], 0..cols);
-            if row < bottom && !terminal_row_wraps(&grid[Line(row)], cols) {
+        for row in rows {
+            let line = &grid[Line(row)];
+            push_row_text(&mut text, line, 0..cols);
+            if row + 1 < end && !terminal_row_wraps(line, cols) {
                 text.push('\n');
             }
         }
@@ -971,34 +954,17 @@ impl TerminalViewportView {
 
         let mouse_mode = self.live_modes();
         if mouse_mode.mouse_mode() {
-            if let Some(pos) = self.viewport_bounds.and_then(|b| {
-                terminal_grid_point(
-                    event.position,
-                    b,
-                    metrics.cell_width,
-                    metrics.line_height,
-                    self.last_content
-                        .as_ref()
-                        .map(|c| c.display_offset)
-                        .unwrap_or(0),
-                    self.last_content
-                        .as_ref()
-                        .map(|c| c.terminal_bounds.columns as u16)
-                        .unwrap_or(0),
-                )
-            }) {
-                let (grid_row, grid_col) = pos;
-                let reports = terminal_scroll_report(
-                    grid_row,
-                    grid_col,
+            if let Some(cell) = self.viewport_to_grid_point(event.position)
+                && let Some(report) = terminal_scroll_report(
+                    cell.row,
+                    usize::from(cell.col),
                     event.modifiers,
                     delta_y,
                     step_rows,
                     mouse_mode,
-                );
-                for report in reports {
-                    self.queue_input(report, cx);
-                }
+                )
+            {
+                self.queue_input(report, cx);
             }
             return;
         }
@@ -1022,18 +988,20 @@ impl TerminalViewportView {
         let Some(term_lock) = &self.term_lock else {
             return;
         };
-        {
-            let mut term = term_lock.lock();
-            if delta_y > px(0.0) {
-                for _ in 0..step_rows {
-                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
-                }
-            } else {
-                for _ in 0..step_rows {
-                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(-1));
-                }
-            }
+        let mut term = term_lock.lock();
+        let current = term.grid().display_offset();
+        let target = if delta_y > px(0.0) {
+            current
+                .saturating_add(step_rows)
+                .min(term.grid().history_size())
+        } else {
+            current.saturating_sub(step_rows)
+        };
+        let delta = target as i32 - current as i32;
+        if delta != 0 {
+            term.scroll_display(Scroll::Delta(delta));
         }
+        drop(term);
         cx.notify();
     }
 
@@ -1166,9 +1134,7 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mode = self.live_modes();
-        if mode.mouse_mode()
-            && mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG)
-        {
+        if mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
             // Only forward a motion report when the pointer crosses into a new
             // grid cell. Without this, every sub-cell GPUI move event produces a
             // duplicate report and floods a TUI in any-event mode (1003); Zed
@@ -1176,15 +1142,15 @@ impl TerminalViewportView {
             let cell = self.viewport_to_grid_point(event.position);
             if cell != self.last_motion_cell {
                 self.last_motion_cell = cell;
-                if let Some(report) = terminal_mouse_moved_report_at(
-                    event.position,
-                    self.viewport_bounds,
-                    &self.layout_cache,
-                    &self.last_content,
-                    self.pressed_mouse_button,
-                    event.modifiers,
-                    mode,
-                ) {
+                if let Some(cell) = cell
+                    && let Some(report) = terminal_mouse_moved_report(
+                        cell.row,
+                        usize::from(cell.col),
+                        self.pressed_mouse_button,
+                        event.modifiers,
+                        mode,
+                    )
+                {
                     self.queue_input(report, cx);
                 }
             }
@@ -1196,11 +1162,6 @@ impl TerminalViewportView {
         // window listeners ahead of this element-local one.
     }
 
-    /// Strict resolver used by mouse reporting: returns `None` outside the
-    /// viewport, matching what `terminal_mouse_*_report_at` will actually
-    /// report. Selection must not share it — a clamping variant here would let
-    /// `last_motion_cell` latch a cell that was never reported, swallowing the
-    /// next genuine entry into it.
     pub(super) fn viewport_to_grid_point(
         &self,
         position: Point<Pixels>,
@@ -1406,16 +1367,16 @@ impl TerminalViewportView {
         mode: TerminalModes,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(report) = terminal_mouse_event_at(
-            position,
-            self.viewport_bounds,
-            &self.layout_cache,
-            &self.last_content,
-            button,
-            modifiers,
-            pressed,
-            mode,
-        ) {
+        if let Some(cell) = self.viewport_to_grid_point(position)
+            && let Some(report) = terminal_mouse_button_report(
+                cell.row,
+                usize::from(cell.col),
+                button,
+                modifiers,
+                pressed,
+                mode,
+            )
+        {
             self.queue_input(report, cx);
         }
     }
@@ -1675,10 +1636,6 @@ impl TerminalViewportView {
             // Cursor
             if gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window)
                 && self.cursor_blink_visible
-                && self
-                    .ime_state
-                    .as_ref()
-                    .is_none_or(|s| s.marked_text.is_empty())
                 && content.cursor.shape != TerminalCursorShape::Hidden
             {
                 let cursor_row = content.cursor.point.line.0 as f32 + content.display_offset as f32;
@@ -1715,32 +1672,6 @@ impl TerminalViewportView {
                         bounds: cursor_bounds,
                         shape: content.cursor.shape,
                     });
-                    paint_state.ime_bounds = Some(cursor_bounds);
-                }
-            }
-
-            // IME marked text
-            if let Some(ref ime) = self.ime_state
-                && !ime.marked_text.is_empty()
-                && gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window)
-            {
-                paint_state.ime_marked_text = Some(ime.marked_text.clone());
-                paint_state.ime_base_style = Some(layout.base_style.clone());
-                let cursor_row = content.cursor.point.line.0 as f32 + content.display_offset as f32;
-                let cursor_col = content.cursor.point.column.0 as f32;
-                if cursor_row >= 0.0
-                    && cursor_row < rows as f32
-                    && cursor_col >= 0.0
-                    && cursor_col < cols as f32
-                {
-                    let cb = Bounds::new(
-                        point(
-                            bounds.left() + layout.metrics.cell_width * cursor_col,
-                            bounds.top() + layout.metrics.line_height * cursor_row,
-                        ),
-                        size(layout.metrics.cell_width, layout.metrics.line_height),
-                    );
-                    paint_state.ime_bounds = Some(cb);
                 }
             }
 
@@ -1844,19 +1775,14 @@ impl Render for TerminalViewportView {
                                         })
                                     },
                                     move |_bounds, paint_state, window, cx| {
-                                        let ime_handler = TerminalTextInputHandler {
-                                            focus_handle: focus_handle.clone(),
-                                            pty_sender: pty_sender.clone(),
-                                            ime_state: paint_state.ime_marked_text.as_ref().map(
-                                                |t| TerminalImeState {
-                                                    marked_text: t.clone(),
-                                                },
-                                            ),
-                                        };
                                         if gitcomet_ui_kit::window_focus::is_active(
                                             &focus_handle,
                                             window,
                                         ) {
+                                            let ime_handler = TerminalTextInputHandler::new(
+                                                focus_handle.clone(),
+                                                pty_sender.clone(),
+                                            );
                                             window.handle_input(&focus_handle, ime_handler, cx);
                                         }
                                         paint_terminal_canvas_state(paint_state, theme, window, cx);
@@ -2011,32 +1937,6 @@ pub(super) fn trim_terminal_copy(text: &str) -> String {
         result.pop();
     }
     result
-}
-
-fn terminal_paste_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
-    let mut normalized = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                let _ = chars.next();
-            }
-            normalized.push('\n');
-        } else {
-            normalized.push(ch);
-        }
-    }
-    if !bracketed_paste {
-        return normalized.into_bytes();
-    }
-    let sanitized = sanitize_bracketed_paste(&normalized);
-    let mut bytes = Vec::with_capacity(
-        BRACKETED_PASTE_START.len() + sanitized.len() + BRACKETED_PASTE_END.len(),
-    );
-    bytes.extend_from_slice(BRACKETED_PASTE_START);
-    bytes.extend_from_slice(sanitized.as_bytes());
-    bytes.extend_from_slice(BRACKETED_PASTE_END);
-    bytes
 }
 
 fn terminal_scroll_wheel_delta(

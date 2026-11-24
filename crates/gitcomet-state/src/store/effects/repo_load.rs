@@ -1575,105 +1575,72 @@ pub(super) fn schedule_load_submodule_summary(
     });
 }
 
-pub(super) fn schedule_load_inline_submodule_selected_diff(
-    executor: &TaskExecutor,
-    backend: Arc<dyn GitBackend>,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    inline_rev: u64,
-    selected: Option<(PathBuf, DiffTarget, u64)>,
-) {
-    let Some((submodule_repo_path, target, current_rev)) = selected else {
-        return;
-    };
-    if current_rev != inline_rev {
-        return;
-    }
-
-    executor.spawn(move || {
-        let result = backend.open(&submodule_repo_path).and_then(|repo| {
-            repo.diff_parsed(
-                &target,
-                None,
-                &gitcomet_core::services::CancellationToken::new(),
-            )
-        });
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
-                repo_id,
-                inline_rev,
-                target,
-                result,
-            }),
-        );
-    });
+pub(super) enum InlineDiffRead {
+    Patch,
+    Text,
+    Image,
 }
 
-pub(super) fn schedule_load_inline_submodule_selected_diff_file(
-    executor: &TaskExecutor,
-    backend: Arc<dyn GitBackend>,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    inline_rev: u64,
-    selected: Option<(PathBuf, DiffTarget, u64)>,
-) {
-    let Some((submodule_repo_path, target, current_rev)) = selected else {
-        return;
-    };
-    if current_rev != inline_rev {
-        return;
-    }
+impl InlineDiffRead {
+    pub(super) fn complete(
+        self,
+        repo_id: RepoId,
+        inline_rev: u64,
+        target: DiffTarget,
+        repository: gitcomet_core::services::Result<Arc<dyn GitRepository>>,
+    ) -> Msg {
+        use crate::msg::InternalMsg;
 
-    executor.spawn(move || {
-        let result = backend.open(&submodule_repo_path).and_then(|repo| {
-            repo.diff_file_text(
-                &target,
-                None,
-                &gitcomet_core::services::CancellationToken::new(),
-            )
-        });
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
-                repo_id,
-                inline_rev,
-                target,
-                result,
-            }),
-        );
-    });
-}
-
-pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
-    executor: &TaskExecutor,
-    backend: Arc<dyn GitBackend>,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    inline_rev: u64,
-    selected: Option<(PathBuf, DiffTarget, u64)>,
-) {
-    let Some((submodule_repo_path, target, current_rev)) = selected else {
-        return;
-    };
-    if current_rev != inline_rev {
-        return;
-    }
-
-    executor.spawn(move || {
-        let result = backend.open(&submodule_repo_path).and_then(|repo| {
-            repo.diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
-        });
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(
-                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+        let message = match self {
+            Self::Patch => {
+                let result = repository
+                    .and_then(|repo| repo.diff_parsed(&target, None, &CancellationToken::new()));
+                InternalMsg::InlineSubmoduleDiffLoaded {
                     repo_id,
                     inline_rev,
                     target,
                     result,
-                },
-            ),
+                }
+            }
+            Self::Text => {
+                let result = repository
+                    .and_then(|repo| repo.diff_file_text(&target, None, &CancellationToken::new()));
+                InternalMsg::InlineSubmoduleDiffFileLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result,
+                }
+            }
+            Self::Image => {
+                let result = repository
+                    .and_then(|repo| repo.diff_file_image(&target, &CancellationToken::new()));
+                InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result,
+                }
+            }
+        };
+        Msg::Internal(message)
+    }
+}
+
+pub(super) fn schedule_load_inline_submodule_diff(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    inline_rev: u64,
+    (submodule_repo_path, target): (PathBuf, DiffTarget),
+    read: InlineDiffRead,
+) {
+    executor.spawn(move || {
+        let repository = backend.open(&submodule_repo_path);
+        send_or_log(
+            &msg_tx,
+            read.complete(repo_id, inline_rev, target, repository),
         );
     });
 }

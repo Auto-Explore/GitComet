@@ -1,6 +1,7 @@
 //! Replies for effects scheduled while Git is unavailable: each fails with
 //! the runtime's reason instead of running.
 
+use super::repo_load::InlineDiffRead;
 use super::{
     selected_conflict_file_path, selected_diff_target, selected_inline_submodule_diff, util,
 };
@@ -31,6 +32,24 @@ fn send_repo_action_unavailable(
         action,
         result: Err(git_unavailable_error(runtime)),
     }))
+}
+
+fn send_inline_diff_unavailable(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    read: InlineDiffRead,
+    runtime: &GitRuntimeState,
+    send: &impl Fn(Msg),
+) {
+    if let Some((_, target)) = selected_inline_submodule_diff(thread_state, repo_id, inline_rev) {
+        send(read.complete(
+            repo_id,
+            inline_rev,
+            target,
+            Err(git_unavailable_error(runtime)),
+        ));
+    }
 }
 
 pub(super) fn send_unavailable_git_effect_result(
@@ -356,66 +375,36 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::LoadInlineSubmoduleSelectedDiff {
             repo_id,
             inline_rev,
-        } => {
-            let Some((_, target, current_rev)) =
-                selected_inline_submodule_diff(thread_state, repo_id)
-            else {
-                return;
-            };
-            if current_rev != inline_rev {
-                return;
-            }
-            send(Msg::Internal(
-                crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
-                    repo_id,
-                    inline_rev,
-                    target,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send_inline_diff_unavailable(
+            thread_state,
+            repo_id,
+            inline_rev,
+            InlineDiffRead::Patch,
+            runtime,
+            &send,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFile {
             repo_id,
             inline_rev,
-        } => {
-            let Some((_, target, current_rev)) =
-                selected_inline_submodule_diff(thread_state, repo_id)
-            else {
-                return;
-            };
-            if current_rev != inline_rev {
-                return;
-            }
-            send(Msg::Internal(
-                crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
-                    repo_id,
-                    inline_rev,
-                    target,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send_inline_diff_unavailable(
+            thread_state,
+            repo_id,
+            inline_rev,
+            InlineDiffRead::Text,
+            runtime,
+            &send,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFileImage {
             repo_id,
             inline_rev,
-        } => {
-            let Some((_, target, current_rev)) =
-                selected_inline_submodule_diff(thread_state, repo_id)
-            else {
-                return;
-            };
-            if current_rev != inline_rev {
-                return;
-            }
-            send(Msg::Internal(
-                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
-                    repo_id,
-                    inline_rev,
-                    target,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send_inline_diff_unavailable(
+            thread_state,
+            repo_id,
+            inline_rev,
+            InlineDiffRead::Image,
+            runtime,
+            &send,
+        ),
         Effect::LoadDiffFileImage { repo_id, target } => send(Msg::Internal(
             crate::msg::InternalMsg::DiffFileImageLoaded {
                 repo_id,

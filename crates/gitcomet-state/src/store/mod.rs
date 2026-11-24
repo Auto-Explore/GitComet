@@ -731,22 +731,6 @@ impl AppStore {
         self.msg_tx.set_auto_fetch_allowed(allowed);
     }
 
-    /// Acknowledge queued reductions and return their publication sequence.
-    /// Effects scheduled by those reductions can still finish afterwards.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
-        self.msg_tx.barrier_for_test()
-    }
-
-    /// Stop this store and acknowledge its worker, private pools, and effects.
-    /// This stops all clones of the store; shared pools remain available.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn shutdown_for_test(&self) -> mpsc::Receiver<()> {
-        let completion = self.msg_tx.test_tasks.completion();
-        self.msg_tx.shutdown();
-        completion
-    }
-
     pub fn reducer_diagnostics() -> StoreReducerDiagnostics {
         reducer_diagnostics::snapshot()
     }
@@ -758,33 +742,6 @@ impl AppStore {
             repository_preferences::PreferenceHub::shared(),
             auto_fetch::AutoFetchCoordinator::shared(),
             FilesystemScope::Process,
-        )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(
-            backend,
-            AppState::test_default(),
-            repository_preferences::PreferenceHub::new(
-                crate::session::default_session_file_path_for_effect(),
-            ),
-            auto_fetch::AutoFetchCoordinator::new(),
-            FilesystemScope::Store,
-        )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_test_sharing_preferences(
-        backend: Arc<dyn GitBackend>,
-        other: &Self,
-    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(
-            backend,
-            AppState::test_default(),
-            Arc::clone(&other.msg_tx.preferences),
-            Arc::clone(&other.msg_tx.auto_fetch),
-            FilesystemScope::Store,
         )
     }
 
@@ -1348,14 +1305,6 @@ impl AppStore {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn history_find_dispatch_count_for_test(&self) -> u64 {
-        self.public_lifetime
-            .history_find_dispatches
-            .load(Ordering::Relaxed)
-    }
-
     /// The filesystem engine this store's file operations journal into.
     pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
         self.msg_tx.filesystem
@@ -1427,38 +1376,6 @@ impl AppStore {
     pub fn snapshot_with_publication(&self) -> (Arc<AppState>, u64) {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         (Arc::clone(&state), self.publication.load(Ordering::Relaxed))
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn record_planned_one_sided_sides_for_test(state: &mut AppState) {
-        reducer::record_planned_one_sided_sides(state);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
-        // Reduce what is already queued first (a new view's settings
-        // bootstrap), so a slow worker cannot apply it over the replacement.
-        let _ = self
-            .barrier_for_test()
-            .recv_timeout(std::time::Duration::from_secs(5));
-        let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
-        *current = state;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
-        self.msg_tx.insert_repo_for_test(repo_id, repo);
-    }
-
-    /// Never starts a filesystem monitor for any repository. For tests over
-    /// real repositories whose assertions a watcher refresh would disturb.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn disable_repo_monitors_for_test(&self) {
-        self.msg_tx.disable_repo_monitors_for_test();
     }
 }
 

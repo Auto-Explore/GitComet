@@ -135,9 +135,6 @@ pub struct TerminalCanvasPaintState {
     pub(super) background_rects: Vec<(Point<Pixels>, gpui::Size<Pixels>, gpui::Rgba)>,
     pub(super) lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
     pub cursor: Option<TerminalPaintCursor>,
-    pub(super) ime_bounds: Option<Bounds<Pixels>>,
-    pub(super) ime_marked_text: Option<String>,
-    pub(super) ime_base_style: Option<gpui::TextStyle>,
 }
 
 #[derive(Clone)]
@@ -180,43 +177,6 @@ pub(super) fn paint_terminal_canvas_state(
     }
     if let Some(cursor) = paint_state.cursor {
         paint_terminal_cursor(cursor, theme, window);
-    }
-
-    // IME preedit (marked) text
-    if let Some(ref marked_text) = paint_state.ime_marked_text
-        && let Some(ime_bounds) = paint_state.ime_bounds
-        && let Some(ref base_style) = paint_state.ime_base_style
-    {
-        let mut ime_style = base_style.clone();
-        ime_style.underline = Some(gpui::UnderlineStyle {
-            color: Some(ime_style.color),
-            thickness: px(1.0),
-            wavy: false,
-        });
-        let shaped = window.text_system().shape_line(
-            marked_text.clone().into(),
-            ime_style.font_size.to_pixels(window.rem_size()),
-            &[TextRun {
-                len: marked_text.len(),
-                font: ime_style.font(),
-                color: ime_style.color,
-                underline: ime_style.underline,
-                ..Default::default()
-            }],
-        );
-        let ime_bg = Bounds::new(
-            ime_bounds.origin,
-            size(shaped.width, ime_bounds.size.height),
-        );
-        window.paint_quad(PaintQuad::new(ime_bg).background(paint_state.terminal_bg));
-        let _ = shaped.paint(
-            ime_bounds.origin,
-            ime_bounds.size.height,
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        );
     }
 }
 

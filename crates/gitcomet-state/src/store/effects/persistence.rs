@@ -21,7 +21,7 @@ pub(super) fn schedule(
             });
         }
         PersistenceEffect::PersistSession { .. } => {
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             let state_snapshot = {
@@ -37,7 +37,7 @@ pub(super) fn schedule(
             });
         }
         PersistenceEffect::PersistRecentRepo { workdir, .. } => {
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             session_persist_executor.spawn(move || {
@@ -69,7 +69,7 @@ pub(super) fn schedule(
             }) {
                 return;
             }
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             session_persist_executor.spawn(move || {
@@ -97,7 +97,7 @@ pub(super) fn schedule(
             if updates.is_empty() {
                 return;
             }
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             session_persist_executor.spawn(move || {
@@ -111,7 +111,7 @@ pub(super) fn schedule(
         PersistenceEffect::PersistRepoHistoryAuthorFilter {
             workdir, author, ..
         } => {
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             session_persist_executor.spawn(move || {
@@ -125,7 +125,7 @@ pub(super) fn schedule(
             });
         }
         PersistenceEffect::PersistRepoHistoryFocus { workdir, focus, .. } => {
-            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+            let Some(session_file_path) = session::default_session_file_path() else {
                 return;
             };
             session_persist_executor.spawn(move || {

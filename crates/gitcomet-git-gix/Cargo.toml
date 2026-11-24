@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 benchmarks = ["gitcomet-core/benchmarks"]
-test-support = []
+test-support = ["gitcomet-core/test-support"]
 
 [[example]]
 name = "status-refresh-bench"

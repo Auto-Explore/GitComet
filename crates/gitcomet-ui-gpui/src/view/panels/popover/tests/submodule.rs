@@ -1,6 +1,78 @@
 use super::*;
 
 #[gpui::test]
+fn backing_out_of_submodule_trust_restores_the_add_form(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_core::services::SubmoduleTrustTarget;
+    use gitcomet_state::model::{SubmoduleTrustPromptOperation, SubmoduleTrustPromptState};
+
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/parent".into(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        submodule_trust_prompt: Some(SubmoduleTrustPromptState {
+            repo_id,
+            operation: SubmoduleTrustPromptOperation::Add {
+                url: "../library".into(),
+                path: "vendor/library".into(),
+                branch: Some("stable".into()),
+                name: Some("library-alias".into()),
+                force: true,
+            },
+            sources: vec![SubmoduleTrustTarget {
+                submodule_path: "vendor/library".into(),
+                display_source: "../library".into(),
+                local_source_path: "/library".into(),
+            }],
+        }),
+        ..AppState::test_default()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        window.activate();
+        view.update(app, |this, cx| {
+            crate::view::test_support::push_test_state(this, state, cx);
+        });
+    });
+    crate::view::test_support::redraw(cx);
+    let back = cx
+        .debug_bounds("submodule_trust_cancel")
+        .expect("Back button");
+    crate::view::panels::tests::simulate_counted_click(cx, back.center(), 1);
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("submodule_trust_cancel").is_none());
+    assert!(cx.debug_bounds("submodule_add_advanced_toggle").is_some());
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        for (input, expected) in [
+            (&host.submodule_url_input, "../library"),
+            (&host.submodule_path_input, "vendor/library"),
+            (&host.submodule_branch_input, "stable"),
+            (&host.submodule_name_input, "library-alias"),
+        ] {
+            assert_eq!(input.read(app).text(), expected);
+        }
+        assert!(host.submodule_add_advanced_expanded);
+        assert!(host.submodule_force_enabled);
+        assert_window_focus(
+            window,
+            app,
+            host.submodule_url_input.read(app).focus_handle(),
+            "Back returns focus to the URL input",
+        );
+    });
+}
+
+#[gpui::test]
 fn submodule_add_advanced_toggle_keeps_its_geometry_when_focused(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();

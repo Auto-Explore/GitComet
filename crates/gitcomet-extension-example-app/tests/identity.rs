@@ -1,6 +1,8 @@
 //! The example product launches under its own identity and paths using the
 //! upstream crates, with no product feature flags.
 
+use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -23,6 +25,29 @@ fn example_at(executable: &Path, args: &[&str], home: &Path) -> Output {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn assert_example_tool_commands(dry_run: &str) {
+    let mut keys = BTreeSet::new();
+    for line in dry_run.lines() {
+        let key = line
+            .strip_prefix("git config --global ")
+            .and_then(|args| args.split_whitespace().find(|arg| !arg.starts_with('-')));
+        if let Some(key) = key.filter(|key| key.ends_with(".cmd")) {
+            keys.insert(key);
+        } else {
+            assert!(!line.contains("gitcomet"), "{line}");
+        }
+    }
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "difftool.comet-example-gui.cmd",
+            "difftool.comet-example.cmd",
+            "mergetool.comet-example-gui.cmd",
+            "mergetool.comet-example.cmd",
+        ])
+    );
 }
 
 #[test]
@@ -52,51 +77,53 @@ fn version_and_help_name_the_example_product() {
 
 #[test]
 fn git_tool_setup_registers_only_the_example_tools() {
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::Builder::new()
+        .prefix("gitcomet-parent-")
+        .tempdir()
+        .unwrap();
     let source = Path::new(env!("CARGO_BIN_EXE_comet-example"));
     let executable = home.path().join(source.file_name().unwrap());
     std::fs::copy(source, &executable).unwrap();
     let setup = example_at(&executable, &["setup", "--dry-run"], home.path());
     assert_eq!(setup.status.code(), Some(0));
     let setup = stdout(&setup);
-    assert!(setup.contains("mergetool.comet-example.cmd"), "{setup}");
-    assert!(setup.contains("difftool.comet-example-gui.cmd"), "{setup}");
+    assert_example_tool_commands(&setup);
     assert!(setup.contains("comet-example.backup.*"), "{setup}");
-    assert!(!setup.contains("gitcomet"), "{setup}");
 
-    let uninstall = stdout(&example_at(
-        &executable,
-        &["uninstall", "--dry-run"],
-        home.path(),
-    ));
-    assert!(
-        uninstall.contains("mergetool.comet-example.cmd"),
-        "{uninstall}"
-    );
-    assert!(!uninstall.contains("gitcomet"), "{uninstall}");
+    let uninstall = example_at(&executable, &["uninstall", "--dry-run"], home.path());
+    assert!(uninstall.status.success());
+    assert_example_tool_commands(&stdout(&uninstall));
 }
 
 #[test]
 fn state_data_and_crash_directories_are_the_examples_own() {
-    let home = tempfile::tempdir().unwrap();
+    let home = tempfile::Builder::new()
+        .prefix("gitcomet-parent-")
+        .tempdir()
+        .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_comet-example"))
         .env("COMET_EXAMPLE_PRINT_DIRS", "1")
         .env("HOME", home.path())
         .env("XDG_STATE_HOME", home.path().join("state"))
         .env("XDG_DATA_HOME", home.path().join("data"))
         .env("LOCALAPPDATA", home.path().join("local"))
+        .env_remove("GITCOMET_PROFILE_ROOT")
         .output()
         .expect("run comet-example");
     let text = stdout(&output);
-    for line in text.lines() {
-        let (_, dir) = line.split_once('=').expect("label=dir");
-        assert!(
-            Path::new(dir)
-                .components()
-                .any(|c| c.as_os_str() == "comet-example"),
-            "{line}"
-        );
-        assert!(!dir.contains("gitcomet"), "{line}");
+    assert!(output.status.success(), "{text}");
+    for (line, label) in text.lines().zip(["state", "data", "crash"]) {
+        let (actual_label, dir) = line.split_once('=').expect("label=dir");
+        assert_eq!(actual_label, label);
+        let dir = Path::new(dir);
+        assert!(dir.starts_with(home.path()), "{line}");
+        let product_dir = if label == "crash" {
+            assert_eq!(dir.file_name(), Some(OsStr::new("crashes")));
+            dir.parent().unwrap()
+        } else {
+            dir
+        };
+        assert_eq!(product_dir.file_name(), Some(OsStr::new("comet-example")));
     }
     assert_eq!(text.lines().count(), 3, "{text}");
 }

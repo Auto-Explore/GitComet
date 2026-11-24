@@ -1,6 +1,8 @@
 use super::*;
 use crate::backend::*;
 
+mod input;
+
 // A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
 const TEST_COLS: usize = 20;
 const TEST_ROWS: usize = 6;
@@ -45,7 +47,16 @@ fn test_layout_cache() -> TerminalLayoutCache {
 /// A live `Term` holding `count` numbered lines, so anything beyond the last
 /// `TEST_ROWS` of them sits in scrollback.
 fn test_term_with_lines(count: usize) -> AlacrittyTermLock {
-    let (events_tx, _events_rx) = smol::channel::unbounded();
+    test_term_with_lines_and_events(count).0
+}
+
+fn test_term_with_lines_and_events(
+    count: usize,
+) -> (
+    AlacrittyTermLock,
+    smol::channel::Receiver<TerminalBackendEvent>,
+) {
+    let (events_tx, events_rx) = smol::channel::unbounded();
     let term_lock = new_term(
         &terminal_config(TEST_SCROLLBACK),
         &TerminalDims {
@@ -66,7 +77,7 @@ fn test_term_with_lines(count: usize) -> AlacrittyTermLock {
         }
     }
     drop(term);
-    term_lock
+    (term_lock, events_rx)
 }
 
 /// Builds a viewport view over `term_lock`, with the layout and bounds a

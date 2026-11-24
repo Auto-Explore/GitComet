@@ -192,7 +192,7 @@ fn status_actions_preserve_historical_and_other_repository_views() {
 }
 
 #[test]
-fn unavailable_git_status_actions_preserve_the_diff() {
+fn unavailable_git_status_actions_report_failure_without_discarding_the_selection() {
     use gitcomet_core::domain::DiffArea;
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         let target = DiffTarget::working_tree("shown.rs".into(), area);
@@ -211,15 +211,23 @@ fn unavailable_git_status_actions_preserve_the_diff() {
                 paths: vec![].into(),
             },
         };
-        let effects = reduce(
-            &mut Default::default(),
-            &AtomicU64::new(3),
-            &mut state,
-            message,
+        let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+        store.disable_repo_monitors_for_test();
+        store.replace_snapshot_for_test(Arc::new(state));
+        store.dispatch(message);
+        store.barrier_for_test().recv().expect("action dispatched");
+        store.barrier_for_test().recv().expect("failure reduced");
+
+        let snapshot = store.snapshot();
+        let repo = &snapshot.repos[0];
+        assert_eq!(repo.diff_state.diff_target, Some(target));
+        assert_eq!(repo.local_actions_in_flight, 0);
+        assert!(
+            repo.feedback
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("unavailable in test"))
         );
-        assert!(effects.is_empty());
-        assert_eq!(state.repos[0].diff_state.diff_target, Some(target));
-        assert_eq!(state.repos[0].local_actions_in_flight, 0);
     }
 }
 

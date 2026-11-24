@@ -1,4 +1,5 @@
 use super::*;
+use std::cell::RefCell;
 
 pub(crate) fn load_repo_session_preferences() -> RepoSessionPreferences {
     let Some(session_file_path) = default_session_file_path() else {

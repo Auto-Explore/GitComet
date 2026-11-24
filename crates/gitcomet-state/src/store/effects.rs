@@ -120,20 +120,16 @@ fn selected_conflict_file_path(
 fn selected_inline_submodule_diff(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
-) -> Option<(std::path::PathBuf, DiffTarget, u64)> {
+    inline_rev: u64,
+) -> Option<(std::path::PathBuf, DiffTarget)> {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
-        .map(|inline| {
-            (
-                inline.submodule_repo_path.clone(),
-                inline.target.clone(),
-                inline.rev,
-            )
-        })
+        .filter(|inline| inline.rev == inline_rev)
+        .map(|inline| (inline.submodule_repo_path.clone(), inline.target.clone()))
 }
 
 pub(super) fn schedule_effect(
@@ -806,48 +802,39 @@ pub(super) fn schedule_effect(
         Effect::LoadInlineSubmoduleSelectedDiff {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Patch,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFile {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff_file(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Text,
+        ),
         Effect::LoadInlineSubmoduleSelectedDiffFileImage {
             repo_id,
             inline_rev,
-        } => {
-            if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_inline_submodule_selected_diff_file_image(
-                    executor,
-                    backend.clone(),
-                    msg_tx,
-                    repo_id,
-                    inline_rev,
-                    selected_inline_submodule_diff(thread_state, repo_id),
-                );
-            }
-        }
+        } => load_tokens::load_inline_submodule_diff(
+            executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            (repo_id, inline_rev),
+            repo_load::InlineDiffRead::Image,
+        ),
         Effect::LoadDiffFileImage { repo_id, target } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);

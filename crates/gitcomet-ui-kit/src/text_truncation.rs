@@ -4,8 +4,6 @@ use gpui::{
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
-#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
-use std::cell::Cell;
 use std::cell::RefCell;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -13,11 +11,26 @@ use std::ops::Range;
 use std::sync::Arc;
 
 mod candidate;
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+mod measurement;
 mod path;
 mod path_alignment;
 mod projection;
 
 use candidate::{TruncatedCandidateParams, build_truncated_candidate};
+#[cfg(feature = "benchmarks")]
+pub use measurement::{
+    clear_layout_cache as clear_truncated_layout_cache_for_benchmark,
+    measure_candidate_calls as measure_candidate_calls_for_benchmark,
+    reset_measure_candidate_calls as reset_measure_candidate_calls_for_benchmark,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use measurement::{
+    clear_layout_cache as clear_truncated_layout_cache_for_test,
+    measure_candidate_calls as measure_candidate_calls_for_test,
+    reset_measure_candidate_calls as reset_measure_candidate_calls_for_test,
+    truncated_layout_cache_len_for_test,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use path_alignment::PathAlignmentSnapshot;
 pub use path_alignment::{PathAlignmentLayoutKey, PathTruncationAlignmentGroup};
@@ -35,11 +48,6 @@ thread_local! {
                 .expect("truncated layout cache capacity must be > 0"),
             BuildHasherDefault::default(),
         ), || TRUNCATED_LAYOUT_CACHE.with_borrow_mut(FxLruCache::clear));
-}
-
-#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
-thread_local! {
-    static MEASURE_CANDIDATE_CALLS_FOR_TEST: Cell<usize> = const { Cell::new(0) };
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -347,14 +355,6 @@ fn char_boundaries(text: &str) -> Vec<usize> {
     boundaries
 }
 
-#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
-fn record_measure_candidate_call_for_test() {
-    MEASURE_CANDIDATE_CALLS_FOR_TEST.with(|calls| calls.set(calls.get() + 1));
-}
-
-#[cfg(not(any(test, feature = "test-support", feature = "benchmarks")))]
-fn record_measure_candidate_call_for_test() {}
-
 fn width_cache_key(width: Pixels) -> u32 {
     let width = f32::from(width);
     if width == 0.0 {
@@ -420,41 +420,6 @@ pub fn path_alignment_style_key(base_style: &TextStyle, rem_size: Pixels) -> u64
 
 pub fn path_alignment_visible_signature(value: &(impl Hash + ?Sized)) -> u64 {
     hash_value(value)
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn clear_truncated_layout_cache_for_test() {
-    TRUNCATED_LAYOUT_CACHE.with(|cache| cache.borrow_mut().clear());
-}
-
-#[cfg(feature = "benchmarks")]
-pub fn clear_truncated_layout_cache_for_benchmark() {
-    TRUNCATED_LAYOUT_CACHE.with(|cache| cache.borrow_mut().clear());
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn truncated_layout_cache_len_for_test() -> usize {
-    TRUNCATED_LAYOUT_CACHE.with(|cache| cache.borrow().len())
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn reset_measure_candidate_calls_for_test() {
-    MEASURE_CANDIDATE_CALLS_FOR_TEST.with(|calls| calls.set(0));
-}
-
-#[cfg(feature = "benchmarks")]
-pub fn reset_measure_candidate_calls_for_benchmark() {
-    MEASURE_CANDIDATE_CALLS_FOR_TEST.with(|calls| calls.set(0));
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn measure_candidate_calls_for_test() -> usize {
-    MEASURE_CANDIDATE_CALLS_FOR_TEST.with(Cell::get)
-}
-
-#[cfg(feature = "benchmarks")]
-pub fn measure_candidate_calls_for_benchmark() -> usize {
-    MEASURE_CANDIDATE_CALLS_FOR_TEST.with(Cell::get)
 }
 
 #[cfg(test)]

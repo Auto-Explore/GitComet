@@ -675,7 +675,6 @@ impl GitCometView {
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
-        let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let initial_state = store.snapshot();
         // The worker queued Git adoption before the restore. If it is already
         // reflected here, no later snapshot needs to suppress that transition.
@@ -1280,7 +1279,6 @@ impl GitCometView {
             reflog_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
-            commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
@@ -2629,42 +2627,16 @@ impl GitCometView {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn is_popover_open(&self, app: &App) -> bool {
-        self.popover_host.read(app).is_open()
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn tooltip_host_for_test(&self) -> Entity<TooltipHost> {
         self.tooltip_host.clone()
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host
             .read(app)
             .tooltip_text_for_test()
             .or_else(tooltip::tooltip_text_for_test)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn open_repo_panel_visible_for_test(&self) -> bool {
-        self.open_repo_panel
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn show_timezone_for_test(&self) -> bool {
-        self.show_timezone
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
-        self.change_tracking_view
     }
 
     #[cfg(test)]
@@ -2757,12 +2729,6 @@ impl GitCometView {
                 self.store.dispatch(Msg::ReloadRepo { repo_id });
             }
         }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
-        self.diff_scroll_sync
     }
 
     pub(super) fn set_external_drag_payload(

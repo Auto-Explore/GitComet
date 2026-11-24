@@ -2644,7 +2644,8 @@ fn render_table_image(
                         .selection_range(region, row_ix, range.clone(), cx)
                         .is_some_and(|selected| !selected.is_empty());
                     if selected {
-                        super::markdown_flow_text::record_selection_paint_for_tests(
+                        #[cfg(test)]
+                        super::markdown_flow_text::test_support::record_selection_paint_for_tests(
                             row_ix,
                             &[bounds],
                         );

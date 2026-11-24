@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::test_support::TestBackend;
+use crate::view::test_support::{StandaloneBackend, TestBackend};
 
 #[gpui::test]
 fn a_detached_document_outside_the_active_bare_repository_still_saves(
@@ -65,21 +65,6 @@ fn adopt_edit(
     document.seat_text(1, Some(2), cx);
     document.retain_text(text, cursor, 1);
     docs.adopt(document, cx);
-}
-
-// Standalone fixtures must stay outside repository routing even when an
-// ancestor of the temporary directory contains a .git entry.
-struct StandaloneBackend;
-
-impl gitcomet_core::services::GitBackend for StandaloneBackend {
-    fn open(
-        &self,
-        _workdir: &Path,
-    ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>> {
-        Err(gitcomet_core::error::Error::new(
-            gitcomet_core::error::ErrorKind::NotARepository,
-        ))
-    }
 }
 
 #[gpui::test]

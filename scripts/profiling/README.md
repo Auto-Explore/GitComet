@@ -428,7 +428,7 @@ python3 scripts/profiling/live-ui.py report target/profiling/live/s1 target/prof
 - `diff-navigation` alternates F7 and Shift-F7 on the fixture's changed file.
   `window-activation` measures 20 verified native focus changes between two
   windows. `history-scroll-tabs` replays 1,200 witnessed scrolls after opening
-  the supplied secondary repositories. [Workloads and measurements](../../docs/ui-responsiveness.md).
+  the supplied secondary repositories.
 - **Display:** each run gets a private headless mutter with one virtual
   monitor, so the window is focused and paced by a real compositor.
   `--display desktop` uses the session instead, where GNOME denies a

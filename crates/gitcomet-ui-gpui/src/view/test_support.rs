@@ -419,6 +419,21 @@ impl gitcomet_core::services::GitBackend for TestBackend {
     }
 }
 
+// Standalone fixtures stay outside repository routing when an ancestor
+// of the temporary directory contains a .git entry.
+pub(crate) struct StandaloneBackend;
+
+impl gitcomet_core::services::GitBackend for StandaloneBackend {
+    fn open(
+        &self,
+        _workdir: &std::path::Path,
+    ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>> {
+        Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::NotARepository,
+        ))
+    }
+}
+
 /// No-op backend for tests that do not touch repositories at all.
 pub(crate) struct NoopBackend;
 

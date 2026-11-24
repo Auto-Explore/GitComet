@@ -98,7 +98,6 @@ impl PopoverKind {
             | Self::ForceRemoveWorktreeConfirm(_)
             | Self::PullPicker
             | Self::PushPicker
-            | Self::CommitOptionsMenu { .. }
             | Self::CommitFileSortMenu { .. }
             | Self::FileListLayoutMenu { .. }
             | Self::FileListFolderMenu { .. }
@@ -271,9 +270,6 @@ impl PopoverHost {
                 .filter(|entry| entry.repository_requirement == RepositoryRequirement::WorkingTree)
                 .and(self.active_repo_id()),
             ContextMenuAction::AddGitattributesRule { .. }
-            | ContextMenuAction::SetCommitAmendEnabled { .. }
-            | ContextMenuAction::SetCommitPushAfterEnabled { .. }
-            | ContextMenuAction::SetCommitSkipHooksEnabled { .. }
             | ContextMenuAction::UseCommitMessage { .. }
             | ContextMenuAction::SetInteractiveRebaseAction { .. }
             | ContextMenuAction::SetInteractiveRebaseAutosquashMode { .. }

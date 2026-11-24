@@ -1,6 +1,7 @@
 use super::super::*;
 use gitcomet_core::domain::HistoryMode;
 use serde_json::json;
+use std::env;
 
 fn session_path(label: &str) -> PathBuf {
     let dir = env::temp_dir().join(format!(

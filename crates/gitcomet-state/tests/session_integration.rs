@@ -4,6 +4,7 @@
 )]
 
 use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
+use gitcomet_core::test_support::child_test;
 use gitcomet_state::model::{AppState, RepoId, RepoState};
 use gitcomet_state::session::{self, ExternalCodeEditorSetting, UiSession, UiSettings};
 use serde_json::json;
@@ -34,35 +35,20 @@ fn write_session_json(path: &Path, value: serde_json::Value) {
     fs::write(path, bytes).expect("write session file");
 }
 
-fn env_defaults_available() -> bool {
-    std::env::var_os(SESSION_FILE_ENV).is_none()
-        && std::env::var_os(DISABLE_SESSION_PERSIST_ENV).is_none()
-}
-
-fn run_subtest_with_env(test_name: &str, session_file: &Path, disable_persist: bool) {
-    let current_exe = std::env::current_exe().expect("locate current test binary");
-    let mut cmd = Command::new(current_exe);
-    cmd.arg("--exact").arg(test_name).arg("--nocapture");
-    cmd.env(SESSION_FILE_ENV, session_file);
-    if disable_persist {
-        cmd.env(DISABLE_SESSION_PERSIST_ENV, "1");
-    } else {
-        cmd.env_remove(DISABLE_SESSION_PERSIST_ENV);
-    }
-    let output = cmd.output().expect("spawn subtest process");
-    assert!(
-        output.status.success(),
-        "subtest {} failed:\nstdout:\n{}\nstderr:\n{}",
-        test_name,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 #[test]
 fn wrapper_apis_return_defaults_without_session_path() {
-    if !env_defaults_available() {
-        eprintln!("skipping test because session env vars are preset");
+    let directory = tempfile::tempdir().unwrap();
+    if !child_test::in_child(
+        "GITCOMET_TEST_SESSION_DEFAULTS",
+        module_path!(),
+        "wrapper_apis_return_defaults_without_session_path",
+        |command| {
+            command
+                .env_remove(SESSION_FILE_ENV)
+                .env_remove(DISABLE_SESSION_PERSIST_ENV)
+                .env("GITCOMET_PROFILE_ROOT", directory.path());
+        },
+    ) {
         return;
     }
 
@@ -74,11 +60,68 @@ fn wrapper_apis_return_defaults_without_session_path() {
     assert_eq!(session::load_repo_history_scope(repo), None);
     assert!(session::load_repo_history_scopes().is_empty());
     assert!(session::persist_repo_history_scope(repo, LogScope::CurrentBranch).is_ok());
+    let profile_state = gitcomet_core::platform::dirs::state_dir().unwrap();
+    assert!(!profile_state.join("session.json").exists());
 }
 
 #[test]
-fn wrapper_apis_use_session_file_env_when_set() {
-    if std::env::var_os(SESSION_FILE_ENV).is_none() {
+fn profile_paths_work_when_an_application_runs_from_a_deps_directory() {
+    const CHILD_PROFILE: &str = "GITCOMET_TEST_CHILD_PROFILE";
+    if let Some(profile) = std::env::var_os(CHILD_PROFILE) {
+        let profile = PathBuf::from(profile);
+        let name = gitcomet_core::identity::current().directory_name();
+        let state = profile.join("state").join(name);
+        assert_eq!(
+            session::browser_instance_file_path(),
+            Some(state.join("browser-instance.json"))
+        );
+        assert_eq!(session::journal_storage_dir(), Some(state.join("journal")));
+        assert_eq!(
+            session::user_themes_dir(),
+            Some(profile.join("data").join(name).join("themes"))
+        );
+        session::persist_ui_settings(UiSettings {
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(state.join("session.json").is_file());
+        assert_eq!(session::load().theme_mode.as_deref(), Some("dark"));
+        return;
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let deps = directory.path().join("deps");
+    fs::create_dir(&deps).unwrap();
+    let executable = deps.join(format!("profile-probe{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+    let profile = directory.path().join("profile");
+    let mut command = Command::new(executable);
+    command
+        .env(CHILD_PROFILE, &profile)
+        .env("GITCOMET_PROFILE_ROOT", &profile)
+        .env_remove(SESSION_FILE_ENV)
+        .env_remove(DISABLE_SESSION_PERSIST_ENV);
+    child_test::run(
+        &mut command,
+        module_path!(),
+        "profile_paths_work_when_an_application_runs_from_a_deps_directory",
+    );
+}
+
+#[test]
+fn wrapper_apis_prefer_session_file_env_even_when_disable_flag_is_set() {
+    let directory = tempfile::tempdir().unwrap();
+    if !child_test::in_child(
+        "GITCOMET_TEST_SESSION_EXPLICIT_PATH",
+        module_path!(),
+        "wrapper_apis_prefer_session_file_env_even_when_disable_flag_is_set",
+        |command| {
+            command
+                .env(SESSION_FILE_ENV, directory.path().join("session.json"))
+                .env(DISABLE_SESSION_PERSIST_ENV, "1");
+        },
+    ) {
         return;
     }
     let repo = Path::new("/tmp/gitcomet-session-env-repo");
@@ -121,21 +164,6 @@ fn wrapper_apis_use_session_file_env_when_set() {
     assert_eq!(
         scopes.get(&repo.to_string_lossy().to_string()),
         Some(&LogScope::CurrentBranch)
-    );
-}
-
-#[test]
-fn wrapper_apis_prefer_session_file_env_even_when_disable_flag_is_set() {
-    if std::env::var_os(SESSION_FILE_ENV).is_some() {
-        return;
-    }
-
-    let dir = unique_temp_dir("wrapper-env-subprocess");
-    let session_file = dir.join("session.json");
-    run_subtest_with_env(
-        "wrapper_apis_use_session_file_env_when_set",
-        &session_file,
-        true,
     );
 }
 

@@ -240,7 +240,6 @@ fn repo_for_popover<'a>(
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
-        | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
@@ -523,7 +522,6 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::PushPicker
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
-        | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::FileHistoryCommitMenu { .. }
         | PopoverKind::TagMenu { .. }

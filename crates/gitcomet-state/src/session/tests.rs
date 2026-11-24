@@ -2685,33 +2685,29 @@ fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
 }
 
 #[test]
-fn persist_ui_settings_round_trips_commit_push_after_enabled() {
-    let dir_guard = tempfile::tempdir().expect("create tempdir");
-    let dir = dir_guard.path().to_path_buf();
-    let path = dir.join("session.json");
-
-    persist_to_path(
-        &path,
-        &UiSessionFile {
-            version: CURRENT_SESSION_FILE_VERSION,
-            open_repos: Vec::new(),
-            active_repo: None,
-            ..UiSessionFile::default()
-        },
-    )
-    .expect("seed session file");
+fn a_session_with_the_retired_commit_push_option_still_loads_and_saves() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.json");
+    let previous = serde_json::json!({
+        "version": CURRENT_SESSION_FILE_VERSION,
+        "theme_mode": "dark",
+        "commit_push_after_enabled": true,
+    });
+    fs::write(&path, previous.to_string()).unwrap();
+    assert_eq!(load_from_path(&path).theme_mode.as_deref(), Some("dark"));
 
     persist_ui_settings_to_path(
         UiSettings {
-            commit_push_after_enabled: Some(true),
+            theme_mode: Some("light".into()),
             ..UiSettings::default()
         },
         &path,
     )
-    .expect("persist ui settings");
+    .unwrap();
 
-    let loaded = load_from_path(&path);
-    assert_eq!(loaded.commit_push_after_enabled, Some(true));
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["theme_mode"], "light");
+    assert!(saved.get("commit_push_after_enabled").is_none());
 }
 
 #[test]
