@@ -7,6 +7,7 @@ use crate::view::caches::{
 use gitcomet_core::domain::WorktreeDirtySummary;
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HistoryIndexHandle};
 use gitcomet_core::services::CancellationToken;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use gitcomet_state::indexed_history::IndexedHistoryMsg as Event;
 use std::rc::Rc;
 
@@ -374,7 +375,7 @@ impl HistoryView {
             self.scroll_interaction.borrow_mut().logical = None;
         }
         let repo = self.active_repo().unwrap();
-        if matches!(repo.log, Loadable::Ready(_))
+        if matches!(repo.history_state.log, Loadable::Ready(_))
             && repo.history_state.log_snapshot.is_some()
             && (repo.history_state.indexed.requested != repo.history_state.log_snapshot
                 || repo.history_state.indexed.epoch != repo.load_epoch)
@@ -1384,7 +1385,7 @@ impl HistoryView {
                 )
                 .always_visible()
                 .focus_on_press(self.history_panel_focus_handle.clone())
-                .render(self.theme),
+                .render(AppTheme::current(cx)),
             )
     }
 
@@ -1640,7 +1641,7 @@ impl HistoryView {
             .fallback_scope
             .filter(|scope| *scope != shown.key.history_scope)
         {
-            self.store.dispatch(Msg::SetHistoryScope {
+            self.store.dispatch(HistoryFilterMsg::SetScope {
                 repo_id: pending.repo_id,
                 scope,
             });

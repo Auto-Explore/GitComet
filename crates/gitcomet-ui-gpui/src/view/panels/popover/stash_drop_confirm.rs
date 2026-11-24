@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     index: usize,
     message: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let reference = format!("stash@{{{index}}}");
     let label = if message.is_empty() {
         reference.clone()

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "scans desktop entries and PATH for installed editors"
+)]
+
 use gitcomet_core::process::background_command;
 use gitcomet_state::session::{self, ExternalCodeEditorSetting};
 use std::collections::BTreeSet;
@@ -927,22 +932,17 @@ fn find_programs(path_dirs: &[PathBuf], names: &[&str]) -> Vec<PathBuf> {
 }
 
 fn is_executable_program(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
         std::fs::metadata(path)
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
     }
 
     #[cfg(not(unix))]
     {
-        true
+        path.is_file()
     }
 }
 

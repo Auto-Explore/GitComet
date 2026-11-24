@@ -15,11 +15,15 @@ pub(super) fn wrap_width_cache_key(wrap_width: Pixels) -> i32 {
     key
 }
 
-pub(super) fn line_index_for_offset(starts: &[usize], offset: usize, line_count: usize) -> usize {
+pub(super) fn line_index_for_offset<S: LineStartLookup + ?Sized>(
+    starts: &S,
+    offset: usize,
+    line_count: usize,
+) -> usize {
     if line_count == 0 {
         return 0;
     }
-    let mut ix = starts.partition_point(|&s| s <= offset);
+    let mut ix = starts.lines_starting_through(offset);
     if ix == 0 {
         ix = 1;
     }
@@ -81,8 +85,8 @@ pub(super) fn visible_plain_line_range(
     start..end
 }
 
-pub(super) fn byte_range_for_line_range(
-    line_starts: &[usize],
+pub(super) fn byte_range_for_line_range<S: LineStartLookup + ?Sized>(
+    line_starts: &S,
     text_len: usize,
     line_range: Range<usize>,
 ) -> Range<usize> {
@@ -91,20 +95,18 @@ pub(super) fn byte_range_for_line_range(
     }
 
     let start = line_starts
-        .get(line_range.start)
-        .copied()
+        .line_start(line_range.start)
         .unwrap_or(text_len)
         .min(text_len);
     let end = line_starts
-        .get(line_range.end)
-        .copied()
+        .line_start(line_range.end)
         .unwrap_or(text_len)
         .min(text_len);
     start.min(end)..end.max(start)
 }
 
-pub(super) fn provider_prefetch_byte_range_for_visible_window(
-    line_starts: &[usize],
+pub(super) fn provider_prefetch_byte_range_for_visible_window<S: LineStartLookup + ?Sized>(
+    line_starts: &S,
     text_len: usize,
     line_count: usize,
     line_height: Pixels,

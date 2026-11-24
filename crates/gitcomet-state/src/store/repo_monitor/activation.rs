@@ -53,7 +53,7 @@ impl ActivationContext {
             // the currently displayed state must still match that baseline.
             revisions: [
                 repo.head_branch_rev,
-                repo.log_rev,
+                repo.history_state.log_rev,
                 repo.branches_rev,
                 repo.remote_branches_rev,
                 repo.tags_rev,
@@ -68,7 +68,7 @@ impl ActivationContext {
             merge_message: repo.merge_commit_message.clone(),
             rebase: repo.rebase_in_progress.clone(),
             ready: matches!(repo.head_branch, Loadable::Ready(_))
-                && matches!(repo.log, Loadable::Ready(_))
+                && matches!(repo.history_state.log, Loadable::Ready(_))
                 && matches!(repo.branches, Loadable::Ready(_))
                 && matches!(repo.remote_branches, Loadable::Ready(_))
                 && matches!(repo.tags, Loadable::Ready(_))
@@ -1166,7 +1166,7 @@ mod tests {
         assert!(!checked().into_refresh(&repo).unwrap().change.git_state);
         // The UI accepted a different history result while metadata was read.
         let pending = checked();
-        repo.log_rev += 1;
+        repo.history_state.log_rev += 1;
         assert!(pending.into_refresh(&repo).unwrap().change.git_state);
         let reopened = crate::model::RepoState::new_opening(repo.id, repo.spec.clone());
         let pending = CheckedActivation {

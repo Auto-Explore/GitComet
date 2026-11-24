@@ -331,13 +331,13 @@ fn multiline_crlf_drag_selection_paints_each_row(test_cx: &mut gpui::TestAppCont
 
 /// A plain multiline input inside a fixed-height scrolling viewport, the way
 /// the merge tool hosts its resolved-output editor.
-struct ScrolledPlainInputView {
-    input: Entity<TextInput>,
+pub(super) struct ScrolledPlainInputView {
+    pub(super) input: Entity<TextInput>,
     scroll_handle: ScrollHandle,
 }
 
 impl ScrolledPlainInputView {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let scroll_handle = ScrollHandle::new();
         let input = cx.new({
             let scroll_handle = scroll_handle.clone();
@@ -1251,19 +1251,11 @@ fn drawing_a_plain_multiline_frame_does_not_materialize_the_document(
             "drawing a frame must cost the viewport, not the document"
         );
 
-        // KNOWN GAP: the companion assertion
-        //
-        //     assert!(!input.read(app).content.snapshot().is_line_index_built());
-        //
-        // does not hold yet, so it is deliberately absent rather than silently
-        // forgotten. Prepaint still calls `shared_line_starts()`, and the edit
-        // above cleared that `OnceLock`, so each post-edit frame rebuilds a
-        // row-per-entry index: measured at 1.6ms for 100k rows, roughly a sixth
-        // of the frame. Closing it means threading windowed row access through
-        // the ~10 places prepaint and paint read `line_starts`, at which point
-        // this assertion belongs here — see
-        // `maintaining_the_content_width_cache_does_not_flatten_the_document`,
-        // which does make it for the edit path.
+        // The quieter document-sized cache: one line start per row.
+        assert!(
+            !input.read(app).content.snapshot().is_line_index_built(),
+            "drawing a frame must not index every row of the document"
+        );
     });
 
     // And the frame still renders the right rows.

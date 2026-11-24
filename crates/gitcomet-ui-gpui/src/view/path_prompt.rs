@@ -1,5 +1,9 @@
 //! Where a Browse dialog opens: at the path its text field names, when that
 //! exists, else wherever the platform picks.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "opens a Browse dialog at the path its text field names"
+)]
 
 use std::path::{Path, PathBuf};
 

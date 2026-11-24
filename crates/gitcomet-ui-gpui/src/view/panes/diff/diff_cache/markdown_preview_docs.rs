@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "sizes and reads markdown preview sources"
+)]
+
 use super::*;
 
 pub(super) fn file_diff_text_is_source_backed(file: &gitcomet_core::domain::FileDiffText) -> bool {

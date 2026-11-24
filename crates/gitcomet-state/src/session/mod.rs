@@ -4,6 +4,7 @@ use crate::model::{
 };
 use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
 use gitcomet_core::platform::dirs;
+use gitcomet_core::platform::test_harness::running_under_test_harness;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -868,36 +869,6 @@ pub fn journal_storage_dir() -> Option<PathBuf> {
 
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
     default_session_file_path()
-}
-
-fn running_under_test_harness() -> bool {
-    let Ok(exe) = env::current_exe() else {
-        return false;
-    };
-    looks_like_test_binary(&exe)
-}
-
-fn looks_like_test_binary(exe: &Path) -> bool {
-    if exe.components().any(|component| {
-        component.as_os_str() == OsStr::new("deps")
-            || component.as_os_str() == OsStr::new("nextest")
-    }) {
-        return true;
-    }
-
-    exe.file_stem()
-        .is_some_and(looks_like_cargo_test_binary_name)
-}
-
-fn looks_like_cargo_test_binary_name(stem: &OsStr) -> bool {
-    let Some(stem) = stem.to_str() else {
-        return false;
-    };
-    let Some((_prefix, suffix)) = stem.rsplit_once('-') else {
-        return false;
-    };
-    // Cargo test binaries typically end in a 16-hex-digit hash suffix, e.g. `mycrate-3ad1b0fd3f0c0d3e`.
-    suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 pub fn user_themes_dir() -> Option<PathBuf> {

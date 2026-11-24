@@ -36,7 +36,7 @@ fn fixture_with_count(selected: &[usize], count: u32) -> (RepoState, Vec<Commit>
             workdir: "/tmp/indexed-comparison".into(),
         },
     );
-    repo.log = Loadable::Ready(Arc::new(LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: commits[..200].to_vec(),
         next_cursor: None,
     }));

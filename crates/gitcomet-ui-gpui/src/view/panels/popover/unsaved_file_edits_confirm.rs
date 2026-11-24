@@ -5,11 +5,11 @@ use super::*;
 ///
 /// Also used when an auto-save has failed or takes too long to finish.
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     prompt: UnsavedFileEditsPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let quit_title = format!("Quit {}?", crate::view::product_name());
     let (title, discard_label) = if prompt.waiting_for_writes {
         ("Waiting for saves", "Wait for saves")

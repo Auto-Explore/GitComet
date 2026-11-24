@@ -20,30 +20,63 @@ const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// git's default `gc.autoPackLimit`.
 const DEFAULT_AUTO_PACK_LIMIT: u64 = 50;
+/// History builds read every commit the commit-graph does not cover: about a
+/// quarter second for this many, which a `commit-graph write` saves each time.
+const COMMIT_GRAPH_STALE_COMMITS: usize = 5_000;
 
 impl GixRepo {
     pub(crate) fn common_dir_impl(&self) -> PathBuf {
         canonicalize_or_original(self.repo().common_dir().to_path_buf())
     }
 
-    /// Only gc's thresholds count: since git 2.54 the default strategy's own
-    /// checks ask after ~500 loose objects or one stale worktree, expecting to
-    /// run after every command, which GitComet turns off.
+    /// Recommended when history reads would walk many commits outside the
+    /// commit-graph, or when gc's thresholds are reached. Only gc's own
+    /// thresholds count among git's checks: since git 2.54 the default
+    /// strategy asks after ~500 loose objects or one stale worktree, expecting
+    /// to run after every command, which GitComet turns off.
     pub(super) fn maintenance_needed_impl(&self) -> Result<bool> {
-        // `is-needed` arrived in git 2.53; older git gets no recommendation.
-        if current_git_runtime()
-            .version()
-            .is_none_or(|version| version < GitVersion::MAINTENANCE_IS_NEEDED)
-        {
-            return Ok(false);
-        }
         // `git maintenance register` turns this off because a scheduler runs
         // maintenance. Read the user's value: git itself would see our `-c`.
         let config = self.repo_with_current_config()?;
         if config.config_snapshot().boolean("maintenance.auto") == Some(false) {
             return Ok(false);
         }
+        if commit_graph_is_behind(&config, COMMIT_GRAPH_STALE_COMMITS) {
+            return Ok(true);
+        }
+        // `is-needed` arrived in git 2.53; older git gets no gc recommendation.
+        if current_git_runtime()
+            .version()
+            .is_none_or(|version| version < GitVersion::MAINTENANCE_IS_NEEDED)
+        {
+            return Ok(false);
+        }
         Ok(self.is_needed(Some("gc"))?.status.code() == Some(0))
+    }
+
+    /// Writes the commit-graph when the recommendation was about it.
+    fn write_commit_graph_if_behind(&self) -> Result<Option<CommandOutput>> {
+        let repo = self.repo_with_current_config()?;
+        if !commit_graph_is_behind(&repo, COMMIT_GRAPH_STALE_COMMITS) {
+            return Ok(None);
+        }
+        let lock = self
+            .common_dir_impl()
+            .join("objects")
+            .join(COMMIT_GRAPH_CHAIN_LOCK);
+        let held_before = lock.exists();
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args(["commit-graph", "write", "--reachable", "--split"]);
+        let result =
+            run_git_with_output_and_timeout(cmd, "git commit-graph write", MAINTENANCE_TIMEOUT);
+        if let Err(error) = &result
+            && was_killed(error.kind())
+            && !held_before
+        {
+            // Every later write would fail on the lock a killed one leaves.
+            let _ = std::fs::remove_file(lock);
+        }
+        result.map(Some)
     }
 
     /// `git maintenance is-needed --auto`: exit 0 when needed, 1 when not.
@@ -67,11 +100,14 @@ impl GixRepo {
                 lock.display()
             ))));
         }
+        let commit_graph = self.write_commit_graph_if_behind()?;
         // The run prints nothing over a pipe, so only this check can tell a
         // run that did nothing; the recommendation may be hours old.
         let check = self.is_needed(None)?;
         if check.status.code() == Some(1) {
-            return Ok(command_output(MAINTENANCE_CHECK_COMMAND, &check));
+            return Ok(
+                commit_graph.unwrap_or_else(|| command_output(MAINTENANCE_CHECK_COMMAND, &check))
+            );
         }
         let pack_limit = self
             .repo_with_current_config()
@@ -95,6 +131,42 @@ impl GixRepo {
     }
 }
 
+/// Whether at least `threshold` commits reachable from HEAD are outside the
+/// commit-graph. Repositories where the graph goes unread are left alone:
+/// `core.commitGraph=false`, shallow clones, and replace refs, with which gix
+/// reads no graph however current.
+fn commit_graph_is_behind(repo: &gix::Repository, threshold: usize) -> bool {
+    let replaced = !repo.objects.ignore_replacements
+        && repo.objects.store_ref().replacements().next().is_some();
+    if repo.config_snapshot().boolean("core.commitGraph") == Some(false)
+        || !matches!(repo.is_shallow(), Ok(false))
+        || replaced
+    {
+        return false;
+    }
+    let Ok(Some(head)) = crate::refs::head_oid(repo) else {
+        return false;
+    };
+    let graph = repo.commit_graph_if_enabled().ok().flatten();
+    let mut pending = vec![head];
+    let mut uncovered = FxHashSet::default();
+    while let Some(id) = pending.pop() {
+        let covered = graph
+            .as_ref()
+            .is_some_and(|graph| graph.lookup(id).is_some());
+        if covered || !uncovered.insert(id) {
+            continue;
+        }
+        if uncovered.len() >= threshold {
+            return true;
+        }
+        if let Ok(commit) = repo.find_commit(id) {
+            pending.extend(commit.parent_ids().map(|parent| parent.detach()));
+        }
+    }
+    false
+}
+
 fn was_killed(kind: &ErrorKind) -> bool {
     match kind {
         ErrorKind::Cancelled => true,
@@ -102,6 +174,9 @@ fn was_killed(kind: &ErrorKind) -> bool {
         _ => false,
     }
 }
+
+/// The lock of a split commit-graph write, below `objects`.
+const COMMIT_GRAPH_CHAIN_LOCK: &str = "info/commit-graphs/commit-graph-chain.lock";
 
 /// A killed run (Stop, timeout) skips git's lockfile cleanup, and a stale
 /// `maintenance.lock` makes every later run exit 0 without doing anything.
@@ -314,5 +389,38 @@ mod tests {
 
         remove_own_maintenance_lock(dir.path(), SystemTime::UNIX_EPOCH);
         assert!(!lock.exists());
+    }
+
+    /// A leftover chain lock fails every later split write, as Git words it.
+    #[test]
+    fn the_chain_lock_is_the_one_a_split_commit_graph_write_takes() {
+        use crate::test_support::{git_output, git_success, init_test_repo};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_test_repo(root);
+        git_success(root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_success(root, &["commit-graph", "write", "--reachable", "--split"]);
+        std::fs::write(root.join(".git/objects").join(COMMIT_GRAPH_CHAIN_LOCK), b"").unwrap();
+        git_success(root, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let output = git_output(root, &["commit-graph", "write", "--reachable", "--split"]);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("commit-graph-chain.lock"), "{stderr}");
+    }
+
+    /// gix reads no commit-graph while replace refs are in use, so writing
+    /// one would not take the recommendation away.
+    #[test]
+    fn replace_refs_leave_the_commit_graph_unrecommended() {
+        use crate::test_support::{git_success, init_test_repo};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_test_repo(root);
+        for message in ["one", "two", "three"] {
+            git_success(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        }
+        assert!(commit_graph_is_behind(&gix::open(root).unwrap(), 2));
+        git_success(root, &["replace", "--graft", "HEAD~1"]);
+        assert!(!commit_graph_is_behind(&gix::open(root).unwrap(), 2));
     }
 }

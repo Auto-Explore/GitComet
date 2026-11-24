@@ -4,7 +4,8 @@
 //! chord and palette tests use two web remotes (picker) or none (warning).
 
 use super::*;
-use crate::view::permalink::RemoteWebPage;
+use gitcomet_core::permalink;
+use permalink::RemoteWebPage;
 
 fn remote(name: &str, url: Option<&str>) -> Remote {
     Remote {

@@ -271,7 +271,7 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
         let first = cx.debug_bounds("branch_row_81_22").unwrap();
         let second = cx.debug_bounds("branch_row_81_23").unwrap();
         let height = cx.update(|_, app| {
-            sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+            sidebar_list_row_height(AppTheme::current(app), ui_scale::current(app).percent)
         });
         assert!((second.top() - first.top() - height).abs() < px(0.5));
         cx.update(|_, app| {

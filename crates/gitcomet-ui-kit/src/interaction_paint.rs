@@ -51,6 +51,14 @@ impl InteractionPaint {
                 paint: self.clone(),
             })
     }
+    /// The pointer tracker alone, without the control it would cover.
+    #[cfg(test)]
+    pub(crate) fn tracker(&self) -> impl IntoElement {
+        Tracker {
+            paint: self.clone(),
+        }
+    }
+
     /// Apply ordinary control feedback when an existing canvas tracks pointers.
     pub fn apply_with_canvas(&self, control: Stateful<Div>) -> Stateful<Div> {
         self.style.clone().apply(control, self.state)
@@ -92,27 +100,29 @@ impl InteractionPaint {
         let hitbox = pointer.hitbox.clone();
         let pressed = pointer.pressed.clone();
         let pressed_on_down = pressed.clone();
-        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _| {
+        // Press feedback is painted by this view alone: dirty it, not the window.
+        let view = window.current_view();
+        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble
                 && !window.default_prevented()
                 && hitbox.is_hovered(window)
             {
                 pressed_on_down.set(true);
-                window.refresh();
+                cx.notify(view);
             }
         });
         let pressed_on_up = pressed.clone();
-        window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _| {
+        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
             if phase == DispatchPhase::Capture && pressed_on_up.replace(false) {
-                window.refresh();
+                cx.notify(view);
             }
         });
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
             if phase == DispatchPhase::Capture
                 && event.pressed_button.is_none()
                 && pressed.replace(false)
             {
-                window.refresh();
+                cx.notify(view);
             }
         });
     }

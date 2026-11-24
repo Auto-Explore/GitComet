@@ -30,7 +30,7 @@ pub(super) fn panel(
     prompt: FilesystemConflictPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let prompt_id = prompt.prompt_id;
 
     let destination = components::TruncatedText::new(

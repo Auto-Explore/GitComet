@@ -84,11 +84,13 @@ impl HistoryView {
     pub(super) fn history_initial_loading(&self) -> bool {
         self.indexed.presentation.is_none()
             && self.history_cache.is_none()
-            && self.active_repo().is_some_and(|repo| match &repo.log {
-                Loadable::NotLoaded | Loadable::Loading => true,
-                Loadable::Ready(page) => !page.commits.is_empty(),
-                Loadable::Error(_) => false,
-            })
+            && self
+                .active_repo()
+                .is_some_and(|repo| match &repo.history_state.log {
+                    Loadable::NotLoaded | Loadable::Loading => true,
+                    Loadable::Ready(page) => !page.commits.is_empty(),
+                    Loadable::Error(_) => false,
+                })
     }
 
     pub(super) fn sync_history_loading(&mut self, cx: &mut gpui::Context<Self>) {

@@ -24,7 +24,7 @@ pub(super) fn panel(
     target: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let can_create = this.can_submit_create_tag(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
     let message_scroll = this.create_tag_message_scroll.clone();

@@ -305,7 +305,7 @@ fn show_commit_details_message(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![gitcomet_core::domain::Commit {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -315,7 +315,7 @@ fn show_commit_details_message(
                 }],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details =
@@ -563,7 +563,7 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![
                     gitcomet_core::domain::Commit {
                         id: gitcomet_core::domain::CommitId(current_sha.into()),
@@ -582,7 +582,7 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
                 ],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -670,7 +670,7 @@ fn commit_details_message_click_beside_a_sha_opens_no_menu(cx: &mut gpui::TestAp
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![
                     gitcomet_core::domain::Commit {
                         id: gitcomet_core::domain::CommitId(current_sha.into()),
@@ -689,7 +689,7 @@ fn commit_details_message_click_beside_a_sha_opens_no_menu(cx: &mut gpui::TestAp
                 ],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details =
@@ -763,7 +763,7 @@ fn commit_details_message_sha_retained_details_are_inert_after_selection_changes
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![
                     gitcomet_core::domain::Commit {
                         id: gitcomet_core::domain::CommitId(retained_sha.into()),
@@ -789,7 +789,7 @@ fn commit_details_message_sha_retained_details_are_inert_after_selection_changes
                 ],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(selected_sha.into()));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -878,7 +878,7 @@ fn commit_details_message_sha_click_opens_the_menu_without_navigating(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![gitcomet_core::domain::Commit {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -888,7 +888,7 @@ fn commit_details_message_sha_click_opens_the_menu_without_navigating(
                 }],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -964,7 +964,7 @@ fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![gitcomet_core::domain::Commit {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -974,7 +974,7 @@ fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
                 }],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -1051,11 +1051,11 @@ fn commit_card_parent_click_selects_and_scrolls_to_the_parent(cx: &mut gpui::Tes
             let mut commits = vec![commit(current_sha.into(), "current".into())];
             commits.extend((0..158).map(|ix| commit(format!("{ix:040x}"), format!("filler {ix}"))));
             commits.push(commit(parent_sha.into(), "parent".into()));
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits,
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details =
@@ -1269,7 +1269,7 @@ fn commit_card_root_commit_has_no_parent_chip(cx: &mut gpui::TestAppContext) {
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
-            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
                 commits: vec![gitcomet_core::domain::Commit {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -1279,7 +1279,7 @@ fn commit_card_root_commit_has_no_parent_chip(cx: &mut gpui::TestAppContext) {
                 }],
                 next_cursor: None,
             }));
-            repo.log_rev = 1;
+            repo.history_state.log_rev = 1;
             repo.history_state.selected_commit =
                 Some(gitcomet_core::domain::CommitId(current_sha.into()));
             repo.history_state.commit_details =
@@ -1740,11 +1740,11 @@ fn rewordable_repo(
         }
         .into(),
     );
-    repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+    repo.history_state.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
         commits,
         next_cursor: None,
     }));
-    repo.log_rev = 1;
+    repo.history_state.log_rev = 1;
     repo.history_state.selected_commit = Some(reword_commit_id(selected));
     repo.history_state.commit_details =
         Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {

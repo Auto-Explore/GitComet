@@ -367,6 +367,105 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/hotfix\n";
         assert_eq!(prune, vec!["v1.1.0".to_string()]);
     }
 
+    /// Only a walk that peels asks packed-refs whether an entry is a tag:
+    /// branch lists and the refs fingerprint walk every ref unpeeled.
+    #[test]
+    fn an_unpeeled_ref_walk_looks_nothing_up_in_packed_refs() {
+        use crate::refs::files::PACKED_TAG_LOOKUPS;
+        use crate::test_support::{git_success, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        write_file(root, "file.txt", "one\n");
+        git_success(root, &["add", "."]);
+        git_success(root, &["commit", "-qm", "one"]);
+        for tag in ["a", "b", "c"] {
+            git_success(root, &["tag", tag]);
+        }
+        git_success(root, &["pack-refs", "--all"]);
+        let repo = gix::open(root).unwrap();
+        let walk = |peel: bool| {
+            PACKED_TAG_LOOKUPS.set(0);
+            let view = crate::refs::view(&repo).unwrap();
+            let tags = view.tags().unwrap();
+            let tags = if peel { tags.peeled() } else { tags };
+            let listed = tags.map(Result::unwrap).count();
+            (listed, PACKED_TAG_LOOKUPS.get())
+        };
+        assert_eq!(walk(false), (3, 0));
+        assert_eq!(walk(true), (3, 3));
+    }
+
+    /// A packed-refs file that records peeled tags says of every entry
+    /// whether it is an annotated tag. Listing then reads no object: shown
+    /// here by tags whose objects cannot be read at all.
+    #[test]
+    fn packed_tags_are_listed_without_reading_their_objects() {
+        use crate::test_support::{git_stdout, git_success, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        write_file(root, "file.txt", "one\n");
+        git_success(root, &["add", "."]);
+        git_success(root, &["commit", "-qm", "one"]);
+        let kept = git_stdout(root, &["rev-parse", "HEAD"]);
+        let tree = git_stdout(root, &["rev-parse", "HEAD^{tree}"]);
+        // A commit nothing but its tag refers to, so that it can be removed.
+        let lost = git_stdout(root, &["commit-tree", "-m", "lost", tree.trim()]);
+        let (kept, lost) = (kept.trim(), lost.trim());
+        git_success(root, &["tag", "light", kept]);
+        git_success(root, &["tag", "-am", "annotated", "annotated", kept]);
+        git_success(root, &["tag", "lost", lost]);
+        git_success(root, &["pack-refs", "--all"]);
+        let object = root.join(".git/objects").join(&lost[..2]).join(&lost[2..]);
+        std::fs::remove_file(&object).unwrap();
+
+        let list = || {
+            open_repo(root)
+                .list_tags_cancellable_impl(&CancellationToken::new())
+                .map(|tags| {
+                    tags.into_iter()
+                        .map(|tag| (tag.name, tag.target.as_ref().to_owned()))
+                        .collect::<Vec<_>>()
+                })
+        };
+        let expected = [("annotated", kept), ("light", kept), ("lost", lost)]
+            .map(|(name, target)| (name.to_owned(), target.to_owned()));
+        assert_eq!(list().unwrap(), expected);
+
+        // A loose ref in a packed entry's place: with the same value it
+        // names what the entry names, an annotated tag here, and with another
+        // the entry says nothing of it. Both are peeled as before.
+        let tag_object = git_stdout(root, &["rev-parse", "refs/tags/annotated"]);
+        std::fs::create_dir_all(root.join(".git/refs/tags")).unwrap();
+        for name in ["annotated", "light"] {
+            let loose = root.join(".git/refs/tags").join(name);
+            std::fs::write(&loose, &tag_object).unwrap();
+            assert_eq!(list().unwrap(), expected, "loose {name}");
+            std::fs::remove_file(&loose).unwrap();
+        }
+
+        // A loose ref says nothing of its object, which is read to peel it.
+        std::fs::write(root.join(".git/refs/tags/loose"), format!("{lost}\n")).unwrap();
+        assert!(list().is_err());
+        std::fs::remove_file(root.join(".git/refs/tags/loose")).unwrap();
+
+        // Nor does a packed-refs file that does not record peeled tags.
+        let packed = root.join(".git/packed-refs");
+        let recorded = std::fs::read_to_string(&packed).unwrap();
+        let (header, entries) = recorded.split_once('\n').unwrap();
+        assert!(header.contains(" fully-peeled"), "{header}");
+        std::fs::write(&packed, format!("# pack-refs with: sorted \n{entries}")).unwrap();
+        assert!(list().is_err());
+        // One that records them for tags alone says as much of a tag.
+        std::fs::write(
+            &packed,
+            format!("# pack-refs with: peeled sorted \n{entries}"),
+        )
+        .unwrap();
+        assert_eq!(list().unwrap(), expected);
+    }
+
     #[test]
     fn cancelled_tag_listing_stops_early() {
         let tmp = tempfile::tempdir().expect("tempdir");

@@ -320,6 +320,70 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
     );
 }
 
+/// The filter tabs fit the width their section measured in the last frame,
+/// so the frame that measures a new width must ask for the one that uses it.
+#[gpui::test]
+fn commit_file_filters_fit_the_frame_after_a_resize(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(612);
+    let commit_id = gitcomet_core::domain::CommitId("0123456789abcdef".into());
+    let change = |path: &str, kind| gitcomet_core::domain::CommitFileChange::new(path.into(), kind);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-file-resize"));
+            repo.history_state.selected_commit = Some(commit_id.clone());
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![],
+                    files: vec![
+                        change(
+                            "src/modified.rs",
+                            gitcomet_core::domain::FileStatusKind::Modified,
+                        ),
+                        change(
+                            "src/removed.rs",
+                            gitcomet_core::domain::FileStatusKind::Deleted,
+                        ),
+                        change("src/added.rs", gitcomet_core::domain::FileStatusKind::Added),
+                        change(
+                            "src/renamed.rs",
+                            gitcomet_core::domain::FileStatusKind::Renamed,
+                        ),
+                    ],
+                },
+            ));
+            repo.history_state.commit_details_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_with_details_width(cx, &view, 700.0);
+    draw_and_drain_test_window(cx);
+
+    draw_with_details_width(cx, &view, 300.0);
+    let tabs = cx
+        .debug_bounds("commit_file_filter_tabs")
+        .expect("filter tabs");
+    let last = cx
+        .debug_bounds("commit_file_filter_tab_4")
+        .expect("last filter tab");
+    assert!(
+        last.right() <= tabs.right(),
+        "the last filter must fit the frame after the resize: {last:?} in {tabs:?}"
+    );
+}
+
 #[gpui::test]
 fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
     cx: &mut gpui::TestAppContext,

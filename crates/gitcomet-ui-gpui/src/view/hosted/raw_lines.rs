@@ -1,4 +1,10 @@
 //! Original bytes indexed by decoded file line. Loaded off the UI thread.
+
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reads raw sides for hosted diffs on a background task"
+)]
+
 use gitcomet_core::domain::{FileDiffText, FileDiffTextSource};
 use gitcomet_core::text_format::TextEncoding;
 use std::sync::Arc;

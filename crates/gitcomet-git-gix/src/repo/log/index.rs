@@ -1,6 +1,6 @@
 use super::*;
 use gitcomet_core::history_index::{
-    HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
+    HistoryIndex, HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
 };
 use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 use std::ops::Range;
@@ -35,7 +35,7 @@ impl GixRepo {
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
         cancellation.check_cancelled()?;
-        let (store, shared) = self.fresh_history_store()?;
+        let (store, shared) = self.current_history_store()?;
         let query = self.resolve_history_query(
             &store.to_thread_local(),
             shared.id,
@@ -90,18 +90,51 @@ impl GixRepo {
         let repo = store.to_thread_local();
         let mode = query.mode;
         let author = &query.author;
-        let mut builder =
-            HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
-        let mut walk = new_log_paged_walk(
+        let hash_len = repo.object_hash().len_in_bytes();
+        let mut walk = new_whole_history_walk(
             store,
-            query.tips.iter().copied(),
+            &query.tips,
             mode,
             &query.shallow,
-            Some(cancellation),
-            None,
-            Some((topology_cache, query.generation)),
+            cancellation,
+            (topology_cache, query.generation),
         )?;
+        // A whole history in date order is held as rows already.
+        if author.is_none()
+            && matches!(mode, HistoryMode::FullReachable | HistoryMode::AllBranches)
+            && let super::LogPagedWalk::CachedDateOrder(topology) = &walk.walk
+        {
+            let tables = topology.index_tables(cancellation)?;
+            cancellation.check_cancelled()?;
+            drop(walk);
+            let rows = (tables.ids.len() / hash_len) as u64;
+            on_progress(HistoryIndexProgress {
+                scanned: rows,
+                matched: rows,
+            });
+            let mut decode_buf = Vec::new();
+            let mut stashes = Vec::new();
+            for row in tables.stash_shaped {
+                cancellation.check_cancelled()?;
+                let id = &tables.ids[row as usize * hash_len..][..hash_len];
+                if is_stash_message(&repo, gix::oid::from_bytes_unchecked(id), &mut decode_buf)? {
+                    stashes.push(row);
+                }
+            }
+            return HistoryIndex::from_rows(
+                snapshot,
+                mode,
+                hash_len,
+                tables.ids,
+                tables.parent_offsets,
+                tables.parents,
+                stashes,
+                cancellation,
+            );
+        }
+        let mut builder = HistoryIndexBuilder::new(snapshot, mode, hash_len)?;
         let mut decode_buf = Vec::new();
+        let mut shapes = StashShapes::default();
         let mut scanned = 0u64;
         let mut last_progress = Instant::now();
         for info in &mut walk.walk {
@@ -109,6 +142,7 @@ impl GixRepo {
             let info = info.map_err(|error| {
                 crate::repo::object_store::gix_error("gix history index", error)
             })?;
+            shapes.visit(info.id, &info.parent_ids);
             scanned += 1;
             if scanned.is_multiple_of(1024) && last_progress.elapsed() >= Duration::from_millis(100)
             {
@@ -154,46 +188,29 @@ impl GixRepo {
             matched: builder.len() as u64,
         });
         // Release the traversal's maps or shared topology before stash
-        // classification opens a graph and reads candidate messages.
+        // classification reads candidate messages.
         drop(walk);
         drop(decode_buf);
 
-        // Author-filtered walks have already checked their messages and no
-        // longer need the potentially large author-decoding scratch buffer.
-        let mut decode_buf = Vec::new();
-        let topology = std::cell::OnceCell::new();
-        builder.retain_probable_stashes(|id, parents| {
-            cancellation.check_cancelled()?;
-            if let Some(graph) =
-                topology.get_or_init(|| repo.commit_graph_if_enabled().ok().flatten())
-            {
-                let parents: smallvec::SmallVec<[gix::ObjectId; 3]> =
-                    parents.map(gix::ObjectId::from_bytes_or_panic).collect();
-                if stash_shape(graph, &parents) == Some(false) {
-                    return Ok(false);
-                }
-            }
-            if author.is_some() {
-                // Author filtering already decoded and checked this message.
-                return Ok(true);
-            }
-            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
-            let commit = repo
-                .objects
-                .find_commit(gix::oid::from_bytes_unchecked(id), &mut decode_buf)
-                .map_err(|error| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "gix history index object: {error}"
-                    )))
-                })?;
-            Ok(has_stash_summary(commit.message))
-        })?;
-        drop(topology);
-        drop(decode_buf);
+        retain_probable_stashes(&mut builder, &repo, &shapes, author.is_some(), cancellation)?;
         builder.finish(cancellation)
     }
 
     pub(in super::super) fn read_history_range_impl(
+        &self,
+        index: &HistoryIndexHandle,
+        range: Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryRange> {
+        cancellation.check_cancelled()?;
+        let (_, shared) = self.current_history_store()?;
+        self.validate_history_store(index, &shared)?;
+        self.decode_history_range(index, range, cancellation)
+    }
+
+    /// Reads `range` through the rotating range reader, for a caller that has
+    /// validated `index` against the current store.
+    pub(in super::super) fn decode_history_range(
         &self,
         index: &HistoryIndexHandle,
         range: Range<usize>,
@@ -205,8 +222,6 @@ impl GixRepo {
                 "history range is outside its snapshot".into(),
             )));
         }
-        let (_, shared) = self.fresh_history_store()?;
-        self.validate_history_store(index, &shared)?;
         let repo = self.range_reader_repo()?;
         let mut decode = CommitDecodeState::default();
         let mut header_buf = Vec::new();
@@ -248,32 +263,95 @@ impl GixRepo {
     }
 }
 
+/// Rules stash candidates out by shape as a walk passes their parents. A
+/// stash's second parent is its index, one commit on the first parent alone,
+/// and a third holds the untracked files and has no parent. A merge is
+/// neither, and its message is then never read.
+#[derive(Default)]
+pub(super) struct StashShapes {
+    /// For a commit that candidates name as a parent: each candidate, and
+    /// the one parent the commit may have (or none) if that is a stash.
+    awaited: FxHashMap<gix::ObjectId, StashParents>,
+    ruled_out: FxHashSet<gix::ObjectId>,
+}
+
+type StashParents = smallvec::SmallVec<[(gix::ObjectId, Option<gix::ObjectId>); 1]>;
+
+impl StashShapes {
+    /// Takes the commits of a walk in its order, children before parents. A
+    /// parent the walk never passes rules nothing out.
+    pub(super) fn visit(&mut self, id: gix::ObjectId, parents: &[gix::ObjectId]) {
+        self.passed(id, Some(parents));
+        let (base, index, untracked) = match parents {
+            [base, index] => (base, index, None),
+            [base, index, untracked] => (base, index, Some(untracked)),
+            _ => return,
+        };
+        self.awaited
+            .entry(*index)
+            .or_default()
+            .push((id, Some(*base)));
+        if let Some(untracked) = untracked {
+            self.awaited.entry(*untracked).or_default().push((id, None));
+        }
+    }
+
+    /// Rules on the candidates that name `id` as a parent, from `id`'s own
+    /// parents; `None` when it has parents that cannot all be named.
+    pub(super) fn passed(&mut self, id: gix::ObjectId, parents: Option<&[gix::ObjectId]>) {
+        for (candidate, only_parent) in self.awaited.remove(&id).unwrap_or_default() {
+            if parents != Some(only_parent.as_slice()) {
+                self.ruled_out.insert(candidate);
+            }
+        }
+    }
+
+    /// The parents candidates name that no visit has passed yet.
+    pub(super) fn awaited(&self) -> Vec<gix::ObjectId> {
+        self.awaited.keys().copied().collect()
+    }
+
+    pub(super) fn rules_out(&self, candidate: &gix::oid) -> bool {
+        self.ruled_out.contains(candidate)
+    }
+}
+
+/// Keeps the stash candidates whose shape and summary are a stash's.
+/// `messages_checked` when an author filter has already read the messages.
+pub(super) fn retain_probable_stashes(
+    builder: &mut HistoryIndexBuilder,
+    repo: &gix::Repository,
+    shapes: &StashShapes,
+    messages_checked: bool,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let mut decode_buf = Vec::new();
+    builder.retain_probable_stashes(|id, _| {
+        cancellation.check_cancelled()?;
+        let id = gix::oid::from_bytes_unchecked(id);
+        if shapes.rules_out(id) {
+            return Ok(false);
+        }
+        if messages_checked {
+            return Ok(true);
+        }
+        is_stash_message(repo, id, &mut decode_buf)
+    })
+}
+
+/// Reads a stash candidate's message for the summary Git gives a stash.
+fn is_stash_message(repo: &gix::Repository, id: &gix::oid, buffer: &mut Vec<u8>) -> Result<bool> {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
+    let commit = repo.objects.find_commit(id, buffer).map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix history index object: {error}"
+        )))
+    })?;
+    Ok(has_stash_summary(commit.message))
+}
+
 fn has_stash_summary(message: &[u8]) -> bool {
     let summary = message.lines().next().unwrap_or_default();
     (summary.starts_with(b"WIP on ") || summary.starts_with(b"On "))
         && summary.windows(2).any(|pair| pair == b": ")
-}
-
-/// Only reject when unfiltered commit-graph topology proves the shape impossible.
-/// Missing graph entries or malformed edges retain the message-check fallback.
-fn stash_shape(graph: &gix::commitgraph::Graph, parents: &[gix::ObjectId]) -> Option<bool> {
-    let base = graph.lookup(parents.first()?)?;
-    let index = graph.commit_by_id(parents.get(1)?)?;
-    let mut edges = index.iter_parents();
-    let parent = edges.next().transpose().ok()?;
-    if parent != Some(base) || edges.next().transpose().ok()?.is_some() {
-        return Some(false);
-    }
-    if let Some(untracked) = parents.get(2) {
-        return Some(
-            graph
-                .commit_by_id(untracked)?
-                .iter_parents()
-                .next()
-                .transpose()
-                .ok()?
-                .is_none(),
-        );
-    }
-    Some(true)
 }

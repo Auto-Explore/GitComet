@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "deletes the crash log the user dismissed"
+)]
+
 use super::repository_views::MainSlot;
 use super::*;
 
@@ -645,6 +650,7 @@ impl GitCometView {
             .unwrap_or(&theme_mode)
             .resolve_theme(window_appearance)
             .with_appearance(crate::appearance::current(cx));
+        crate::theme::set_window_theme(cx, window.window_handle().window_id(), initial_theme);
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
@@ -684,7 +690,7 @@ impl GitCometView {
                 cx,
             )
         });
-        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
+        let tooltip_host = cx.new(|_cx| TooltipHost::default());
         let diff_environment = super::hosted::environment::DiffPaneEnvironment {
             services: super::panes::diff::services::DiffServices {
                 store: store.clone().into(),
@@ -775,39 +781,23 @@ impl GitCometView {
 
         let title_bar = cx.new(|cx| {
             TitleBarView::new(
-                initial_theme,
                 weak_view.clone(),
                 titlebar_repo_tab_actions_enabled(view_mode, !initial_state.repos.is_empty()),
                 cx,
             )
         });
-        let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
-        let history_refs_hover_host =
-            cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
-        let commit_message_hover_host = cx.new(|_cx| {
-            CommitMessageHoverHost::new(initial_theme, Arc::clone(&store), ui_model.clone())
-        });
+        let toast_host = cx.new(|_cx| ToastHost::new(weak_view.clone()));
+        let history_refs_hover_host = cx.new(|_cx| HistoryRefsHoverHost::new(weak_view.clone()));
+        let commit_message_hover_host =
+            cx.new(|_cx| CommitMessageHoverHost::new(Arc::clone(&store), ui_model.clone()));
         let repo_tabs_bar = cx.new(|cx| {
-            RepoTabsBarView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                cx,
-            )
+            RepoTabsBarView::new(Arc::clone(&store), ui_model.clone(), weak_view.clone(), cx)
         });
         let action_bar = cx.new(|cx| {
-            ActionBarView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                cx,
-            )
+            ActionBarView::new(Arc::clone(&store), ui_model.clone(), weak_view.clone(), cx)
         });
-        let bottom_status_bar = cx.new(|cx| {
-            BottomStatusBarView::new(initial_theme, ui_model.clone(), weak_view.clone(), cx)
-        });
+        let bottom_status_bar =
+            cx.new(|cx| BottomStatusBarView::new(ui_model.clone(), weak_view.clone(), cx));
         panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
         let file_history_pane = cx.new(|cx| {
@@ -815,7 +805,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 panes::file_history::FileHistoryPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                 },
                 window,
@@ -826,7 +815,6 @@ impl GitCometView {
             let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
                 ui_session.repo_sidebar_collapsed_items.clone(),
                 ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
@@ -906,7 +894,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 DetailsPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                     diff_renderer: diff_renderer.downgrade(),
                     history_view: main_pane.read(cx).history_view.clone(),
@@ -922,7 +909,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 ReflogPaneInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                 },
                 cx,
@@ -934,7 +920,6 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 PopoverHostInit {
-                    theme: initial_theme,
                     root_view: weak_view.clone(),
                     root_view_mode: view_mode,
                     tooltip_host: tooltip_host.downgrade(),
@@ -953,7 +938,6 @@ impl GitCometView {
 
         let command_palette = cx.new(|cx| {
             command_palette::CommandPaletteView::new(
-                initial_theme,
                 initial_state.active_repo.is_some(),
                 weak_view.clone(),
                 window,
@@ -963,7 +947,6 @@ impl GitCometView {
 
         let reveal_commit_dialog = cx.new(|cx| {
             reveal_commit::RevealCommitView::new(
-                initial_theme,
                 initial_state.active_repo,
                 weak_view.clone(),
                 Arc::clone(&store),
@@ -1177,25 +1160,12 @@ impl GitCometView {
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
         let documents_root = cx.weak_entity();
-        let documents = cx.new(|cx| {
-            documents::DocumentsView::new(
-                initial_theme,
-                documents_root.clone(),
-                ui_model.clone(),
-                cx,
-            )
-        });
+        let documents = cx
+            .new(|cx| documents::DocumentsView::new(documents_root.clone(), ui_model.clone(), cx));
         let document_picker = {
             let status_bar = bottom_status_bar.entity_id();
             cx.new(|cx| {
-                documents::DocumentPicker::new(
-                    initial_theme,
-                    documents_root,
-                    &documents,
-                    status_bar,
-                    window,
-                    cx,
-                )
+                documents::DocumentPicker::new(documents_root, &documents, status_bar, window, cx)
             })
         };
 
@@ -1440,56 +1410,13 @@ impl GitCometView {
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         let theme = theme.with_appearance(crate::appearance::current(cx));
         crate::theme::set_window_theme(cx, self.window_handle.window_id(), theme);
-        self.documents
-            .update(cx, |documents, cx| documents.set_theme(theme, cx));
-        self.document_picker
-            .update(cx, |picker, cx| picker.set_theme(theme, cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_theme(theme, cx);
         }
-        for session in self.terminal_sessions.values() {
-            for instance in &session.instances {
-                instance.viewport.update(cx, |viewport, cx| {
-                    viewport.set_theme(theme, cx);
-                });
-            }
-        }
-        self.title_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.details_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.reflog_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.file_history_pane
-            .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self.repo_tabs_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.action_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.bottom_status_bar
-            .update(cx, |bar, cx| bar.set_theme(theme, cx));
-        self.tooltip_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.toast_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.history_refs_hover_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.commit_message_hover_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.set_theme(theme, cx));
-        self.command_palette
-            .update(cx, |palette, cx| palette.set_theme(theme, cx));
-        self.reveal_commit_dialog
-            .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -1501,6 +1428,12 @@ impl GitCometView {
     pub(super) fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
         let metrics = crate::appearance::current(cx);
         self.set_theme(self.theme.with_appearance(metrics), cx);
+        // A font family or zoom change leaves the theme equal, but every view
+        // draws differently.
+        let window = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, _| window.refresh());
+        });
         self.update_ui_preferences(cx, move |prefs| prefs.appearance.metrics = metrics);
         self.details_pane
             .update(cx, |pane, _| pane.appearance_metrics = metrics);
@@ -2538,11 +2471,11 @@ impl GitCometView {
                 }) else {
                     return;
                 };
-                let (handled, in_diff) = if target.entity_id() == primary {
+                let (handled, in_diff, drawn_by) = if target.entity_id() == primary {
                     let in_diff = !main.read(cx).history_is_active_surface(cx);
                     let handled =
                         main.update(cx, |main, cx| main.navigate_search_match(forward, cx));
-                    (handled, in_diff)
+                    (handled, in_diff, main.entity_id())
                 } else {
                     let handled = target.update(cx, |pane, cx| {
                         if forward {
@@ -2551,7 +2484,7 @@ impl GitCometView {
                             pane.navigate_prev_search_match_or_diff_change(cx)
                         }
                     });
-                    (handled, true)
+                    (handled, true, target.entity_id())
                 };
                 if handled {
                     if in_diff && pressed_in == NavKeyFocus::Elsewhere {
@@ -2559,7 +2492,9 @@ impl GitCometView {
                             pane.focus_diff_after_navigation(window, cx);
                         });
                     }
-                    window.refresh();
+                    // The step moved only what that view draws; other panes
+                    // follow the store.
+                    gpui::AppContext::notify(cx, drawn_by);
                 }
             });
         });
@@ -2585,7 +2520,6 @@ impl GitCometView {
                 pane.update(cx, |pane, cx| {
                     if action(pane, window, cx) {
                         cx.notify();
-                        window.refresh();
                     }
                 });
             });

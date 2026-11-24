@@ -270,22 +270,21 @@ impl TextInput {
             return self.logical_row_boundaries(offset);
         };
         let Some(line) = lines
-            .get(starts.partition_point(|&s| s <= offset).saturating_sub(1))
+            .get(starts.lines_starting_through(offset).saturating_sub(1))
             .or_else(|| lines.first())
         else {
             return self.logical_row_boundaries(offset);
         };
 
-        let mut ix = starts.partition_point(|&s| s <= offset);
+        let mut ix = starts.lines_starting_through(offset);
         if ix == 0 {
             ix = 1;
         }
         let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
-        let line_start = starts.get(line_ix).copied().unwrap_or(0);
+        let line_start = starts.line_start(line_ix).unwrap_or(0);
         let line = lines.get(line_ix).unwrap_or(line);
         let next_start = starts
-            .get(line_ix.saturating_add(1))
-            .copied()
+            .line_start(line_ix.saturating_add(1))
             .unwrap_or(self.content.len());
         if line.len() == 0 && next_start > line_start {
             return self.logical_row_boundaries(offset);
@@ -387,13 +386,13 @@ impl TextInput {
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
-                let mut ix = starts.partition_point(|&s| s <= cursor);
+                let mut ix = starts.lines_starting_through(cursor);
                 if ix == 0 {
                     ix = 1;
                 }
                 let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
                 let line = lines.get(line_ix)?;
-                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let start = starts.line_start(line_ix).unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(line.len());
                 let pos = line
                     .position_for_index(local, line_height)
@@ -484,13 +483,13 @@ impl TextInput {
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
-                let mut ix = starts.partition_point(|&s| s <= cursor);
+                let mut ix = starts.lines_starting_through(cursor);
                 if ix == 0 {
                     ix = 1;
                 }
                 let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
                 let line = lines.get(line_ix)?;
-                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let start = starts.line_start(line_ix).unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(line.len());
                 let pos = line
                     .position_for_index(local, line_height)
@@ -889,16 +888,16 @@ impl TextInput {
     }
 
     fn wrapped_line_for_offset(
-        starts: &[usize],
+        starts: &LineStarts,
         lines: &[EditorLine],
         offset: usize,
     ) -> (usize, usize) {
-        let mut ix = starts.partition_point(|&s| s <= offset);
+        let mut ix = starts.lines_starting_through(offset);
         if ix == 0 {
             ix = 1;
         }
         let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
-        let start = starts.get(line_ix).copied().unwrap_or(0);
+        let start = starts.line_start(line_ix).unwrap_or(0);
         let local = offset.saturating_sub(start).min(lines[line_ix].len());
         (line_ix, local)
     }
@@ -955,9 +954,8 @@ impl TextInput {
         match layout {
             TextInputLayout::Plain(lines) => {
                 let (start_line_ix, start_local_ix) =
-                    line_for_offset(starts.as_ref(), lines, final_glyph_start);
-                let (end_line_ix, end_local_ix) =
-                    line_for_offset(starts.as_ref(), lines, range.end);
+                    line_for_offset(starts, lines, final_glyph_start);
+                let (end_line_ix, end_local_ix) = line_for_offset(starts, lines, range.end);
                 if start_line_ix != end_line_ix {
                     return false;
                 }
@@ -989,9 +987,9 @@ impl TextInput {
                 lines, y_offsets, ..
             } => {
                 let (start_line_ix, start_local_ix) =
-                    Self::wrapped_line_for_offset(starts.as_ref(), lines, final_glyph_start);
+                    Self::wrapped_line_for_offset(starts, lines, final_glyph_start);
                 let (end_line_ix, end_local_ix) =
-                    Self::wrapped_line_for_offset(starts.as_ref(), lines, range.end);
+                    Self::wrapped_line_for_offset(starts, lines, range.end);
                 if start_line_ix != end_line_ix {
                     return false;
                 }
@@ -1036,7 +1034,7 @@ impl TextInput {
 
         match layout {
             TextInputLayout::Plain(lines) => {
-                let (line_ix, local_ix) = line_for_offset(starts.as_ref(), lines, offset);
+                let (line_ix, local_ix) = line_for_offset(starts, lines, offset);
                 let line = lines.get(line_ix)?;
                 Some(point(
                     bounds.left() + line.x_for_index(local_ix) - self.layout.scroll_x,
@@ -1050,8 +1048,7 @@ impl TextInput {
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
-                let (line_ix, local_ix) =
-                    Self::wrapped_line_for_offset(starts.as_ref(), lines, offset);
+                let (line_ix, local_ix) = Self::wrapped_line_for_offset(starts, lines, offset);
                 let line = lines.get(line_ix)?;
                 let pos = line.position_for_index(local_ix, line_height)?;
                 Some(point(
@@ -1261,7 +1258,7 @@ impl TextInput {
                 let local_ix = line
                     .map(|line| line.closest_index_for_x(local_x))
                     .unwrap_or(0);
-                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
+                let doc_ix = starts.line_start(line_ix).unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
             TextInputLayout::TruncatedSingleLine(line) => {
@@ -1286,7 +1283,7 @@ impl TextInput {
                 let local = line
                     .closest_index_for_position(point(local_x, local_y_in_line), line_height)
                     .unwrap_or_else(|ix| ix);
-                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
+                let doc_ix = starts.line_start(line_ix).unwrap_or(0) + local;
                 doc_ix.min(self.content.len())
             }
         })
@@ -1350,7 +1347,7 @@ impl TextInput {
                     .get(line_ix)
                     .map(|line| line.closest_index_for_x(local_x))
                     .unwrap_or(0);
-                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
+                let doc_ix = starts.line_start(line_ix).unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
             TextInputLayout::TruncatedSingleLine(line) => {
@@ -1372,7 +1369,7 @@ impl TextInput {
                 let local = line
                     .closest_index_for_position(point(local_x, local_y_in_line), line_height)
                     .unwrap_or_else(|ix| ix);
-                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
+                let doc_ix = starts.line_start(line_ix).unwrap_or(0) + local;
                 doc_ix.min(self.content.len())
             }
         }

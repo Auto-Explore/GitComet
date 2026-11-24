@@ -69,7 +69,7 @@ pub(super) fn panel(
     _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let advanced_expanded = this.submodule_add_advanced_expanded;
     let force_enabled = this.submodule_force_enabled;
     let can_submit = this.can_submit_submodule_add(cx);

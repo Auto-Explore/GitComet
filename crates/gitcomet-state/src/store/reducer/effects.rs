@@ -2026,10 +2026,10 @@ pub(super) fn branches_loaded(
             }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::LocalBranches,
+        super::history_filter::FocusRefList::LocalBranches,
     ));
     effects
 }
@@ -2057,10 +2057,10 @@ pub(super) fn remotes_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::Remotes,
+        super::history_filter::FocusRefList::Remotes,
     ));
     effects
 }
@@ -2125,10 +2125,10 @@ pub(super) fn remote_branches_loaded(
             repo_state.set_remote_branches(branches);
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::RemoteBranches,
+        super::history_filter::FocusRefList::RemoteBranches,
     ));
     effects
 }
@@ -2477,7 +2477,7 @@ pub(super) fn head_branch_loaded(
                             .history_state
                             .history_focus
                             .head_is_first(repo_state.history_state.history_scope)
-                        && let Loadable::Ready(page) = &repo_state.log
+                        && let Loadable::Ready(page) = &repo_state.history_state.log
                     {
                         repo_state
                             .set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
@@ -2632,10 +2632,10 @@ pub(super) fn tags_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_focus(
+    effects.extend(super::history_filter::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::FocusRefList::Tags,
+        super::history_filter::FocusRefList::Tags,
     ));
     effects
 }

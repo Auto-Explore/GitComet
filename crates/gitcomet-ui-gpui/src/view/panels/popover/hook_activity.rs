@@ -209,7 +209,7 @@ fn history_row(
     operation: &GitHookOperation,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let operation_id = operation.id;
@@ -423,7 +423,7 @@ fn history_rail(
     rail_width: Pixels,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let rows = div()
         .w_full()
         .min_w(px(0.0))
@@ -478,7 +478,7 @@ fn operation_detail(
     operation: &GitHookOperation,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = popover_ui_scale(cx);
     let operation_id = operation.id;
     let color = status_color(theme, operation.status);
@@ -888,7 +888,7 @@ pub(super) fn panel(
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     if this.hook_activity_text.repo_id != Some(repo_id) {
         this.hook_activity_text = TextState {
             repo_id: Some(repo_id),

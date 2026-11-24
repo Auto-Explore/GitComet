@@ -1,4 +1,5 @@
 use crate::view::GitCometView;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::mod_helpers::PopoverKind;
 use gitcomet_core::domain::CommitId;
 use gitcomet_state::model::RepoId;
@@ -158,9 +159,11 @@ impl CommitLinkMenu {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverForBounds(kind.into(), anchor),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }

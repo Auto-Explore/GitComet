@@ -1,4 +1,9 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "tells a folder entry from a file while the menu is built"
+)]
 use super::*;
+use gitcomet_core::permalink;
 
 use crate::kit::components::secondary_shortcut;
 
@@ -329,7 +334,7 @@ pub(super) fn model(
                     // point at a nonexistent source, so skip the action there.
                     let branch_is_pushed = match remote_branches {
                         Loadable::Ready(remote_branches) => {
-                            crate::view::permalink::branch_exists_on_permalink_remote(
+                            permalink::branch_exists_on_permalink_remote(
                                 remotes,
                                 remote_branches,
                                 head,
@@ -340,11 +345,7 @@ pub(super) fn model(
                         _ => true,
                     };
                     branch_is_pushed.then(|| {
-                        crate::view::permalink::file_permalink(
-                            remotes,
-                            head,
-                            &path.display().to_string(),
-                        )
+                        permalink::file_permalink(remotes, head, &path.display().to_string())
                     })?
                 }
                 _ => None,

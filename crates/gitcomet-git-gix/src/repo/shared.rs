@@ -287,6 +287,8 @@ impl CommonRepository {
     pub fn invalidate(&self) {
         let mut stores = self.stores.lock().expect("shared object stores");
         for store in stores.iter().filter_map(Weak::upgrade) {
+            // A handle still holding this store must attach again.
+            store.reusable.store(false, Ordering::Release);
             let mut indexes = store.indexes.lock().expect("shared indexes");
             for entry in indexes.iter() {
                 if let Some(build) = entry.build.upgrade() {
@@ -314,7 +316,7 @@ pub(super) struct SharedStore {
     reusable: AtomicBool,
     pub topology: Arc<log::TopologyCache>,
     indexes: Arc<Mutex<Vec<IndexEntry>>>,
-    pub decode: Arc<Mutex<()>>,
+    pub decode: Arc<super::shared_ranges::DecodeFlights>,
 }
 
 struct IndexEntry {
@@ -407,6 +409,11 @@ fn queue(job: Job) -> Result<()> {
 }
 
 impl SharedStore {
+    /// Whether a fresh open of `repo` would attach this store again.
+    pub fn is_current(&self, repo: &gix::Repository, private_scope: u64) -> bool {
+        self.reusable.load(Ordering::Acquire) && StoreKey::read(repo, private_scope) == self.key
+    }
+
     pub fn snapshot(&self, query: &log::HistoryQuery) -> HistorySnapshot {
         let mut entries = self.indexes.lock().expect("shared indexes");
         IndexEntry::get(&mut entries, query).snapshot()
@@ -418,6 +425,34 @@ impl SharedStore {
             .expect("shared indexes")
             .iter()
             .any(|entry| entry.index.ptr_eq(&Arc::downgrade(index)))
+    }
+
+    /// `query`'s index grown from a finished one this store still holds, when
+    /// `query` only adds commits on top of it. Anything but a cancellation
+    /// leaves the answer to a rebuild.
+    fn extended_index(
+        &self,
+        repo: &gix::ThreadSafeRepository,
+        query: &log::HistoryQuery,
+        snapshot: HistorySnapshot,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<HistoryIndexHandle>> {
+        let older = self
+            .indexes
+            .lock()
+            .expect("shared indexes")
+            .iter()
+            .rev()
+            .filter(|entry| query.extends(&entry.key))
+            .find_map(|entry| Some((entry.key.clone(), entry.index.upgrade()?)));
+        let Some((older_query, older)) = older else {
+            return Ok(None);
+        };
+        match log::extend_history_index(repo, query, snapshot, &older_query, &older, cancellation) {
+            Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => Err(error),
+            Ok(index) => Ok(index),
+            Err(_) => Ok(None),
+        }
     }
 
     pub fn index(
@@ -470,6 +505,14 @@ impl SharedStore {
             queue(Box::new(gitcomet_core::history_perf::with_capture_context(
                 move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if let Some(index) = shared.extended_index(
+                            &repo,
+                            &query,
+                            snapshot.clone(),
+                            &worker.cancellation,
+                        )? {
+                            return Ok(index);
+                        }
                         GixRepo::build_resolved_history_index(
                             &repo,
                             &query,

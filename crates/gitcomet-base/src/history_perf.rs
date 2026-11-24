@@ -22,12 +22,21 @@ pub enum Work {
     PickerModelBuild,
     PickerFilterItem,
     LogWalkObjectRead,
+    /// A commit header read ahead of the scan, from a pack's run of commits.
+    LogHeaderReadAhead,
+    /// Every record of a commit-graph read front to back for a scan.
+    CommitGraphRead,
     LogTopologyBuild,
+    /// A topology made from the cached one and the commits added on top.
+    LogTopologyExtend,
     HistoryIndexBuild,
+    /// An index made from an existing one and the commits added on top.
+    HistoryIndexExtend,
+    RepositoryReopen,
 }
 
 impl Work {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 23] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -44,8 +53,13 @@ impl Work {
         Self::PickerModelBuild,
         Self::PickerFilterItem,
         Self::LogWalkObjectRead,
+        Self::LogHeaderReadAhead,
+        Self::CommitGraphRead,
         Self::LogTopologyBuild,
+        Self::LogTopologyExtend,
         Self::HistoryIndexBuild,
+        Self::HistoryIndexExtend,
+        Self::RepositoryReopen,
     ];
 
     pub fn name(self) -> &'static str {
@@ -66,8 +80,13 @@ impl Work {
             Self::PickerModelBuild => "picker_model_build",
             Self::PickerFilterItem => "picker_filter_item",
             Self::LogWalkObjectRead => "log_walk_object_read",
+            Self::LogHeaderReadAhead => "log_header_read_ahead",
+            Self::CommitGraphRead => "commit_graph_read",
             Self::LogTopologyBuild => "log_topology_build",
+            Self::LogTopologyExtend => "log_topology_extend",
             Self::HistoryIndexBuild => "history_index_build",
+            Self::HistoryIndexExtend => "history_index_extend",
+            Self::RepositoryReopen => "repository_reopen",
         }
     }
 }

@@ -8,7 +8,7 @@ use gitcomet_state::name_summary::{LISTED_NAMES, branch_noun, elide_names, elisi
 /// of a finished feature group, so "Force delete" has to be reachable without
 /// running the safe attempt first and reading the failure.
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     section: BranchSection,
     remote: Option<String>,
@@ -16,7 +16,7 @@ pub(super) fn panel(
     names: Vec<String>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let count = names.len();
     let noun = branch_noun(count);
 

@@ -35,8 +35,8 @@ fn tooltip_is_retracted_after_row_removal(
     );
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.head_branch_rev = 1;
-    repo.log = Loadable::Ready(page.clone());
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page.clone());
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     repo.history_state.commit_signatures = Arc::new(
@@ -165,8 +165,8 @@ fn tooltip_is_retracted_after_row_removal(
                 _ => Vec::new(),
             };
             let page = Arc::new(log_page(commits, None));
-            repo.log = Loadable::Ready(page.clone());
-            repo.log_rev += 1;
+            repo.history_state.log = Loadable::Ready(page.clone());
+            repo.history_state.log_rev += 1;
             repo.history_state.log = Loadable::Ready(page);
             repo.history_state.log_rev += 1;
             let next = Arc::new(next);

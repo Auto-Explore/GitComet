@@ -2,6 +2,7 @@
 //! worktrees and submodules.
 
 use super::*;
+use gitcomet_state::history_filter::HistoryFilterMsg;
 
 mod annex;
 mod branch;
@@ -89,10 +90,10 @@ impl SidebarRowContext {
         repo_id: RepoId,
         surface: SidebarRowSurface,
         presentation: SidebarPresentation,
-        ui_scale_percent: u32,
+        cx: &mut App,
     ) -> Self {
         let is_collapsed_popover = surface == SidebarRowSurface::Rail;
-        let theme = this.theme;
+        let (theme, ui_scale_percent) = (AppTheme::current(cx), ui_scale::current(cx).percent);
         let history_focus = this
             .active_repo()
             .map(|repo| repo.history_state.history_focus.clone())
@@ -227,7 +228,7 @@ impl SidebarRowContext {
                     false,
                     controls::ControlActivation::Nested,
                     cx.listener(move |this, _, _, _| {
-                        this.store.dispatch(Msg::ToggleHistoryFocus {
+                        this.store.dispatch(HistoryFilterMsg::ToggleFocus {
                             repo_id,
                             target: target.clone(),
                         });
@@ -450,13 +451,11 @@ impl SidebarPaneView {
         {
             this.rendered_rows += range.size_hint().0;
         }
-        let ui_scale_percent = ui_scale::current(cx).percent;
-
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
         let rows = presentation.rows.clone();
-        let ctx = SidebarRowContext::new(this, repo_id, surface, presentation, ui_scale_percent);
+        let ctx = SidebarRowContext::new(this, repo_id, surface, presentation, cx);
         let decorated: std::rc::Rc<[usize]> = if surface == SidebarRowSurface::Tree {
             this.decorated_sidebar_rows()
         } else {

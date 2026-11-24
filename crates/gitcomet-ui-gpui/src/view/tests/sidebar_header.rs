@@ -78,16 +78,7 @@ fn sidebar_heading_uses_content_header_surface_and_preserves_body_surface(
 ) {
     let (view, cx) = open_view(cx);
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-        cx.update(|_, app| {
-            view.update(app, |view, cx| {
-                view.theme = theme;
-                view.sidebar_pane.update(cx, |pane, cx| {
-                    pane.theme = theme;
-                    cx.notify();
-                });
-                cx.notify();
-            })
-        });
+        cx.update(|_, app| view.update(app, |view, cx| view.set_theme(theme, cx)));
         test_support::redraw(cx);
         let header: gpui::Background = crate::theme::content_header_bg(theme).into();
         assert!(

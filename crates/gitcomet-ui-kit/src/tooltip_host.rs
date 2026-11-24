@@ -8,9 +8,8 @@ use std::time::Duration;
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 const TOOLTIP_WINDOW_MARGIN_PX: f32 = 8.0;
 
+#[derive(Default)]
 pub struct TooltipHost {
-    theme: AppTheme,
-
     tooltip_text: Option<SharedString>,
     tooltip_candidate_last: Option<SharedString>,
     tooltip_visible_text: Option<SharedString>,
@@ -28,25 +27,6 @@ pub struct TooltipHost {
 }
 
 impl TooltipHost {
-    pub fn new(theme: AppTheme) -> Self {
-        Self {
-            theme,
-            tooltip_text: None,
-            tooltip_candidate_last: None,
-            tooltip_visible_text: None,
-            tooltip_pending_pos: None,
-            tooltip_visible_pos: None,
-            tooltip_delay_seq: 0,
-            last_mouse_pos: point(px(0.0), px(0.0)),
-            pending_delay: None,
-        }
-    }
-
-    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     pub fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,
@@ -232,7 +212,7 @@ impl Render for TooltipHost {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.sync_tooltip_state(cx);
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let mut layer = div()
             .id("tooltip_layer")
             .absolute()

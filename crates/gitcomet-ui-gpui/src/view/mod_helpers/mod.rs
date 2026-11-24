@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::permalink;
 use gitcomet_core::services::InteractiveRebaseAction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -45,9 +46,9 @@ pub(in crate::view) enum RemoteWebRequest {
     NotReady,
     NoRemotes,
     NoWebPage,
-    Open(super::permalink::RemoteWebPage),
+    Open(permalink::RemoteWebPage),
     /// Several remotes have a page; `origin`'s comes first.
-    Choose(Vec<super::permalink::RemoteWebPage>),
+    Choose(Vec<permalink::RemoteWebPage>),
 }
 
 impl RemoteWebRequest {
@@ -250,7 +251,7 @@ pub(in crate::view) fn remote_web_request(repo: &RepoState) -> RemoteWebRequest 
     if remotes.is_empty() {
         return RemoteWebRequest::NoRemotes;
     }
-    let mut pages = super::permalink::remote_web_pages(remotes);
+    let mut pages = permalink::remote_web_pages(remotes);
     match pages.len() {
         0 => RemoteWebRequest::NoWebPage,
         1 => RemoteWebRequest::Open(pages.remove(0)),

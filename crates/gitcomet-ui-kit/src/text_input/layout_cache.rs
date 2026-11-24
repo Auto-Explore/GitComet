@@ -213,11 +213,8 @@ impl TextInput {
         };
         let content = self.content.snapshot();
         let substitute_text = self.substitute_display_text(&content);
-        let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
-            Some(text) => compute_line_starts(text).into(),
-            None => content.shared_line_starts(),
-        };
-        let line_count = line_starts.len().max(1);
+        let line_starts = LineStarts::for_display(substitute_text.as_deref(), &content);
+        let line_count = line_starts.line_count().max(1);
         if self.wrap.row_counts.len() != line_count {
             return;
         }
@@ -231,10 +228,11 @@ impl TextInput {
 
         let has_content = !content.is_empty();
         let display_text = substitute_text.unwrap_or_else(|| content.as_shared_string());
+        let line_source = LineTextSource::whole(display_text.as_ref(), &line_starts);
         let mut rows_changed = false;
         for line_ix in dirty_ranges.into_iter().flatten() {
-            let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-            let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
+            let line_start = line_starts.line_start(line_ix).unwrap_or(0);
+            let line_text = line_source.line_text(line_ix);
             // Bold or italic highlights move wrap points.
             let highlights = has_content.then(|| {
                 self.highlights_polling_provider(line_start..line_start + line_text.len(), cx)

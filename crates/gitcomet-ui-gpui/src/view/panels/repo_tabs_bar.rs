@@ -2,6 +2,7 @@ use super::super::path_display;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::HeadTracking;
 use gitcomet_state::model::RepoIncomingState;
 use rustc_hash::FxHasher;
@@ -12,7 +13,6 @@ use std::rc::Rc;
 pub(in super::super) struct RepoTabsBarView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
-    theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     open_terminal_repo_ids: FxHashSet<RepoId>,
@@ -363,10 +363,10 @@ impl RepoTabsBarView {
         // values with Loading; pagination has its own explicit pending flag.
         let primary_view_ready = matches!(repo.head_branch, Loadable::Ready(_))
             && matches!(repo.status, Loadable::Ready(_))
-            && matches!(repo.log, Loadable::Ready(_));
+            && matches!(repo.history_state.log, Loadable::Ready(_));
         matches!(repo.open, Loadable::Loading)
             || (repo.loads_in_flight.any_foreground_in_flight()
-                && (!primary_view_ready || repo.log_loading_more))
+                && (!primary_view_ready || repo.history_state.log_loading_more))
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -471,16 +471,20 @@ impl RepoTabsBarView {
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
         self.pressed_repo_tab = None;
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.request_close_repos(vec![repo_id], None, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::CloseRepos {
+                repo_ids: vec![repo_id],
+                activate_after: None,
+            },
+            None,
+            cx,
+        );
         cx.notify();
     }
 
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -518,7 +522,6 @@ impl RepoTabsBarView {
         let mut this = Self {
             store,
             state,
-            theme,
             _ui_model_subscription: subscription,
             root_view,
             open_terminal_repo_ids: FxHashSet::default(),
@@ -539,11 +542,6 @@ impl RepoTabsBarView {
         };
         this.update_repo_tab_spinner_delay(cx);
         this
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in super::super) fn set_external_folder_drag_active(
@@ -851,7 +849,7 @@ impl Render for RepoTabsBarView {
             self.repo_tab_drag_visual = None;
         }
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let drag_direction_reversal = px(REPO_TAB_DIRECTION_REVERSAL_PX);
         let active = self.active_repo_id();
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
@@ -1240,14 +1238,14 @@ impl Render for RepoTabsBarView {
                         this.hovered_repo_tab = Some(repo_id);
                         let invoker = context_menu_invoker_for_right_click.clone();
                         let anchor = e.position;
-                        let _ = this.root_view.update(cx, move |root, cx| {
-                            root.open_popover_at(
+                        let _ = this.root_view.request(
+                            RootRequest::OpenPopoverAt(
                                 (PopoverKind::RepoTabMenu { repo_id }).invoked_by(invoker),
                                 anchor,
-                                window,
-                                cx,
-                            );
-                        });
+                            ),
+                            Some(window),
+                            cx,
+                        );
                         cx.notify();
                     }),
                 )
@@ -1258,7 +1256,7 @@ impl Render for RepoTabsBarView {
                     cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         let _ = this
                             .root_view
-                            .update(cx, |root, cx| root.show_repository_canvas(cx));
+                            .request(RootRequest::ShowRepositoryCanvas, None, cx);
                         if let Some(msg) =
                             Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                         {
@@ -1312,14 +1310,14 @@ impl Render for RepoTabsBarView {
                     .unscaled()
                     .on_click_with_bounds(theme, cx, move |_this, _e, bounds, window, cx| {
                         cx.stop_propagation();
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.open_popover_for_bounds(
-                                PopoverKind::AddRepoMenu,
+                        let _ = root_view.request(
+                            RootRequest::OpenPopoverForBounds(
+                                PopoverKind::AddRepoMenu.into(),
                                 bounds,
-                                window,
-                                cx,
-                            );
-                        });
+                            ),
+                            Some(window),
+                            cx,
+                        );
                     })
                     .debug_selector(|| "add_repo_menu".to_string())
                     .block_mouse_except_scroll()
@@ -1603,10 +1601,11 @@ mod tests {
             staged: Default::default(),
             unstaged: Default::default(),
         }));
-        repo.log = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }));
+        repo.history_state.log =
+            Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }));
         repo.loads_in_flight.request(LoadKind::WorktreeStatus);
         repo.loads_in_flight.request(LoadKind::Tags);
         assert!(!RepoTabsBarView::is_repo_busy(&repo));
@@ -1615,10 +1614,10 @@ mod tests {
         reload.status = Loadable::Loading;
         assert!(RepoTabsBarView::is_repo_busy(&reload));
         let mut history_filter = repo.clone();
-        history_filter.log = Loadable::Loading;
+        history_filter.history_state.log = Loadable::Loading;
         assert!(RepoTabsBarView::is_repo_busy(&history_filter));
         let mut pagination = repo.clone();
-        pagination.log_loading_more = true;
+        pagination.history_state.log_loading_more = true;
         assert!(RepoTabsBarView::is_repo_busy(&pagination));
         repo.local_actions_in_flight = 1;
         assert!(RepoTabsBarView::is_repo_busy(&repo));

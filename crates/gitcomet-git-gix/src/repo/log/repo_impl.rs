@@ -93,14 +93,23 @@ impl GixRepo {
         });
     }
 
+    /// The key of `path`'s follow walk now, from a handle that sees packed
+    /// refs rewritten without a newer mtime.
     pub(super) fn log_file_follow_cache_key(
+        &self,
         path: &Path,
-        head_oid: Option<gix::ObjectId>,
-    ) -> super::LogFileFollowCacheKey {
-        super::LogFileFollowCacheKey {
-            head_oid,
+    ) -> Result<super::LogFileFollowCacheKey> {
+        let (repo, _) = self.current_history_store()?;
+        let repo = repo.to_thread_local();
+        let shallow = repo
+            .shallow_file()
+            .ok()
+            .and_then(|file| crate::repo::config::ConfigStamp::read(&file).ok());
+        Ok(super::LogFileFollowCacheKey {
+            head_oid: gix_head_id_or_none(&repo)?,
             path: path.to_path_buf(),
-        }
+            shallow,
+        })
     }
 
     pub(super) fn cached_log_file_follow_commits(
@@ -299,15 +308,38 @@ impl GixRepo {
     }
 
     /// Find the file's name in `commit`'s tree by following renames from `path`.
-    /// Runs `git log --follow --name-status` and reads the entry for `commit`:
-    /// a rename yields its destination; a plain change yields its path; a
-    /// deletion (the followed name was renamed away at `commit`) is resolved to
-    /// the rename's destination via `git diff-tree -M`.
+    /// Reads `commit`'s entry of `git log --follow --name-status`: a rename
+    /// yields its destination; a plain change yields its path; a deletion (the
+    /// followed name was renamed away at `commit`) is resolved to the rename's
+    /// destination via `git diff-tree -M`.
     pub(super) fn resolve_renamed_path_at_commit(
         &self,
         path: &Path,
         commit: &CommitId,
     ) -> Result<Option<PathBuf>> {
+        match self.followed_names(path)?.status_line(commit.as_ref()) {
+            Some(status_line) => self.interpret_name_status_for_commit(status_line, commit),
+            None => Ok(None),
+        }
+    }
+
+    /// Every commit's name-status line for `path` followed from `HEAD`. One
+    /// walk answers every commit, so it is kept until `HEAD` moves: selecting
+    /// commits under older names would otherwise walk the history each time.
+    fn followed_names(&self, path: &Path) -> Result<Arc<super::FollowedNames>> {
+        let key = self.log_file_follow_cache_key(path)?;
+        let cache = &self.history_cache.followed_names;
+        {
+            let mut cache = cache.lock().expect("followed names cache");
+            if let Some(index) = cache.iter().position(|(cached, _)| cached == &key) {
+                // Most recently used last.
+                let entry = cache.remove(index);
+                let names = Arc::clone(&entry.1);
+                cache.push(entry);
+                return Ok(names);
+            }
+        }
+
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("-c")
             .arg("core.quotePath=false")
@@ -319,26 +351,30 @@ impl GixRepo {
             // Record separator (0x1e) before each commit hash so records can be
             // split unambiguously from the name-status lines that follow.
             .arg("--format=%x1e%H");
+        // From the commit the key names, should `HEAD` move meanwhile.
+        cmd.args(key.head_oid.map(|id| id.to_string()));
         push_literal_paths(&mut cmd, [path]);
         let output = run_git_capture(cmd, "git log --follow --name-status")?;
+        let names = Arc::new(super::FollowedNames::parse(&output));
 
-        let target = commit.as_ref();
-        for record in output.split('\u{1e}') {
-            let mut lines = record.lines().filter(|line| !line.is_empty());
-            let Some(hash) = lines.next() else {
-                continue;
-            };
-            if hash != target {
-                continue;
-            }
-            // The pathspec filters output to the followed file, so the first
-            // status line is the one we want.
-            if let Some(status_line) = lines.next() {
-                return self.interpret_name_status_for_commit(status_line, commit);
-            }
-            return Ok(None);
+        let mut cache = cache.lock().expect("followed names cache");
+        cache.retain(|(cached, _)| cached != &key);
+        cache.push((key, Arc::clone(&names)));
+        // Oldest first, down to the entry and commit bounds; an oversized walk
+        // is not kept at all.
+        let total = |cache: &[(_, Arc<super::FollowedNames>)]| {
+            cache
+                .iter()
+                .map(|(_, names)| names.commits())
+                .sum::<usize>()
+        };
+        while !cache.is_empty()
+            && (cache.len() > super::FOLLOWED_NAMES_CACHE_LIMIT
+                || total(&cache) > super::FOLLOWED_NAMES_CACHE_COMMIT_LIMIT)
+        {
+            cache.remove(0);
         }
-        Ok(None)
+        Ok(names)
     }
 
     /// Interpret one `--name-status` line (`<status>\t<path>[\t<path2>]`) as the
@@ -451,9 +487,11 @@ impl GixRepo {
         Ok(renames)
     }
 
+    /// `path`'s history followed from `from`, or from `HEAD`.
     pub(super) fn log_follow_commits(
         &self,
         path: &Path,
+        from: Option<gix::ObjectId>,
         max_count: Option<usize>,
     ) -> Result<Vec<Commit>> {
         let mut cmd = self.git_workdir_cmd();
@@ -467,6 +505,7 @@ impl GixRepo {
         if let Some(max_count) = max_count {
             cmd.arg(format!("-n{max_count}"));
         }
+        cmd.args(from.map(|id| id.to_string()));
         push_literal_paths(&mut cmd, [path]);
 
         run_git_parsed_stdout(cmd, "git log --follow", false, |stdout| {
@@ -985,17 +1024,15 @@ impl GixRepo {
         if cursor.is_none() {
             // One past the limit tells the page whether more follow; a limit
             // that cannot grow reads as "every commit" and drops the bound.
-            let commits = self.log_follow_commits(path, limit.checked_add(1))?;
+            let commits = self.log_follow_commits(path, None, limit.checked_add(1))?;
             return paginate_commits(commits.into_iter().map(Ok), limit, cursor).map(Arc::new);
         }
 
-        let repo = self.repo();
-        let head_oid = gix_head_id_or_none(&repo)?;
-        let cache_key = Self::log_file_follow_cache_key(path, head_oid);
+        let cache_key = self.log_file_follow_cache_key(path)?;
         let commits = if let Some(commits) = self.cached_log_file_follow_commits(&cache_key) {
             commits
         } else {
-            let commits = Arc::new(self.log_follow_commits(path, None)?);
+            let commits = Arc::new(self.log_follow_commits(path, cache_key.head_oid, None)?);
             self.store_log_file_follow_commits(cache_key, Arc::clone(&commits));
             commits
         };

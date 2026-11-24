@@ -39,12 +39,12 @@ fn empty_gitlink_fixture() -> tempfile::TempDir {
 }
 
 fn selected_gitlinks(root: &Path, staged: &[FileStatus]) -> Option<Vec<std::path::PathBuf>> {
-    super::gitlink_status_paths(&gix::open(root).unwrap(), staged)
+    super::gitlink_selection(&gix::open(root).unwrap(), staged).map(super::GitlinkSelection::asked)
 }
 
 // Keep this independent Git oracle outside the per-file production-command audit.
 #[cfg(test)]
-fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
+fn gitlink_status_from_git(root: &Path, paths: &[&str]) -> (Vec<FileStatus>, Vec<FileStatus>) {
     let output = crate::util::git_workdir_cmd_for(root)
         .args([
             "--literal-pathspecs",
@@ -54,8 +54,8 @@ fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
             "-z",
             "--ignore-submodules=none",
             "--",
-            CHILD,
         ])
+        .args(paths)
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -74,7 +74,7 @@ fn assert_gitlink_lanes_match_git(
     repo: &super::super::GixRepo,
     needs_commands: (bool, bool),
 ) -> (Vec<FileStatus>, Vec<FileStatus>) {
-    let expected = gitlink_status_from_git(root);
+    let expected = gitlink_status_from_git(root, &[CHILD]);
     let token = CancellationToken::new();
     let (combined, commands) = crate::command_trace::capture(|| repo.status_impl().unwrap());
     assert_eq!(*combined.staged, expected.0);
@@ -199,7 +199,7 @@ fn gitlink_status_disables_fsmonitor_in_parent_and_child() {
     write_file(&child, "file.txt", "changed\n");
 
     let trace = root.join(".git/config-trace.json");
-    let output = super::gitlink_status_command(root)
+    let output = super::gitlink_status_command(root, super::GitlinkAsk::Repository(None))
         .env("GIT_TRACE2_EVENT", &trace)
         .env("GIT_TRACE2_CONFIG_PARAMS", "core.fsmonitor")
         .output()
@@ -559,4 +559,471 @@ fn read_status_lane(
         "staged" => repo.staged_status_cancellable_impl(token).map(|_| ()),
         _ => unreachable!("unknown status lane"),
     }
+}
+
+#[test]
+fn gitlink_paths_are_dealt_into_queries_worth_a_process_each() {
+    let paths = |count: usize| -> Vec<std::path::PathBuf> {
+        (0..count).map(|path| format!("{path:03}").into()).collect()
+    };
+    // Too few to share out.
+    assert_eq!(super::gitlink_queries(paths(15), 8), [paths(15)]);
+    assert_eq!(super::gitlink_queries(paths(40), 1), [paths(40)]);
+    // Dealt in turn, so that neighbours (one vendor directory, often the
+    // large checkouts) land in different queries.
+    let queries = super::gitlink_queries(paths(20), 8);
+    assert_eq!(queries.len(), 2);
+    assert_eq!(
+        queries[0],
+        paths(20).into_iter().step_by(2).collect::<Vec<_>>()
+    );
+    assert_eq!(super::gitlink_queries(paths(152), 8).len(), 8);
+    assert_eq!(super::gitlink_queries(paths(152), 32).len(), 8);
+    let mut all: Vec<_> = super::gitlink_queries(paths(152), 8).concat();
+    all.sort();
+    assert_eq!(all, paths(152));
+}
+
+/// What the index's cached root tree says, and whether the comparison it
+/// spares agrees: a root equal to HEAD's tree must mean nothing is staged.
+fn cached_tree_says_nothing_is_staged(root: &Path) -> bool {
+    let repo = crate::test_support::open_gix(root);
+    let tree = crate::refs::head_tree_id_or_empty(&repo).unwrap();
+    let index = repo.index_or_empty().unwrap();
+    let mut compared = Vec::new();
+    super::compare_tree_with_index(&repo, &tree, &index, "test", |change| {
+        super::collect_tree_index_change(change, &mut compared).unwrap();
+        Ok(std::ops::ControlFlow::Continue(()))
+    })
+    .unwrap();
+    let says = super::index_is_tree(&index, &tree);
+    assert!(!says || compared.is_empty(), "{compared:?}");
+    let mut staged = super::collect_staged_status_from_tree_index(&repo, &tree).unwrap();
+    staged.sort_by(|a, b| a.path.cmp(&b.path));
+    compared.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(staged, compared);
+    says
+}
+
+#[test]
+fn the_cached_root_tree_spares_the_staged_comparison_only_when_nothing_is_staged() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    // Unborn, with an empty index and then a filled one.
+    cached_tree_says_nothing_is_staged(root);
+    write_file(root, "a/b/one.txt", "one\n");
+    write_file(root, "a/two.txt", "two\n");
+    write_file(root, "three.txt", "three\n");
+    git_success(root, &["add", "."]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["commit", "-qm", "seed"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    // A change in the working tree alone leaves the index as HEAD has it.
+    write_file(root, "a/b/one.txt", "changed\n");
+    assert!(cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["add", "a/b/one.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["commit", "-qm", "change"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    write_file(root, "a/new.txt", "new\n");
+    git_success(root, &["add", "-N", "a/new.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["reset", "-q"]);
+    cached_tree_says_nothing_is_staged(root);
+    git_success(root, &["rm", "-q", "--cached", "three.txt"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["reset", "-q", "--hard"]);
+    assert!(cached_tree_says_nothing_is_staged(root));
+
+    // Stages of a conflict are not what HEAD has either.
+    git_success(root, &["checkout", "-q", "-b", "side"]);
+    write_file(root, "a/two.txt", "theirs\n");
+    git_success(root, &["commit", "-qam", "theirs"]);
+    git_success(root, &["checkout", "-q", "-"]);
+    write_file(root, "a/two.txt", "ours\n");
+    git_success(root, &["commit", "-qam", "ours"]);
+    crate::test_support::git_expect_failure(root, &["merge", "-q", "side"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+    git_success(root, &["merge", "--abort"]);
+    cached_tree_says_nothing_is_staged(root);
+
+    // An older HEAD is not what the index was written as.
+    git_success(root, &["reset", "-q", "--soft", "HEAD~1"]);
+    assert!(!cached_tree_says_nothing_is_staged(root));
+}
+
+/// Git does not check the index's trailing checksum when it reads it, only
+/// `git fsck` does. Hashing a large index costs more than decoding it.
+#[test]
+fn an_index_is_read_without_checking_its_checksum_as_git_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    write_file(root, "file.txt", "changed\n");
+    let before = open_repo(root).status_impl().unwrap();
+    assert_eq!(before.unstaged.len(), 1);
+
+    let index = root.join(".git/index");
+    let mut bytes = std::fs::read(&index).unwrap();
+    *bytes.last_mut().unwrap() ^= 0xff;
+    let bytes_end = bytes.last().copied();
+    std::fs::write(&index, bytes).unwrap();
+    // Without optional locks, or Git writes the index anew.
+    let status = ["--no-optional-locks", "status", "--porcelain"];
+    let porcelain = crate::test_support::git_stdout(root, &status);
+    assert_eq!(porcelain.trim(), "M file.txt");
+    assert_eq!(std::fs::read(&index).unwrap().last(), bytes_end.as_ref());
+    let after = open_repo(root).status_impl().unwrap();
+    assert_eq!(
+        (&after.staged, &after.unstaged),
+        (&before.staged, &before.unstaged)
+    );
+}
+
+/// Each side waits for a word from the other, which only arrives when both
+/// run at once.
+#[test]
+fn the_gitlink_query_and_the_walk_run_at_once() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+    let wait = Duration::from_secs(30);
+    let (to_walk, from_ask) = channel();
+    let (to_ask, from_walk) = channel();
+    let (walked, asked) = super::beside(
+        move || {
+            to_walk.send("asking").unwrap();
+            from_walk.recv_timeout(wait)
+        },
+        move || {
+            to_ask.send("walking").unwrap();
+            from_ask.recv_timeout(wait)
+        },
+    );
+    assert_eq!((walked, asked), (Ok("asking"), Ok("walking")));
+}
+
+#[test]
+fn a_submodules_own_status_says_whether_its_gitlink_is_modified() {
+    let recorded = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap();
+    let modified =
+        |status: &str| super::checkout_is_modified(status.as_bytes(), &recorded).unwrap();
+    let same = "# branch.oid 1111111111111111111111111111111111111111\n# branch.head main\n";
+    assert!(!modified(same));
+    assert!(!modified(""));
+    // Nothing is checked out yet, which Git takes to match any commit.
+    assert!(!modified("# branch.oid (initial)\n# branch.head main\n"));
+    assert!(modified(
+        "# branch.oid 2222222222222222222222222222222222222222\n# branch.head (detached)\n"
+    ));
+    for record in [
+        "? new.txt",
+        "1 .M N... 100644 100644 100644 1111 1111 changed.txt",
+        "2 R. N... 100644 100644 100644 1111 1111 R100 to.txt\tfrom.txt",
+        "u UU N... 100644 100644 100644 100644 1111 1111 1111 both.txt",
+    ] {
+        assert!(modified(&format!("{same}{record}\n")), "{record}");
+    }
+    // Ignored files are not shown, and would not make it dirty.
+    assert!(!modified(&format!("{same}! ignored.txt\n")));
+
+    // Read to the end past the answer, so that Git can finish writing; no
+    // line outlives the next.
+    let many: String = (0..10_000).map(|n| format!("? new-{n}.txt\n")).collect();
+    let mut status = std::io::Cursor::new(format!("{same}{many}").into_bytes());
+    assert!(super::checkout_is_modified(&mut status, &recorded).unwrap());
+    assert_eq!(status.position() as usize, status.get_ref().len());
+}
+
+/// A child repository in `path` with one commit, its Git directory inside
+/// the checkout or, as `git submodule` leaves it, among the parent's modules.
+fn commit_child(root: &Path, path: &str, absorbed: bool) -> String {
+    let child = root.join(path);
+    std::fs::create_dir_all(&child).unwrap();
+    if absorbed {
+        let modules = root.join(".git/modules").join(path);
+        std::fs::create_dir_all(modules.parent().unwrap()).unwrap();
+        let separate = format!("--separate-git-dir={}", modules.display());
+        git_success(&child, &["init", "-q", &separate]);
+        for (key, value) in [("user.name", "t"), ("user.email", "t@example.invalid")] {
+            git_success(&child, &["config", key, value]);
+        }
+        git_success(&child, &["config", "commit.gpgsign", "false"]);
+    } else {
+        init_test_repo(&child);
+    }
+    write_file(&child, "tracked.txt", "base\n");
+    git_success(&child, &["add", "."]);
+    git_success(&child, &["commit", "-qm", "child"]);
+    crate::refs::head_oid(&gix::open(&child).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_string()
+}
+
+fn add_gitlink(root: &Path, path: &str, oid: &str) {
+    git_success(
+        root,
+        &["update-index", "--add", "--cacheinfo", "160000", oid, path],
+    );
+}
+
+#[test]
+fn checked_out_submodules_are_asked_directly_and_the_rest_through_the_repository() {
+    use gix::index::entry::Flags;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    let plain = commit_child(root, "plain", false);
+    let absorbed = commit_child(root, "absorbed", true);
+    add_gitlink(root, "plain", &plain);
+    add_gitlink(root, "absorbed", &absorbed);
+    // Not checked out, and checked out as something Git may not take for a
+    // repository: an empty `.git`, and files with no `.git` at all.
+    for path in ["empty", "hollow", "files"] {
+        add_gitlink(root, path, &plain);
+        std::fs::create_dir(root.join(path)).unwrap();
+    }
+    std::fs::create_dir(root.join("hollow/.git")).unwrap();
+    write_file(root, "files/note.txt", "not a repository\n");
+    git_success(root, &["commit", "-qm", "gitlinks"]);
+
+    let select = |staged: &[FileStatus]| {
+        let selection = super::gitlink_selection(&gix::open(root).unwrap(), staged).unwrap();
+        let checkouts: Vec<_> = selection
+            .checkouts
+            .iter()
+            .map(|(path, oid)| (path.to_str().unwrap().to_owned(), oid.to_string()))
+            .collect();
+        (checkouts, selection.paths)
+    };
+    let both = vec![
+        ("absorbed".to_owned(), absorbed.clone()),
+        ("plain".to_owned(), plain.clone()),
+    ];
+    let uncertain: Vec<std::path::PathBuf> = vec!["files".into(), "hollow".into()];
+    assert_eq!(select(&[]), (both.clone(), uncertain.clone()));
+
+    // A staged change at the gitlink is Git's to report on both sides.
+    let staged = FileStatus {
+        path: "plain".into(),
+        kind: FileStatusKind::Modified,
+        conflict: None,
+    };
+    let (checkouts, paths) = select(&[staged]);
+    assert_eq!(checkouts, both[..1]);
+    assert_eq!(
+        paths,
+        ["files", "hollow", "plain"].map(std::path::PathBuf::from)
+    );
+
+    // So is a gitlink Git is told to assume unchanged.
+    let repo = gix::open(root).unwrap();
+    let mut index = (*repo.index_or_empty().unwrap()).clone();
+    let position = index
+        .entries()
+        .iter()
+        .position(|entry| entry.path(&index) == "absorbed")
+        .unwrap();
+    index.entries_mut()[position].flags |= Flags::ASSUME_VALID;
+    index.write(Default::default()).unwrap();
+    let (checkouts, paths) = select(&[]);
+    assert_eq!(checkouts, both[1..]);
+    assert_eq!(
+        paths,
+        ["absorbed", "files", "hollow"].map(std::path::PathBuf::from)
+    );
+}
+
+/// Started from a hook, GitComet carries the `GIT_DIR` and `GIT_INDEX_FILE`
+/// of the repository above. Git clears them before it looks into a
+/// submodule, and so must the direct question.
+#[test]
+fn a_checkout_is_asked_without_the_variables_of_the_repository_above() {
+    const NAME: &str = "a_checkout_is_asked_without_the_variables_of_the_repository_above";
+    const ROOT: &str = "GITCOMET_GITLINK_ENV_TEST_ROOT";
+    let Some(root) = std::env::var_os(ROOT).map(std::path::PathBuf::from) else {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_test_repo(root);
+        write_file(root, "file.txt", "base\n");
+        git_success(root, &["add", "."]);
+        git_success(root, &["commit", "-qm", "seed"]);
+        let oid = commit_child(root, "child", false);
+        add_gitlink(root, "child", &oid);
+        write_file(&root.join("child"), "tracked.txt", "changed\n");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .env(ROOT, root)
+            .env("GIT_DIR", root.join(".git"))
+            .env("GIT_INDEX_FILE", root.join(".git/index"));
+        gitcomet_core::test_support::child_test::run(&mut command, module_path!(), NAME);
+        return;
+    };
+    let oid = crate::refs::head_oid(&gix::open(root.join("child")).unwrap())
+        .unwrap()
+        .unwrap();
+    let token = CancellationToken::new();
+    let status = super::gitlink_status_output(
+        &root,
+        super::GitlinkAsk::Checkout(Path::new("child")),
+        &token,
+    )
+    .unwrap()
+    .expect("Git answers for the checkout");
+    let status = String::from_utf8(status).unwrap();
+    assert!(
+        status.starts_with(&format!("# branch.oid {oid}\n")),
+        "{status}"
+    );
+    assert!(
+        status
+            .lines()
+            .any(|line| line.starts_with("1 .M") && line.ends_with(" tracked.txt")),
+        "{status}"
+    );
+}
+
+/// Asked in a checkout whose `.git` it does not take for a repository, Git
+/// looks for one above and would answer for the parent.
+#[test]
+fn a_checkout_is_never_answered_for_by_the_repository_above_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    write_file(
+        root,
+        "untracked/inside.txt",
+        "the parent would report this\n",
+    );
+    git_success(root, &["add", "file.txt"]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    let token = CancellationToken::new();
+    let ask = |path: &str| {
+        super::gitlink_status_output(root, super::GitlinkAsk::Checkout(Path::new(path)), &token)
+            .unwrap()
+    };
+    assert_eq!(ask("untracked"), None);
+    let oid = commit_child(root, "child", false);
+    let status = String::from_utf8(ask("child").unwrap()).unwrap();
+    assert!(
+        status.starts_with(&format!("# branch.oid {oid}\n")),
+        "{status}"
+    );
+    assert!(!status.contains("inside.txt"), "{status}");
+}
+
+/// Git looks into each checked-out submodule in turn. Asked directly, or
+/// through the repository in several queries at once, each must come out as
+/// in Git's one query.
+#[test]
+fn checked_out_gitlinks_read_as_git_reads_them_in_one_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    let child_path = |child: usize| std::path::PathBuf::from(format!("modules/c{child:02}"));
+    let children: Vec<String> = (0..20)
+        .map(|child| child_path(child).to_str().unwrap().to_owned())
+        .collect();
+    for (number, child) in children.iter().enumerate() {
+        let oid = commit_child(root, child, number % 2 == 1);
+        add_gitlink(root, child, &oid);
+    }
+    // A submodule of a submodule, recorded before the parent's commit.
+    let nesting = root.join(&children[12]);
+    let nested = commit_child(&nesting, "nested", false);
+    add_gitlink(&nesting, "nested", &nested);
+    git_success(&nesting, &["commit", "-qm", "nested"]);
+    let oid = crate::refs::head_oid(&gix::open(&nesting).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_string();
+    add_gitlink(root, &children[12], &oid);
+    git_success(root, &["commit", "-qm", "gitlinks"]);
+
+    // One of each kind of change, in checkouts that different queries get.
+    let child = |number: usize| root.join(&children[number]);
+    write_file(&child(3), "untracked.txt", "new\n");
+    write_file(&child(10), "tracked.txt", "changed\n");
+    write_file(&child(17), "tracked.txt", "committed\n");
+    git_success(&child(17), &["commit", "-qam", "ahead"]);
+    write_file(&child(6), "tracked.txt", "staged\n");
+    git_success(&child(6), &["add", "."]);
+    write_file(&nesting.join("nested"), "untracked.txt", "new\n");
+    // And of what leaves a gitlink as it is: nothing checked out yet, an
+    // ignored file, and untracked files the submodule is set not to show.
+    std::fs::remove_dir_all(child(4).join(".git")).unwrap();
+    std::fs::remove_file(child(4).join("tracked.txt")).unwrap();
+    init_test_repo(&child(4));
+    write_file(&child(14), ".git/info/exclude", "ignored.txt\n");
+    write_file(&child(14), "ignored.txt", "ignored\n");
+    git_success(&child(8), &["config", "status.showUntrackedFiles", "no"]);
+    write_file(&child(8), "untracked.txt", "new\n");
+
+    let paths: Vec<&str> = children.iter().map(String::as_str).collect();
+    let (staged, expected) = gitlink_status_from_git(root, &paths);
+    let modified: Vec<_> = expected.iter().map(|entry| entry.path.clone()).collect();
+    assert_eq!(modified, [3, 6, 10, 12, 17].map(child_path), "{expected:?}");
+
+    let repo = open_repo(root);
+    assert_eq!(
+        selected_gitlinks(root, &[]).map(|paths| paths.len()),
+        Some(20)
+    );
+    // Asked before anything is cached: what is staged needs no checkout.
+    let token = CancellationToken::new();
+    let (staged_alone, commands) =
+        crate::command_trace::capture(|| repo.staged_status_cancellable_impl(&token).unwrap());
+    assert_eq!(staged_alone, staged);
+    assert_eq!(commands.len(), 0, "{commands:?}");
+    let (status, commands) = crate::command_trace::capture(|| repo.status_impl().unwrap());
+    assert_eq!(*status.unstaged, expected);
+    assert_eq!(*status.staged, staged);
+    assert_eq!(commands.len(), 20, "one question to each checkout");
+    assert_eq!(
+        repo.worktree_status_cancellable_impl(&token).unwrap(),
+        expected
+    );
+
+    let queries = super::gitlink_queries(paths.iter().map(Into::into).collect(), 8);
+    assert_eq!(queries.len(), 2);
+    let records = super::run_repository_query(root, super::RepositoryQuery::Paths(queries), &token);
+    let outputs = super::GitlinkOutputs {
+        records,
+        modified: Ok(Vec::new()),
+    };
+    let (mut staged, mut unstaged) = (Vec::new(), Vec::new());
+    super::apply_gitlink_outputs(outputs, &mut staged, &mut unstaged).unwrap();
+    unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(unstaged, expected);
+    assert!(staged.is_empty());
+
+    // The repository's own untracked files are not Git's to look for here,
+    // while untracked files inside a submodule still make it modified.
+    write_file(root, "untracked.txt", "new\n");
+    let everything = super::RepositoryQuery::Everything;
+    let records = super::run_repository_query(root, everything, &token);
+    let record = records[0].as_ref().unwrap().as_ref().unwrap();
+    let records: Vec<_> = record.split(|byte| *byte == 0).collect();
+    assert!(!records.iter().any(|record| record.starts_with(b"? ")));
+    let gitlinks = |number: usize| {
+        let path = children[number].as_bytes();
+        records
+            .iter()
+            .filter(|record| record.ends_with(path))
+            .count()
+    };
+    assert_eq!([3, 12].map(gitlinks), [1, 1]);
 }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "benchmark fixtures use the disk directly"
+)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use gitcomet_ui_gpui::perf_alloc::{PerfTrackingAllocator, TRACKING_MIMALLOC};
 

@@ -1499,7 +1499,8 @@ fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(cx: &mut gpui
         let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
             return false;
         };
-        matches!(repo.branches, Loadable::Ready(_)) && matches!(repo.log, Loadable::Ready(_))
+        matches!(repo.branches, Loadable::Ready(_))
+            && matches!(repo.history_state.log, Loadable::Ready(_))
     });
 
     let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
@@ -1608,7 +1609,7 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
         };
         matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
             && matches!(repo.branches, Loadable::Ready(_))
-            && matches!(repo.log, Loadable::Ready(_))
+            && matches!(repo.history_state.log, Loadable::Ready(_))
             && repo.diff_state.diff_target.is_some()
     });
     sync_view_from_store(cx);
@@ -1720,7 +1721,7 @@ fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
         };
         matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
             && matches!(repo.branches, Loadable::Ready(_))
-            && matches!(repo.log, Loadable::Ready(_))
+            && matches!(repo.history_state.log, Loadable::Ready(_))
     });
     sync_view_from_store(cx);
 

@@ -439,7 +439,7 @@ impl TextInput {
     pub(super) fn streamed_highlight_runs_for_visible_window(
         &mut self,
         display_text: &LineTextSource<'_>,
-        line_starts: &[usize],
+        line_starts: &LineStarts,
         visible_line_range: Range<usize>,
         shape_style: &TextShapeStyle<'_>,
     ) -> Option<Arc<VisibleWindowTextRuns>> {
@@ -447,7 +447,7 @@ impl TextInput {
             self.highlight.prepaint_runs_cache = None;
             return None;
         };
-        let line_count = line_starts.len().max(1);
+        let line_count = line_starts.line_count().max(1);
         if highlights.is_empty()
             || line_count <= TEXT_INPUT_STREAMED_HIGHLIGHT_LEGACY_LINE_THRESHOLD
             || visible_line_range.is_empty()

@@ -2,6 +2,7 @@ use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, Relocated
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
@@ -85,7 +86,6 @@ fn status_bar_item_height(ui_scale_percent: u32, theme: AppTheme) -> Pixels {
 
 pub(in super::super) struct BottomStatusBarView {
     pub(super) relocated_items: RelocatedBarItems,
-    theme: AppTheme,
     state: Arc<AppState>,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
@@ -102,7 +102,6 @@ pub(in super::super) struct BottomStatusBarView {
 
 impl BottomStatusBarView {
     pub(in super::super) fn new(
-        theme: AppTheme,
         ui_model: Entity<AppUiModel>,
         root_view: WeakEntity<GitCometView>,
         cx: &mut gpui::Context<Self>,
@@ -122,7 +121,6 @@ impl BottomStatusBarView {
         });
         Self {
             relocated_items: Vec::new(),
-            theme,
             state,
             _ui_model_subscription: subscription,
             root_view,
@@ -208,11 +206,6 @@ impl BottomStatusBarView {
         }
     }
 
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     pub(in super::super) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,
@@ -234,9 +227,11 @@ impl BottomStatusBarView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+            Some(window),
+            cx,
+        );
     }
 
     fn open_popover_centered(
@@ -245,10 +240,11 @@ impl BottomStatusBarView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_centered(kind, window, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::OpenPopoverCentered(kind.into()),
+            Some(window),
+            cx,
+        );
     }
 }
 
@@ -259,7 +255,7 @@ impl BarItemOwner for BottomStatusBarView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> BarItems {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let filesystem_pending = self
             .root_view
             .upgrade()
@@ -331,9 +327,7 @@ impl BarItemOwner for BottomStatusBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.set_sidebar_collapsed(!root.sidebar_collapsed, cx);
-                });
+                let _ = this.root_view.request(RootRequest::ToggleSidebar, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -352,9 +346,7 @@ impl BarItemOwner for BottomStatusBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.set_details_collapsed(!root.details_collapsed, cx);
-                });
+                let _ = this.root_view.request(RootRequest::ToggleDetails, None, cx);
             })
             .gitcomet_tooltip(
                 theme,
@@ -621,9 +613,9 @@ impl BarItemOwner for BottomStatusBarView {
                 .borderless()
                 .style(components::ButtonStyle::Subtle)
                 .on_click(theme, cx, |this, _, _, cx| {
-                    let _ = this
-                        .root_view
-                        .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                    let _ =
+                        this.root_view
+                            .request(RootRequest::CancelFilesystemOperations, None, cx);
                 }),
             );
         }
@@ -650,9 +642,11 @@ impl BarItemOwner for BottomStatusBarView {
                 .style(components::ButtonStyle::Subtle)
                 .borderless()
                 .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.toggle_document_picker(bounds, window, cx)
-                    });
+                    let _ = this.root_view.request(
+                        RootRequest::ToggleDocumentPicker(bounds),
+                        Some(window),
+                        cx,
+                    );
                 })
                 .gitcomet_tooltip(theme, "Open a file…".into())
                 .debug_selector(|| "bottom_documents".into())
@@ -669,9 +663,9 @@ impl BarItemOwner for BottomStatusBarView {
                 .style(components::ButtonStyle::Subtle)
                 .borderless()
                 .on_click(theme, cx, |this, _, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.toggle_shortcut_help(window, cx);
-                    });
+                    let _ =
+                        this.root_view
+                            .request(RootRequest::ToggleShortcutHelp, Some(window), cx);
                 })
                 .gitcomet_tooltip(theme, "Keyboard shortcuts".into())
                 .debug_selector(|| "bottom_keyboard_shortcuts".into()),
@@ -721,7 +715,7 @@ impl Render for BottomStatusBarView {
             self.render_count += 1;
         }
         let mut items = self.bar_items(false, window, cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scale = crate::ui_scale::UiScale::current(cx);
         div()
             .id("bottom_status_bar")

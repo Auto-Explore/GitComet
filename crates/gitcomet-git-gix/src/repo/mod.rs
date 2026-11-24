@@ -324,7 +324,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct TestRacyClock {
     now: Option<std::time::SystemTime>,
     skew: std::time::Duration,
@@ -368,6 +368,12 @@ impl RacyClockSkew {
 
     fn install(clock: TestRacyClock) -> Self {
         Self(RACY_CLOCK.with(|cell| cell.replace(clock)))
+    }
+
+    /// This thread's clock, to be set on the threads that work for it.
+    pub(crate) fn carry() -> impl Fn() -> Self + Sync {
+        let clock = RACY_CLOCK.with(|cell| cell.borrow().clone());
+        move || Self::install(clock.clone())
     }
 }
 
@@ -573,8 +579,7 @@ impl GixRepo {
     }
 
     pub(crate) fn refresh_object_store(&self) -> Result<()> {
-        let fresh = self.reopen_repo()?.into_sync();
-        self.install_history_store(fresh);
+        self.fresh_history_store()?;
         Ok(())
     }
 
@@ -585,7 +590,24 @@ impl GixRepo {
     /// Fresh refs/config belong to this worktree. Only the compatible object
     /// store is attached; never substitute another worktree's repository handle.
     fn fresh_history_store(&self) -> Result<(gix::ThreadSafeRepository, Arc<shared::SharedStore>)> {
-        Ok(self.install_history_store(self.reopen_repo()?.into_sync()))
+        Ok(self.install_history_store(self.reopen_repo_apart()?.into_sync()))
+    }
+
+    /// [`Self::fresh_history_store`], reopening only when a config input, the
+    /// object store's key or its mappings changed since the last fresh open.
+    fn current_history_store(
+        &self,
+    ) -> Result<(gix::ThreadSafeRepository, Arc<shared::SharedStore>)> {
+        let shared = self.shared_store();
+        if let Some(repo) = self
+            .history_cache
+            .current_handle(&shared, self.private_store_scope)
+        {
+            return Ok((repo, shared));
+        }
+        let (fresh, shared) = self.fresh_history_store()?;
+        self.history_cache.keep_handle(&fresh, &shared);
+        Ok((fresh, shared))
     }
 
     fn install_history_store(
@@ -643,16 +665,25 @@ impl GixRepo {
 
     /// A fresh open, for operations that must see config/ref changes made after
     /// this repository was opened (e.g. upstream tracking written by the CLI).
-    /// It reads only the sources the first open could.
+    /// It reads only the sources the first open could, and objects through
+    /// the open store where that still fits: a store of its own loads every
+    /// pack index again, 41 ms for a 1 GB index.
     /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
+        Ok(self.fresh_history_store()?.0.to_thread_local())
+    }
+
+    /// [`Self::reopen_repo`] with an object store of its own.
+    fn reopen_repo_apart(&self) -> Result<gix::Repository> {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::RepositoryReopen);
         let permissions = self.repo().open_options().permissions;
         crate::open::open_worktree_repo_with(&self.spec.workdir, permissions)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo", &self.spec.workdir))
     }
 
     pub(super) fn range_reader_repo(&self) -> Result<gix::Repository> {
-        self.history_cache.range_reader_repo(|| self.reopen_repo())
+        self.history_cache
+            .range_reader_repo(|| self.reopen_repo_apart())
     }
 }
 
@@ -2105,6 +2136,29 @@ mod tests {
             reopened.open_options().permissions,
             gix::open::Permissions::isolated()
         );
+    }
+
+    #[test]
+    fn a_reopen_reads_objects_through_the_open_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::test_support::init_test_repo(tmp.path());
+        let repo = crate::test_support::open_repo(tmp.path());
+        let store = |repo: &gix::Repository| std::ptr::from_ref(repo.objects.store_ref());
+
+        let reopened = repo.reopen_repo().unwrap();
+        assert_eq!(store(&reopened), store(&repo.repo()));
+
+        // A store this one no longer reads as is replaced for both.
+        let other = tempfile::tempdir().unwrap();
+        crate::test_support::init_test_repo(other.path());
+        crate::test_support::write_file(
+            tmp.path(),
+            ".git/objects/info/alternates",
+            &format!("{}\n", other.path().join(".git/objects").display()),
+        );
+        let apart = repo.reopen_repo().unwrap();
+        assert_ne!(store(&apart), store(&reopened));
+        assert_eq!(store(&apart), store(&repo.repo()));
     }
 
     #[test]

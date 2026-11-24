@@ -157,9 +157,6 @@ pub struct RepoState {
     /// least one `FileStatusKind::Conflicted` entry. Recomputed in
     /// `set_worktree_status` and `set_status`.
     pub has_unstaged_conflicts: bool,
-    pub log: Loadable<Shared<LogPage>>,
-    pub log_loading_more: bool,
-    pub log_rev: u64,
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
     pub reflog: Loadable<Arc<Vec<ReflogEntry>>>,
@@ -439,9 +436,6 @@ impl RepoState {
             status_rev: 0,
             head_gitlink_paths: FxHashSet::default(),
             has_unstaged_conflicts: false,
-            log: Loadable::NotLoaded,
-            log_loading_more: false,
-            log_rev: 0,
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,

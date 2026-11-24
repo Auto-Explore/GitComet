@@ -33,6 +33,7 @@ pub mod mergetool_trace;
 pub mod partial_patch;
 pub mod patch_action;
 pub mod path_utils;
+pub mod permalink;
 pub mod process;
 pub mod remote_url;
 pub mod services;

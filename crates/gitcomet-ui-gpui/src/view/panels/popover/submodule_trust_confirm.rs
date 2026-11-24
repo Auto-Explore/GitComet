@@ -8,7 +8,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let Some(prompt) = this
         .state
         .submodule_trust_prompt

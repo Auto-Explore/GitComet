@@ -55,13 +55,16 @@ fn hiding_refs_reloads_the_active_walk_and_unloads_other_all_branches_walks() {
         )],
         "only the active repository walks now"
     );
-    assert!(matches!(state.repos[0].log, Loadable::Loading));
+    assert!(matches!(
+        state.repos[0].history_state.log,
+        Loadable::Loading
+    ));
     assert!(
-        matches!(state.repos[1].log, Loadable::NotLoaded),
+        matches!(state.repos[1].history_state.log, Loadable::NotLoaded),
         "an inactive all-branches walk reloads on activation"
     );
     assert!(
-        matches!(state.repos[2].log, Loadable::Ready(_)),
+        matches!(state.repos[2].history_state.log, Loadable::Ready(_)),
         "a first-parent walk has no refs to hide"
     );
     for repo in &state.repos {

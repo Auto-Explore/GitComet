@@ -1154,7 +1154,6 @@ pub(crate) struct CommandPaletteView {
     root_view: WeakEntity<GitCometView>,
     /// Extension commands, fixed when the window is built.
     extension_commands: &'static [CommandEntry],
-    theme: AppTheme,
     context: PaletteContext,
     open: bool,
     query: SharedString,
@@ -1168,7 +1167,6 @@ pub(crate) struct CommandPaletteView {
 
 impl CommandPaletteView {
     pub(crate) fn new(
-        theme: AppTheme,
         has_active_repo: bool,
         root_view: WeakEntity<GitCometView>,
         window: &mut Window,
@@ -1198,7 +1196,6 @@ impl CommandPaletteView {
             fallback_focus: None,
             root_view,
             extension_commands: super::extension_host::palette_entries(cx),
-            theme,
             context: PaletteContext {
                 has_active_repo,
                 ..PaletteContext::default()
@@ -1212,11 +1209,6 @@ impl CommandPaletteView {
             scroll_handle: UniformListScrollHandle::default(),
             _input_subscription: input_subscription,
         }
-    }
-
-    pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     /// Refresh what commands are enabled against. Only a repository change
@@ -1447,8 +1439,9 @@ impl CommandPaletteView {
         color: gpui::Rgba,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
+        let theme = AppTheme::current(cx);
         let highlight = gpui::HighlightStyle {
-            color: Some(self.theme.colors.accent.foreground.into_color()),
+            color: Some(theme.colors.accent.foreground.into_color()),
             font_weight: Some(FontWeight::BOLD),
             ..gpui::HighlightStyle::default()
         };
@@ -1460,7 +1453,7 @@ impl CommandPaletteView {
             }
         }
         let focus_range = ranges.first().map(|(range, _)| range.clone());
-        let mut text = components::TruncatedText::new(label.to_owned(), self.theme.ui_text(14.0))
+        let mut text = components::TruncatedText::new(label.to_owned(), theme.ui_text(14.0))
             .profile(components::TextTruncationProfile::End)
             .text_color(color);
         if let Some(focus_range) = focus_range {
@@ -1478,7 +1471,7 @@ impl CommandPaletteView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let row_height = scaled_px(36.0);
@@ -1638,7 +1631,7 @@ impl Render for CommandPaletteView {
             return div().into_any_element();
         }
 
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let palette_width = scaled_px(620.0);

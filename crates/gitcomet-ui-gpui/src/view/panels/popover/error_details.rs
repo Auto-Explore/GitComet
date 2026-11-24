@@ -108,7 +108,7 @@ fn rail(
     width: Pixels,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let danger = theme.colors.status.danger.foreground;
     let rows = notices
         .iter()
@@ -231,7 +231,7 @@ fn detail(
     error_count: usize,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let mut meta = Vec::new();
     if let Some(name) = repo_name(this, notice.repo_id) {
         meta.push(name.to_string());
@@ -482,7 +482,7 @@ pub(super) fn panel(
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     for (_, seen) in this.error_details_text.fields.values_mut() {
         *seen = false;
     }

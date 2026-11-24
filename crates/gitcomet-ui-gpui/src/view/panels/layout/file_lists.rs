@@ -91,7 +91,7 @@ impl DetailsPaneView {
         counts: crate::view::rows::CommitFileKindCounts,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         // Each caller supplies its measured filter width. Keep it explicit so
         // worktree and range controls do not read the commit list's bounds.
@@ -201,7 +201,7 @@ impl DetailsPaneView {
         disabled: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let sort = self.file_list_sort_for(list);
         let layout = self.file_list_layout_for(repo_id, list);
@@ -280,7 +280,7 @@ impl DetailsPaneView {
         details: &gitcomet_core::domain::CommitDetails,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let projection =
             self.cached_commit_file_projection(repo_id, commit_details_rev, &details.files);
@@ -363,6 +363,7 @@ impl DetailsPaneView {
         );
 
         let section_bounds = std::rc::Rc::clone(&self.commit_files_section_bounds_ref);
+        let pane = cx.weak_entity();
         div()
             .relative()
             .flex()
@@ -374,12 +375,17 @@ impl DetailsPaneView {
             .border_t_1()
             .border_color(theme.colors.stroke.default)
             .pt_2()
-            .on_children_prepainted(move |children_bounds, window, _app| {
+            .on_children_prepainted(move |children_bounds, _window, app| {
                 let next_bounds = children_bounds.first().copied();
                 let mut measured = section_bounds.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
-                    window.refresh();
+                    // Cached panes must be notified after prepaint: this
+                    // frame was drawn with the old bounds.
+                    let pane = pane.clone();
+                    app.defer(move |app| {
+                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                    });
                 }
             })
             .child(visible_bounds_probe())

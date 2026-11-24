@@ -895,10 +895,9 @@ fn status_cache_rev_changes_with_split_lane_revisions() {
 #[test]
 fn set_log_bumps_log_rev() {
     let mut repo = new_repo();
-    let before = (repo.log_rev, repo.history_state.log_rev);
+    let before = repo.history_state.log_rev;
     repo.set_log(Loadable::Loading);
-    assert_eq!(repo.log_rev, before.0 + 1);
-    assert_eq!(repo.history_state.log_rev, before.1 + 1);
+    assert_eq!(repo.history_state.log_rev, before + 1);
 }
 
 #[test]
@@ -937,22 +936,19 @@ fn retain_log_while_loading_keeps_ready_log_alive_until_next_log_state() {
 #[test]
 fn set_log_loading_more_bumps_log_rev() {
     let mut repo = new_repo();
-    let before = (repo.log_rev, repo.history_state.log_rev);
+    let before = repo.history_state.log_rev;
     repo.set_log_loading_more(true);
-    assert_eq!(repo.log_rev, before.0 + 1);
-    assert_eq!(repo.history_state.log_rev, before.1 + 1);
+    assert_eq!(repo.history_state.log_rev, before + 1);
     repo.set_log_loading_more(false);
-    assert_eq!(repo.log_rev, before.0 + 2);
-    assert_eq!(repo.history_state.log_rev, before.1 + 2);
+    assert_eq!(repo.history_state.log_rev, before + 2);
 }
 
 #[test]
 fn set_log_scope_bumps_log_rev() {
     let mut repo = new_repo();
-    let before = (repo.log_rev, repo.history_state.log_rev);
+    let before = repo.history_state.log_rev;
     repo.set_log_scope(LogScope::AllBranches);
-    assert_eq!(repo.log_rev, before.0 + 1);
-    assert_eq!(repo.history_state.log_rev, before.1 + 1);
+    assert_eq!(repo.history_state.log_rev, before + 1);
 }
 
 #[test]
@@ -1374,30 +1370,27 @@ fn set_status_skips_rev_bump_when_unchanged() {
 fn set_log_skips_rev_bump_when_unchanged() {
     let mut repo = new_repo();
     repo.set_log(Loadable::Loading);
-    let rev = (repo.log_rev, repo.history_state.log_rev);
+    let rev = repo.history_state.log_rev;
     repo.set_log(Loadable::Loading);
-    assert_eq!(repo.log_rev, rev.0);
-    assert_eq!(repo.history_state.log_rev, rev.1);
+    assert_eq!(repo.history_state.log_rev, rev);
 }
 
 #[test]
 fn set_log_loading_more_skips_rev_bump_when_unchanged() {
     let mut repo = new_repo();
     repo.set_log_loading_more(true);
-    let rev = (repo.log_rev, repo.history_state.log_rev);
+    let rev = repo.history_state.log_rev;
     repo.set_log_loading_more(true);
-    assert_eq!(repo.log_rev, rev.0);
-    assert_eq!(repo.history_state.log_rev, rev.1);
+    assert_eq!(repo.history_state.log_rev, rev);
 }
 
 #[test]
 fn set_log_scope_skips_rev_bump_when_unchanged() {
     let mut repo = new_repo();
     repo.set_log_scope(LogScope::AllBranches);
-    let rev = (repo.log_rev, repo.history_state.log_rev);
+    let rev = repo.history_state.log_rev;
     repo.set_log_scope(LogScope::AllBranches);
-    assert_eq!(repo.log_rev, rev.0);
-    assert_eq!(repo.history_state.log_rev, rev.1);
+    assert_eq!(repo.history_state.log_rev, rev);
 }
 
 // --- Isolation tests: one setter does not bump another's rev ---
@@ -1407,7 +1400,6 @@ fn setters_only_bump_their_own_rev_counter() {
     let mut repo = new_repo();
     let snap = (
         repo.status_rev,
-        repo.log_rev,
         repo.history_state.log_rev,
         repo.history_state.selected_commit_rev,
         repo.history_state.commit_details_rev,
@@ -1422,24 +1414,22 @@ fn setters_only_bump_their_own_rev_counter() {
 
     repo.set_status(Loadable::Loading);
     assert_eq!(repo.status_rev, snap.0 + 1);
-    assert_eq!(repo.log_rev, snap.1);
-    assert_eq!(repo.history_state.log_rev, snap.2);
-    assert_eq!(repo.history_state.selected_commit_rev, snap.3);
-    assert_eq!(repo.history_state.commit_details_rev, snap.4);
-    assert_eq!(repo.merge_message_rev, snap.5);
-    assert_eq!(repo.upstream_divergence_rev, snap.6);
-    assert_eq!(repo.open_rev, snap.7);
-    assert_eq!(repo.conflict_state.conflict_rev, snap.8);
-    assert_eq!(repo.diff_state.diff_target_rev, snap.9);
-    assert_eq!(repo.diff_state.diff_state_rev, snap.10);
-    assert_eq!(repo.ops_rev, snap.11);
+    assert_eq!(repo.history_state.log_rev, snap.1);
+    assert_eq!(repo.history_state.selected_commit_rev, snap.2);
+    assert_eq!(repo.history_state.commit_details_rev, snap.3);
+    assert_eq!(repo.merge_message_rev, snap.4);
+    assert_eq!(repo.upstream_divergence_rev, snap.5);
+    assert_eq!(repo.open_rev, snap.6);
+    assert_eq!(repo.conflict_state.conflict_rev, snap.7);
+    assert_eq!(repo.diff_state.diff_target_rev, snap.8);
+    assert_eq!(repo.diff_state.diff_state_rev, snap.9);
+    assert_eq!(repo.ops_rev, snap.10);
 }
 
 #[test]
 fn all_rev_counters_start_at_zero() {
     let repo = new_repo();
     assert_eq!(repo.status_rev, 0);
-    assert_eq!(repo.log_rev, 0);
     assert_eq!(repo.history_state.log_rev, 0);
     assert_eq!(repo.history_state.selected_commit_rev, 0);
     assert_eq!(repo.history_state.commit_details_rev, 0);

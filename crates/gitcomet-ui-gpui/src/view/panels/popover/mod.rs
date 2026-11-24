@@ -187,7 +187,6 @@ pub(in super::super) struct PopoverHost {
     main_pane: Entity<MainPaneView>,
     extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
-    theme: AppTheme,
     theme_mode: ThemeMode,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
@@ -213,7 +212,7 @@ pub(in super::super) struct PopoverHost {
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
     _prompt_input_subscriptions: Vec<gpui::Subscription>,
-    notify_fingerprint: u64,
+    notify_fingerprint: fingerprint::NotifyFingerprint,
     root_view: WeakEntity<GitCometView>,
     /// Mirror of the root view's mode, which is fixed for the window's lifetime.
     /// Held here because menu models are built while the root view's update
@@ -475,7 +474,6 @@ pub(in super::super) struct PopoverHost {
 type PinMenuEntries = std::rc::Rc<[(SharedString, SharedString)]>;
 
 pub(in crate::view) struct PopoverHostInit {
-    pub(in crate::view) theme: AppTheme,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) root_view_mode: GitCometViewMode,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,

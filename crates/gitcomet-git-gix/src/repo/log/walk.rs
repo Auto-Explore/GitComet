@@ -224,8 +224,12 @@ pub(super) fn new_log_paged_walk(
             .ok()
             .flatten();
         // The cached topology follows every parent, so it serves only walks
-        // that do.
-        let built = if commit_graph.is_none() && !first_parent {
+        // that do. With a commit-graph the lazy walk below starts at once,
+        // unless tips lie far apart.
+        let whole = commit_graph
+            .as_ref()
+            .is_none_or(|graph| tips_lie_far_apart(graph, &tips));
+        let built = if whole && !first_parent {
             TopologyWalk::new(repo, &tips, &walk_cancellation, topology_cache)
                 .map(super::LogPagedWalk::CachedDateOrder)
         } else {
@@ -288,6 +292,93 @@ pub(super) fn new_log_paged_walk(
         walk,
         cancellation: walk_cancellation,
     })
+}
+
+/// The depth between tips, in commits, beyond which a page is not walked
+/// lazily, and that depth as a share of the deepest tip's own.
+const FAR_APART_COMMITS: u32 = 4_096;
+const FAR_APART_SHARE: u32 = 8;
+
+/// Whether the lazy walk would start slowly from `tips`. Before its first
+/// commit it counts the children of every commit above the lowest tip, a
+/// microsecond each: 1.85 s on Chromium from nine branches, one of them old,
+/// where ordering the whole graph takes a tenth of that. A commit's
+/// generation in the graph is its depth; a tip newer than the graph lies
+/// above all of it and does not lower the lowest.
+fn tips_lie_far_apart(graph: &gix::commitgraph::Graph, tips: &[gix::ObjectId]) -> bool {
+    let generations = tips
+        .iter()
+        .filter_map(|tip| Some(graph.commit_by_id(tip)?.generation()));
+    generations_lie_far_apart(generations)
+}
+
+pub(super) fn generations_lie_far_apart(generations: impl Iterator<Item = u32>) -> bool {
+    let Some((lowest, highest)) = generations.fold(None, |range, generation| {
+        let (lowest, highest) = range.unwrap_or((generation, generation));
+        Some((lowest.min(generation), highest.max(generation)))
+    }) else {
+        return false;
+    };
+    let apart = highest - lowest;
+    apart > FAR_APART_COMMITS && apart > highest / FAR_APART_SHARE
+}
+
+/// A walk for a caller that reads every commit, as an index build does. With
+/// a commit-graph the paged walk is lazy, which serves a first page at once
+/// but costs far more per commit than ordering the graph's tables in one
+/// pass. Both give the same order.
+pub(super) fn new_whole_history_walk(
+    repo: &gix::ThreadSafeRepository,
+    tips: &[gix::ObjectId],
+    mode: HistoryMode,
+    shallow: &super::ShallowSnapshot,
+    cancellation: &CancellationToken,
+    topology_cache: (&TopologyCache, u64),
+) -> Result<super::LogPagedWalkState> {
+    if mode != HistoryMode::FirstParent && !shallow.is_shallow() {
+        let walk_cancellation = LogWalkCancellation::new(Some(cancellation));
+        // Where the paged walk builds this topology too, it is shared
+        // through the cache; otherwise it is this walk's alone.
+        let shared = repo
+            .to_thread_local()
+            .commit_graph_if_enabled()
+            .ok()
+            .flatten()
+            .is_none_or(|graph| tips_lie_far_apart(&graph, tips));
+        let cache = shared.then_some(topology_cache);
+        let state = |walk| super::LogPagedWalkState {
+            pending: std::collections::VecDeque::new(),
+            walk,
+            cancellation: walk_cancellation.clone(),
+        };
+        match TopologyWalk::new(repo, tips, &walk_cancellation, cache) {
+            Ok(walk) => return Ok(state(super::LogPagedWalk::CachedDateOrder(walk))),
+            // The paged walk would build this same topology again; take its
+            // fallback here instead.
+            Err(error) if shared => {
+                cancellation.check_cancelled()?;
+                if !topo_build_error_is_missing_object(&error) {
+                    return Err(crate::repo::object_store::gix_error(
+                        "gix date-order walk",
+                        error,
+                    ));
+                }
+                let filter = log_paged_walk_filter(repo, shallow);
+                let parents = gix::traverse::commit::Parents::All;
+                return Ok(state(new_commit_time_walk(repo, tips, parents, filter)?));
+            }
+            Err(_) => cancellation.check_cancelled()?,
+        }
+    }
+    new_log_paged_walk(
+        repo,
+        tips.iter().copied(),
+        mode,
+        shallow,
+        Some(cancellation),
+        None,
+        Some(topology_cache),
+    )
 }
 
 /// A first-parent walk from several tips that puts every commit after all of
@@ -576,6 +667,13 @@ impl DecodeThreadBudget {
                 Err(observed) => in_use = observed,
             }
         }
+    }
+}
+
+impl DecodeThreadBudget {
+    /// Threads the claimant may start beside its own.
+    pub(crate) fn helpers(&self) -> usize {
+        self.0
     }
 }
 

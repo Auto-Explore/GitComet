@@ -6,7 +6,7 @@ pub(super) fn panel(
     onto: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
 
     // Name the branch being moved rather than the opaque "HEAD".
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);

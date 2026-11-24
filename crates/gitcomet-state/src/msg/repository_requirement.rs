@@ -102,11 +102,6 @@ impl Msg {
             | Self::RepoExternallyChanged { repo_id, .. }
             | Self::RepoWatchDegraded { repo_id, .. }
             | Self::UpdateRepositoryPreference { repo_id, .. }
-            | Self::SetHistoryScope { repo_id, .. }
-            | Self::SetHistoryAuthorFilter { repo_id, .. }
-            | Self::SetHistoryFocus { repo_id, .. }
-            | Self::ToggleHistoryFocus { repo_id, .. }
-            | Self::FocusHistoryRefs { repo_id, .. }
             | Self::LoadMoreHistory { repo_id, .. }
             | Self::SelectCommit { repo_id, .. }
             | Self::SelectCommitMulti { repo_id, .. }
@@ -195,6 +190,7 @@ impl Msg {
             | Self::SetRemoteUrl { repo_id, .. }
             | Self::RecordConflictAutosolveTelemetry { repo_id, .. }
             | Self::ConflictSetHideResolved { repo_id, .. } => Some((*repo_id, Repository)),
+            Self::HistoryFilter(message) => Some((message.repo_id(), Repository)),
             Self::CompareWithOptions { repo_id, to, .. } => Some((
                 *repo_id,
                 if to.is_some() {

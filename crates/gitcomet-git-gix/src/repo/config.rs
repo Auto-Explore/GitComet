@@ -7,14 +7,20 @@ use std::sync::Arc;
 
 pub(super) struct ConfigRepo {
     repo: Arc<gix::ThreadSafeRepository>,
-    inputs: Vec<(PathBuf, std::io::Result<ConfigStamp>)>,
+    inputs: ConfigInputs,
+}
+
+/// Every file a config load read or looked for, and the branch its `onbranch`
+/// conditions were tested against.
+pub(super) struct ConfigInputs {
+    files: Vec<(PathBuf, std::io::Result<ConfigStamp>)>,
     branch: Option<Option<Vec<u8>>>,
 }
 
 /// Config freshness needs metadata, not another read of every input. Include
 /// file identity and change time on Unix to catch replacements/backdated edits.
-#[derive(Debug, PartialEq, Eq)]
-struct ConfigStamp {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConfigStamp {
     len: u64,
     modified: std::time::SystemTime,
     #[cfg(unix)]
@@ -22,7 +28,7 @@ struct ConfigStamp {
 }
 
 impl ConfigStamp {
-    fn read(path: &Path) -> std::io::Result<Self> {
+    pub(super) fn read(path: &Path) -> std::io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
@@ -44,8 +50,8 @@ fn symbolic_head(repo: &gix::Repository) -> Result<Option<Vec<u8>>> {
     Ok(crate::refs::head_name(repo)?.map(|name| name.as_bstr().to_vec()))
 }
 
-impl ConfigRepo {
-    pub(super) fn new(repo: gix::Repository) -> Self {
+impl ConfigInputs {
+    pub(super) fn read(repo: &gix::Repository) -> Self {
         let mut paths = vec![
             repo.common_dir().join("config"),
             repo.git_dir().join("config.worktree"),
@@ -95,18 +101,39 @@ impl ConfigRepo {
         }
         paths.sort();
         paths.dedup();
-        let inputs = paths
+        let files = paths
             .into_iter()
             .map(|path| {
                 let stamp = ConfigStamp::read(&path);
                 (path, stamp)
             })
             .collect();
-        let branch = depends_on_branch.then(|| symbolic_head(&repo).ok().flatten());
+        let branch = depends_on_branch.then(|| symbolic_head(repo).ok().flatten());
+        Self { files, branch }
+    }
+
+    /// Whether loading `repo`'s config again would read the same inputs.
+    pub(super) fn is_current(&self, repo: &gix::ThreadSafeRepository) -> bool {
+        self.branch.as_ref().is_none_or(|previous| {
+            symbolic_head(&repo.to_thread_local()).is_ok_and(|name| name == *previous)
+        }) && self.files.iter().all(
+            |(path, previous)| match (previous, ConfigStamp::read(path)) {
+                (Ok(previous), Ok(current)) => *previous == current,
+                (Err(previous), Err(current)) => {
+                    previous.kind() == std::io::ErrorKind::NotFound
+                        && current.kind() == std::io::ErrorKind::NotFound
+                }
+                _ => false,
+            },
+        )
+    }
+}
+
+impl ConfigRepo {
+    pub(super) fn new(repo: gix::Repository) -> Self {
         Self {
+            inputs: ConfigInputs::read(&repo),
             repo: Arc::new(repo.into_sync()),
-            inputs,
-            branch,
         }
     }
 
@@ -118,18 +145,7 @@ impl ConfigRepo {
     }
 
     fn is_current(&self) -> bool {
-        self.branch.as_ref().is_none_or(|previous| {
-            symbolic_head(&self.repo.to_thread_local()).is_ok_and(|name| name == *previous)
-        }) && self.inputs.iter().all(
-            |(path, previous)| match (previous, ConfigStamp::read(path)) {
-                (Ok(previous), Ok(current)) => *previous == current,
-                (Err(previous), Err(current)) => {
-                    previous.kind() == std::io::ErrorKind::NotFound
-                        && current.kind() == std::io::ErrorKind::NotFound
-                }
-                _ => false,
-            },
-        )
+        self.inputs.is_current(&self.repo)
     }
 }
 

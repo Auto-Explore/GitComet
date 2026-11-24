@@ -22,7 +22,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
             let mut source = StreamedFileDiffSource::new(plan,
                 IndexedFileDiffSource::from_shared(Some(&Arc::from(old))), IndexedFileDiffSource::from_shared(Some(&Arc::from(new))), DiffWhitespaceMode::Show);
-            source.apply_structural(diff);
+            apply_structural(&mut source, diff);
             let source = Arc::new(source);
             pane.file_diff_row_provider = Some(Arc::new(PagedFileDiffRows::new(source.clone(), 10)));
             pane.file_diff_inline_row_provider = Some(Arc::new(PagedFileDiffInlineRows::new(source, 10)));
@@ -181,7 +181,7 @@ fn structural_line_keys_follow_the_last_right_click(cx: &mut gpui::TestAppContex
                     IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
                     DiffWhitespaceMode::Show,
                 );
-                source.apply_structural(diff);
+                apply_structural(&mut source, diff);
                 let source = Arc::new(source);
                 pane.file_diff_row_provider =
                     Some(Arc::new(PagedFileDiffRows::new(source.clone(), 10)));
@@ -290,7 +290,7 @@ fn identical_text_with_structural_novelty_has_two_inline_sides() {
     let source = IndexedFileDiffSource::from_shared(Some(&Arc::from(text)));
     let mut source =
         StreamedFileDiffSource::new(plan, source.clone(), source, DiffWhitespaceMode::Show);
-    source.apply_structural(diff);
+    apply_structural(&mut source, diff);
     assert_eq!(source.inline_len(), 2);
     assert_eq!(source.inline_visual_kind(0), Some(DiffLineKind::Remove));
     assert_eq!(source.inline_visual_kind(1), Some(DiffLineKind::Add));
@@ -317,7 +317,7 @@ fn a_line_changed_on_one_side_is_one_row_showing_that_side() {
         IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
         DiffWhitespaceMode::Show,
     );
-    source.apply_structural(diff);
+    apply_structural(&mut source, diff);
     let source = Arc::new(source);
     let split = PagedFileDiffRows::new(source.clone(), 10);
     let inline = PagedFileDiffInlineRows::new(source, 10);
@@ -367,6 +367,82 @@ fn a_line_changed_on_one_side_is_one_row_showing_that_side() {
     );
     assert_eq!(split.change_blocks(), vec![1..4]);
     assert_eq!(inline.change_blocks(), vec![1..5]);
+}
+
+/// Applies `diff` with the inline-row maps of `source`'s own plan.
+fn apply_structural(source: &mut StreamedFileDiffSource, diff: StructuralDiff) {
+    let (old_inline, new_inline) = super::super::plan_line_to_inline_row_maps(
+        &source.plan,
+        source.old_source.line_count(),
+        source.new_source.line_count(),
+    );
+    source.apply_structural(diff, &old_inline, &new_inline);
+}
+
+/// The builder already has the inline-row maps: a structural result must not
+/// build them a second time.
+#[test]
+fn a_structural_build_makes_its_inline_row_maps_once() {
+    use super::super::INLINE_ROW_MAP_BUILDS;
+
+    let file = FileDiffText::new_shared(
+        "app.js".into(),
+        Some(Arc::from("call(a, b);\nkeep();\n")),
+        Some(Arc::from("call(a, c);\nkeep();\n")),
+    );
+    INLINE_ROW_MAP_BUILDS.with(|builds| builds.set(0));
+
+    let rebuild = super::super::build_file_diff_cache_with_engine(
+        &file,
+        std::path::Path::new("/repo"),
+        None,
+        DiffWhitespaceMode::Show,
+        DiffEngine::Difftastic,
+        &CancellationToken::new(),
+    )
+    .expect("difftastic build");
+
+    assert!(matches!(
+        rebuild.engine_status,
+        DiffEngineStatus::Difftastic { .. }
+    ));
+    assert_eq!(INLINE_ROW_MAP_BUILDS.with(|builds| builds.get()), 1);
+}
+
+/// A side already in memory is the text that was compared: indexing and
+/// copying it again after the comparison is the same work twice.
+#[test]
+fn a_structural_comparison_keeps_the_sides_it_was_given() {
+    let texts: [Arc<str>; 2] = [
+        Arc::from("call(a, b);\nkeep();\n"),
+        Arc::from("call(a, c);\nkeep();\n"),
+    ];
+    let file = FileDiffText::new_shared(
+        "app.js".into(),
+        Some(texts[0].clone()),
+        Some(texts[1].clone()),
+    );
+    let mut old = IndexedFileDiffSource::from_shared(Some(&texts[0]));
+    let mut new = IndexedFileDiffSource::from_shared(Some(&texts[1]));
+    let indexes = [old.line_starts.clone(), new.line_starts.clone()];
+
+    let comparison = compare(
+        &file,
+        &mut old,
+        &mut new,
+        DiffEngine::Difftastic,
+        &CancellationToken::new(),
+    )
+    .expect("comparison");
+
+    assert!(comparison.diff.is_some());
+    for ((source, text), index) in [&old, &new].into_iter().zip(&texts).zip(&indexes) {
+        assert!(Arc::ptr_eq(&source.line_starts, index), "index rebuilt");
+        assert!(
+            matches!(&source.content, super::super::IndexedFileDiffContent::Shared(kept) if Arc::ptr_eq(kept, text)),
+            "text copied"
+        );
+    }
 }
 
 #[test]
@@ -421,7 +497,7 @@ fn a_final_newline_change_draws_the_last_line_once() {
         IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
         DiffWhitespaceMode::Show,
     );
-    source.apply_structural(diff);
+    apply_structural(&mut source, diff);
     let rows: Vec<_> = (0..source.inline_len())
         .map(|row| {
             (
@@ -499,7 +575,7 @@ fn show_structural_rows(pane: &mut DiffRenderer, old: &str, new: &str, diff: Str
         IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
         DiffWhitespaceMode::Show,
     );
-    source.apply_structural(diff);
+    apply_structural(&mut source, diff);
     let source = Arc::new(source);
     pane.diff_visible_indices = (0..source.split_len().max(source.inline_len())).collect();
     pane.file_diff_row_provider = Some(Arc::new(PagedFileDiffRows::new(source.clone(), 10)));

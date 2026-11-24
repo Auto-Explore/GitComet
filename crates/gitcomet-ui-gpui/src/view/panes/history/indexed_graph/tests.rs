@@ -150,3 +150,146 @@ fn checkpoint_windows_match_continuous_graph_and_attribution() {
         assert_eq!(graph.checkpoints.len(), count.div_ceil(CHECKPOINT_STRIDE));
     }
 }
+
+/// A history of mostly plain rows among merges, roots, branch heads and
+/// stashes, whose second parents the graph hides.
+fn mixed_history(count: usize, width: usize, seed: u64) -> HistoryIndexHandle {
+    let mut random = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut below = |limit: usize| {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        (random >> 11) as usize % limit
+    };
+    let mut builder =
+        HistoryIndexBuilder::new(HistorySnapshot("mixed".into()), LogScope::AllBranches, 20)
+            .unwrap();
+    for row in 0..count {
+        let stash = row % 97 == 5 && row + 3 < count;
+        let mut parents: Vec<usize> = Vec::new();
+        if stash {
+            parents.extend([row + 3, row + 1]);
+        } else if row % 97 == 6 && row + 2 < count {
+            parents.push(row + 2);
+        } else {
+            let wanted = match below(20) {
+                0 => 0,
+                1 | 2 => 2,
+                3 => 3,
+                _ => 1,
+            };
+            for _ in 0..wanted {
+                let parent = row + 1 + below(width);
+                if parent < count && !parents.contains(&parent) {
+                    parents.push(parent);
+                }
+            }
+        }
+        let parents: Vec<_> = parents.into_iter().map(raw).collect();
+        builder
+            .push(&raw(row), parents.iter().map(|id| id.as_slice()), stash)
+            .unwrap();
+    }
+    builder.finish(&CancellationToken::new()).unwrap()
+}
+
+#[test]
+fn plain_rows_build_the_graph_the_general_path_builds() {
+    use crate::view::history_graph::PLAIN_STEPS_OFF;
+    let cancel = CancellationToken::new();
+    let id = |row: usize| CommitId(gitcomet_core::hex::encode(&raw(row)).into());
+    let branch = |name: &str, row: usize| Branch {
+        name: name.into(),
+        target: id(row),
+        upstream: None,
+        divergence: None,
+    };
+    for (seed, width) in [(1, 1), (2, 3), (3, 12), (4, 60)] {
+        let count = 5_000;
+        let index = mixed_history(count, width, seed);
+        let branches = [
+            branch("main", 0),
+            branch("feature", 40),
+            branch("topic", 1_500),
+        ];
+        // Everything a graph keeps and shows, built with or without the
+        // plain steps.
+        let shown = |general_only: bool| {
+            PLAIN_STEPS_OFF.set(general_only);
+            let graph = IndexedGraph::build(
+                index.clone(),
+                &branches,
+                &[],
+                &[],
+                Some("main"),
+                Some(id(0).as_ref()),
+                &cancel,
+            )
+            .unwrap();
+            let windows: Vec<_> = [0, 700, 1_023, 1_024, 2_500, 4_900]
+                .into_iter()
+                .map(|start| {
+                    let window = graph.window(start..start + 90, &cancel).unwrap();
+                    (window.rows.to_vec(), window.labels.to_vec())
+                })
+                .collect();
+            // Labels alone, over rows a first window already painted: a
+            // rebuild with a branch renamed keeps the lanes' geometry.
+            let renamed = [
+                branch("main", 0),
+                branch("feature", 40),
+                branch("renamed", 1_500),
+            ];
+            let reused = IndexedGraph::build_reusing(
+                index.clone(),
+                &renamed,
+                &[],
+                &[],
+                Some("main"),
+                Some(id(0).as_ref()),
+                &cancel,
+                Some(&graph),
+            )
+            .unwrap();
+            let capture = gitcomet_core::history_perf::capture();
+            let again = reused
+                .window(4_900..4_990, &cancel)
+                .unwrap()
+                .labels
+                .to_vec();
+            let painted =
+                gitcomet_core::history_perf::count(gitcomet_core::history_perf::Work::PaintRow);
+            drop(capture);
+            assert_eq!(painted, 0, "the labels alone are worked out");
+            PLAIN_STEPS_OFF.set(false);
+            let spans: Vec<Vec<_>> = graph
+                .lane_spans
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|span| (span.first, span.last, span.color))
+                        .collect()
+                })
+                .collect();
+            let checkpoints = format!("{:?}", graph.checkpoints);
+            (graph, (checkpoints, spans, windows, again))
+        };
+        let (graph, plain) = shown(false);
+        let (_, general) = shown(true);
+        assert!(plain == general, "seed={seed} width={width}");
+
+        // The plain steps are what built a good part of it.
+        let mut state = graph.checkpoints[1].restore();
+        let taken = (1_024..2_048)
+            .filter(|&row| {
+                let plain = graph.plain_step(row, &mut state).is_some();
+                if !plain {
+                    graph.step(row, &mut state, false);
+                }
+                plain
+            })
+            .count();
+        assert!(taken > 250, "seed={seed} width={width}: {taken}");
+    }
+}

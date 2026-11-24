@@ -349,7 +349,7 @@ fn row(
     scale: ui_scale::UiScale,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let p = crate::ui_scale::scaler(scale);
     let keys = entry.keys.iter().enumerate().flat_map(|(index, key)| {
         let separator = (index > 0).then(|| {
@@ -479,7 +479,7 @@ pub(super) fn panel(
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let scale = popover_ui_scale(cx);
     let p = crate::ui_scale::scaler(scale);
     let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;

@@ -173,7 +173,7 @@ impl PaneStore {
         self.store.upgrade().map(|store| store.snapshot())
     }
 
-    pub fn dispatch(&self, msg: Msg) {
+    pub fn dispatch(&self, msg: impl Into<Msg>) {
         if self.read_only {
             return;
         }
@@ -206,7 +206,7 @@ impl PaneStore {
             Some(path) if target.worktree().is_none() => target.in_worktree(path.clone()),
             _ => target,
         };
-        let session = match msg {
+        let session = match msg.into() {
             Msg::SelectDiff {
                 repo_id: id,
                 target,

@@ -65,8 +65,8 @@ fn mount(
     );
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.head_branch_rev = 1;
-    repo.log = Loadable::Ready(page.clone());
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page.clone());
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     repo.navigation.comparison_mark = mark;

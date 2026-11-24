@@ -122,8 +122,8 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
     repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
-    repo.log = Loadable::Ready(Arc::clone(&page));
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
     let state = Arc::new(AppState {

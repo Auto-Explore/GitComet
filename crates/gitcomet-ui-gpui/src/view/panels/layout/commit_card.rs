@@ -151,7 +151,7 @@ impl DetailsPaneView {
         current: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let body_enabled = current || matches!(chip, ShaChip::Commit { .. });
         let ui_scale = self.ui_scale();
         let menu_id = chip.menu_id();
@@ -227,7 +227,7 @@ impl DetailsPaneView {
         menu: ChipMenu,
         cx: &mut gpui::Context<Self>,
     ) -> Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let ChipMenu {
             invoker,
@@ -343,7 +343,7 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Div {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let secondary = theme.colors.foreground.secondary;
         let (icon, label_color) = match &pill.kind {
@@ -465,7 +465,7 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale = self.ui_scale();
         let parent = details.parent_ids.first().cloned();
         let date = self.commit_details_date_display(details);

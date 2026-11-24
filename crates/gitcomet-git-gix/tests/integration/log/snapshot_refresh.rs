@@ -695,6 +695,27 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
         ],
     );
     let merge = git_stdout(dir.path(), &["rev-parse", "HEAD"]);
+    // Two one-commit branches merged at once: the second parent is a commit
+    // on the first alone, as a stash's index is, but the third is no root.
+    for branch in ["one", "two"] {
+        run_git(dir.path(), &["checkout", "-q", "-b", branch, "master"]);
+        run_git(dir.path(), &["commit", "--allow-empty", "-qm", branch]);
+    }
+    run_git(dir.path(), &["checkout", "-q", "master"]);
+    run_git(
+        dir.path(),
+        &[
+            "merge",
+            "--no-ff",
+            "-qm",
+            "On master: misleading octopus",
+            "one",
+            "two",
+        ],
+    );
+    let octopus = git_stdout(dir.path(), &["rev-list", "--parents", "-1", "HEAD"]);
+    assert_eq!(octopus.split_whitespace().count(), 4, "{octopus}");
+    let octopus = octopus.split_whitespace().next().unwrap().to_owned();
     std::fs::write(dir.path().join("file.txt"), "changed tracked content").unwrap();
     std::fs::write(dir.path().join("untracked.txt"), "untracked content").unwrap();
     run_git(dir.path(), &["stash", "push", "-u", "-qm", "real stash"]);
@@ -705,6 +726,7 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
         }
         let repo = GixBackend.open(dir.path()).unwrap();
         for author in [None, Some("Alice")] {
+            let _capture = gitcomet_core::history_perf::capture();
             let index = repo
                 .build_history_index(
                     &HistoryMode::AllBranches.into(),
@@ -715,12 +737,27 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
                 )
                 .unwrap()
                 .unwrap();
-            assert_eq!(
-                index.is_probable_stash(index.position(merge.trim()).unwrap()),
-                !graph,
+            // The walk passes the merged branch's tip, which is no commit on
+            // the first parent alone: no stash, whatever the message says.
+            assert!(
+                !index.is_probable_stash(index.position(merge.trim()).unwrap()),
+                "graph={graph} author={author:?}"
+            );
+            assert!(
+                !index.is_probable_stash(index.position(&octopus).unwrap()),
                 "graph={graph} author={author:?}"
             );
             assert!(index.is_probable_stash(index.position(stash.trim()).unwrap()));
+            // Only the stash has a message worth reading.
+            if author.is_none() {
+                assert_eq!(
+                    gitcomet_core::history_perf::count(
+                        gitcomet_core::history_perf::Work::IndexObjectRead
+                    ),
+                    1,
+                    "graph={graph}"
+                );
+            }
         }
     }
 }

@@ -202,7 +202,7 @@ impl PopoverHost {
     }
 
     /// Track the global theme preference, which `schedule_ui_settings_persist`
-    /// writes back. The visual theme arrives separately through `set_theme`.
+    /// writes back. The visual theme is the window's, read when a popover draws.
     pub(in crate::view) fn sync_global_theme_mode(&mut self, next: ThemeMode) {
         self.theme_mode = next;
     }

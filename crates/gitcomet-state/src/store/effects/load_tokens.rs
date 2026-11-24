@@ -114,7 +114,7 @@ pub(super) fn load_log(
             return;
         }
         let snapshot = repo.and_then(|repo| repo.history_state.log_snapshot.clone());
-        match (cursor.as_ref(), repo.map(|repo| &repo.log)) {
+        match (cursor.as_ref(), repo.map(|repo| &repo.history_state.log)) {
             (None, Some(Loadable::Ready(previous))) => HistoryReadRequest::Refresh {
                 previous: Arc::clone(previous),
                 snapshot,

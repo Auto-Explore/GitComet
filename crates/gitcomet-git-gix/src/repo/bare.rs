@@ -81,7 +81,7 @@ impl GixRepo {
     }
 
     pub(crate) fn release_conversion_store(&self) -> Result<()> {
-        let fresh = self.reopen_repo()?.into_sync();
+        let fresh = self.reopen_repo_apart()?.into_sync();
         let common = self.shared_store().common.clone();
         common.invalidate();
         let mut fresh = fresh;

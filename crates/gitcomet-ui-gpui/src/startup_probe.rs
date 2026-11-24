@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reads /proc for the opt-in startup probe"
+)]
+
 use gitcomet_state::model::{AppState, Loadable};
 use serde_json::{Map, Value, json};
 use std::env;
@@ -215,7 +220,7 @@ fn active_repo_ready(state: &AppState) -> bool {
         Some(repo.id) == state.active_repo
             && matches!(repo.open, Loadable::Ready(()))
             && matches!(repo.status, Loadable::Ready(_))
-            && matches!(repo.log, Loadable::Ready(_))
+            && matches!(repo.history_state.log, Loadable::Ready(_))
             && !repo.loads_in_flight.any_foreground_in_flight()
             && repo.local_actions_in_flight == 0
             && repo.pull_in_flight == 0
@@ -390,7 +395,7 @@ mod tests {
         );
         state.repos[0].status = Loadable::Ready(Default::default());
         assert!(!active_repo_ready(&state), "history is still missing");
-        state.repos[0].log = Loadable::Ready(
+        state.repos[0].history_state.log = Loadable::Ready(
             gitcomet_core::domain::LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
@@ -418,7 +423,7 @@ mod tests {
         repo.open = Loadable::Ready(());
         repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.status = Loadable::Ready(Default::default());
-        repo.log = Loadable::Ready(
+        repo.history_state.log = Loadable::Ready(
             gitcomet_core::domain::LogPage {
                 commits: Vec::new(),
                 next_cursor: None,

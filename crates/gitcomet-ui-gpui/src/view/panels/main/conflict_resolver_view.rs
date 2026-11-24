@@ -97,6 +97,26 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
     gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
 }
 
+/// Puts the output editor where the gutter's deferred scroll landed. The
+/// editor was laid out at its old offset, so its pane is drawn once more.
+fn mirror_output_gutter_scroll(
+    gutter: &gpui::UniformListScrollHandle,
+    editor: &gpui::ScrollHandle,
+    pane: &gpui::WeakEntity<DiffRenderer>,
+    app: &mut gpui::App,
+) {
+    let gutter_y = gutter.0.borrow().base_handle.offset().y;
+    let offset = editor.offset();
+    let target_y = conflict_output_post_layout_scroll_y(gutter_y, editor.max_offset().y);
+    if offset.y != target_y {
+        editor.set_offset(point(offset.x, target_y));
+        let pane = pane.clone();
+        app.defer(move |app| {
+            let _ = pane.update(app, |_pane, cx| cx.notify());
+        });
+    }
+}
+
 impl DiffRenderer {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
     /// decision-only): resolved counts. File navigation is in the bottom bar.
@@ -2066,46 +2086,26 @@ impl DiffRenderer {
                                                     let output_editor_scroll =
                                                         self.conflict_resolved_output_editor_scroll
                                                             .clone();
+                                                    let pane = cx.weak_entity();
                                                     div()
                                                         // `scroll_to_item_strict` is consumed by the
                                                         // virtualized gutter during prepaint, after the
                                                         // normal gutter/editor synchronizer has already
                                                         // run for this frame. Mirror that newly-applied
-                                                        // offset immediately and request the follow-up
-                                                        // paint, so conflict navigation updates the
-                                                        // editable output without waiting for incidental
-                                                        // input (for example, mouse movement).
+                                                        // offset here, and draw it on the next frame:
+                                                        // the editor was laid out at the old one.
                                                         .when(
                                                             !streamed
                                                                 && mirror_deferred_output_scroll,
                                                             move |d| {
                                                             d.on_children_prepainted(
-                                                                move |_bounds, window, _cx| {
-                                                                    let gutter_y =
-                                                                        output_gutter_scroll
-                                                                            .0
-                                                                            .borrow()
-                                                                            .base_handle
-                                                                            .offset()
-                                                                            .y;
-                                                                    let editor_offset =
-                                                                        output_editor_scroll.offset();
-                                                                    let target_y =
-                                                                        conflict_output_post_layout_scroll_y(
-                                                                            gutter_y,
-                                                                            output_editor_scroll
-                                                                                .max_offset()
-                                                                                .y,
-                                                                        );
-                                                                    if editor_offset.y != target_y {
-                                                                        output_editor_scroll.set_offset(
-                                                                            point(
-                                                                                editor_offset.x,
-                                                                                target_y,
-                                                                            ),
-                                                                        );
-                                                                        window.refresh();
-                                                                    }
+                                                                move |_bounds, _window, app| {
+                                                                    mirror_output_gutter_scroll(
+                                                                        &output_gutter_scroll,
+                                                                        &output_editor_scroll,
+                                                                        &pane,
+                                                                        app,
+                                                                    )
                                                                 },
                                                             )
                                                             },

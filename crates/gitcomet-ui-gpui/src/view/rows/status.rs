@@ -423,7 +423,7 @@ fn render_status_rows_for_section(
         .into_iter()
         .flat_map(|locks| locks.iter().map(|lock| lock.path.as_path()))
         .collect();
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = this.ui_scale();
     let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
     // Leaf names have no shared prefix to align, and a row that reported into

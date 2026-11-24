@@ -67,7 +67,7 @@ impl HistoryView {
         let show_graph_color_marker =
             history_scope_shows_graph_color_marker(repo.history_state.history_scope);
 
-        let theme = this.theme;
+        let theme = AppTheme::current(cx);
         let graph_fade_opacity = if this.history_show_graph_gradient {
             theme.graph_fade_opacity
         } else {
@@ -334,6 +334,7 @@ impl HistoryView {
         row_top: Option<Pixels>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let theme = AppTheme::current(cx);
         let height = history_row_height(self.ui_scale());
         let Some(shown) = self.indexed.presentation.as_ref() else {
             return place_history_row(div().h(height), row_top).into_any_element();
@@ -360,7 +361,7 @@ impl HistoryView {
                 .loading
                 .skeleton_visible(list_ix, cx.background_executor().now())
             {
-                self.history_skeleton_row(list_ix, row_top)
+                self.history_skeleton_row(list_ix, row_top, cx)
                     .into_any_element()
             } else {
                 place_history_row(
@@ -378,11 +379,11 @@ impl HistoryView {
             .flex()
             .items_center()
             .px_3()
-            .text_color(self.theme.colors.foreground.secondary)
+            .text_color(theme.colors.foreground.secondary)
             .child("Could not load commits. Click to retry.")
             .when(failed, |row| {
                 row.control_interaction(
-                    controls::InteractionStyle::new(self.theme),
+                    controls::InteractionStyle::new(theme),
                     controls::InteractionState::default(),
                 )
                 .on_activate(
@@ -400,7 +401,9 @@ impl HistoryView {
         &self,
         list_ix: usize,
         row_top: Option<Pixels>,
+        cx: &App,
     ) -> AnyElement {
+        let theme = AppTheme::current(cx);
         let scale = self.ui_scale();
         let (graph, author, date, sha) = self.history_visible_columns();
         let pad = scale.px(HISTORY_COL_HANDLE_PX / 2.0);
@@ -410,7 +413,7 @@ impl HistoryView {
             }),
         ));
         let bar = |width: Pixels| {
-            components::skeleton(self.theme)
+            components::skeleton(theme)
                 .h(scale.px(8.0))
                 .w(width)
                 .max_w_full()

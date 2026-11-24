@@ -509,7 +509,7 @@ pub(super) fn activate(
 }
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -720,7 +720,7 @@ fn branch_picker_status_panel(
     empty_text: impl Into<SharedString>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 

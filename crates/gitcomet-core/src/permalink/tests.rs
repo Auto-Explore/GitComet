@@ -51,7 +51,7 @@ fn remote_branch(remote: &str, name: &str) -> RemoteBranch {
     RemoteBranch {
         remote: remote.to_string(),
         name: name.to_string(),
-        target: gitcomet_core::domain::CommitId("abc123".into()),
+        target: crate::domain::CommitId("abc123".into()),
     }
 }
 

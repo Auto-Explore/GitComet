@@ -531,3 +531,183 @@ fn alternate_source_changes_invalidate_the_object_interpretation() {
     assert!(!Arc::ptr_eq(&indexes[0], &indexes[1]));
     assert_eq!(indexes[0].len(), indexes[1].len());
 }
+
+/// An index whose first block is decoded, so the range reader is open.
+fn warm_index(repo: &dyn GitRepository) -> HistoryIndexHandle {
+    let index = index(repo, HistoryMode::FullReachable, None);
+    repo.read_history_range_shared(&index, 0..256, &CancellationToken::new())
+        .unwrap();
+    index
+}
+
+#[test]
+fn a_range_read_reuses_the_repository_while_its_inputs_are_unchanged() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let index = warm_index(&*repo);
+    let cancel = CancellationToken::new();
+    let _capture = capture();
+    let block = repo
+        .read_history_range_shared(&index, 256..512, &cancel)
+        .unwrap();
+    assert_eq!(block.commits.len(), 256);
+    assert_eq!(
+        count(Work::RepositoryReopen),
+        0,
+        "an undecoded block of an unchanged repository"
+    );
+    repo.read_history_range(&index, 512..768, &cancel).unwrap();
+    assert_eq!(count(Work::RepositoryReopen), 0, "an unshared range read");
+}
+
+#[test]
+fn history_reads_reuse_the_repository_and_still_see_moved_refs() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let all = HistoryMode::AllBranches;
+    let built = index(&*repo, all, None);
+    let _capture = capture();
+    assert!(Arc::ptr_eq(&built, &index(&*repo, all, None)));
+    assert_eq!(page_snapshot(&*repo), built.snapshot);
+    let authors = repo
+        .history_authors(&all.into(), &Default::default(), &CancellationToken::new())
+        .unwrap();
+    assert_eq!(&*authors[0], "You");
+    assert_eq!(
+        count(Work::RepositoryReopen),
+        0,
+        "an index, a page and the authors of an unchanged repository"
+    );
+    run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~100"]);
+    assert_eq!(index(&*repo, all, None).len(), 3996);
+    assert_ne!(page_snapshot(&*repo), built.snapshot);
+    assert_eq!(count(Work::RepositoryReopen), 0, "a moved branch");
+}
+
+/// Push-after-commit and rebase checks trust this id, so it must follow a
+/// packed branch rewritten within one mtime tick.
+#[test]
+fn head_commit_id_sees_packed_refs_rewritten_without_a_newer_mtime() {
+    let dir = fixture();
+    run_git(dir.path(), &["pack-refs", "--all", "--prune"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let head = repo.head_commit_id().unwrap().unwrap();
+    let parent = git_stdout(dir.path(), &["rev-parse", "HEAD~1"]);
+    let packed = dir.path().join(".git/packed-refs");
+    let modified = std::fs::metadata(&packed).unwrap().modified().unwrap();
+    let refs = std::fs::read_to_string(&packed).unwrap();
+    std::fs::write(&packed, refs.replace(head.as_ref(), parent.trim())).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&packed)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let moved = repo.head_commit_id().unwrap().unwrap();
+    assert_eq!(moved.as_ref(), parent.trim());
+}
+
+#[test]
+fn head_commit_id_follows_head_without_reopening() {
+    let dir = fixture();
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let head = || git_stdout(dir.path(), &["rev-parse", "HEAD"]);
+    // The first read opens the handle that history reads keep.
+    let before = repo.head_commit_id().unwrap().unwrap();
+    let _capture = capture();
+    assert_eq!(before.as_ref(), head().trim());
+    run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~1"]);
+    assert_ne!(repo.head_commit_id().unwrap().unwrap(), before);
+    for packed in [false, true] {
+        if packed {
+            run_git(dir.path(), &["pack-refs", "--all", "--prune"]);
+        }
+        let id = repo.head_commit_id().unwrap().unwrap();
+        assert_eq!(id.as_ref(), head().trim(), "packed={packed}");
+    }
+    assert_eq!(count(Work::RepositoryReopen), 0);
+}
+
+/// The read after `change` must open a fresh handle, reject the index of the
+/// previous object interpretation and build one of `rows_after` rows.
+#[track_caller]
+fn assert_change_reopens(dir: &Path, change: impl FnOnce(), rows_after: usize) {
+    let repo = GixBackend.open(dir).unwrap();
+    let cancel = CancellationToken::new();
+    let before = warm_index(&*repo);
+    change();
+    let _capture = capture();
+    for reads in 1..=2 {
+        assert!(
+            repo.read_history_range_shared(&before, 256..512, &cancel)
+                .is_err(),
+            "the next read must observe the change"
+        );
+        assert_eq!(
+            count(Work::RepositoryReopen),
+            1,
+            "read {reads}: one fresh handle, reused in turn"
+        );
+    }
+    let after = index(&*repo, HistoryMode::FullReachable, None);
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert_eq!(after.len(), rows_after);
+    repo.read_history_range_shared(&after, 256..512, &cancel)
+        .unwrap();
+}
+
+#[test]
+fn a_config_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    run_git(dir.path(), &["replace", "HEAD", "HEAD~10"]);
+    let change = || run_git(dir.path(), &["config", "core.useReplaceRefs", "false"]);
+    assert_change_reopens(dir.path(), change, 4096);
+}
+
+#[test]
+fn an_alternates_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    let donor = tempfile::tempdir().unwrap();
+    run_git(donor.path(), &["init", "--bare", "-q"]);
+    let change = || {
+        std::fs::write(
+            dir.path().join(".git/objects/info/alternates"),
+            format!("{}\n", donor.path().join("objects").display()),
+        )
+        .unwrap();
+    };
+    assert_change_reopens(dir.path(), change, 4096);
+}
+
+#[test]
+fn a_replace_ref_change_reopens_the_repository_for_the_next_range_read() {
+    let dir = fixture();
+    let change = || run_git(dir.path(), &["replace", "HEAD", "HEAD~10"]);
+    assert_change_reopens(dir.path(), change, 4086);
+}
+
+#[test]
+fn a_reused_repository_reloads_packed_refs_rewritten_without_a_newer_mtime() {
+    let dir = fixture();
+    run_git(dir.path(), &["pack-refs", "--all"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let before = index(&*repo, HistoryMode::AllBranches, None);
+    // gix alone reloads packed refs only when their mtime moved forward.
+    let packed = dir.path().join(".git/packed-refs");
+    let modified = std::fs::metadata(&packed).unwrap().modified().unwrap();
+    let side = git_stdout(dir.path(), &["rev-parse", "HEAD~5"]);
+    let mut refs = std::fs::read_to_string(&packed).unwrap();
+    refs.push_str(&format!("{} refs/heads/side\n", side.trim()));
+    std::fs::write(&packed, refs).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&packed)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let after = index(&*repo, HistoryMode::AllBranches, None);
+    assert_ne!(
+        before.snapshot, after.snapshot,
+        "the new packed tip must reach the next history read"
+    );
+}

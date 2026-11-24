@@ -3,6 +3,7 @@
 
 pub mod dirs;
 pub mod resource_limits;
+pub mod test_harness;
 
 /// Detects WSL from explicit environment signals or the Linux kernel release.
 ///

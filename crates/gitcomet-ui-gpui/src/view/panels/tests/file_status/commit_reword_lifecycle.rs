@@ -107,7 +107,7 @@ impl GitRepository for ControlledRewordRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<LogPage>> {
         cancellation.check_cancelled()?;
-        let Loadable::Ready(page) = &self.original.log else {
+        let Loadable::Ready(page) = &self.original.history_state.log else {
             unreachable!()
         };
         let mut page = (**page).clone();

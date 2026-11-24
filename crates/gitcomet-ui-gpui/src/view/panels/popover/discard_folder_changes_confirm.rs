@@ -9,7 +9,7 @@ pub(super) fn panel(
     folder: Arc<std::path::Path>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let paths = this
         .details_pane
         .read(cx)

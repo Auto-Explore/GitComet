@@ -340,8 +340,8 @@ pub(crate) fn build_repo_switch_repo_state(
     });
     repo.history_state.log = Loadable::Ready(Arc::clone(&log_page));
     repo.history_state.log_rev = 1;
-    repo.log = Loadable::Ready(log_page);
-    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(log_page);
+    repo.history_state.log_rev = 1;
 
     seed_repo_status(&mut repo, build_synthetic_repo_status(status_entries));
     repo.tags = Loadable::Ready(Arc::new(build_tags_targeting_commits(commits, 32)));

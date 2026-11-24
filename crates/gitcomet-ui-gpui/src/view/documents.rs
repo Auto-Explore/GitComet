@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "opens documents and stats dropped paths"
+)]
+
 use super::panes::diff::TextDecodeRequest;
 use super::panes::diff::file_editor::{file_editor_gutter_width, file_editor_line_for_visual_row};
 use super::panes::diff::helpers::state::FileImagePreviewAnimationSide;
@@ -55,7 +60,6 @@ fn update_recent(path: PathBuf, remove: bool, cx: &mut gpui::App) {
 }
 
 pub(crate) struct DocumentsView {
-    theme: AppTheme,
     root: WeakEntity<GitCometView>,
     ui_model: Entity<AppUiModel>,
     recents: Entity<RecentDocumentList>,
@@ -81,21 +85,7 @@ impl DocumentsView {
         self.owner.clone()
     }
 
-    pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        for buffer in self.buffers.values() {
-            buffer.update(cx, |buffer, cx| {
-                buffer.theme = theme;
-                buffer.syntax_key = None;
-                buffer.refresh_syntax(cx);
-                cx.notify();
-            });
-        }
-        cx.notify();
-    }
-
     pub(super) fn new(
-        theme: AppTheme,
         root: WeakEntity<GitCometView>,
         ui_model: Entity<AppUiModel>,
         cx: &mut gpui::Context<Self>,
@@ -103,7 +93,6 @@ impl DocumentsView {
         let owner = ui_model.read(cx).documents.clone();
         owner.register_documents(cx.entity().downgrade());
         Self {
-            theme,
             root,
             ui_model,
             recents: shared_recents(cx),
@@ -121,9 +110,8 @@ impl DocumentsView {
         cx: &mut gpui::Context<Self>,
     ) -> BufferId {
         let root = self.root.clone();
-        let buffer = cx.new(|cx| {
-            StandaloneBuffer::new(path, self.theme, root, self.ui_model.clone(), initial, cx)
-        });
+        let buffer =
+            cx.new(|cx| StandaloneBuffer::new(path, root, self.ui_model.clone(), initial, cx));
         let subscription = cx.observe(&buffer, |this, _, cx| {
             this.prune_clean_buffers(cx);
             cx.notify();
@@ -314,7 +302,7 @@ impl Render for DocumentsView {
         if self.focus.is_focused(window) {
             self.focus_active(window, cx);
         }
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let content = self
             .active
             .as_ref()
@@ -371,7 +359,10 @@ struct StandaloneBuffer {
     image_timer: crate::view::image_preview::FrameTimer,
     document: DocumentBuffer,
     owner: DocumentOwner,
+    /// The theme the syntax highlights were built under: the window's, as of
+    /// the last draw. Highlighting also runs outside a draw.
     theme: AppTheme,
+    theme_generation: crate::theme::ThemeGeneration,
     root: WeakEntity<GitCometView>,
     input: Entity<TextInput>,
     scroll: gpui::ScrollHandle,
@@ -455,12 +446,12 @@ impl StandaloneBuffer {
 
     fn new(
         path: PathBuf,
-        theme: AppTheme,
         root: WeakEntity<GitCometView>,
         ui_model: Entity<AppUiModel>,
         initial: Option<DocumentBuffer>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let theme = AppTheme::current(cx);
         let scroll = gpui::ScrollHandle::new();
         let input = cx.new(|cx| {
             let mut input = TextInput::new_inert(
@@ -530,6 +521,7 @@ impl StandaloneBuffer {
                     .create(DocumentIdentity(path), None)
             }),
             theme,
+            theme_generation: AppTheme::current_generation(cx),
             root,
             input,
             scroll,
@@ -1319,12 +1311,11 @@ impl StandaloneBuffer {
             .on_children_prepainted({
                 let editor_scroll = editor_scroll.clone();
                 let gutter_scroll = gutter_scroll.clone();
-                move |_bounds, window, _cx| {
+                move |_bounds, _window, _cx| {
                     let target_y = editor_scroll.offset().y;
                     let base = gutter_scroll.0.borrow().base_handle.clone();
                     if base.offset().y != target_y {
                         base.set_offset(point(px(0.0), target_y));
-                        window.refresh();
                     }
                 }
             })
@@ -1351,17 +1342,17 @@ impl StandaloneBuffer {
                     // A wheel over the numbers moves the text, not the gutter.
                     .on_scroll_wheel({
                         let editor_scroll = editor_scroll.clone();
-                        move |event, window, cx| {
+                        cx.listener(move |_, event: &gpui::ScrollWheelEvent, window, cx| {
                             let delta = event.delta.pixel_delta(window.line_height());
                             let offset = editor_scroll.offset();
                             let max_y = editor_scroll.max_offset().y.max(px(0.0));
                             let next_y = (offset.y + delta.y).clamp(-max_y, px(0.0));
                             if next_y != offset.y {
                                 editor_scroll.set_offset(point(offset.x, next_y));
-                                window.refresh();
+                                cx.notify();
                             }
                             cx.stop_propagation();
-                        }
+                        })
                     })
                     .child(gutter),
             )
@@ -1440,6 +1431,11 @@ impl StandaloneBuffer {
 
 impl Render for StandaloneBuffer {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.theme_generation.changed(cx) {
+            self.theme = AppTheme::current(cx);
+            self.syntax_key = None;
+            self.refresh_syntax(cx);
+        }
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let _ = self.subscriptions.len();

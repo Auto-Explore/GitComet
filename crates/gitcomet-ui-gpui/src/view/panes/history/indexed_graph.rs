@@ -51,6 +51,35 @@ struct Containment {
     bits: Arc<[u64]>,
 }
 
+/// The rows reachable from the row `tip`, a bit for each row of the index.
+fn reachable_rows(
+    index: &HistoryIndexHandle,
+    tip: u32,
+    cancellation: &CancellationToken,
+) -> Result<Arc<[u64]>> {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::ContainmentWalk);
+    let mut bits = vec![0u64; index.len().div_ceil(64)];
+    let mut stack = vec![tip];
+    let mut visits = 0usize;
+    while let Some(raw) = stack.pop() {
+        if raw == MISSING_PARENT {
+            continue;
+        }
+        let raw = raw as usize;
+        let mask = 1u64 << (raw % 64);
+        if bits[raw / 64] & mask != 0 {
+            continue;
+        }
+        bits[raw / 64] |= mask;
+        stack.extend_from_slice(index.parents(raw));
+        visits += 1;
+        if visits.is_multiple_of(CHECKPOINT_STRIDE) {
+            cancellation.check_cancelled()?;
+        }
+    }
+    Ok(bits.into())
+}
+
 pub(in crate::view) struct IndexedGraph {
     pub projection: HistoryProjection,
     checkpoints: Vec<Checkpoint>,
@@ -205,31 +234,7 @@ impl IndexedGraph {
                 .map(|old| old.bits.clone());
             let bits = match reused {
                 Some(bits) => bits,
-                None => {
-                    gitcomet_core::history_perf::record(
-                        gitcomet_core::history_perf::Work::ContainmentWalk,
-                    );
-                    let mut bits = vec![0u64; projection.index.len().div_ceil(64)];
-                    let mut stack = vec![raw as u32];
-                    let mut visits = 0usize;
-                    while let Some(raw) = stack.pop() {
-                        if raw == MISSING_PARENT {
-                            continue;
-                        }
-                        let raw = raw as usize;
-                        let mask = 1u64 << (raw % 64);
-                        if bits[raw / 64] & mask != 0 {
-                            continue;
-                        }
-                        bits[raw / 64] |= mask;
-                        stack.extend_from_slice(projection.index.parents(raw));
-                        visits += 1;
-                        if visits.is_multiple_of(CHECKPOINT_STRIDE) {
-                            cancellation.check_cancelled()?;
-                        }
-                    }
-                    bits.into()
-                }
+                None => reachable_rows(&projection.index, raw as u32, cancellation)?,
             };
             containment.push(Containment {
                 label,
@@ -319,6 +324,9 @@ impl IndexedGraph {
                     labels,
                 });
             }
+            if graph.plain_step(row, &mut state).is_some() {
+                continue;
+            }
             let (transition, _) = graph.step(row, &mut state, false);
             if reusable.is_some() {
                 continue;
@@ -357,31 +365,73 @@ impl IndexedGraph {
         }
     }
 
+    /// A row's place in the index and its visible parents below it.
+    fn parents(&self, row: usize) -> (usize, SmallVec<[usize; 4]>, bool) {
+        // One raw lookup per row; the parents map through the projection directly.
+        let raw = self.projection.raw_position(row).expect("graph row");
+        let raw_parents = self.projection.index.parents(raw);
+        let parents = raw_parents
+            .iter()
+            .filter_map(|&parent| self.projection.visible_position(parent as usize))
+            .filter(|&parent| parent > row)
+            .collect();
+        (raw, parents, raw_parents.len() > 1)
+    }
+
     fn step(
         &self,
         row: usize,
         state: &mut WalkState,
         materialize: bool,
     ) -> (history_graph::GraphTransition, Option<u16>) {
-        // One raw lookup per row; the parents map through the projection directly.
-        let raw = self.projection.raw_position(row).expect("graph row");
-        let raw_parents = self.projection.index.parents(raw);
-        let parents: SmallVec<[usize; 4]> = raw_parents
-            .iter()
-            .filter_map(|&parent| self.projection.visible_position(parent as usize))
-            .filter(|&parent| parent > row)
-            .collect();
+        let (raw, parents, merge) = self.parents(row);
         let transition = state.walk.transition(
             row,
             &parents,
-            raw_parents.len() > 1,
+            merge,
             self.branch_heads.contains(&row),
             materialize,
         );
         let paint = &transition.paint;
-        let node = usize::from(paint.node_col);
+        let label = self.label(
+            row,
+            raw,
+            state,
+            usize::from(paint.node_col),
+            &paint.joins_in,
+            &transition.next,
+            transition.next_len,
+        );
+        (transition, label)
+    }
+
+    /// [`Self::step`] for a row nobody paints, where it is one that
+    /// [`history_graph::GraphWalk::plain_step`] takes: `Some` with the row's
+    /// label. The row's lane keeps its span and its label.
+    fn plain_step(&self, row: usize, state: &mut WalkState) -> Option<Option<u16>> {
+        if self.branch_heads.contains(&row) {
+            return None;
+        }
+        let (raw, parents, _) = self.parents(row);
+        let (col, _) = state.walk.plain_step(row, &parents)?;
+        let width = state.walk.width();
+        Some(self.label(row, raw, state, col, &[], &[], width))
+    }
+
+    /// The branch a row is attributed to, from the lanes that reach its
+    /// node, and with it the labels of the lanes that leave the row.
+    fn label(
+        &self,
+        row: usize,
+        raw: usize,
+        state: &mut WalkState,
+        node: usize,
+        joins_in: &[history_graph::GraphEdge],
+        next: &[(usize, history_graph::LanePaint)],
+        next_len: usize,
+    ) -> Option<u16> {
         let mut resolved = state.labels.get(node).copied().flatten();
-        for edge in &paint.joins_in {
+        for edge in joins_in {
             if let Some(candidate) = state
                 .labels
                 .get(usize::from(edge.from_col))
@@ -404,10 +454,10 @@ impl IndexedGraph {
             state.labels.resize(node + 1, None);
         }
         state.labels[node] = resolved;
-        if state.labels.len() < transition.next_len {
-            state.labels.resize(transition.next_len, None);
+        if state.labels.len() < next_len {
+            state.labels.resize(next_len, None);
         }
-        for &(col, lane) in &transition.next {
+        for &(col, lane) in next {
             if col >= state.labels.len() {
                 continue;
             }
@@ -417,8 +467,8 @@ impl IndexedGraph {
                 state.labels[col] = resolved;
             }
         }
-        state.labels.truncate(transition.next_len);
-        (transition, resolved.map(|(label, _)| label))
+        state.labels.truncate(next_len);
+        resolved.map(|(label, _)| label)
     }
 
     pub fn selected_lane(
@@ -517,12 +567,19 @@ impl IndexedGraph {
                 if row.is_multiple_of(128) {
                     cancellation.check_cancelled()?;
                 }
-                let (transition, label) =
-                    self.step(row, &mut state, geometry.is_none() && row >= range.start);
-                if row >= range.start {
-                    if geometry.is_none() {
-                        rows.push(transition.paint);
+                let paint = geometry.is_none() && row >= range.start;
+                let plain = (!paint).then(|| self.plain_step(row, &mut state)).flatten();
+                let label = match plain {
+                    Some(label) => label,
+                    None => {
+                        let (transition, label) = self.step(row, &mut state, paint);
+                        if paint {
+                            rows.push(transition.paint);
+                        }
+                        label
                     }
+                };
+                if row >= range.start {
                     labels.push(
                         label
                             .and_then(|label| self.branch_names.get(usize::from(label)))

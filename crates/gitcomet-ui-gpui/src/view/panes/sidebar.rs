@@ -12,7 +12,9 @@ use super::super::sidebar_presentation::{
 };
 use super::super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
+use gitcomet_state::history_filter::HistoryFilterMsg;
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use rustc_hash::{FxHashSet, FxHasher};
@@ -361,7 +363,6 @@ pub(in super::super) struct SidebarPaneView {
     contributions: Option<contributions::SidebarContributions>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in crate::view) sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
     documents: crate::view::documents::buffers::DocumentOwner,
@@ -504,7 +505,6 @@ impl SidebarPaneView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
@@ -675,7 +675,6 @@ impl SidebarPaneView {
             contributions: contributions::SidebarContributions::new(cx),
             store,
             state,
-            theme,
             sidebar_focus: cx.focus_handle().tab_stop(true),
             _ui_model_subscription: subscription,
             documents,
@@ -737,11 +736,6 @@ impl SidebarPaneView {
         // Reflect any already-active repo's stored search query on first mount.
         this.sync_search_input_with_state(cx);
         this
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     /// Sync the section this pane should render as collapsed-rail popover content.
@@ -1122,11 +1116,7 @@ impl SidebarPaneView {
         let options = self.branch_search_options;
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_branch_search(query, options, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorBranchFilter { query, options }, None, cx);
         });
     }
 
@@ -1137,11 +1127,7 @@ impl SidebarPaneView {
         let collapsed = self.sidebar_collapsed_items_by_repo.clone();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_collapsed_items(collapsed, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorCollapsedItems(collapsed), None, cx);
         });
     }
 
@@ -1153,11 +1139,7 @@ impl SidebarPaneView {
         let pinned = self.sidebar_pinned_branches_by_repo.clone();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.popover_host.update(cx, |host, cx| {
-                    host.set_pinned_branches(pinned, cx);
-                });
-            });
+            let _ = root_view.request(RootRequest::MirrorPinnedBranches(pinned), None, cx);
         });
     }
 
@@ -1473,7 +1455,7 @@ impl SidebarPaneView {
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         self.sync_contributed_rows(cx);
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
 
         self.apply_pending_file_browser_reveal(cx);
         let tab_bar = self.render_tab_bar(theme, cx);
@@ -1525,7 +1507,7 @@ impl SidebarPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let ui_scale_percent = ui_scale::current(cx).percent;
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = ui_scale::scaler(ui_scale_percent);
@@ -1945,7 +1927,7 @@ impl SidebarPaneView {
                             .borderless()
                             .style(components::ButtonStyle::Subtle)
                             .on_click(theme, cx, move |_this, _e, _w, _cx| {
-                                store.dispatch(Msg::SetHistoryFocus {
+                                store.dispatch(HistoryFilterMsg::SetFocus {
                                     repo_id,
                                     focus: gitcomet_core::domain::HistoryFocusSet::default(),
                                 });
@@ -2156,28 +2138,26 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
     }
 
     pub(in super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.diff_renderer.update(cx, |pane, cx| {
-                pane.rebuild_diff_cache(cx);
-                cx.notify();
-            });
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::RebuildDiffCache, None, cx);
     }
 
     pub(in crate::view) fn explain_working_tree_required(&self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.push_toast(
+        let _ = self.root_view.request(
+            RootRequest::Toast(
                 components::ToastKind::Warning,
                 gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_owned(),
-                cx,
-            );
-        });
+            ),
+            None,
+            cx,
+        );
     }
 
     /// Focus a worktree in the log: its uncommitted-changes row when it has
@@ -2202,11 +2182,16 @@ impl SidebarPaneView {
         });
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.main_pane.update(cx, |pane, cx| {
-                    pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
-                });
-            });
+            let _ = root_view.request(
+                RootRequest::RevealWorktreeInHistory {
+                    repo_id,
+                    path,
+                    is_current,
+                    head,
+                },
+                None,
+                cx,
+            );
         });
     }
 
@@ -2236,17 +2221,16 @@ impl SidebarPaneView {
     ) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.main_pane.update(cx, |pane, cx| {
-                    pane.reveal_history_branch_commit(
-                        repo_id,
-                        target,
-                        commit_id,
-                        fallback_scope,
-                        cx,
-                    );
-                });
-            });
+            let _ = root_view.request(
+                RootRequest::RevealBranchCommitInHistory {
+                    repo_id,
+                    target,
+                    commit_id,
+                    fallback_scope,
+                },
+                None,
+                cx,
+            );
         });
     }
 }
@@ -2261,7 +2245,8 @@ impl Render for SidebarPaneView {
             self.explorer_name_edit = None;
         }
         if self.explorer_name_edit.is_some() {
-            let height = ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme));
+            let height = ui_scale::UiScale::current(cx)
+                .px(sidebar_list_row_height_px(AppTheme::current(cx)));
             self.explorer_name_input.update(cx, |input, cx| {
                 input.set_line_height(Some(height - px(4.0)), cx)
             });
@@ -2469,11 +2454,12 @@ fn unsaved_file_row(
                     let path = Arc::clone(&path);
                     move |this, _e, _window, cx| {
                         let path = Arc::clone(&path);
-                        let _ = this.root_view.update(cx, move |root, cx| {
-                            root.diff_renderer.update(cx, |pane, cx| {
-                                pane.discard_file_edits_for(repo_id, path.as_path(), cx);
-                            });
-                        });
+                        let path = path.to_path_buf();
+                        let _ = this.root_view.request(
+                            RootRequest::DiscardFileEdits { repo_id, path },
+                            None,
+                            cx,
+                        );
                     }
                 })
                 .w(icon_slot_px)

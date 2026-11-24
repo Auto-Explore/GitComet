@@ -8,7 +8,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::theme::{AppTheme, ThemeGeneration};
 use gitcomet_ui_kit::{Scrollbar, ScrollbarAxis, ScrollbarDriver};
 use gpui::prelude::*;
 use gpui::{
@@ -74,7 +74,9 @@ pub(crate) struct TerminalRenderCache {
 }
 
 pub struct TerminalViewportView {
-    pub(crate) theme: AppTheme,
+    /// The theme the layout and row caches were built under.
+    theme: AppTheme,
+    theme_generation: ThemeGeneration,
     pub focus_handle: FocusHandle,
     pub(crate) focus_subscriptions: Option<[gpui::Subscription; 2]>,
     pub(crate) took_press: bool,
@@ -362,19 +364,17 @@ impl Element for TerminalSelectionTracker {
 
 impl TerminalViewportView {
     pub fn new(
-        theme: AppTheme,
         focus_handle: FocusHandle,
         term_lock: AlacrittyTermLock,
         pty_sender: PtySender,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender), cx)
+        Self::with_backend(focus_handle, Some(term_lock), Some(pty_sender), cx)
     }
 
     /// Shared constructor. Tests use a real `Term` with either no PTY or a
     /// sender that records messages without spawning a process.
     pub fn with_backend(
-        theme: AppTheme,
         focus_handle: FocusHandle,
         term_lock: Option<AlacrittyTermLock>,
         pty_sender: Option<PtySender>,
@@ -393,7 +393,8 @@ impl TerminalViewportView {
                 }
             });
         Self {
-            theme,
+            theme: AppTheme::current(cx),
+            theme_generation: AppTheme::current_generation(cx),
             focus_handle,
             focus_subscriptions: None,
             took_press: false,
@@ -433,18 +434,17 @@ impl TerminalViewportView {
         cx.notify();
     }
 
-    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        self.layout_cache = None;
-        self.render_cache = TerminalRenderCache::default();
-        cx.notify();
-    }
-
     pub(super) fn terminal_layout_snapshot(
         &mut self,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> TerminalLayoutCache {
+        // Both caches hold the theme's colours.
+        if self.theme_generation.changed(cx) {
+            self.theme = AppTheme::current(cx);
+            self.layout_cache = None;
+            self.render_cache = TerminalRenderCache::default();
+        }
         let rem_size = window.rem_size();
         if let Some(ref cache) = self.layout_cache
             && cache.rem_size == rem_size
@@ -1760,7 +1760,7 @@ impl Render for TerminalViewportView {
             ));
         }
         let view = cx.entity().clone();
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let term_lock = self.term_lock.clone();
         div()
             .track_focus(&self.focus_handle)

@@ -6,10 +6,6 @@ it does not add application builds to the CI test matrix. Capture-policy and
 fixture tests run in the existing CI configuration lane; deterministic history
 and picker work limits also run in the performance workflow.
 
-The [performance finalization record](../../docs/performance-finalization.md)
-tracks the verified branch, framework fork ports, fresh Linux evidence and the
-deferred macOS/Windows verification checklist.
-
 Run examples from the repository root. Python tools require Python 3.11 or newer;
 use `python3` instead of `python` where appropriate. Build probes with the repo's
 Rust toolchain. LFS fixtures need `git-lfs` on `PATH`. Windows GUI captures need
@@ -597,9 +593,6 @@ python3 scripts/profiling/live-ui.py measure --gpu \
 python3 scripts/profiling/live-ui.py measure ... --session second --reverse --output target/profiling/gpu/s2
 python3 scripts/profiling/live-ui.py report target/profiling/gpu/s1 target/profiling/gpu/s2
 ```
-
-Results and the reference builds are in the
-[GPU performance inventory](../../docs/gpu-performance-inventory.md).
 
 ## Windows GPU measurements
 

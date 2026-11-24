@@ -1239,7 +1239,7 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     draw_and_drain_test_window(cx);
     draw_and_drain_test_window(cx);
 
-    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    let diff_renderer = diff_renderer(cx, &view);
     let before = cx.update(|_window, app| {
         diff_renderer
             .read(app)
@@ -1277,6 +1277,100 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     assert_eq!(
         settled, after,
         "the drawn frame must agree with the offset navigation placed"
+    );
+
+    fixture.cleanup();
+}
+
+/// Scrolling the output to a line moves its gutter in the gutter's own
+/// prepaint; the editor follows in a mirror that runs after the editor was laid
+/// out, so that frame still shows the old rows. The mirror has to ask for the
+/// frame that shows the new ones.
+#[gpui::test]
+fn the_output_mirror_asks_for_the_frame_that_shows_where_it_moved(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(954);
+    let fixture = SyntheticLargeConflictFixture::new(
+        "resolver_output_mirror_frame",
+        "fixtures/resolver_output_mirror_frame.rs",
+        900,
+        12,
+    );
+    fixture.write();
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &fixture.workdir,
+        &fixture.file_rel,
+        &fixture.base_text,
+        &fixture.ours_text,
+        &fixture.theirs_text,
+        &fixture.current_text,
+    );
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "output mirror fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
+                && !pane.conflict_resolved_output_is_streamed()
+        },
+        |pane| format!("streamed={}", pane.conflict_resolved_output_is_streamed()),
+    );
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    let diff_renderer = diff_renderer(cx, &view);
+    let editor_y = |app: &gpui::App| {
+        diff_renderer
+            .read(app)
+            .conflict_resolved_output_editor_scroll
+            .offset()
+            .y
+    };
+    let before = cx.update(|_window, app| editor_y(app));
+    let notified_after_moving = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _observer = cx.update(|_window, app| {
+        let notified_after_moving = notified_after_moving.clone();
+        app.observe(&diff_renderer, move |renderer, app| {
+            if renderer
+                .read(app)
+                .conflict_resolved_output_editor_scroll
+                .offset()
+                .y
+                != before
+            {
+                notified_after_moving.set(notified_after_moving.get() + 1);
+            }
+        })
+    });
+
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            let text = pane.conflict_resolver_input.read(cx).text().to_string();
+            let last_line = text.lines().count().saturating_sub(1);
+            pane.conflict_resolver_scroll_resolved_output_to_line_in_text(last_line, &text);
+            cx.notify();
+        });
+    });
+
+    let after = cx.update(|_window, app| editor_y(app));
+    assert!(
+        after < before,
+        "the mirror must move the editor with the gutter (before={before:?} after={after:?})"
+    );
+    assert_eq!(
+        notified_after_moving.get(),
+        1,
+        "moving the editor after it was laid out must ask for one more frame"
     );
 
     fixture.cleanup();

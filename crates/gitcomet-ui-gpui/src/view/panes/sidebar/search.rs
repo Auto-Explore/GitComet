@@ -706,7 +706,7 @@ impl SidebarPaneView {
         section: CollapsedSidebarSection,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        let theme = AppTheme::current(cx);
         let scale = ui_scale::UiScale::current(cx);
         let available = if section == CollapsedSidebarSection::Files {
             self.active_repo()

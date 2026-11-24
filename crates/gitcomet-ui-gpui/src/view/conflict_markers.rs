@@ -5,6 +5,11 @@
 //! branch. The paths this reports are offered to the user for confirmation
 //! before the stage goes ahead.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "bounded marker scan before a stage"
+)]
+
 use super::*;
 
 /// How far into a worktree file the marker scan reads before giving up. The scan

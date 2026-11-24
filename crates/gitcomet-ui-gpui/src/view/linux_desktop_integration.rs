@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "writes the desktop entry and icon on request"
+)]
+
 use super::*;
 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]

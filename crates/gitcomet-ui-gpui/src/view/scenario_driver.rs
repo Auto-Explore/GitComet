@@ -18,6 +18,11 @@
 //! See scripts/profiling/live-ui.py for the harness that writes scenarios and
 //! analyses the records.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "opt-in scenario driver reads scripts and writes results"
+)]
+
 use super::*;
 use gitcomet_core::history_perf::{self, Work};
 use gitcomet_core::op_trace::{self, Stage};

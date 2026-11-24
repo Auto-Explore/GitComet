@@ -9,7 +9,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     // Recompute eligibility from live state each render: the selection or the

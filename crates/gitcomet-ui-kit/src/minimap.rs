@@ -165,6 +165,8 @@ impl<B: Copy + PartialEq + 'static> MinimapColumn<B> {
                 let Some(on_jump) = on_jump.clone() else {
                     return;
                 };
+                // A jump moves what this view draws: dirty it, not the window.
+                let view = window.current_view();
                 let height = bounds.size.height;
                 let fraction_at = move |y: Pixels| {
                     if height <= px(0.0) {
@@ -187,7 +189,7 @@ impl<B: Copy + PartialEq + 'static> MinimapColumn<B> {
                         crate::text_selection_owner::preserve(cx);
                         interaction.update(cx, |state, _cx| state.dragging = true);
                         on_jump(fraction_at(event.position.y), window, cx);
-                        window.refresh();
+                        cx.notify(view);
                         cx.stop_propagation();
                     }
                 });
@@ -203,7 +205,7 @@ impl<B: Copy + PartialEq + 'static> MinimapColumn<B> {
                             return;
                         }
                         on_jump(fraction_at(event.position.y), window, cx);
-                        window.refresh();
+                        cx.notify(view);
                         cx.stop_propagation();
                     }
                 });

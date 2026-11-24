@@ -7,7 +7,7 @@ pub(super) fn panel(
     branch: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
     let upstream = format!("{remote}/{branch}");
     let can_submit = this.can_submit_checkout_remote_branch(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);

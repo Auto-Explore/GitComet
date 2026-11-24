@@ -5,7 +5,7 @@
 //! Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or any GitHub-style forge
 //! such as a self-hosted Gitea instance), or into the repository page itself.
 
-use gitcomet_core::domain::{Remote, RemoteBranch};
+use crate::domain::{Remote, RemoteBranch};
 
 /// The forge URL shapes GitComet knows how to generate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,7 +38,7 @@ struct ForgeWebBase {
 
 /// The remote web links should be based on: `origin` when present, otherwise
 /// the first remote that has a URL.
-pub(super) fn origin_remote(remotes: &[Remote]) -> Option<&Remote> {
+pub fn origin_remote(remotes: &[Remote]) -> Option<&Remote> {
     remotes
         .iter()
         .find(|remote| remote.name == "origin")
@@ -47,7 +47,7 @@ pub(super) fn origin_remote(remotes: &[Remote]) -> Option<&Remote> {
 
 /// Web permalink for a commit, e.g.
 /// `https://github.com/Auto-Explore/GitComet/commit/<sha>`.
-pub(super) fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> {
+pub fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> {
     let base = web_base(remotes)?;
     let sha = sha.trim();
     if sha.is_empty() {
@@ -70,7 +70,7 @@ pub(super) fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> 
 /// Matching is done against the permalink remote specifically: a branch pushed
 /// to a *different* remote still has no counterpart on the forge the link
 /// targets.
-pub(super) fn branch_exists_on_permalink_remote(
+pub fn branch_exists_on_permalink_remote(
     remotes: &[Remote],
     remote_branches: &[RemoteBranch],
     branch: &str,
@@ -88,7 +88,7 @@ pub(super) fn branch_exists_on_permalink_remote(
 /// `https://dev.azure.com/…/_git/repo?path=/src/main.rs&version=GB<ref>`.
 /// The path must be repository-relative; backslashes and URL-unsafe characters
 /// are normalized/percent-encoded.
-pub(super) fn file_permalink(remotes: &[Remote], reference: &str, path: &str) -> Option<String> {
+pub fn file_permalink(remotes: &[Remote], reference: &str, path: &str) -> Option<String> {
     let base = web_base(remotes)?;
     let reference = reference.trim();
     let path = path.trim();
@@ -151,14 +151,14 @@ fn web_base(remotes: &[Remote]) -> Option<ForgeWebBase> {
 
 /// A remote whose URL points at a repository page on a forge.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct RemoteWebPage {
-    pub(super) remote: String,
-    pub(super) url: String,
+pub struct RemoteWebPage {
+    pub remote: String,
+    pub url: String,
 }
 
 impl RemoteWebPage {
     /// The page without its scheme, e.g. `github.com/Auto-Explore/GitComet`.
-    pub(super) fn display_address(&self) -> &str {
+    pub fn display_address(&self) -> &str {
         self.url
             .split_once("://")
             .map_or(self.url.as_str(), |(_, address)| address)
@@ -167,14 +167,14 @@ impl RemoteWebPage {
 
 /// The repository page a remote URL points at, e.g.
 /// `https://github.com/Auto-Explore/GitComet`.
-pub(super) fn remote_web_url(url: &str) -> Option<String> {
+pub fn remote_web_url(url: &str) -> Option<String> {
     parse_remote_url(url).map(|base| base.web_root)
 }
 
 /// Every remote with a web page, `origin` first and the rest in the given
 /// order. A page two remotes share (ssh and https of one repo) is listed once,
 /// under the first.
-pub(super) fn remote_web_pages(remotes: &[Remote]) -> Vec<RemoteWebPage> {
+pub fn remote_web_pages(remotes: &[Remote]) -> Vec<RemoteWebPage> {
     let origin_first = remotes
         .iter()
         .filter(|remote| remote.name == "origin")
@@ -385,7 +385,7 @@ fn encode_path(path: &str) -> String {
     } else {
         std::borrow::Cow::Borrowed(path)
     };
-    gitcomet_core::url_encoding::encode_path(path.as_bytes()).collect()
+    crate::url_encoding::encode_path(path.as_bytes()).collect()
 }
 
 #[cfg(test)]

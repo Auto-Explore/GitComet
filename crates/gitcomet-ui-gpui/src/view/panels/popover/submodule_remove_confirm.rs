@@ -1,12 +1,12 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut PopoverHost,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
     path: std::path::PathBuf,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    let theme = this.theme;
+    let theme = AppTheme::current(cx);
 
     ConfirmDialog::new("Remove submodule", DIALOG_420_WIDTH)
         .text(theme, path.display().to_string())

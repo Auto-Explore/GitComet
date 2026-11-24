@@ -1,6 +1,7 @@
 use super::super::path_display;
 use super::super::*;
 use crate::kit::text_truncation::path_alignment_visible_signature;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use crate::view::pending_commit::PendingCommit;
 use gitcomet_core::history_find::HistoryFindQuery;
 use rustc_hash::FxHasher;
@@ -73,7 +74,6 @@ pub(in super::super) struct DetailsPaneView {
     >,
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
     pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
@@ -214,7 +214,6 @@ pub(in super::super) struct DetailsPaneView {
 }
 
 pub(in super::super) struct DetailsPaneInit {
-    pub(in super::super) theme: AppTheme,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in super::super) diff_renderer: WeakEntity<DiffRenderer>,
     pub(in super::super) history_view: Entity<HistoryView>,
@@ -280,7 +279,7 @@ impl Element for StatusSectionResizeTracker {
         _cx: &mut App,
     ) {
         let pane = self.view.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
             if phase != gpui::DispatchPhase::Capture {
                 return;
             }
@@ -294,20 +293,18 @@ impl Element for StatusSectionResizeTracker {
                 }
             });
             if active {
-                window.refresh();
                 cx.stop_propagation();
             }
         });
 
         let pane = self.view.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
             if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
                 return;
             }
 
             let finished = pane.update(cx, |this, cx| this.finish_status_section_resize(cx));
             if finished {
-                window.refresh();
                 cx.stop_propagation();
             }
         });
@@ -341,13 +338,13 @@ impl DetailsPaneView {
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
             if Self::shows_comparison(repo) {
-                repo.log_rev.hash(&mut hasher);
+                repo.history_state.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
             }
             // An older commit's place in that history, and HEAD's, decide
             // whether its message can be edited and whether it is published.
             if history.selected_commit.is_some() {
-                repo.log_rev.hash(&mut hasher);
+                repo.history_state.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
                 repo.detached_head_commit.hash(&mut hasher);
                 repo.upstream_divergence_rev.hash(&mut hasher);
@@ -388,7 +385,6 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let DetailsPaneInit {
-            theme,
             root_view,
             diff_renderer,
             history_view,
@@ -560,7 +556,6 @@ impl DetailsPaneView {
         let mut pane = Self {
             store,
             state,
-            theme,
             change_tracking_view,
             ui_scale_percent,
             appearance_metrics: crate::appearance::current(cx),
@@ -655,7 +650,6 @@ impl DetailsPaneView {
             render_count: 0,
         };
         pane.sync_scaled_section_heights_from_design();
-        pane.set_theme(theme, cx);
         pane
     }
 
@@ -665,11 +659,6 @@ impl DetailsPaneView {
 
     pub(in super::super) fn current_change_tracking_stack_bounds(&self) -> Option<Bounds<Pixels>> {
         *self.change_tracking_stack_bounds_ref.borrow()
-    }
-
-    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
@@ -865,7 +854,7 @@ impl DetailsPaneView {
         self.set_commit_amend_enabled(enabled, cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| root.set_commit_amend_enabled(enabled, cx));
+            let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
         });
     }
 
@@ -876,9 +865,7 @@ impl DetailsPaneView {
         self.set_commit_skip_hooks_enabled(enabled, cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_skip_hooks_enabled(enabled, cx)
-            });
+            let _ = root_view.request(RootRequest::SetCommitSkipHooks(enabled), None, cx);
         });
     }
 
@@ -889,7 +876,7 @@ impl DetailsPaneView {
     ) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| root.copy_commit_sha(commit_id, cx));
+            let _ = root_view.request(RootRequest::CopyCommitSha(commit_id), None, cx);
         });
     }
 
@@ -1041,9 +1028,7 @@ impl DetailsPaneView {
     fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_amend_enabled(enabled, cx);
-            });
+            let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
         });
     }
 
@@ -2987,9 +2972,8 @@ impl DetailsPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::OpenPopoverAt(kind, anchor), Some(window), cx);
             });
         });
     }
@@ -3006,9 +2990,11 @@ impl DetailsPaneView {
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-                });
+                let _ = root_view.request(
+                    RootRequest::OpenPopoverForBounds(kind, anchor_bounds),
+                    Some(window),
+                    cx,
+                );
             });
         });
     }
@@ -3059,7 +3045,6 @@ impl DetailsPaneView {
                     }) && pane.toggle_stage_shown_file(window, cx)
                     {
                         cx.notify();
-                        window.refresh();
                     }
                 });
             });
@@ -3095,10 +3080,9 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            let handle = root.diff_renderer.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&handle, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::FocusDiffPanel, Some(window), cx);
     }
 
     pub(in super::super) fn focus_history_panel(
@@ -3106,11 +3090,9 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            let history = root.main_pane.read(cx).history_view.clone();
-            let handle = history.read(cx).history_panel_focus_handle.clone();
-            window.focus(&handle, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::FocusHistoryPanel, Some(window), cx);
     }
 }
 
