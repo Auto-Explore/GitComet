@@ -2002,15 +2002,18 @@ fn explicit_crash_dismissal_retries_private_cleanup_before_acknowledging(
     std::fs::write(&path, b"saved exit").unwrap();
     let private = dir.path().join("private-evidence");
     let token = gitcomet_core::startup_exit::current_session_token();
+    let capture = gitcomet_core::startup_exit::PanicCaptureId::new_v4();
     let snapshot = gitcomet_extension_api::StartupExitReport::new_with_session(
         path.clone(),
         b"saved exit",
-        gitcomet_extension_api::StartupExitReason::UnknownExit,
+        gitcomet_extension_api::StartupExitReason::RustPanic,
         Some(token),
-    );
+    )
+    .with_panic_capture_id(capture);
     let cleanup_path = private.clone();
-    let cleanup: CrashReportDismiss = Arc::new(move |received| {
+    let cleanup: CrashReportDismiss = Arc::new(move |received, received_capture| {
         assert_eq!(received, token);
+        assert_eq!(received_capture, capture);
         std::fs::remove_file(&cleanup_path)
     });
     cx.update(|app| {

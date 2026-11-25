@@ -2,6 +2,7 @@
 
 use super::readiness::{ReadyCallback, StartupReadiness};
 use super::*;
+use crate::launch_guard::FatalPanicObserver;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FocusedMergetoolConfig {
@@ -158,6 +159,7 @@ pub struct UiLaunch {
     pub(super) on_shutdown: Option<ShutdownCallback>,
     pub(super) browser_requests: Option<crate::BrowserRequestReceiver>,
     on_ready: Option<ReadyCallback>,
+    on_fatal_panic: Option<FatalPanicObserver>,
 }
 
 impl UiLaunch {
@@ -174,6 +176,7 @@ impl UiLaunch {
             on_shutdown: None,
             browser_requests: None,
             on_ready: None,
+            on_fatal_panic: None,
         }
     }
 
@@ -199,6 +202,11 @@ impl UiLaunch {
 
     pub fn startup_crash_report(mut self, report: Option<StartupCrashReport>) -> Self {
         self.startup_crash_report = report;
+        self
+    }
+
+    pub fn on_fatal_panic(mut self, observer: Option<FatalPanicObserver>) -> Self {
+        self.on_fatal_panic = observer;
         self
     }
 
@@ -239,6 +247,7 @@ impl UiLaunch {
             on_shutdown,
             browser_requests,
             on_ready,
+            on_fatal_panic,
         } = self;
         let readiness = StartupReadiness::new(on_ready);
         let window_readiness = readiness.clone();
@@ -249,7 +258,7 @@ impl UiLaunch {
             let _stage = gitcomet_core::startup_trace::span("graphics_device_precheck");
             ensure_graphics_device_available("main GPUI window launch")?;
         }
-        run_with_panic_guard("main GPUI window launch", move || {
+        run_with_panic_guard("main GPUI window launch", on_fatal_panic, move || {
             run_windowed_app(
                 backend,
                 extensions,
@@ -303,7 +312,7 @@ impl UiLaunch {
             },
             browser_open_target: BrowserOpenTarget::ExistingWindow,
         };
-        match run_with_panic_guard("focused diff GPUI launch", move || {
+        match run_with_panic_guard("focused diff GPUI launch", self.on_fatal_panic, move || {
             run_windowed_app(
                 self.backend,
                 self.extensions,
@@ -323,7 +332,13 @@ impl UiLaunch {
     }
 
     pub fn run_focused_mergetool(self, config: FocusedMergetoolConfig) -> i32 {
-        run_mergetool_with_extensions(self.backend, config, self.extensions)
+        run_mergetool_with_extensions(
+            self.backend,
+            config,
+            self.extensions,
+            self.on_shutdown,
+            self.on_fatal_panic,
+        )
     }
 }
 
@@ -346,13 +361,21 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
-    run_mergetool_with_extensions(backend, config, gitcomet_extension_api::Registry::default())
+    run_mergetool_with_extensions(
+        backend,
+        config,
+        gitcomet_extension_api::Registry::default(),
+        None,
+        None,
+    )
 }
 
 fn run_mergetool_with_extensions(
     backend: Arc<dyn GitBackend>,
     config: FocusedMergetoolConfig,
     extensions: gitcomet_extension_api::Registry,
+    on_shutdown: Option<ShutdownCallback>,
+    on_fatal_panic: Option<FatalPanicObserver>,
 ) -> i32 {
     install_live_kit_policy();
     if let Err(err) = ensure_graphics_device_available("focused mergetool GPUI launch") {
@@ -362,17 +385,19 @@ fn run_mergetool_with_extensions(
 
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
-    if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
-        run_windowed_app(
-            backend,
-            extensions,
-            launch,
-            CleanShutdownTracker::default(),
-            None,
-            None,
-            StartupReadiness::new(None),
-        )
-    }) {
+    if let Err(err) =
+        run_with_panic_guard("focused mergetool GPUI launch", on_fatal_panic, move || {
+            run_windowed_app(
+                backend,
+                extensions,
+                launch,
+                CleanShutdownTracker::default(),
+                on_shutdown,
+                None,
+                StartupReadiness::new(None),
+            )
+        })
+    {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;
     }
@@ -618,33 +643,41 @@ pub(super) fn run_windowed_app(
             cx.activate(true);
             readiness.observe(cx);
         };
-        let workflows: Vec<_> = crate::view::extension_host::registry(cx)
-            .filter(|_| launch_is_normal)
-            .map(|registry| {
-                registry
-                    .startup_workflows()
-                    .iter()
-                    .map(|(_, workflow)| workflow.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !workflows.is_empty()
-            && let Err(err) = crate::bundled_fonts::register(cx)
-        {
-            eprintln!("Failed to register startup workflow fonts: {err:#}");
-        }
-        let mut next: Box<dyn FnOnce(&mut App)> = Box::new(resume);
-        for workflow in workflows.into_iter().rev() {
-            next = Box::new(move |cx| {
-                workflow(gitcomet_extension_api::StartupContinuation::new(next), cx)
-            });
-        }
-        next(cx);
+        run_startup_workflows(cx, launch_is_normal, resume);
     });
     match handle.event_loop_error() {
         Some(error) => Err(UiLaunchError::from_event_loop(error)),
         None => Ok(()),
     }
+}
+
+fn run_startup_workflows(
+    cx: &mut App,
+    launch_is_normal: bool,
+    resume: impl FnOnce(&mut App) + 'static,
+) {
+    let workflows: Vec<_> = crate::view::extension_host::registry(cx)
+        .filter(|_| launch_is_normal)
+        .map(|registry| {
+            registry
+                .startup_workflows()
+                .iter()
+                .map(|(_, workflow)| workflow.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !workflows.is_empty()
+        && let Err(err) = crate::bundled_fonts::register(cx)
+    {
+        eprintln!("Failed to register startup workflow fonts: {err:#}");
+    }
+    let mut next: Box<dyn FnOnce(&mut App)> = Box::new(resume);
+    for workflow in workflows.into_iter().rev() {
+        next = Box::new(move |cx| {
+            workflow(gitcomet_extension_api::StartupContinuation::new(next), cx)
+        });
+    }
+    next(cx);
 }
 
 pub(super) fn open_initial_gitcomet_windows(

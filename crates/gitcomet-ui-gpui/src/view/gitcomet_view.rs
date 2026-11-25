@@ -2388,8 +2388,12 @@ impl GitCometView {
             cx,
             move || {
                 if let Some(snapshot) = snapshot {
-                    if let (Some(dismiss), Some(token)) = (dismiss, snapshot.session_token()) {
-                        dismiss(token)?;
+                    if let (Some(dismiss), Some(token), Some(capture)) = (
+                        dismiss,
+                        snapshot.session_token(),
+                        snapshot.panic_capture_id(),
+                    ) {
+                        dismiss(token, capture)?;
                     }
                     return snapshot.acknowledge();
                 }

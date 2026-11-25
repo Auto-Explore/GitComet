@@ -18,20 +18,21 @@ produced it.
 
 ## The Two Kinds of Crash Report
 
-**GitComet's own crash log.** Written by the panic hook in
-[`crates/gitcomet-app/src/crashlog.rs`](../crates/gitcomet-app/src/crashlog.rs) whenever a
-Rust panic occurs, except one contained by `gitcomet_base::panic::contain`, which
-the caller turns into a fallback:
+**GitComet's own crash report.** A fatal Rust panic or a matching OS fault
+creates a confirmed session record in the product's crash directory. The panic
+hook captures the original site before Rust unwinds. A confirmed record can
+retain the most recent hook capture as `last_observed_panic`. Use the reported
+failure context and message to assess whether those frames belong to the
+terminal panic.
 
 | OS | Location |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\gitcomet\crashes\panic-<pid>-<ms>.log` |
-| macOS | `~/Library/Logs/gitcomet/crashes/panic-<pid>-<ms>.log` |
-| Linux | `${XDG_STATE_HOME:-~/.local/state}/gitcomet/crashes/panic-<pid>-<ms>.log` |
+| Windows | `%LOCALAPPDATA%\gitcomet\crashes\session-in-progress-*.v1.json` |
+| macOS | `~/Library/Logs/gitcomet/crashes/session-in-progress-*.v1.json` |
+| Linux | `${XDG_STATE_HOME:-~/.local/state}/gitcomet/crashes/session-in-progress-*.v1.json` |
 
-The `location=<file>#L<line>` line in that file is **always usable without any
-symbols** — it is compile-time information baked into the binary. Ask for this
-file first; it often identifies the panic outright.
+An observed source file and line are usable without symbols. Ask for the
+confirmed record first.
 
 The backtrace below it depends on the platform. Linux and macOS ship with
 `strip = "debuginfo"`, keeping the symbol table, so frames carry function names

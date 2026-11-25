@@ -6,18 +6,40 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 pub use uuid::Uuid as SessionToken;
+pub type PanicCaptureId = uuid::Uuid;
+pub use gitcomet_base::platform::dirs::current_session_token;
 
-/// Local correlation between the process marker and the private panic collector.
-pub fn current_session_token() -> SessionToken {
-    static TOKEN: OnceLock<SessionToken> = OnceLock::new();
-    *TOKEN.get_or_init(SessionToken::new_v4)
+type PrivateCapture = dyn Fn(SessionToken, PanicCaptureId) + Send + Sync;
+static PRIVATE_CAPTURE: OnceLock<Box<PrivateCapture>> = OnceLock::new();
+
+pub fn set_private_panic_capture(
+    capture: impl Fn(SessionToken, PanicCaptureId) + Send + Sync + 'static,
+) {
+    let _ = PRIVATE_CAPTURE.set(Box::new(capture));
+}
+
+#[doc(hidden)]
+pub fn capture_private_panic(session: SessionToken, id: PanicCaptureId) -> bool {
+    if let Some(capture) = PRIVATE_CAPTURE.get() {
+        capture(session, id);
+        return true;
+    }
+    false
+}
+
+#[doc(hidden)]
+pub fn has_private_panic_capture() -> bool {
+    PRIVATE_CAPTURE.get().is_some()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum StartupExitReason {
     UnknownExit,
     X11EventLoopError,
     WaylandEventLoopError,
+    RustPanic,
+    NativeFault,
 }
 
 impl StartupExitReason {
@@ -26,6 +48,8 @@ impl StartupExitReason {
             Self::UnknownExit => "The previous session ended unexpectedly. The cause is unknown.",
             Self::X11EventLoopError => "The X11 event loop returned an error.",
             Self::WaylandEventLoopError => "The Wayland event loop returned an error.",
+            Self::RustPanic => "A Rust panic ended the previous session.",
+            Self::NativeFault => "The operating system recorded a fatal fault.",
         }
     }
 }
@@ -39,6 +63,7 @@ struct Snapshot {
     digest: [u8; 32],
     reason: StartupExitReason,
     session_token: Option<SessionToken>,
+    panic_capture_id: Option<PanicCaptureId>,
     acknowledged: AtomicBool,
 }
 
@@ -56,6 +81,7 @@ impl PartialEq for StartupExitReport {
             && self.0.digest == other.0.digest
             && self.reason() == other.reason()
             && self.session_token() == other.session_token()
+            && self.panic_capture_id() == other.panic_capture_id()
     }
 }
 
@@ -63,7 +89,7 @@ impl Eq for StartupExitReport {}
 
 /// Coordinates recovery, dismissal and submission across running processes.
 pub fn lock_snapshot(path: &Path) -> io::Result<File> {
-    crate::fs_utils::lock_private_file(&path.with_extension("lock"))
+    crate::fs_utils::lock_private_file(&path.with_file_name("startup-report.lock"))
 }
 
 impl StartupExitReport {
@@ -84,6 +110,7 @@ impl StartupExitReport {
             digest: Sha256::digest(contents).into(),
             reason,
             session_token,
+            panic_capture_id: None,
             acknowledged: AtomicBool::new(false),
         }))
     }
@@ -95,6 +122,22 @@ impl StartupExitReport {
     /// Local diagnostic correlation. Exclude this value from submissions and exports.
     pub fn session_token(&self) -> Option<SessionToken> {
         self.0.session_token
+    }
+
+    #[doc(hidden)]
+    pub fn with_panic_capture_id(self, id: PanicCaptureId) -> Self {
+        Self(Arc::new(Snapshot {
+            path: self.0.path.clone(),
+            digest: self.0.digest,
+            reason: self.0.reason,
+            session_token: self.0.session_token,
+            panic_capture_id: Some(id),
+            acknowledged: AtomicBool::new(self.acknowledged()),
+        }))
+    }
+
+    pub fn panic_capture_id(&self) -> Option<PanicCaptureId> {
+        self.0.panic_capture_id
     }
 
     pub fn acknowledged(&self) -> bool {

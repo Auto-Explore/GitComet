@@ -4,6 +4,7 @@ use std::time::Duration;
 
 mod process;
 pub use process::terminate_process_tree;
+pub mod application_error;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, FALSE, FILETIME, HANDLE, HWND, LPARAM, POINT, TRUE, WPARAM,

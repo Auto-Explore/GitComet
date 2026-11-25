@@ -315,31 +315,30 @@ The full theme guide, including file locations, schema details, example bundles,
 
 ### Crash logs
 
-GitComet writes panic logs and abnormal-exit recovery state to:
+GitComet keeps local crash reports and recent session diagnostics in:
 
 - Linux: `$XDG_STATE_HOME/gitcomet/crashes/` (fallback: `~/.local/state/gitcomet/crashes/`)
 - macOS: `~/Library/Logs/gitcomet/crashes/`
 - Windows: `%LOCALAPPDATA%\gitcomet\crashes\` (fallback: `%APPDATA%\gitcomet\crashes\`)
 
-On Linux, the directory normally is `~/.local/state/gitcomet/crashes/`.
-GitComet creates a process-specific `session-in-progress-<pid>.log` before it
-starts the GPUI runtime. A native abort, terminated UI, or GPUI event loop exit
-without an explicitly requested user shutdown leaves that marker behind; Rust
-panics also write `panic-*.log`, except a panic GitComet contains in code it
-does not own (such as Difftastic), which falls back instead. Error-level runtime diagnostics are mirrored to
-`last-runtime-error-<pid>.log`, including their source location and a backtrace,
-so fatal errors logged and consumed by the UI runtime remain reportable.
-Recovery ignores markers owned by still-running GitComet processes, so one open
-instance cannot consume another's crash state.
-On the next launch, GitComet snapshots recovered data as
-`pending-startup-report.log` and retains it until the user reports or dismisses
-the notification, so a failed subsequent launch cannot discard the report before
-its notification is visible.
+GitComet offers a report on the next launch after it records a fatal Rust panic
+or finds an operating-system crash record for the exact previous session. The
+banner shows the observed crash time or the time the OS logged the event. The
+report can include the app version, environment, and confirmed failure
+details. A Rust panic observation in the local file can include the original
+location and backtrace. Review it before adding it to your report.
 
-GitComet presents the report in the next UI launch and also prints its
-prefilled GitHub issue URL and log path to the launching terminal. The report
-includes app version, platform, structured failure details, and a trimmed
-backtrace.
+For an unfinished session, GitComet looks for native crash evidence once.
+It checks macOS DiagnosticReports, the Windows Application event log, or a
+supported Linux systemd-coredump journal. A late or unavailable OS record can
+leave a crash unconfirmed. External stops and recovered panics leave no startup
+prompt. Check `latest-session.log` for the latest local diagnostic and attach
+it manually when it helps describe a hang or other failure. Review diagnostics
+before sharing them.
+
+Each confirmed session has its own `session-in-progress-*.v1.json` file. Opening
+the issue page preserves the report. Use **Dismiss** after reviewing it to clear
+that incident.
 
 ### Prior work and ideas inspired by:
 

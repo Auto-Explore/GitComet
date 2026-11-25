@@ -4,9 +4,7 @@
 # internal names, or GitComet's own identity. Never raise a count to admit new
 # product text: read it from the identity instead.
 crates/gitcomet-app/src/cli/compat.rs identifier 3 argv encoding markers and scratch directory shared with git tool shims
-crates/gitcomet-app/src/crashlog.rs display-name 5 crash log section headers are a parsed file format
-crates/gitcomet-app/src/crashlog/report.rs display-name 3 crash log section headers the report parser reads back
-crates/gitcomet-app/src/crashlog.rs identifier 4 crash report path encoding markers, issue template file name, and thread name
+crates/gitcomet-app/src/crashlog.rs identifier 3 crash diagnostics worker thread names
 crates/gitcomet-app/src/difftool_mode.rs identifier 1 temporary file prefix
 crates/gitcomet-app/src/launch.rs identifier 1 GitComet's default app icon, used unless the identity supplies one
 crates/gitcomet-core/src/auth/askpass.rs identifier 7 askpass helper script and prompt file names

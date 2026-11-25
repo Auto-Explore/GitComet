@@ -406,6 +406,7 @@ libc	0.2.191	MIT OR Apache-2.0
 libfuzzer-sys	0.4.13	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
+libproc	0.15.0	MIT
 libredox	0.1.25	MIT
 libz-sys	1.1.33	MIT OR Apache-2.0
 line-numbers	0.4.0	MIT

@@ -19,6 +19,9 @@ ui-gpui-runtime = [
     "dep:gitcomet-ui-gpui",
     "dep:gitcomet-win32-window-utils",
     "dep:hmac",
+    "dep:jiff",
+    "dep:libproc",
+    "dep:objc2-foundation",
     "dep:sha2",
     "dep:sysinfo",
     "dep:process-wrap",
@@ -38,6 +41,7 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
+jiff = { workspace = true, optional = true }
 log = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
@@ -54,7 +58,11 @@ wayland-client = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 signal-hook = { workspace = true, optional = true }
 process-wrap = { workspace = true, features = ["process-session"], optional = true }
-rustix = { workspace = true, features = ["stdio"], optional = true }
+rustix = { workspace = true, features = ["fs", "stdio"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = { version = "0.15.0", optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gitcomet-win32-window-utils = { workspace = true, optional = true }

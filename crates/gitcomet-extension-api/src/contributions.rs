@@ -31,7 +31,12 @@ pub type CrashReportAction = Rc<dyn Fn(WindowHost, &mut Window, &mut App)>;
 /// Clears the review provider's private evidence for the dismissed session on a worker.
 /// Returning an error leaves the host report available for retry.
 pub type CrashReportDismiss = std::sync::Arc<
-    dyn Fn(gitcomet_core::startup_exit::SessionToken) -> std::io::Result<()> + Send + Sync,
+    dyn Fn(
+            gitcomet_core::startup_exit::SessionToken,
+            gitcomet_core::startup_exit::PanicCaptureId,
+        ) -> std::io::Result<()>
+        + Send
+        + Sync,
 >;
 
 /// The product's own update check, run by "Check for updates" in place of the
