@@ -1412,7 +1412,8 @@ fn pull_monitor_opens_exact_command_details_and_can_stop_while_silent(
     draw_and_drain_test_window(cx);
 
     assert!(cx.debug_bounds("operation_progress_toast_751").is_some());
-    assert!(cx.debug_bounds("operation_progress_bar_751").is_none());
+    // A silent pull keeps the empty bar, so the card never grows when git reports.
+    assert!(cx.debug_bounds("operation_progress_bar_751").is_some());
     assert!(cx.debug_bounds("hook_activity_panel").is_none());
     let details = cx
         .debug_bounds("operation_progress_details_751")
@@ -1662,4 +1663,383 @@ fn maintenance_progress_card_explains_the_wait() {
     assert_eq!(progress.title(), "Optimizing repository…");
     assert!(progress.explanation().is_some());
     assert_eq!(progress.percent_label().as_deref(), Some("~46%"));
+}
+
+#[gpui::test]
+fn operation_progress_card_keeps_percentage_and_counts_steady(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(733);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_operation_progress_steady",
+            std::process::id()
+        )),
+        &CommitId("7337337337337337".into()),
+    );
+
+    let now = std::time::SystemTime::now();
+    let samples = [
+        (
+            5_u64,
+            1_u8,
+            "Receiving objects:   1% (9/947019), 980.00 KiB",
+            false,
+        ),
+        (
+            10_u64,
+            1_u8,
+            "Receiving objects:   1% (9/947019), 980.00 KiB | 980.00 KiB/s",
+            true,
+        ),
+        (
+            175_u64,
+            90_u8,
+            "Receiving objects:  90% (854840/947019), 1.13 GiB | 10.33 MiB/s",
+            true,
+        ),
+        (
+            185_u64,
+            90_u8,
+            "Receiving objects:  90% (859502/947019), 1.20 GiB | 8.66 MiB/s",
+            true,
+        ),
+        (
+            750_u64,
+            100_u8,
+            "Receiving objects: 100% (947019/947019), 1.35 GiB | 102.40 MiB/s, done.",
+            true,
+        ),
+    ];
+
+    let mut expected_toast_size = None;
+    let mut expected_percent_bounds = None;
+    let mut expected_elapsed_right = None;
+    let mut expected_2m_elapsed_width = None;
+    let mut expected_total_bounds = None;
+    let mut expected_bytes_bounds = None;
+    let mut expected_speed_bounds = None;
+
+    for (rev, (elapsed_secs, percent, line, has_speed)) in samples.into_iter().enumerate() {
+        let mut fetch = running_fetch(733, Some(percent));
+        fetch.time = now - Duration::from_secs(elapsed_secs);
+        fetch.latest_line = line.to_string();
+        repo.feedback_mut().hook_activity = vec![fetch];
+        repo.feedback_mut().hook_activity_rev = rev as u64 + 1;
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        draw_and_drain_test_window(cx);
+
+        let toast = cx
+            .debug_bounds("operation_progress_toast_733")
+            .expect("operation progress toast bounds");
+        let percent_bounds = cx
+            .debug_bounds("operation_progress_percent_733")
+            .expect("operation progress percent bounds");
+        let elapsed_bounds = cx
+            .debug_bounds("operation_progress_elapsed_733")
+            .expect("operation progress elapsed bounds");
+        let total_bounds = cx
+            .debug_bounds("operation_progress_total_733")
+            .expect("operation progress total bounds");
+        let bytes_bounds = cx
+            .debug_bounds("operation_progress_bytes_733")
+            .expect("operation progress bytes bounds");
+
+        match expected_toast_size {
+            None => {
+                assert!(toast.size.width <= px(420.0), "{toast:?}");
+                expected_toast_size = Some(toast.size);
+            }
+            Some(expected) => assert_eq!(toast.size, expected, "toast size at {line}"),
+        }
+        match expected_percent_bounds {
+            None => expected_percent_bounds = Some(percent_bounds),
+            Some(expected) => assert_eq!(
+                (percent_bounds.origin, percent_bounds.size.width),
+                (expected.origin, expected.size.width),
+                "percent bounds shifted at {line}"
+            ),
+        }
+        match expected_elapsed_right {
+            None => expected_elapsed_right = Some(elapsed_bounds.right()),
+            Some(expected) => assert_eq!(
+                elapsed_bounds.right(),
+                expected,
+                "elapsed right edge shifted at {line}"
+            ),
+        }
+        if matches!(elapsed_secs, 175 | 185) {
+            match expected_2m_elapsed_width {
+                None => expected_2m_elapsed_width = Some(elapsed_bounds.size.width),
+                Some(expected) => assert_eq!(
+                    elapsed_bounds.size.width, expected,
+                    "2m/3m elapsed width shifted at {line}"
+                ),
+            }
+        }
+        match expected_total_bounds {
+            None => expected_total_bounds = Some(total_bounds),
+            Some(expected) => assert_eq!(
+                (total_bounds.origin.x, total_bounds.size.width),
+                (expected.origin.x, expected.size.width),
+                "total count bounds shifted at {line}"
+            ),
+        }
+        match expected_bytes_bounds {
+            None => expected_bytes_bounds = Some(bytes_bounds),
+            Some(expected) => assert_eq!(
+                (
+                    bytes_bounds.origin.x,
+                    bytes_bounds.right(),
+                    bytes_bounds.size.width,
+                ),
+                (expected.origin.x, expected.right(), expected.size.width),
+                "bytes bounds shifted at {line}"
+            ),
+        }
+        if has_speed {
+            let speed_bounds = cx
+                .debug_bounds("operation_progress_speed_733")
+                .expect("operation progress speed bounds");
+            assert!(speed_bounds.right() <= toast.right(), "{speed_bounds:?}");
+            match expected_speed_bounds {
+                None => expected_speed_bounds = Some(speed_bounds),
+                Some(expected) => assert_eq!(
+                    (
+                        speed_bounds.origin.x,
+                        speed_bounds.right(),
+                        speed_bounds.size.width,
+                    ),
+                    (expected.origin.x, expected.right(), expected.size.width),
+                    "speed bounds shifted at {line}"
+                ),
+            }
+        }
+    }
+
+    let mut enum_right = None;
+    let mut enum_height = None;
+    for (rev, count) in [(10_u64, 12_u64), (11, 1200), (12, 947019)] {
+        let mut fetch = running_fetch(733, None);
+        fetch.time = now - Duration::from_secs(3);
+        fetch.progress = Some(gitcomet_core::git_progress::GitProgressMeter {
+            title: Arc::from("Enumerating objects"),
+            percent: None,
+            estimated: false,
+        });
+        fetch.latest_line = format!("remote: Enumerating objects: {count}");
+        repo.feedback_mut().hook_activity = vec![fetch];
+        repo.feedback_mut().hook_activity_rev = rev;
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        draw_and_drain_test_window(cx);
+
+        let toast = cx
+            .debug_bounds("operation_progress_toast_733")
+            .expect("enumerating toast bounds");
+        let count_bounds = cx
+            .debug_bounds("operation_progress_count_733")
+            .expect("enumerating count bounds");
+        assert!(cx.debug_bounds("operation_progress_percent_733").is_none());
+        match enum_height {
+            None => enum_height = Some(toast.size.height),
+            Some(expected) => assert_eq!(toast.size.height, expected, "count={count}"),
+        }
+        match enum_right {
+            None => enum_right = Some(count_bounds.right()),
+            Some(expected) => assert_eq!(
+                count_bounds.right(),
+                expected,
+                "enumerating count right edge shifted at {count}"
+            ),
+        }
+    }
+
+    let mut est_percent_bounds = None;
+    for (rev, percent) in [(13_u64, 9_u8), (14, 46), (15, 100)] {
+        let mut maint = running_fetch(733, Some(percent));
+        maint.label = "Maintenance".to_string();
+        maint.time = now - Duration::from_secs(10);
+        maint.progress = Some(gitcomet_core::git_progress::GitProgressMeter::estimated(
+            "Writing new pack",
+            percent,
+        ));
+        repo.feedback_mut().hook_activity = vec![maint];
+        repo.feedback_mut().hook_activity_rev = rev;
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        draw_and_drain_test_window(cx);
+
+        let percent_bounds = cx
+            .debug_bounds("operation_progress_percent_733")
+            .expect("estimated percent bounds");
+        match est_percent_bounds {
+            None => est_percent_bounds = Some(percent_bounds),
+            Some(expected) => assert_eq!(
+                (percent_bounds.origin, percent_bounds.size.width),
+                (expected.origin, expected.size.width),
+                "estimated percent bounds shifted at {percent}%"
+            ),
+        }
+    }
+
+    let mut pull_with_hook = running_hook_activity(735);
+    pull_with_hook.label = "Pull".to_string();
+    pull_with_hook.progress_lane = true;
+    pull_with_hook.latest_line = "remote: Enumerating objects: 1200, done.".to_string();
+    pull_with_hook.command = Some(Arc::from("git pull"));
+    repo.feedback_mut().hook_activity = vec![pull_with_hook];
+    repo.feedback_mut().hook_activity_rev = 16;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+    if let Some(minimize) = cx.debug_bounds("hook_activity_minimize") {
+        cx.simulate_click(minimize.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+    }
+    assert!(cx.debug_bounds("operation_progress_toast_735").is_some());
+    assert!(cx.debug_bounds("operation_progress_count_735").is_none());
+
+    cx.update(|_, app| {
+        app.set_global(crate::appearance::Appearance {
+            ui_font_size_px: 24,
+            ..crate::appearance::Appearance::default()
+        });
+        view.update(app, |this, cx| {
+            this.notify_font_preferences_changed(cx);
+        });
+    });
+    let mut large_font_fetch = running_fetch(733, Some(90));
+    large_font_fetch.time = now - Duration::from_secs(175);
+    large_font_fetch.latest_line =
+        "Receiving objects:  90% (854840/947019), 1.13 GiB | 10.33 MiB/s".to_string();
+    repo.feedback_mut().hook_activity = vec![large_font_fetch];
+    repo.feedback_mut().hook_activity_rev = 17;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    let toast = cx
+        .debug_bounds("operation_progress_toast_733")
+        .expect("large-font toast bounds");
+    let count_bounds = cx
+        .debug_bounds("operation_progress_count_733")
+        .expect("large-font count bounds");
+    let bytes_bounds = cx
+        .debug_bounds("operation_progress_bytes_733")
+        .expect("large-font bytes bounds");
+    let speed_bounds = cx
+        .debug_bounds("operation_progress_speed_733")
+        .expect("large-font speed bounds");
+    assert!(count_bounds.right() <= toast.right(), "{count_bounds:?}");
+    assert!(bytes_bounds.right() <= toast.right(), "{bytes_bounds:?}");
+    assert!(speed_bounds.right() <= toast.right(), "{speed_bounds:?}");
+}
+
+#[gpui::test]
+fn fetch_progress_card_keeps_its_height_from_the_first_frame(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(734);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_operation_progress_height",
+            std::process::id()
+        )),
+        &CommitId("7347347347347347".into()),
+    );
+
+    let now = std::time::SystemTime::now();
+    // Every phase a fetch passes through, from before git reports anything.
+    let phases: [(Option<(&str, Option<u8>)>, &str); 6] = [
+        (None, ""),
+        (None, "From github.com:example/app"),
+        (
+            Some(("Enumerating objects", None)),
+            "remote: Enumerating objects: 1200",
+        ),
+        (
+            Some(("Receiving objects", Some(1))),
+            "Receiving objects:   1% (9/947019), 980.00 KiB",
+        ),
+        (
+            Some(("Receiving objects", Some(90))),
+            "Receiving objects:  90% (854840/947019), 1.13 GiB | 10.33 MiB/s",
+        ),
+        (
+            Some(("Resolving deltas", Some(45))),
+            "Resolving deltas:  45% (4500/10000)",
+        ),
+    ];
+    let mut first_height = None;
+    for (rev, (meter, line)) in phases.into_iter().enumerate() {
+        let mut fetch = running_fetch(734, None);
+        fetch.time = now - Duration::from_secs(5);
+        fetch.progress =
+            meter.map(
+                |(title, percent)| gitcomet_core::git_progress::GitProgressMeter {
+                    title: Arc::from(title),
+                    percent,
+                    estimated: false,
+                },
+            );
+        fetch.latest_line = line.to_string();
+        repo.feedback_mut().hook_activity = vec![fetch];
+        repo.feedback_mut().hook_activity_rev = rev as u64 + 1;
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        draw_and_drain_test_window(cx);
+
+        let toast = cx
+            .debug_bounds("operation_progress_toast_734")
+            .unwrap_or_else(|| panic!("toast at phase {rev}"));
+        assert!(
+            cx.debug_bounds("operation_progress_bar_734").is_some(),
+            "bar from the first frame, phase {rev}"
+        );
+        match first_height {
+            None => first_height = Some(toast.size.height),
+            Some(height) => assert_eq!(toast.size.height, height, "height at phase {rev}"),
+        }
+    }
+}
+
+#[gpui::test]
+fn clone_progress_card_keeps_percentage_steady(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dest = Arc::new(std::env::temp_dir().join("clone_steady_test"));
+    let mut expected_percent_bounds = None;
+    for (seq, percent) in [(1_u64, 0_u8), (2, 9), (3, 45), (4, 100)] {
+        let mut state = AppState::test_default();
+        state.clone = Some(gitcomet_state::model::CloneOpState {
+            url: Arc::from("file:///tmp/repo.git"),
+            dest: Arc::clone(&dest),
+            status: gitcomet_state::model::CloneOpStatus::Running,
+            progress: gitcomet_state::model::CloneProgressMeter {
+                stage: gitcomet_state::model::CloneProgressStage::RemoteObjects,
+                percent,
+            },
+            seq,
+            output_tail: Default::default(),
+        });
+        apply_state(cx, &view, Arc::new(state));
+        draw_and_drain_test_window(cx);
+        let bounds = cx
+            .debug_bounds("clone_progress_percent")
+            .expect("clone progress percent bounds");
+        match expected_percent_bounds {
+            None => expected_percent_bounds = Some(bounds),
+            Some(expected) => assert_eq!(
+                (bounds.origin, bounds.size.width),
+                (expected.origin, expected.size.width),
+                "clone percent bounds shifted at {percent}%"
+            ),
+        }
+    }
 }

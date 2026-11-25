@@ -1,9 +1,21 @@
 //! The progress card for long git operations: fetch, pull and maintenance.
 use gitcomet_core::git_operation::GitOperationId;
-use gitcomet_core::git_progress::GitProgressMeter;
+use gitcomet_core::git_progress::{GitProgressMeter, parse_progress_detail};
 use gitcomet_state::model::{GitHookOperation, GitHookOperationStatus, RepoId};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum OperationProgressDetail<'a> {
+    Count(u64),
+    Transfer {
+        count: u64,
+        total: u64,
+        transferred: Option<&'a str>,
+        throughput: Option<&'a str>,
+    },
+    Raw(&'a str),
+}
 
 const SHOW_AFTER: Duration = Duration::from_secs(2);
 
@@ -115,6 +127,36 @@ impl OperationProgress {
         })
     }
 
+    pub(super) fn is_estimated(&self) -> bool {
+        self.progress
+            .as_ref()
+            .is_some_and(|progress| progress.estimated)
+    }
+
+    pub(super) fn detail(&self) -> Option<OperationProgressDetail<'_>> {
+        if self.latest_line.is_empty() {
+            return None;
+        }
+        Some(match parse_progress_detail(&self.latest_line) {
+            Some(detail)
+                if self.progress.as_ref().is_some_and(|meter| {
+                    !meter.estimated && meter.title.as_ref() == detail.title
+                }) =>
+            {
+                match detail.total {
+                    Some(total) => OperationProgressDetail::Transfer {
+                        count: detail.count,
+                        total,
+                        transferred: detail.transferred,
+                        throughput: detail.throughput,
+                    },
+                    None => OperationProgressDetail::Count(detail.count),
+                }
+            }
+            _ => OperationProgressDetail::Raw(&self.latest_line),
+        })
+    }
+
     pub(super) fn elapsed(&self, now: SystemTime) -> String {
         format_elapsed(now.duration_since(self.started).unwrap_or_default())
     }
@@ -200,5 +242,83 @@ mod tests {
         let mut stopping = progress("Pull", None);
         stopping.cancelling = true;
         assert_eq!(stopping.title(), "Stopping…");
+    }
+
+    #[test]
+    fn detail_parses_git_progress_and_preserves_raw_lines() {
+        let mut op = progress("Fetch", None);
+        assert_eq!(op.detail(), None);
+
+        op.latest_line =
+            "Receiving objects: 90% (854840/947019), 1.13 GiB | 10.33 MiB/s".to_string();
+        assert_eq!(
+            op.detail(),
+            Some(OperationProgressDetail::Raw(
+                "Receiving objects: 90% (854840/947019), 1.13 GiB | 10.33 MiB/s"
+            ))
+        );
+
+        op.progress = Some(GitProgressMeter {
+            title: Arc::from("Receiving objects"),
+            percent: Some(90),
+            estimated: false,
+        });
+        assert_eq!(
+            op.detail(),
+            Some(OperationProgressDetail::Transfer {
+                count: 854840,
+                total: 947019,
+                transferred: Some("1.13 GiB"),
+                throughput: Some("10.33 MiB/s"),
+            })
+        );
+
+        op.progress = Some(GitProgressMeter {
+            title: Arc::from("Enumerating objects"),
+            percent: None,
+            estimated: false,
+        });
+        op.latest_line = "remote: Enumerating objects: 1200".to_string();
+        assert_eq!(op.detail(), Some(OperationProgressDetail::Count(1200)));
+
+        op.latest_line = "LFS download 2/4 files · 1 MB of 8 MB".to_string();
+        assert_eq!(
+            op.detail(),
+            Some(OperationProgressDetail::Raw(
+                "LFS download 2/4 files · 1 MB of 8 MB"
+            ))
+        );
+
+        let mut hook = progress(
+            "Pull",
+            Some(GitProgressMeter {
+                title: Arc::from("Running post-merge hook"),
+                percent: None,
+                estimated: false,
+            }),
+        );
+        hook.latest_line = "remote: Enumerating objects: 1200, done.".to_string();
+        assert_eq!(
+            hook.detail(),
+            Some(OperationProgressDetail::Raw(
+                "remote: Enumerating objects: 1200, done."
+            ))
+        );
+
+        let mut estimated = progress(
+            "Maintenance",
+            Some(GitProgressMeter::estimated(
+                "Computing commit graph generation numbers",
+                50,
+            )),
+        );
+        estimated.latest_line =
+            "Computing commit graph generation numbers:  50% (100/200)".to_string();
+        assert_eq!(
+            estimated.detail(),
+            Some(OperationProgressDetail::Raw(
+                "Computing commit graph generation numbers:  50% (100/200)"
+            ))
+        );
     }
 }
