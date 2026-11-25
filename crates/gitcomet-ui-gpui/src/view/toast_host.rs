@@ -1,9 +1,61 @@
 use super::operation_progress::{
     MAINTENANCE_RECOMMENDATION_TEXT, MaintenanceRecommendation, OperationProgress,
+    OperationProgressDetail,
 };
 use super::*;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_state::model::SubmoduleAddProgressState;
+
+const PROGRESS_PERCENT_SAMPLE: &str = "100%";
+const PROGRESS_ESTIMATED_PERCENT_SAMPLE: &str = "~100%";
+const PROGRESS_BYTES_SAMPLE: &str = "1023.99 MiB";
+const PROGRESS_SPEED_SAMPLE: &str = "1023.99 MiB/s";
+/// Stands in for a metric git has not reported yet.
+const PROGRESS_PLACEHOLDER: &str = "–";
+
+fn monospace_sample_width(
+    window: &mut Window,
+    theme: AppTheme,
+    text_px: f32,
+    weight: FontWeight,
+    sample: &str,
+) -> Pixels {
+    let font_size = theme.ui_text(text_px).to_pixels(window.rem_size());
+    let style = gpui::TextStyle {
+        font_family: UI_MONOSPACE_FONT_FAMILY.into(),
+        font_features: gpui::FontFeatures::disable_ligatures(),
+        font_weight: weight,
+        font_size: font_size.into(),
+        ..Default::default()
+    };
+    window
+        .text_system()
+        .shape_line(
+            sample.to_owned().into(),
+            font_size,
+            &[style.to_run(sample.len())],
+        )
+        .width
+        .ceil()
+}
+
+fn render_steady_percent(
+    width: Pixels,
+    label: String,
+    selector: impl Fn() -> String + 'static,
+) -> gpui::Div {
+    div()
+        .debug_selector(selector)
+        .w(width)
+        .flex_none()
+        .flex()
+        .justify_end()
+        .font_family(UI_MONOSPACE_FONT_FAMILY)
+        .font_features(gpui::FontFeatures::disable_ligatures())
+        .font_weight(FontWeight::SEMIBOLD)
+        .whitespace_nowrap()
+        .child(label)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HookProgressToast {
@@ -872,12 +924,20 @@ impl ToastHost {
     fn render_clone_progress_toast(
         &self,
         op: CloneOpState,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = AppTheme::current(cx);
         let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
         let percent = op.progress.percent.min(100);
+        let percent_width = monospace_sample_width(
+            window,
+            theme,
+            14.0,
+            FontWeight::SEMIBOLD,
+            PROGRESS_PERCENT_SAMPLE,
+        );
         let bar_fill_color = crate::view::clone_progress::clone_progress_bar_fill_color(theme, &op);
         let aborting = matches!(op.status, CloneOpStatus::Cancelling);
         let dest = op.dest.as_ref().clone();
@@ -925,6 +985,7 @@ impl ToastHost {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
+                            .flex()
                             .flex_col()
                             .gap_0p5()
                             .child(
@@ -954,11 +1015,11 @@ impl ToastHost {
                             .text_color(spinner_color)
                             .child(crate::view::clone_progress::clone_progress_phase_label(&op)),
                     )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{percent}%")),
-                    ),
+                    .child(render_steady_percent(
+                        percent_width,
+                        format!("{percent}%"),
+                        || "clone_progress_percent".to_string(),
+                    )),
             )
             .child(components::progress_bar(
                 theme,
@@ -995,6 +1056,7 @@ impl ToastHost {
                     div()
                         .flex_1()
                         .min_w(px(0.0))
+                        .flex()
                         .flex_col()
                         .gap_0p5()
                         .child(
@@ -1065,6 +1127,7 @@ impl ToastHost {
             .gap_2()
             .child(
                 div()
+                    .flex()
                     .flex_col()
                     .gap_0p5()
                     .child(
@@ -1098,19 +1161,223 @@ impl ToastHost {
         self.render_progress_shell(theme, ui_scale, content)
     }
 
-    fn render_operation_progress_toast(
-        &self,
+    /// One line: spinner, title, subtitle, elapsed time and the card's actions.
+    fn render_operation_progress_header(
+        theme: AppTheme,
+        ui_scale: crate::ui_scale::UiScale,
         progress: &OperationProgress,
         now: std::time::SystemTime,
+        accent: gpui::Rgba,
+        actions: gpui::Div,
+    ) -> gpui::Div {
+        let operation_id = progress.operation_id;
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(svg_spinner(
+                ("operation_progress_spinner", operation_id.0),
+                accent,
+                ui_scale.px(16.0),
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_baseline()
+                    .gap_1p5()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .font_weight(FontWeight::BOLD)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(progress.title()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(theme.ui_text(14.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(progress.subtitle.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || {
+                        format!("operation_progress_elapsed_{}", operation_id.0)
+                    })
+                    .flex_none()
+                    .font_family(UI_MONOSPACE_FONT_FAMILY)
+                    .font_features(gpui::FontFeatures::disable_ligatures())
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .whitespace_nowrap()
+                    .child(progress.elapsed(now)),
+            )
+            .child(actions)
+    }
+
+    fn render_operation_progress_phase_row(
+        window: &mut Window,
+        theme: AppTheme,
+        progress: &OperationProgress,
+        accent: gpui::Rgba,
+        inline_count: Option<u64>,
+    ) -> gpui::Div {
+        let operation_id = progress.operation_id;
+        let percent_sample = if progress.is_estimated() {
+            PROGRESS_ESTIMATED_PERCENT_SAMPLE
+        } else {
+            PROGRESS_PERCENT_SAMPLE
+        };
+        let percent_width =
+            monospace_sample_width(window, theme, 14.0, FontWeight::SEMIBOLD, percent_sample);
+        let right_slot = match (progress.percent_label(), inline_count) {
+            (Some(percent_label), _) => {
+                render_steady_percent(percent_width, percent_label, move || {
+                    format!("operation_progress_percent_{}", operation_id.0)
+                })
+            }
+            (None, Some(count)) => div()
+                .debug_selector(move || format!("operation_progress_count_{}", operation_id.0))
+                .flex_none()
+                .font_family(UI_MONOSPACE_FONT_FAMILY)
+                .font_features(gpui::FontFeatures::disable_ligatures())
+                .font_weight(FontWeight::SEMIBOLD)
+                .whitespace_nowrap()
+                .child(count.to_string()),
+            (None, None) => {
+                render_steady_percent(percent_width, PROGRESS_PLACEHOLDER.to_string(), move || {
+                    format!("operation_progress_percent_{}", operation_id.0)
+                })
+            }
+        };
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .text_size(theme.ui_text(14.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_color(accent)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(progress.phase().to_string()),
+            )
+            .child(right_slot)
+    }
+
+    /// One steady line under the bar. Metrics a phase lacks show a placeholder,
+    /// so the card keeps its size from the first frame to the last.
+    fn render_operation_progress_detail_row(
+        window: &mut Window,
+        theme: AppTheme,
+        operation_id: GitOperationId,
+        detail: Option<OperationProgressDetail<'_>>,
+    ) -> gpui::Div {
+        let base = div()
+            .debug_selector(move || format!("operation_progress_output_{}", operation_id.0))
+            .w_full()
+            .font_family(UI_MONOSPACE_FONT_FAMILY)
+            .font_features(gpui::FontFeatures::disable_ligatures())
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary);
+
+        let (count, transferred, throughput) = match detail {
+            Some(OperationProgressDetail::Raw(line)) => {
+                return base
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(line.to_string());
+            }
+            Some(OperationProgressDetail::Transfer {
+                count,
+                total,
+                transferred,
+                throughput,
+            }) => (Some((count, total)), transferred, throughput),
+            Some(OperationProgressDetail::Count(_)) | None => (None, None, None),
+        };
+        let metric_width = |sample: &str, window: &mut Window| {
+            monospace_sample_width(window, theme, 12.0, FontWeight::NORMAL, sample)
+        };
+        let bytes_width = metric_width(PROGRESS_BYTES_SAMPLE, window);
+        let speed_width = metric_width(PROGRESS_SPEED_SAMPLE, window);
+
+        let count_cell = div()
+            .debug_selector(move || format!("operation_progress_count_{}", operation_id.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .whitespace_nowrap();
+        let count_cell = match count {
+            Some((count, total)) => {
+                let count_str = count.to_string();
+                let total_str = total.to_string();
+                let done_width =
+                    metric_width(&"8".repeat(total_str.len().max(count_str.len())), window);
+                count_cell
+                    .child(div().w(done_width).flex().justify_end().child(count_str))
+                    .child(
+                        div()
+                            .debug_selector(move || {
+                                format!("operation_progress_total_{}", operation_id.0)
+                            })
+                            .child(format!("/{total_str}")),
+                    )
+            }
+            None => count_cell.child(PROGRESS_PLACEHOLDER),
+        };
+        let metric = |selector: &'static str, width: Pixels, value: Option<&str>| {
+            div()
+                .debug_selector(move || format!("operation_progress_{selector}_{}", operation_id.0))
+                .min_w(width)
+                .flex()
+                .justify_end()
+                .child(value.unwrap_or(PROGRESS_PLACEHOLDER).to_string())
+        };
+
+        base.flex()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_x_2()
+            .gap_y_1()
+            .overflow_hidden()
+            .child(count_cell)
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .whitespace_nowrap()
+                    .child(metric("bytes", bytes_width, transferred))
+                    .child(metric("speed", speed_width, throughput)),
+            )
+    }
+
+    fn render_operation_progress_actions(
+        &self,
+        theme: AppTheme,
+        progress: &OperationProgress,
         cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let theme = AppTheme::current(cx);
-        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
+    ) -> gpui::Div {
         let operation_id = progress.operation_id;
         let repo_id = progress.repo_id;
-        let accent = theme.colors.accent.foreground;
-        let percent = progress.progress.as_ref().and_then(|meter| meter.percent);
-
         let details_button = components::Button::new(
             format!("operation_progress_details_{}", operation_id.0),
             "Details",
@@ -1159,100 +1426,76 @@ impl ToastHost {
         })
         .debug_selector(move || format!("operation_progress_stop_{}", operation_id.0));
 
-        let status = match progress.percent_label() {
-            Some(percent) => format!("{percent} · {}", progress.elapsed(now)),
-            None => progress.elapsed(now),
+        div()
+            .flex_none()
+            .flex()
+            .gap_1()
+            .when(progress.label == "Pull", |actions| {
+                actions.child(details_button)
+            })
+            .child(stop_button)
+    }
+
+    fn render_operation_progress_toast(
+        &self,
+        progress: &OperationProgress,
+        now: std::time::SystemTime,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = AppTheme::current(cx);
+        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
+        let operation_id = progress.operation_id;
+        let accent = theme.colors.accent.foreground;
+        let percent = progress.progress.as_ref().and_then(|meter| meter.percent);
+        let detail = progress.detail();
+        let inline_count = match (&percent, &detail) {
+            (None, Some(OperationProgressDetail::Count(count))) => Some(*count),
+            _ => None,
         };
+        let detail = if inline_count.is_some() { None } else { detail };
+        let fill_ratio =
+            crate::view::clone_progress::clone_progress_fill_ratio(percent.unwrap_or(0));
+
         let content = div()
             .debug_selector(move || format!("operation_progress_toast_{}", operation_id.0))
             .w_full()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(svg_spinner(
-                        ("operation_progress_spinner", operation_id.0),
-                        accent,
-                        ui_scale.px(16.0),
-                    ))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex_col()
-                            .gap_0p5()
-                            .child(div().font_weight(FontWeight::BOLD).child(progress.title()))
-                            .child(
-                                div()
-                                    .text_size(theme.ui_text(14.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .line_clamp(1)
-                                    .overflow_hidden()
-                                    .child(progress.subtitle.clone()),
-                            ),
-                    ),
-            )
+            .gap_1p5()
+            .child(Self::render_operation_progress_header(
+                theme,
+                ui_scale,
+                progress,
+                now,
+                accent,
+                self.render_operation_progress_actions(theme, progress, cx),
+            ))
             .when_some(progress.explanation(), |this, explanation| {
                 this.child(div().text_size(theme.ui_text(14.0)).child(explanation))
             })
+            .child(Self::render_operation_progress_phase_row(
+                window,
+                theme,
+                progress,
+                accent,
+                inline_count,
+            ))
             .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .text_size(theme.ui_text(14.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_color(accent)
-                            .line_clamp(1)
-                            .overflow_hidden()
-                            .child(progress.phase().to_string()),
-                    )
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(status)),
+                components::progress_bar(
+                    theme,
+                    ui_scale,
+                    fill_ratio,
+                    with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
+                )
+                .debug_selector(move || format!("operation_progress_bar_{}", operation_id.0)),
             )
-            .when_some(percent, |this, percent| {
-                this.child(
-                    components::progress_bar(
-                        theme,
-                        ui_scale,
-                        crate::view::clone_progress::clone_progress_fill_ratio(percent),
-                        with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
-                    )
-                    .debug_selector(move || format!("operation_progress_bar_{}", operation_id.0)),
-                )
-            })
-            .when(!progress.latest_line.is_empty(), |this| {
-                this.child(
-                    div()
-                        .debug_selector(move || {
-                            format!("operation_progress_output_{}", operation_id.0)
-                        })
-                        .text_size(theme.ui_text(12.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .line_clamp(2)
-                        .overflow_hidden()
-                        .child(progress.latest_line.clone()),
-                )
-            })
-            .child(
-                div()
-                    .pt_1()
-                    .flex()
-                    .gap_2()
-                    .when(progress.label == "Pull", |actions| {
-                        actions.child(details_button)
-                    })
-                    .child(stop_button),
-            );
+            .child(Self::render_operation_progress_detail_row(
+                window,
+                theme,
+                operation_id,
+                detail,
+            ));
 
         self.render_progress_shell(theme, ui_scale, content)
     }
@@ -1496,7 +1739,7 @@ impl ToastHost {
 }
 
 impl Render for ToastHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         #[cfg(any(test, feature = "benchmarks"))]
         {
             self.render_count += 1;
@@ -1529,7 +1772,7 @@ impl Render for ToastHost {
 
         let mut progress_toasts = Vec::new();
         if let Some(progress) = self.clone_progress.clone() {
-            progress_toasts.push(self.render_clone_progress_toast(progress, cx));
+            progress_toasts.push(self.render_clone_progress_toast(progress, window, cx));
         }
         progress_toasts.extend(self.submodule_add_progress.iter().enumerate().map(
             |(ix, progress)| self.render_submodule_add_progress_toast(ix as u64, progress, cx),
@@ -1551,7 +1794,7 @@ impl Render for ToastHost {
             .cloned()
             .collect::<Vec<_>>()
         {
-            progress_toasts.push(self.render_operation_progress_toast(&progress, now, cx));
+            progress_toasts.push(self.render_operation_progress_toast(&progress, now, window, cx));
         }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };

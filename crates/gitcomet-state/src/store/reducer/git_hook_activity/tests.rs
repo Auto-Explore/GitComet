@@ -696,3 +696,66 @@ fn operations_without_a_progress_lane_do_not_parse_meters() {
     );
     assert_eq!(repo.feedback.hook_activity[0].progress, None);
 }
+
+#[test]
+fn progress_lane_latest_line_preserves_complete_lines_across_split_chunks() {
+    let mut repo = repo_state();
+    let operation_id = GitOperationId(43);
+    started(
+        &mut repo,
+        operation_id,
+        "Fetch".to_string(),
+        None,
+        SystemTime::UNIX_EPOCH,
+        true,
+    );
+
+    apply_event(
+        &mut repo,
+        operation_id,
+        stderr("remote: Enumerating objects: 1"),
+    );
+    assert_eq!(repo.feedback.hook_activity[0].latest_line, "");
+
+    apply_event(&mut repo, operation_id, stderr("200\r"));
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "remote: Enumerating objects: 1200"
+    );
+
+    apply_event(
+        &mut repo,
+        operation_id,
+        stderr(
+            "remote: Counting objects: 100% (5/5), done.\nReceiving objects:  40% (2/5)\rReceiving obj",
+        ),
+    );
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "Receiving objects:  40% (2/5)"
+    );
+
+    apply_event(&mut repo, operation_id, stderr("ects:  60% (3/5)\r"));
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "Receiving objects:  60% (3/5)"
+    );
+
+    apply_event(&mut repo, operation_id, stderr("\nReceiving obj"));
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "Receiving objects:  60% (3/5)"
+    );
+
+    apply_event(&mut repo, operation_id, stderr("ects:  80% (4/5), 1.2"));
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "Receiving objects:  60% (3/5)"
+    );
+
+    apply_event(&mut repo, operation_id, stderr("0 MiB\r"));
+    assert_eq!(
+        repo.feedback.hook_activity[0].latest_line,
+        "Receiving objects:  80% (4/5), 1.20 MiB"
+    );
+}

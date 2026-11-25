@@ -23,10 +23,17 @@ impl GitProgressMeter {
     }
 }
 
-/// Parses one redrawn segment of git's progress output. Git prints either
-/// `<title>: NN% (x/y)[, throughput][, done.]` or `<title>: N[, done.]`,
-/// optionally behind `remote: ` for the server's phases.
-pub fn parse_progress_fragment(fragment: &str) -> Option<GitProgressMeter> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitProgressDetail<'a> {
+    pub title: &'a str,
+    pub percent: Option<u8>,
+    pub count: u64,
+    pub total: Option<u64>,
+    pub transferred: Option<&'a str>,
+    pub throughput: Option<&'a str>,
+}
+
+pub fn parse_progress_detail(fragment: &str) -> Option<GitProgressDetail<'_>> {
     let fragment = fragment.trim();
     let fragment = fragment.strip_prefix("remote: ").unwrap_or(fragment);
     let (title, rest) = fragment.split_once(": ")?;
@@ -40,20 +47,101 @@ pub fn parse_progress_fragment(fragment: &str) -> Option<GitProgressMeter> {
     }
     let number = rest[..digits].parse::<u64>().ok()?;
     let after = &rest[digits..];
-    let percent = if let Some(after_percent) = after.strip_prefix('%') {
-        // `(x/y)` follows every percentage git prints.
-        if !after_percent.trim_start().starts_with('(') {
+
+    if let Some(after_percent) = after.strip_prefix('%') {
+        let after_paren = after_percent.trim_start().strip_prefix('(')?;
+        let (counts, tail) = after_paren.split_once(')')?;
+        let (done_str, total_str) = counts.split_once('/')?;
+        if done_str.is_empty()
+            || total_str.is_empty()
+            || !done_str.bytes().all(|b| b.is_ascii_digit())
+            || !total_str.bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
-        Some(number.min(100) as u8)
-    } else if after.is_empty() || after.starts_with(", done") {
-        None
-    } else {
-        return None;
-    };
+        let count = done_str.parse::<u64>().ok()?;
+        let total = total_str.parse::<u64>().ok()?;
+        let tail = tail.trim();
+        let tail = tail
+            .strip_suffix(", done.")
+            .or_else(|| tail.strip_suffix(", done"))
+            .unwrap_or(tail)
+            .trim_end();
+        if !tail.is_empty() && !tail.starts_with(", ") {
+            return None;
+        }
+        let (transferred, throughput) = if let Some(metrics) = tail.strip_prefix(", ") {
+            let metrics = metrics.trim();
+            if let Some((bytes, speed)) = metrics.split_once('|') {
+                let bytes = bytes.trim();
+                let speed = speed
+                    .split_once(", ")
+                    .map_or(speed, |(head, _)| head)
+                    .trim();
+                (
+                    bytes
+                        .bytes()
+                        .next()
+                        .is_some_and(|b| b.is_ascii_digit())
+                        .then_some(bytes),
+                    speed
+                        .bytes()
+                        .next()
+                        .is_some_and(|b| b.is_ascii_digit())
+                        .then_some(speed),
+                )
+            } else {
+                let bytes = metrics
+                    .split_once(", ")
+                    .map_or(metrics, |(head, _)| head)
+                    .trim();
+                (
+                    bytes
+                        .bytes()
+                        .next()
+                        .is_some_and(|b| b.is_ascii_digit())
+                        .then_some(bytes),
+                    None,
+                )
+            }
+        } else {
+            (None, None)
+        };
+        return Some(GitProgressDetail {
+            title,
+            percent: Some(number.min(100) as u8),
+            count,
+            total: Some(total),
+            transferred,
+            throughput,
+        });
+    }
+
+    if after.is_empty()
+        || after.strip_prefix(", ").is_some_and(|done| {
+            !done.is_empty()
+                && !done.chars().any(char::is_whitespace)
+                && !done.bytes().any(|b| b.is_ascii_digit())
+        })
+    {
+        return Some(GitProgressDetail {
+            title,
+            percent: None,
+            count: number,
+            total: None,
+            transferred: None,
+            throughput: None,
+        });
+    }
+
+    None
+}
+
+pub fn parse_progress_fragment(fragment: &str) -> Option<GitProgressMeter> {
+    let detail = parse_progress_detail(fragment)?;
     Some(GitProgressMeter {
-        title: Arc::from(title),
-        percent,
+        title: Arc::from(detail.title),
+        percent: detail.percent,
         estimated: false,
     })
 }
@@ -181,5 +269,96 @@ mod tests {
         );
         assert_eq!(strip_progress("fatal: denied\n"), "fatal: denied\n");
         assert_eq!(strip_progress("no newline"), "no newline");
+    }
+
+    #[test]
+    fn parses_progress_detail_counts_bytes_and_throughput() {
+        assert_eq!(
+            parse_progress_detail(
+                "Receiving objects:  90% (854840/947019), 1.13 GiB | 10.33 MiB/s",
+            ),
+            Some(GitProgressDetail {
+                title: "Receiving objects",
+                percent: Some(90),
+                count: 854840,
+                total: Some(947019),
+                transferred: Some("1.13 GiB"),
+                throughput: Some("10.33 MiB/s"),
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("Unpacking objects: 100% (3/3), 280 bytes | 280.00 KiB/s, done.",),
+            Some(GitProgressDetail {
+                title: "Unpacking objects",
+                percent: Some(100),
+                count: 3,
+                total: Some(3),
+                transferred: Some("280 bytes"),
+                throughput: Some("280.00 KiB/s"),
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("Receiving objects:  45% (9/20), 1.20 MiB"),
+            Some(GitProgressDetail {
+                title: "Receiving objects",
+                percent: Some(45),
+                count: 9,
+                total: Some(20),
+                transferred: Some("1.20 MiB"),
+                throughput: None,
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("remote: Counting objects: 100% (5/5), done."),
+            Some(GitProgressDetail {
+                title: "Counting objects",
+                percent: Some(100),
+                count: 5,
+                total: Some(5),
+                transferred: None,
+                throughput: None,
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("Objekte empfangen: 100% (5/5), fertig."),
+            Some(GitProgressDetail {
+                title: "Objekte empfangen",
+                percent: Some(100),
+                count: 5,
+                total: Some(5),
+                transferred: None,
+                throughput: None,
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("remote: Enumerating objects: 1200, done."),
+            Some(GitProgressDetail {
+                title: "Enumerating objects",
+                percent: None,
+                count: 1200,
+                total: None,
+                transferred: None,
+                throughput: None,
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("remote: Objekte aufzählen: 1200, fertig."),
+            Some(GitProgressDetail {
+                title: "Objekte aufzählen",
+                percent: None,
+                count: 1200,
+                total: None,
+                transferred: None,
+                throughput: None,
+            })
+        );
+        assert_eq!(
+            parse_progress_detail("Enumerating objects: 1200, 5 items"),
+            None
+        );
+        assert_eq!(
+            parse_progress_detail("Enumerating objects: 1200, two words"),
+            None
+        );
     }
 }
