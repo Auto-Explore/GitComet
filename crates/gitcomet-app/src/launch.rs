@@ -357,6 +357,9 @@ fn run_browser(
     if let Err(err) = crash_session_result {
         eprintln!("Failed to create {name} crash-recovery marker before UI launch: {err}");
     }
+    let startup_exit = startup_crash_report
+        .as_ref()
+        .map(|report| report.snapshot.clone());
     let startup_report = startup_crash_report.map(|report| gitcomet_ui_gpui::StartupCrashReport {
         issue_url: report.issue_url,
         summary: report.summary,
@@ -365,6 +368,7 @@ fn run_browser(
     let mut ui_launch = gitcomet_ui_gpui::UiLaunch::new(backend)
         .extensions(extensions)
         .initial_request(initial_browser_request)
+        .startup_exit(startup_exit)
         .startup_crash_report(startup_report)
         .on_shutdown(move || {
             if let Err(err) = crashlog::finish_session() {
@@ -380,10 +384,7 @@ fn run_browser(
     }
     let run_result = ui_launch.run();
     match run_result {
-        Ok(
-            gitcomet_ui_gpui::UiRunOutcome::CleanShutdown
-            | gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit,
-        ) => {
+        Ok(gitcomet_ui_gpui::UiRunOutcome::CleanShutdown) => {
             if let Err(err) = crashlog::finish_session() {
                 eprintln!(
                     "Failed to clear {name} crash-recovery marker after clean shutdown: {err}"
@@ -391,10 +392,18 @@ fn run_browser(
             }
             exit_code::SUCCESS
         }
+        Ok(gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit) => {
+            eprintln!("The GPUI event loop exited unexpectedly.");
+            exit_code::ERROR
+        }
         Err(err) => {
-            if let Err(record_err) =
-                crashlog::record_session_failure("main GPUI window launch", &err.to_string())
-            {
+            let recorded = match err.event_loop_reason() {
+                Some(reason) => crashlog::record_event_loop_failure(reason),
+                None => {
+                    crashlog::record_session_failure("main GPUI window launch", &err.to_string())
+                }
+            };
+            if let Err(record_err) = recorded {
                 eprintln!("Failed to preserve {name} UI launch failure data: {record_err}");
             }
             eprintln!("Failed to launch GPUI browser UI: {err}");
@@ -695,14 +704,13 @@ fn ensure_macos_dev_app_bundle(
 
 #[cfg(feature = "ui-gpui-runtime")]
 fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
-    eprintln!(
-        "{} detected a crash from a previous run.",
-        identity::current().display_name()
-    );
-    eprintln!(
-        "Open this URL to file a prefilled crash report:\n{}",
-        report.issue_url
-    );
+    eprintln!("{}", report.summary);
+    if !report.issue_url.is_empty() {
+        eprintln!(
+            "Open this URL to file a prefilled crash report:\n{}",
+            report.issue_url
+        );
+    }
     eprintln!("Crash log: {}", report.crash_log_path.display());
 }
 

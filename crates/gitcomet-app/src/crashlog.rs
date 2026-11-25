@@ -1,6 +1,7 @@
 mod report;
 
 use gitcomet_core::identity;
+use gitcomet_core::startup_exit::{StartupExitReason, StartupExitReport};
 use std::backtrace::Backtrace;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -35,6 +36,7 @@ pub struct StartupCrashReport {
     pub issue_url: String,
     pub summary: String,
     pub crash_log_path: PathBuf,
+    pub snapshot: StartupExitReport,
 }
 
 struct AbnormalExitLog {
@@ -401,6 +403,11 @@ fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
 
     let mut contents = Vec::new();
     writeln!(contents, "=== GitComet abnormal exit candidate ===")?;
+    writeln!(
+        contents,
+        "session_token={}",
+        gitcomet_core::startup_exit::current_session_token()
+    )?;
     writeln!(contents, "failure_kind=abnormal-exit")?;
     writeln!(contents, "failure_context=")?;
     writeln!(contents, "copy_source=")?;
@@ -498,6 +505,22 @@ fn record_session_failure_in_dir_with_diagnostics(
     file.sync_data()
 }
 
+/// Records the backend's observed result. Logged driver warnings cannot establish this cause.
+pub fn record_event_loop_failure(reason: StartupExitReason) -> std::io::Result<()> {
+    let kind = match reason {
+        StartupExitReason::X11EventLoopError => "x11-event-loop-error",
+        StartupExitReason::WaylandEventLoopError => "wayland-event-loop-error",
+        StartupExitReason::UnknownExit => {
+            return Err(std::io::Error::other("missing event-loop failure"));
+        }
+    };
+    let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
+    let mut file = open_private_append(&session_marker_path(&dir))?;
+    writeln!(file, "failure_kind={kind}")?;
+    writeln!(file, "message={}", reason.description())?;
+    file.sync_data()
+}
+
 pub fn take_startup_report() -> Option<StartupCrashReport> {
     let dir = crash_dir()?;
     take_startup_report_from_crash_dir_with_process_check(
@@ -517,6 +540,11 @@ fn take_startup_report_from_crash_dir_with_process_check(
 ) -> Option<StartupCrashReport> {
     let product = identity::current().display_name();
     let report_path = startup_report_path(dir);
+    let _lock = gitcomet_core::startup_exit::lock_snapshot(&report_path)
+        .inspect_err(|err| {
+            eprintln!("Failed to lock pending {product} crash report: {err}");
+        })
+        .ok()?;
     let mut report_log = match std::fs::read_to_string(&report_path) {
         Ok(report_log) => report_log,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -555,6 +583,9 @@ fn take_startup_report_from_crash_dir_with_process_check(
     // Preserve the existing panic-over-session priority when both reports are
     // available while retaining the session's last-operation diagnostics.
     if let Some(panic_log) = &panic_log {
+        if !report_log.is_empty() && !panic_log.contents.starts_with("=== GitComet ") {
+            append_report_log(&mut report_log, "=== GitComet crash (panic) ===");
+        }
         append_report_log(&mut report_log, &panic_log.contents);
     }
 
@@ -674,6 +705,9 @@ fn read_abnormal_exit_log(
     if session_log.trim().is_empty() {
         return None;
     }
+    if !session_log.starts_with("=== GitComet ") {
+        session_log.insert_str(0, "=== GitComet abnormal exit candidate ===\n");
+    }
     match std::fs::read_to_string(last_operation_path) {
         Ok(last_operation) => {
             let _ = writeln!(session_log, "\n=== GitComet operation context ===");
@@ -781,6 +815,11 @@ fn write_panic_log(
     };
 
     let _ = writeln!(file, "=== GitComet crash (panic) ===");
+    let _ = writeln!(
+        file,
+        "session_token={}",
+        gitcomet_core::startup_exit::current_session_token()
+    );
     let _ = writeln!(file, "failure_kind=panic");
     let _ = writeln!(file, "timestamp_unix_ms={}", unix_time_ms());
     let _ = writeln!(

@@ -47,12 +47,12 @@ fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui
     });
 
     cx.update(|_window, app| {
-        view.update(app, |this, _cx| {
-            this.ignore_startup_crash_report()
-                .expect("ignore startup crash report");
+        view.update(app, |this, cx| {
+            this.ignore_startup_crash_report(cx);
         });
     });
 
+    cx.run_until_parked();
     assert!(
         !crash_log_path.exists(),
         "ignoring the crash must delete its persisted report"
@@ -1935,6 +1935,12 @@ fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
     let report_dir = tempfile::tempdir().unwrap();
     let crash_log_path = report_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "private raw crash text").unwrap();
+    let snapshot = gitcomet_extension_api::StartupExitReport::new(
+        crash_log_path.clone(),
+        b"private raw crash text",
+        gitcomet_extension_api::StartupExitReason::X11EventLoopError,
+    );
+    cx.update(|cx| cx.set_global(gitcomet_extension_api::host::RecoveredExit(snapshot)));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let mut config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: String::new(),
@@ -1955,4 +1961,18 @@ fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
     assert_eq!(opened.get(), 1);
     assert!(crash_log_path.exists(), "review must preserve the report");
     view.read_with(cx, |view, _| assert!(view.startup_crash_report.is_some()));
+    cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let reviewed = host.startup_exit_report(app).unwrap();
+        assert_eq!(
+            reviewed.reason(),
+            gitcomet_extension_api::StartupExitReason::X11EventLoopError
+        );
+        reviewed.acknowledge().unwrap();
+        host.refresh_startup_exit_report(app);
+        assert!(host.startup_exit_report(app).is_none());
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("startup_crash_report").is_none());
+    assert!(!crash_log_path.exists());
 }

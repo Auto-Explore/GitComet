@@ -393,7 +393,10 @@ fn previous_session_report_is_snapshotted_before_marker_is_removed() {
         .expect("stale session should produce a startup report");
 
     assert_eq!(report.crash_log_path, startup_report_path(dir.path()));
-    assert!(report.summary.contains("did not exit cleanly"));
+    assert_eq!(
+        report.summary,
+        "The previous session ended unexpectedly. The cause is unknown."
+    );
     assert!(report.issue_url.contains("commit-details-diff"));
     assert!(
         !marker.exists(),
@@ -725,7 +728,10 @@ fn startup_recovery_consumes_a_stale_session_marker() {
 
     let report = take_startup_report_from_crash_dir(dir.path())
         .expect("the marker should produce a startup report");
-    assert!(report.summary.contains("did not exit cleanly"));
+    assert_eq!(
+        report.summary,
+        "The previous session ended unexpectedly. The cause is unknown."
+    );
     assert!(
         !marker.exists(),
         "stale recovery state should be removed after it is snapshotted"
@@ -1022,4 +1028,41 @@ fn build_issue_body_trims_very_long_backtrace() {
 
     assert_eq!(backtrace_text.chars().count(), MAX_BACKTRACE_CHARS);
     assert!(backtrace_text.ends_with("..."));
+}
+
+#[test]
+fn recovered_loop_failure_survives_an_unrelated_runtime_log() {
+    let dir = tempdir().unwrap();
+    begin_session_in_dir(dir.path()).unwrap();
+    let mut marker = open_private_append(&session_marker_path(dir.path())).unwrap();
+    writeln!(marker, "failure_kind=x11-event-loop-error").unwrap();
+    drop(marker);
+    write_runtime_error_log_in_dir(dir.path(), "renderer.rs", "driver warning", "local detail")
+        .unwrap();
+    let recovered = take_startup_report_from_crash_dir(dir.path()).unwrap();
+    assert_eq!(
+        recovered.snapshot.reason(),
+        StartupExitReason::X11EventLoopError
+    );
+    assert_eq!(recovered.summary, "The X11 event loop returned an error.");
+    recovered.snapshot.acknowledge().unwrap();
+    assert!(take_startup_report_from_crash_dir(dir.path()).is_none());
+}
+
+#[test]
+fn startup_token_follows_only_the_most_recent_primary_record() {
+    let dir = tempdir().unwrap();
+    begin_session_in_dir(dir.path()).unwrap();
+    let recovered = take_startup_report_from_crash_dir(dir.path()).unwrap();
+    let token = gitcomet_core::startup_exit::current_session_token();
+    assert_eq!(recovered.snapshot.session_token(), Some(token));
+    assert!(!recovered.issue_url.contains(&token.to_string()));
+    std::fs::write(
+        session_marker_path(dir.path()),
+        "message=older version marker\n",
+    )
+    .unwrap();
+    let legacy = take_startup_report_from_crash_dir(dir.path()).unwrap();
+    assert_eq!(legacy.snapshot.session_token(), None);
+    assert_eq!(legacy.summary, StartupExitReason::UnknownExit.description());
 }

@@ -1,4 +1,4 @@
-use gitcomet_core::panic::payload_message;
+use gitcomet_core::{panic::payload_message, startup_exit::StartupExitReason};
 use std::any::Any;
 use std::fmt;
 
@@ -6,10 +6,36 @@ use std::fmt;
 pub struct UiLaunchError {
     context: &'static str,
     message: String,
-    is_panic: bool,
+    kind: LaunchFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchFailure {
+    Panic,
+    ReturnedError,
+    EventLoop(StartupExitReason),
 }
 
 impl UiLaunchError {
+    pub fn event_loop_reason(&self) -> Option<StartupExitReason> {
+        match self.kind {
+            LaunchFailure::EventLoop(reason) => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn from_event_loop(error: gpui::EventLoopError) -> Self {
+        let reason = match error {
+            gpui::EventLoopError::X11 => StartupExitReason::X11EventLoopError,
+            gpui::EventLoopError::Wayland => StartupExitReason::WaylandEventLoopError,
+        };
+        Self {
+            context: "GPUI event loop",
+            message: reason.description().into(),
+            kind: LaunchFailure::EventLoop(reason),
+        }
+    }
+
     pub fn context(&self) -> &'static str {
         self.context
     }
@@ -22,7 +48,7 @@ impl UiLaunchError {
         Self {
             context,
             message: payload_message(payload.as_ref()),
-            is_panic: true,
+            kind: LaunchFailure::Panic,
         }
     }
 
@@ -30,14 +56,14 @@ impl UiLaunchError {
         Self {
             context,
             message: message.into(),
-            is_panic: false,
+            kind: LaunchFailure::ReturnedError,
         }
     }
 }
 
 impl fmt::Display for UiLaunchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_panic {
+        if self.kind == LaunchFailure::Panic {
             write!(f, "{} panicked: {}", self.context, self.message)
         } else {
             write!(f, "{} failed: {}", self.context, self.message)
@@ -49,10 +75,10 @@ impl std::error::Error for UiLaunchError {}
 
 pub(crate) fn run_with_panic_guard<F>(context: &'static str, launch: F) -> Result<(), UiLaunchError>
 where
-    F: FnOnce(),
+    F: FnOnce() -> Result<(), UiLaunchError>,
 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(launch))
-        .map_err(|payload| UiLaunchError::from_panic(context, payload))
+        .map_err(|payload| UiLaunchError::from_panic(context, payload))?
 }
 
 #[cfg(test)]
@@ -61,7 +87,7 @@ mod tests {
 
     #[test]
     fn panic_guard_returns_ok_for_successful_launch() {
-        assert!(run_with_panic_guard("main window", || {}).is_ok());
+        assert!(run_with_panic_guard("main window", || Ok(())).is_ok());
     }
 
     #[test]

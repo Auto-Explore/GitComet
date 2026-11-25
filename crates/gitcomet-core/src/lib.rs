@@ -39,6 +39,7 @@ pub mod remote_url;
 pub mod services;
 pub mod signing_tools;
 pub mod squash;
+pub mod startup_exit;
 pub mod text_format;
 pub mod text_search;
 pub mod text_utils;

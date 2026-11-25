@@ -22,6 +22,7 @@ pub enum UiRunOutcome {
 
 #[derive(Clone, Debug)]
 pub(super) struct WindowLaunchConfig {
+    startup_exit: Option<gitcomet_extension_api::StartupExitReport>,
     pub(super) title: String,
     pub(super) app_id: String,
     pub(super) view_config: GitCometViewConfig,
@@ -149,6 +150,7 @@ pub(crate) fn install_live_kit_policy() {
 
 /// A browser-window launch: configure it, then [`run`](Self::run) it.
 pub struct UiLaunch {
+    startup_exit: Option<gitcomet_extension_api::StartupExitReport>,
     pub(super) backend: Arc<dyn GitBackend>,
     pub(super) extensions: gitcomet_extension_api::Registry,
     pub(super) initial_request: BrowserOpenRequest,
@@ -168,6 +170,7 @@ impl UiLaunch {
                 target: BrowserOpenTarget::ExistingWindow,
             },
             startup_crash_report: None,
+            startup_exit: None,
             on_shutdown: None,
             browser_requests: None,
             on_ready: None,
@@ -186,6 +189,11 @@ impl UiLaunch {
     /// just like a forwarded request.
     pub fn initial_request(mut self, request: BrowserOpenRequest) -> Self {
         self.initial_request = request;
+        self
+    }
+
+    pub fn startup_exit(mut self, exit: Option<gitcomet_extension_api::StartupExitReport>) -> Self {
+        self.startup_exit = exit;
         self
     }
 
@@ -227,6 +235,7 @@ impl UiLaunch {
             extensions,
             initial_request,
             startup_crash_report,
+            startup_exit,
             on_shutdown,
             browser_requests,
             on_ready,
@@ -235,6 +244,7 @@ impl UiLaunch {
         let window_readiness = readiness.clone();
         let mut launch = normal_launch_config(initial_request.path, startup_crash_report);
         launch.browser_open_target = initial_request.target;
+        launch.startup_exit = startup_exit;
         {
             let _stage = gitcomet_core::startup_trace::span("graphics_device_precheck");
             ensure_graphics_device_available("main GPUI window launch")?;
@@ -282,6 +292,7 @@ impl UiLaunch {
             return 2;
         }
         let launch = WindowLaunchConfig {
+            startup_exit: None,
             title: format!("{} — Diff", identity::current().display_name()),
             app_id: identity::current().window_app_id(WindowKind::FocusedDiff),
             view_config: GitCometViewConfig {
@@ -375,6 +386,7 @@ pub(super) fn normal_launch_config(
     let mut view_config = GitCometViewConfig::normal(startup_crash_report);
     view_config.initial_path = initial_path;
     WindowLaunchConfig {
+        startup_exit: None,
         title: identity::current().display_name().to_string(),
         app_id: identity::current().window_app_id(WindowKind::Main),
         view_config,
@@ -387,6 +399,7 @@ pub(super) fn normal_launch_config_with_initial_repository(
     startup_crash_report: Option<StartupCrashReport>,
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
+        startup_exit: None,
         title: identity::current().display_name().to_string(),
         app_id: identity::current().window_app_id(WindowKind::Main),
         view_config: GitCometViewConfig::normal_with_initial_repository(
@@ -428,6 +441,7 @@ pub(super) fn focused_mergetool_launch_config(
     exit_code: Option<Arc<AtomicI32>>,
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
+        startup_exit: None,
         title: focused_mergetool_window_title(&config.conflicted_file_path),
         app_id: identity::current().window_app_id(WindowKind::FocusedMergetool),
         view_config: GitCometViewConfig {
@@ -486,7 +500,7 @@ pub(super) fn run_windowed_app(
     on_shutdown: Option<ShutdownCallback>,
     browser_requests: Option<crate::BrowserRequestReceiver>,
     readiness: StartupReadiness,
-) {
+) -> Result<(), UiLaunchError> {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     // Without this, `gpui` keeps its null client and every request — the
     // update check, and images a markdown preview points at — fails silently.
@@ -528,8 +542,11 @@ pub(super) fn run_windowed_app(
     }
 
     gitcomet_core::startup_trace::mark("event_loop_start");
-    application.run(move |cx: &mut App| {
+    let handle = application.run(move |cx: &mut App| {
         gitcomet_core::startup_trace::mark("event_loop_callback");
+        if let Some(exit) = launch.startup_exit.clone() {
+            cx.set_global(gitcomet_extension_api::host::RecoveredExit(exit));
+        }
         cx.set_global(clean_shutdown_tracker);
         #[cfg(target_os = "windows")]
         cx.set_global(renderer_session);
@@ -548,7 +565,9 @@ pub(super) fn run_windowed_app(
         cx.on_app_quit(move |cx| {
             flush_open_workspace_environments(cx);
             crate::workspaces::flush_to_disk(cx);
-            if let Some(on_shutdown) = on_shutdown.as_ref() {
+            if cx.event_loop_error().is_none()
+                && let Some(on_shutdown) = on_shutdown.as_ref()
+            {
                 on_shutdown();
             }
             async {}
@@ -622,6 +641,10 @@ pub(super) fn run_windowed_app(
         }
         next(cx);
     });
+    match handle.event_loop_error() {
+        Some(error) => Err(UiLaunchError::from_event_loop(error)),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn open_initial_gitcomet_windows(

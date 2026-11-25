@@ -2375,17 +2375,39 @@ impl GitCometView {
         );
     }
 
-    pub(super) fn ignore_startup_crash_report(&mut self) -> Result<(), std::io::Error> {
-        let Some(report) = self.startup_crash_report.as_ref() else {
-            return Ok(());
+    pub(super) fn ignore_startup_crash_report(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(report) = self.startup_crash_report.clone() else {
+            return;
         };
-        match std::fs::remove_file(&report.crash_log_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
-        }
-        self.startup_crash_report = None;
-        Ok(())
+        let snapshot = cx
+            .try_global::<gitcomet_extension_api::host::RecoveredExit>()
+            .map(|exit| exit.0.clone());
+        platform_open::spawn_launch(
+            cx,
+            move || {
+                if let Some(snapshot) = snapshot {
+                    return snapshot.acknowledge();
+                }
+                match std::fs::remove_file(report.crash_log_path) {
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                }
+            },
+            |this, result, cx| {
+                match result {
+                    Ok(()) => {
+                        this.startup_crash_report = None;
+                        cx.refresh_windows();
+                    }
+                    Err(err) => this.push_toast(
+                        components::ToastKind::Error,
+                        format!("Could not clear crash report: {err}"),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            },
+        );
     }
 
     /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,

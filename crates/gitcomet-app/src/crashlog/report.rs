@@ -20,19 +20,38 @@ pub(super) fn build_startup_report(crash_log_path: PathBuf, crash_log: &str) -> 
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown location".to_string());
 
-    StartupCrashReport {
-        issue_url: build_issue_url(&issue_title, &issue_body),
-        summary: format!(
+    let reason = parsed.exit_reason.unwrap_or(StartupExitReason::UnknownExit);
+    let legacy_marker = parsed.failure_kind.is_none()
+        && parsed.backtrace.is_empty()
+        && parsed.location.is_none()
+        && summary_message.ends_with("did not exit cleanly");
+    let summary = if legacy_marker || parsed.exit_reason.is_some() {
+        reason.description().to_owned()
+    } else {
+        format!(
             "{} at {}",
             truncate_chars(&summary_message, 160),
             truncate_chars(&summary_location, 160)
+        )
+    };
+
+    StartupCrashReport {
+        snapshot: StartupExitReport::new_with_session(
+            crash_log_path.clone(),
+            crash_log.as_bytes(),
+            reason,
+            parsed.session_token,
         ),
+        issue_url: build_issue_url(&issue_title, &issue_body),
+        summary,
         crash_log_path,
     }
 }
 
 #[derive(Default)]
 pub(super) struct ParsedCrashLog {
+    pub(super) exit_reason: Option<StartupExitReason>,
+    pub(super) session_token: Option<gitcomet_core::startup_exit::SessionToken>,
     pub(super) environment: Option<EnvironmentSnapshot>,
     pub(super) os: Option<String>,
     pub(super) arch: Option<String>,
@@ -53,9 +72,17 @@ pub(super) struct ParsedCrashLog {
 pub(super) fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
     let mut parsed = ParsedCrashLog::default();
     let mut in_backtrace = false;
+    let mut expect_session_token = false;
 
     for raw_line in crash_log.lines() {
         let line = raw_line.trim_end_matches('\r');
+
+        if std::mem::take(&mut expect_session_token)
+            && let Some(token) = line.strip_prefix("session_token=")
+        {
+            parsed.session_token = token.parse().ok();
+            continue;
+        }
 
         if line == "=== GitComet operation context ===" || line == "=== GitComet environment ===" {
             in_backtrace = false;
@@ -73,6 +100,18 @@ pub(super) fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
             } else {
                 None
             };
+            expect_session_token = matches!(
+                parsed.failure_kind.as_deref(),
+                Some("abnormal-exit" | "panic")
+            );
+            if expect_session_token {
+                parsed.session_token = None;
+            }
+            match parsed.failure_kind.as_deref() {
+                Some("abnormal-exit") => parsed.exit_reason = Some(StartupExitReason::UnknownExit),
+                Some("panic") => parsed.exit_reason = None,
+                _ => {}
+            }
             in_backtrace = false;
             continue;
         }
@@ -117,7 +156,19 @@ pub(super) fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
         }
 
         if let Some(rest) = line.strip_prefix("failure_kind=") {
-            parsed.failure_kind = Some(rest.trim().to_string());
+            let kind = rest.trim();
+            match kind {
+                "abnormal-exit" => parsed.exit_reason = Some(StartupExitReason::UnknownExit),
+                "x11-event-loop-error" => {
+                    parsed.exit_reason = Some(StartupExitReason::X11EventLoopError)
+                }
+                "wayland-event-loop-error" => {
+                    parsed.exit_reason = Some(StartupExitReason::WaylandEventLoopError)
+                }
+                "panic" | "returned-error" => parsed.exit_reason = None,
+                _ => {}
+            }
+            parsed.failure_kind = Some(kind.to_string());
             continue;
         }
 

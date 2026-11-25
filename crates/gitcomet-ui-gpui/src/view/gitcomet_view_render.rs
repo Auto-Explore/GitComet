@@ -284,6 +284,12 @@ impl Render for GitCometView {
 
         body = body.child(center_content);
 
+        if cx
+            .try_global::<gitcomet_extension_api::host::RecoveredExit>()
+            .is_some_and(|exit| exit.0.acknowledged())
+        {
+            self.startup_crash_report = None;
+        }
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal
         {
@@ -298,19 +304,11 @@ impl Render for GitCometView {
                     })
             });
 
-            let ignore_button =
-                components::Button::new("startup_crash_report_ignore", "Ignore Crash")
-                    .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        if let Err(err) = this.ignore_startup_crash_report() {
-                            this.push_toast(
-                                components::ToastKind::Error,
-                                format!("Could not clear crash report: {err}"),
-                                cx,
-                            );
-                        }
-                        cx.notify();
-                    });
+            let ignore_button = components::Button::new("startup_crash_report_ignore", "Dismiss")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.ignore_startup_crash_report(cx);
+                });
 
             body = body.child(
                 div()
@@ -344,10 +342,7 @@ impl Render for GitCometView {
                                 div()
                                     .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .child(format!(
-                                        "{} recovered from program crash",
-                                        crate::view::product_name()
-                                    )),
+                                    .child("Previous session report"),
                             )
                             .child(
                                 div()
@@ -362,7 +357,7 @@ impl Render for GitCometView {
                                 div()
                                     .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
-                                    .child(format!("Summary: {summary}")),
+                                    .child(summary),
                             )
                             .child(
                                 div()

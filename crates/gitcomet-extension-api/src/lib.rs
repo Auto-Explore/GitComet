@@ -29,6 +29,7 @@ pub use files::*;
 pub mod sidebar;
 pub use sidebar::*;
 pub mod host;
+pub use gitcomet_core::startup_exit::{StartupExitReason, StartupExitReport};
 pub mod id;
 pub mod lifecycle;
 pub mod markdown;
