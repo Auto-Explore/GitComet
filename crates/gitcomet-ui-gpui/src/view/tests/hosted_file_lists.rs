@@ -249,6 +249,30 @@ fn shown(cx: &mut gpui::VisualTestContext, list: &HostedFileList) -> Vec<String>
     })
 }
 
+/// A flat list lines its paths' ellipses up as the status lists do, through
+/// one alignment group its visible rows report to; a tree's leaf names do not.
+#[gpui::test]
+fn flat_rows_align_their_path_ellipses(cx: &mut gpui::TestAppContext) {
+    let long = |leaf: &str| {
+        format!(
+            "crates/a-directory-name-long-enough/to-overflow/any-sidebar-width/{}/{leaf}",
+            "nested/".repeat(60)
+        )
+    };
+    let flat = crate::view::FileListDefaults {
+        layout: crate::view::FileListLayout::Flat,
+        sort: crate::view::rows::CommitFileSort::default(),
+    };
+    let changes = ["a.rs", "much_longer_name.rs"]
+        .map(|leaf| CommitFileChange::new(PathBuf::from(long(leaf)), FileStatusKind::Modified))
+        .to_vec();
+    let (_list, entity, _shell, cx) = mount_changes(cx, changes, Some(flat));
+    draw(cx);
+    let aligned = cx.update(|_, app| entity.read(app).path_alignment_for_test());
+    assert!(aligned.visible_signature.is_some(), "{aligned:?}");
+    assert!(aligned.resolved_anchor.is_some(), "{aligned:?}");
+}
+
 /// A list's first marks show at whatever revision they carry, zero too: a
 /// revision tells a publication from the one before it, and the first has
 /// none.
