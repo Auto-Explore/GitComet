@@ -2382,10 +2382,15 @@ impl GitCometView {
         let snapshot = cx
             .try_global::<gitcomet_extension_api::host::RecoveredExit>()
             .map(|exit| exit.0.clone());
+        let dismiss = super::extension_host::registry(cx)
+            .and_then(|registry| registry.crash_report_dismiss().cloned());
         platform_open::spawn_launch(
             cx,
             move || {
                 if let Some(snapshot) = snapshot {
+                    if let (Some(dismiss), Some(token)) = (dismiss, snapshot.session_token()) {
+                        dismiss(token)?;
+                    }
                     return snapshot.acknowledge();
                 }
                 match std::fs::remove_file(report.crash_log_path) {

@@ -48,7 +48,7 @@ pub use contributions::{
     BottomPanelDescriptor, CanvasOverlayDescriptor, CanvasOverlayObserver, CanvasOverlayVisibility,
     ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext,
     CommandDescriptor, CommandHandler, CommitBoxItemDescriptor, CrashReportAction,
-    DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
+    CrashReportDismiss, DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
     NavigationAvailability, PanelArea, PanelContentPolicy, PanelTabDescriptor, RefMenuContext,
     RefMenuHandler, RefMenuItemDescriptor, RefMenuTarget, RepositoryEntryGate,
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
