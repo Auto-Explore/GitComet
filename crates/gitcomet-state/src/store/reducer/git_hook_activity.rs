@@ -77,11 +77,12 @@ pub(super) fn apply_event(
                 if text.is_empty() {
                     continue;
                 }
-                if let Some(line) = text
-                    .split(['\r', '\n'])
-                    .rev()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
+                if !operation.progress_lane
+                    && let Some(line) = text
+                        .split(['\r', '\n'])
+                        .rev()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
                 {
                     operation.latest_line = utf8_tail(line, MAX_LATEST_LINE_BYTES);
                 }
@@ -91,10 +92,13 @@ pub(super) fn apply_event(
                     text: Arc::from(text),
                 });
             }
-            if operation.progress_lane
-                && let Some(meter) = latest_progress_in(&operation.output)
-            {
-                operation.progress = Some(meter);
+            if operation.progress_lane {
+                if let Some(line) = latest_line_in(&operation.output) {
+                    operation.latest_line = utf8_tail(&line, MAX_LATEST_LINE_BYTES);
+                }
+                if let Some(meter) = latest_progress_in(&operation.output) {
+                    operation.progress = Some(meter);
+                }
             }
             trim_operation_output(operation);
         }
@@ -143,23 +147,36 @@ pub(super) fn apply_event(
     repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
-/// The newest complete meter in the output's tail. A meter can straddle two
-/// chunks, so a few are joined before parsing.
-fn latest_progress_in(
-    output: &VecDeque<GitHookOutputChunk>,
-) -> Option<gitcomet_core::git_progress::GitProgressMeter> {
-    const TAIL_BYTES: usize = 1024;
+fn latest_line_in(output: &VecDeque<GitHookOutputChunk>) -> Option<String> {
+    let tail = tail_text_in(output, MAX_LATEST_LINE_BYTES * 2);
+    let complete = tail.rfind(['\r', '\n']).map(|end| &tail[..end])?;
+    complete
+        .split(['\r', '\n'])
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+fn tail_text_in(output: &VecDeque<GitHookOutputChunk>, max_bytes: usize) -> String {
     let mut tail: Vec<&str> = Vec::new();
     let mut bytes = 0;
     for chunk in output.iter().rev() {
         tail.push(&chunk.text);
         bytes += chunk.text.len();
-        if bytes >= TAIL_BYTES {
+        if bytes >= max_bytes {
             break;
         }
     }
     tail.reverse();
-    gitcomet_core::git_progress::latest_progress(&tail.concat())
+    tail.concat()
+}
+
+fn latest_progress_in(
+    output: &VecDeque<GitHookOutputChunk>,
+) -> Option<gitcomet_core::git_progress::GitProgressMeter> {
+    const TAIL_BYTES: usize = 1024;
+    gitcomet_core::git_progress::latest_progress(&tail_text_in(output, TAIL_BYTES))
 }
 
 pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId) -> bool {
