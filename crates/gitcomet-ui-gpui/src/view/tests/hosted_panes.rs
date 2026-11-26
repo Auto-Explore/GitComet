@@ -1306,6 +1306,56 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     assert_eq!(store.snapshot().repos[0].diff_sessions.len(), 2);
 }
 
+/// A hosted list's header is laid out as a status section's: the Unstaged
+/// header's height and its `px_2` inset (8px at the tests' 100% scale) on
+/// either side, with the chips centred in it.
+#[gpui::test]
+fn a_hosted_list_header_lines_up_with_the_status_headers(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    let bounds = |cx: &mut gpui::VisualTestContext, name: String| {
+        cx.debug_bounds(selector(name.clone()))
+            .unwrap_or_else(|| panic!("{name} is drawn"))
+    };
+    settle(cx, &view, &store, "the Unstaged header", |cx| {
+        cx.debug_bounds("unstaged_header").is_some()
+    });
+    let status = bounds(cx, "unstaged_header".into());
+
+    let (list_id, _changes) = open_changes_view(cx, &view, &store);
+    // The example's chip shows once a line is flagged.
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    let mut pane = None;
+    settle(cx, &view, &store, "the pane's rows", |cx| {
+        pane = store.snapshot().repos[0]
+            .diff_sessions
+            .keys()
+            .next()
+            .copied();
+        pane.is_some_and(|id| {
+            cx.debug_bounds(selector(format!("hosted_diff_{}_gutter_0", id.0)))
+                .is_some()
+        })
+    });
+    let pane = pane.unwrap().0;
+    click_debug_selector(cx, selector(format!("hosted_diff_{pane}_gutter_0")));
+    settle(cx, &view, &store, "the chip", |cx| {
+        cx.debug_bounds(selector(format!("file_filter_{list_id}_0")))
+            .is_some()
+    });
+    let header = bounds(cx, format!("hosted_file_list_{list_id}_header"));
+    let chip = bounds(cx, format!("file_filter_{list_id}_0"));
+    let sort = bounds(cx, format!("hosted_file_list_{list_id}_sort"));
+
+    assert_eq!(header.size.height, status.size.height);
+    assert_eq!(chip.left() - header.left(), px(8.0));
+    assert_eq!(header.right() - sort.right(), px(8.0));
+    assert_eq!(chip.center().y, header.center().y);
+    assert_eq!(sort.center().y, header.center().y);
+}
+
 /// Whether display row `row` of pane `id` is drawn: in its visible window.
 fn row_drawn(cx: &mut gpui::VisualTestContext, id: u64, row: usize) -> bool {
     cx.debug_bounds(selector(format!("hosted_diff_{id}_row_{row}")))
