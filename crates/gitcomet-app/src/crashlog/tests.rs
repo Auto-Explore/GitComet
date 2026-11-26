@@ -134,11 +134,11 @@ fn a_literal_panic_is_confirmed_and_uncorrelated_details_stay_local() {
     );
     assert!(crash.summary.contains("literal callback panic"));
     assert!(crash.snapshot.panic_capture_id().is_none());
-    assert!(!crash.issue_url.contains("crashlog%2Ftests.rs"));
+    assert!(!crash.issue_url.contains("tests.rs"));
     let local = std::fs::read_to_string(&crash.crash_log_path).unwrap();
     assert!(local.contains("last_observed_panic"));
     assert!(local.contains("literal callback panic"));
-    assert!(local.contains("crashlog/tests.rs") || local.contains(r"crashlog\tests.rs"));
+    assert!(local.contains("tests.rs#L"));
 }
 
 #[cfg(unix)]
