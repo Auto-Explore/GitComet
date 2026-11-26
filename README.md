@@ -126,6 +126,10 @@ The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 an
 
 GitComet requires a local Git installation of `2.53` or newer. With an older Git, GitComet shows a notice asking you to update, and features that need newer Git (such as repository maintenance) are turned off.
 
+### Remote protocols
+
+**Settings → Security / Privacy → Allowed remote protocols** controls which explicit URL schemes you can enter. Clone, fetch, pull, push, remote-ref lookups, and submodule operations also apply your HTTP, HTTPS, Git, FTP, and FTPS settings after Git rewrites a URL. Git treats SSH aliases as one transport. Configured remotes continue to use Git's rules for file and SSH transports so local paths and SCP-style addresses remain usable. Git’s own rules also govern custom transport helpers selected by a rewrite. Git LFS and git-annex use their own connection settings.
+
 ### GitComet User Survey
 
 We’re running this short survey to better understand how people use our Git GUI client in their daily work. Your feedback will help us improve the product and prioritize the features that matter most.

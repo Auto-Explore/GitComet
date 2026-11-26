@@ -469,7 +469,7 @@ impl GixRepo {
             return Err(failed("No branches were selected for publication"));
         }
         let mut branches = BTreeSet::new();
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.args(["push", "--porcelain"]);
         if atomic {
             cmd.arg("--atomic");

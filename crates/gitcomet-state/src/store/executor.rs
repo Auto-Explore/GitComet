@@ -1,5 +1,6 @@
 use super::send_diagnostics::{SendFailureKind, send_or_log};
 use gitcomet_core::panic::payload_message;
+use gitcomet_core::remote_url::{ScopedRemoteUrlPolicy, current_remote_url_policy};
 use gitcomet_core::{mergetool_trace, op_trace};
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
@@ -145,7 +146,9 @@ impl TaskExecutor {
         // Traced at request time: a replacement also replaces the operation
         // the running task is attributed to.
         let task = op_trace::wrap_task(self.name, task);
+        let remote_url_policy = current_remote_url_policy();
         let task: Task = Box::new(move || {
+            let _remote_url_policy = ScopedRemoteUrlPolicy::set(remote_url_policy);
             let _trace = context.as_ref().map(mergetool_trace::attach_capture);
             task();
         });
@@ -284,9 +287,11 @@ impl TaskExecutor {
         #[cfg(any(test, feature = "test-support"))]
         let task = super::test_support::track_task(task);
         let mergetool_trace_context = mergetool_trace::current_capture_context();
+        let remote_url_policy = current_remote_url_policy();
         send_or_log(
             &self.tx,
             Box::new(move || {
+                let _remote_url_policy = ScopedRemoteUrlPolicy::set(remote_url_policy);
                 let _mergetool_trace = mergetool_trace_context
                     .as_ref()
                     .map(mergetool_trace::attach_capture);
@@ -323,6 +328,19 @@ mod tests {
                 .map(|worker| worker._threads.len())
                 .sum::<usize>()
         );
+    }
+
+    #[test]
+    fn worker_uses_the_remote_policy_from_submission() {
+        let executor = TaskExecutor::new(1);
+        let initial = gitcomet_core::remote_url::RemoteUrlPolicy::none();
+        let changed = gitcomet_core::remote_url::RemoteUrlPolicy::default();
+        let _initial = ScopedRemoteUrlPolicy::set(Some(initial));
+        let (policy_tx, policy_rx) = mpsc::channel();
+        executor.spawn(move || policy_tx.send(current_remote_url_policy()).unwrap());
+        let _changed = ScopedRemoteUrlPolicy::set(Some(changed));
+        assert_eq!(policy_rx.recv().unwrap(), Some(initial));
+        assert_eq!(current_remote_url_policy(), Some(changed));
     }
 
     #[test]

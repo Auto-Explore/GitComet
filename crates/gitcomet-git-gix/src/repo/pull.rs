@@ -145,7 +145,7 @@ impl GixRepo {
     }
 
     fn pull_command(&self, target: &PullTarget, mode: PullMode) -> Command {
-        let mut command = self.git_workdir_cmd();
+        let mut command = self.git_remote_cmd();
         command.args(NO_COLOR_CONFIG);
         command.args(["-c", "fetch.pruneTags=false"]);
         if remote_name_is_config_key_safe(&target.repository) && !target.repository.contains("://")

@@ -163,6 +163,7 @@ fn incoming_tracking_broadcast_includes_linked_tabs_in_the_initiating_store() {
                     workdir: PathBuf::from(workdir),
                     common_dir: Some(PathBuf::from(common)),
                     repository: None,
+                    remote_url_policy: Default::default(),
                     active: false,
                     needs_refresh: true,
                 })

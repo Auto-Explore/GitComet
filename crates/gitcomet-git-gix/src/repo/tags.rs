@@ -1,10 +1,11 @@
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
-    git_workdir_cmd_for, run_git_capture, run_git_capture_cancellable, run_git_with_output,
+    git_remote_cmd_for, run_git_capture, run_git_capture_cancellable, run_git_with_output,
     validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, RemoteTag, Tag};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::remote_url::current_remote_url_policy;
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet;
@@ -99,6 +100,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let remotes = self.list_remotes_impl()?;
         let workdir = self.spec.workdir.clone();
+        let remote_url_policy = current_remote_url_policy();
         let mut handles = Vec::new();
 
         for remote in remotes {
@@ -117,7 +119,7 @@ impl GixRepo {
                 // Nobody asked for this lookup, so it never prompts for
                 // credentials: it uses stored ones or fails.
                 let output = crate::util::background::with_background_git(&cancellation, || {
-                    let mut cmd = git_workdir_cmd_for(&workdir);
+                    let mut cmd = git_remote_cmd_for(&workdir, remote_url_policy);
                     cmd.arg("ls-remote")
                         .arg("--tags")
                         .arg("--refs")
@@ -211,7 +213,7 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(name, "tag name")?;
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push")
             .arg("--")
             .arg(remote)
@@ -227,7 +229,7 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(name, "tag name")?;
 
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         cmd.arg("push")
             .arg("--delete")
             .arg("--")
@@ -251,7 +253,7 @@ impl GixRepo {
         for remote in remotes {
             validate_ref_like_arg(&remote.name, "remote name")?;
 
-            let mut cmd = self.git_workdir_cmd();
+            let mut cmd = self.git_remote_cmd();
             cmd.arg("ls-remote")
                 .arg("--tags")
                 .arg("--refs")

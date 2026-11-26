@@ -9,7 +9,7 @@ use gitcomet_core::domain::{
     Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
-use gitcomet_core::remote_url::RemoteUrlPolicy;
+use gitcomet_core::remote_url::{RemoteUrlPolicy, current_remote_url_policy};
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
     ConflictFileStages, ConflictSide, ForcePushLease, GitHooks, GitRepository,
@@ -519,6 +519,10 @@ impl GixRepo {
     /// Returns a `Command` pre-configured with `git -C <workdir>`.
     pub(super) fn git_workdir_cmd(&self) -> Command {
         util_git_workdir_cmd_for(&self.spec.workdir)
+    }
+
+    pub(super) fn git_remote_cmd(&self) -> Command {
+        crate::util::git_remote_cmd_for(&self.spec.workdir, current_remote_url_policy())
     }
 
     /// A thread-local handle for one operation.

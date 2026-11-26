@@ -12,7 +12,9 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
+use gitcomet_core::remote_url::{
+    RemoteUrlPolicy, restrict_native_git_transports, validate_remote_url_with_policy,
+};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
@@ -184,6 +186,7 @@ impl GixRepo {
         persist_submodule_trust_approvals(trust_root, approved_sources)?;
 
         let mut cmd = self.git_workdir_cmd();
+        restrict_native_git_transports(&mut cmd, remote_url_policy, Some(url));
         if let Some(target) = trust_target_from_raw_source(trust_root, path, url)? {
             if !submodule_source_trusted(trust_root, &target)? {
                 return Err(untrusted_local_submodule_error(&target, "add"));
@@ -701,6 +704,7 @@ fn update_submodule_recursive(
     let local_target =
         trust_target_from_submodule(current_workdir, full_path, submodule, remote_url_policy)?;
     let mut cmd = git_workdir_cmd_for(current_workdir);
+    restrict_native_git_transports(&mut cmd, remote_url_policy, None);
     if let Some(target) = local_target.as_ref() {
         if !submodule_source_trusted(trust_root, target)? {
             return Err(untrusted_local_submodule_error(target, "update"));

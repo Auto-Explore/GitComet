@@ -2,6 +2,7 @@ use super::auto_fetch_admission::Admission;
 use crate::model::{AutoFetchStatus, RemoteSettings, RepoAutoFetchState, RepoId, RepoLifetime};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, GitBackend, GitRepository, Result,
 };
@@ -36,6 +37,7 @@ pub(super) struct Registration {
     pub(super) workdir: PathBuf,
     pub(super) common_dir: Option<PathBuf>,
     pub(super) repository: Option<Arc<dyn GitRepository>>,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
     /// The tab is the selected one in its window; its repository fetches first.
     pub(super) active: bool,
     /// The tab has no current incoming count and is not loading one.
@@ -49,6 +51,7 @@ struct Subscriber {
     lifetime: RepoLifetime,
     original_path: PathBuf,
     settings: RemoteSettings,
+    remote_url_policy: RemoteUrlPolicy,
     backend: Arc<dyn GitBackend>,
     repository: Option<Arc<dyn GitRepository>>,
     sink: EventSink,
@@ -398,6 +401,7 @@ impl AutoFetchCoordinator {
                 lifetime: registration.lifetime,
                 original_path: registration.workdir,
                 settings,
+                remote_url_policy: registration.remote_url_policy,
                 backend: Arc::clone(backend),
                 repository: registration.repository,
                 sink: Arc::clone(&sink),

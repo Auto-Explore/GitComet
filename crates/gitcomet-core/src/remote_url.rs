@@ -1,4 +1,8 @@
 use crate::error::{Error, ErrorKind};
+use std::cell::Cell;
+use std::marker::PhantomData;
+use std::process::Command;
+use std::rc::Rc;
 
 /// A Git transport implemented by Git itself rather than a `git-remote-*`
 /// helper discovered on `PATH`.
@@ -63,9 +67,37 @@ impl RemoteProtocol {
 /// Schemeless local paths and SCP-style SSH locations are outside this list
 /// and remain supported. Remote-helper syntax (`ext::...`, `hg::...`, and
 /// similar) is always rejected and cannot be enabled by this policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RemoteUrlPolicy {
     allowed: u16,
+}
+
+thread_local! {
+    static REMOTE_URL_POLICY: Cell<Option<RemoteUrlPolicy>> = const { Cell::new(None) };
+}
+
+pub fn current_remote_url_policy() -> Option<RemoteUrlPolicy> {
+    REMOTE_URL_POLICY.get()
+}
+
+pub struct ScopedRemoteUrlPolicy {
+    previous: Option<RemoteUrlPolicy>,
+    thread_bound: PhantomData<Rc<()>>,
+}
+
+impl ScopedRemoteUrlPolicy {
+    pub fn set(policy: Option<RemoteUrlPolicy>) -> Self {
+        Self {
+            previous: REMOTE_URL_POLICY.replace(policy),
+            thread_bound: PhantomData,
+        }
+    }
+}
+
+impl Drop for ScopedRemoteUrlPolicy {
+    fn drop(&mut self) {
+        REMOTE_URL_POLICY.set(self.previous);
+    }
 }
 
 impl RemoteUrlPolicy {
@@ -164,6 +196,75 @@ pub fn validate_remote_url_with_policy(url: &str, policy: RemoteUrlPolicy) -> Re
     Ok(())
 }
 
+pub fn restrict_native_git_transports(
+    command: &mut Command,
+    policy: RemoteUrlPolicy,
+    explicit_source: Option<&str>,
+) {
+    use RemoteProtocol::{File, Ftp, Ftps, Git, GitSsh, Http, Https, Ssh, SshGit};
+
+    const NATIVE_PROTOCOLS: [(&str, &[RemoteProtocol]); 7] = [
+        ("file", &[File]),
+        ("ssh", &[Ssh, GitSsh, SshGit]),
+        ("git", &[Git]),
+        ("http", &[Http]),
+        ("https", &[Https]),
+        ("ftp", &[Ftp]),
+        ("ftps", &[Ftps]),
+    ];
+    const ALLOW_PROTOCOL: &str = "GIT_ALLOW_PROTOCOL";
+
+    let schemeless_transport = explicit_source.and_then(schemeless_native_git_transport);
+    let mut blocked = Vec::new();
+    for (name, protocols) in NATIVE_PROTOCOLS {
+        let accepts_schemeless = schemeless_transport == Some(name)
+            || (explicit_source.is_none() && matches!(name, "file" | "ssh"));
+        if !protocols.iter().any(|&protocol| policy.allows(protocol)) && !accepts_schemeless {
+            command.args(["-c", &format!("protocol.{name}.allow=never")]);
+            blocked.push(name);
+        }
+    }
+
+    let caller_allowlist = command
+        .get_envs()
+        .find_map(|(key, value)| (key == ALLOW_PROTOCOL).then_some(value))
+        .map_or_else(
+            || std::env::var_os(ALLOW_PROTOCOL),
+            |value| value.map(ToOwned::to_owned),
+        );
+    if let Some(caller_allowlist) = caller_allowlist {
+        let allowed = caller_allowlist
+            .to_str()
+            .unwrap_or_default()
+            .split(':')
+            .filter(|name| {
+                !blocked.contains(name) && NATIVE_PROTOCOLS.iter().any(|(native, _)| native == name)
+            })
+            .collect::<Vec<_>>()
+            .join(":");
+        command.env(ALLOW_PROTOCOL, allowed);
+    }
+}
+
+fn schemeless_native_git_transport(source: &str) -> Option<&'static str> {
+    let source = source.trim();
+    let (_, remainder) = git_transport_prefix(source);
+    if remainder.starts_with("://") || remainder.starts_with("::") {
+        return None;
+    }
+    let has_windows_drive = cfg!(windows)
+        && source
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+        && source.as_bytes().get(1) == Some(&b':');
+    let is_local = has_windows_drive
+        || source
+            .find(':')
+            .is_none_or(|colon| source.find('/').is_some_and(|slash| slash < colon));
+    Some(if is_local { "file" } else { "ssh" })
+}
+
 fn allowed_scheme_list(policy: RemoteUrlPolicy) -> String {
     let allowed = policy
         .allowed_protocols()
@@ -196,8 +297,74 @@ fn invalid(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoteProtocol, RemoteUrlPolicy, validate_remote_url, validate_remote_url_with_policy,
+        RemoteProtocol, RemoteUrlPolicy, restrict_native_git_transports, validate_remote_url,
+        validate_remote_url_with_policy,
     };
+    use std::process::Command;
+
+    #[test]
+    fn native_protocol_exceptions_apply_only_to_the_schemeless_source_family() {
+        for (source, permitted, blocked) in [
+            ("./repo.git", "file", "ssh"),
+            ("git@example.test:repo.git", "ssh", "file"),
+        ] {
+            let mut command = Command::new("git");
+            command.env_remove("GIT_ALLOW_PROTOCOL");
+            restrict_native_git_transports(&mut command, RemoteUrlPolicy::none(), Some(source));
+            let prohibited = format!("protocol.{blocked}.allow=never");
+            let accepted = format!("protocol.{permitted}.allow=never");
+            assert!(command.get_args().any(|arg| arg == prohibited.as_str()));
+            assert!(!command.get_args().any(|arg| arg == accepted.as_str()));
+        }
+    }
+
+    #[test]
+    fn native_restrictions_preserve_caller_protocol_limits() {
+        let mut command = Command::new("git");
+        command.env("GIT_ALLOW_PROTOCOL", "https:http:file:fixture-helper");
+        let policy = RemoteUrlPolicy::none().with_allowed(RemoteProtocol::Https, true);
+        restrict_native_git_transports(&mut command, policy, Some("https://example.test/repo"));
+        assert_eq!(
+            command
+                .get_envs()
+                .find_map(|(key, value)| (key == "GIT_ALLOW_PROTOCOL").then_some(value))
+                .flatten(),
+            Some(std::ffi::OsStr::new("https"))
+        );
+
+        command.env("GIT_ALLOW_PROTOCOL", "file");
+        restrict_native_git_transports(&mut command, policy, Some("https://example.test/repo"));
+        assert_eq!(
+            command
+                .get_envs()
+                .find_map(|(key, value)| (key == "GIT_ALLOW_PROTOCOL").then_some(value))
+                .flatten(),
+            Some(std::ffi::OsStr::new(""))
+        );
+    }
+
+    #[test]
+    fn explicitly_enabled_ssh_alias_uses_the_native_ssh_transport() {
+        let policy = RemoteUrlPolicy::none().with_allowed(RemoteProtocol::GitSsh, true);
+        let mut command = Command::new("git");
+        command.env_remove("GIT_ALLOW_PROTOCOL");
+        restrict_native_git_transports(&mut command, policy, Some("git+ssh://example.test/repo"));
+        assert!(
+            !command
+                .get_args()
+                .any(|arg| arg == "protocol.ssh.allow=never")
+        );
+        assert!(
+            command
+                .get_args()
+                .any(|arg| arg == "protocol.file.allow=never")
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "GIT_ALLOW_PROTOCOL" && value.is_none())
+        );
+    }
 
     #[test]
     fn invalid_option_like_urls_do_not_echo_embedded_credentials() {

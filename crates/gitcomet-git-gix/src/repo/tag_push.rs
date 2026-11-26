@@ -28,7 +28,7 @@ impl GixRepo {
                 "The current branch changed. Open Push again to update the destination and tag preview.".into(),
             )));
         }
-        let mut cmd = self.git_workdir_cmd();
+        let mut cmd = self.git_remote_cmd();
         if preview {
             // Credential helpers can open their own dialogs even when Git's
             // terminal prompts are disabled. Probes never invoke them; an
