@@ -37,6 +37,7 @@ pub(in crate::view) struct HostedDiffDecor {
     pub(super) line_rows: FxHashMap<(DiffLineSide, u32), (usize, usize)>,
     markers: Arc<Vec<(f32, gpui::Hsla)>>,
     pub(super) search_document: std::cell::RefCell<Option<diff_search::SourceSearchDocument>>,
+    pub(super) stops: super::hosted_change_stops::ReportedStops,
     #[cfg(test)]
     pub(in crate::view) marker_builds: usize,
 }

@@ -12,6 +12,8 @@ use gitcomet_extension_api::{
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::WorktreeSaveBaseline;
 
+#[path = "hosted_change_stops.rs"]
+mod change_stops;
 #[path = "hosted_context.rs"]
 mod context;
 #[path = "hosted_one_sided.rs"]

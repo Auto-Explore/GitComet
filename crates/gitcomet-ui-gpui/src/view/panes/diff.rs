@@ -15,6 +15,7 @@ mod file_disk;
 pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;
 mod hosted_binding;
+mod hosted_change_stops;
 mod hosted_people;
 mod hosted_views;
 pub(in crate::view) mod input;
@@ -125,7 +126,9 @@ impl Render for DiffRenderer {
             .debug_selector(|| "bare_mode_diff".to_owned())
             .into_any_element()
         } else if self.rendered_diff_target().is_some() {
-            self.diff_view(window, cx).into_any_element()
+            let body = self.diff_view(window, cx).into_any_element();
+            self.report_hosted_change_stops(cx);
+            body
         } else {
             div().into_any_element()
         };
