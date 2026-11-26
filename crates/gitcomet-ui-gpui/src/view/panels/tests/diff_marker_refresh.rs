@@ -151,7 +151,14 @@ fn markers_follow_an_in_place_external_edit(
     set_diff_content_mode_for_test(cx, &view, content_mode);
     let (cached, fresh) = marker_starts(cx, &view);
     assert_eq!(cached, fresh);
-    assert!(!cached.is_empty(), "the change near the end is marked");
+    if content_mode == DiffContentMode::Collapsed {
+        assert!(
+            cached.is_empty(),
+            "{view_mode:?}/{content_mode:?}: collapsed mode hides scrollbar markers"
+        );
+    } else {
+        assert!(!cached.is_empty(), "the change near the end is marked");
+    }
     let markers_before = cached.len();
 
     // Another program fills the blank line 6: same line count, so the split
@@ -179,14 +186,21 @@ fn markers_follow_an_in_place_external_edit(
     show(cx, &view, snapshot);
 
     let (cached, fresh) = marker_starts(cx, &view);
-    assert!(
-        fresh.len() > markers_before,
-        "the diff on screen has a second change: {fresh:?}"
-    );
-    assert_eq!(
-        cached, fresh,
-        "{view_mode:?}/{content_mode:?}: the scrollbar must mark the new change at the top, not only the old one"
-    );
+    if content_mode == DiffContentMode::Collapsed {
+        assert!(
+            cached.is_empty() && fresh.is_empty(),
+            "{view_mode:?}/{content_mode:?}: collapsed mode keeps scrollbar markers hidden"
+        );
+    } else {
+        assert!(
+            fresh.len() > markers_before,
+            "the diff on screen has a second change: {fresh:?}"
+        );
+        assert_eq!(
+            cached, fresh,
+            "{view_mode:?}/{content_mode:?}: the scrollbar must mark the new change at the top, not only the old one"
+        );
+    }
 }
 
 #[gpui::test]

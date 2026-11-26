@@ -58,74 +58,11 @@ impl DiffRenderer {
         }
     }
 
-    pub(super) fn collapsed_diff_hunk_marker_flag(hunk: CollapsedDiffHunk) -> u8 {
-        match (hunk.has_additions, hunk.has_removals) {
-            (true, true) => 3,
-            (true, false) => 1,
-            (false, true) => 2,
-            (false, false) => 0,
-        }
-    }
-
-    pub(super) fn collapsed_diff_hunk_visible_file_bounds(
-        &self,
-        hunk_ix: usize,
-        hunk: CollapsedDiffHunk,
-    ) -> Option<(usize, usize)> {
-        let mut visible_ix = *self.collapsed_diff_hunk_visible_indices.get(hunk_ix)?;
-        while let Some(row) = self.collapsed_diff_visible_rows.get(visible_ix).copied() {
-            match row {
-                CollapsedDiffVisibleRow::HunkHeader { .. } => visible_ix += 1,
-                CollapsedDiffVisibleRow::FileRow { row_ix } if row_ix < hunk.base_row_start => {
-                    visible_ix += 1;
-                }
-                CollapsedDiffVisibleRow::FileRow { row_ix } if row_ix == hunk.base_row_start => {
-                    let end_ix = visible_ix
-                        .saturating_add(
-                            hunk.base_row_end_exclusive
-                                .saturating_sub(hunk.base_row_start),
-                        )
-                        .min(self.collapsed_diff_visible_rows.len());
-                    return (visible_ix < end_ix).then_some((visible_ix, end_ix));
-                }
-                CollapsedDiffVisibleRow::FileRow { .. } => return None,
-            }
-        }
-        None
-    }
-
-    pub(super) fn diff_scrollbar_markers_collapsed(&self) -> Vec<components::ScrollbarMarker> {
-        let ranges = self
-            .collapsed_diff_hunks
-            .iter()
-            .enumerate()
-            .filter_map(|(hunk_ix, hunk)| {
-                let flag = Self::collapsed_diff_hunk_marker_flag(*hunk);
-                let (start, end) = self.collapsed_diff_hunk_visible_file_bounds(hunk_ix, *hunk)?;
-                Some((start, end, flag))
-            })
-            .collect::<Vec<_>>();
-        if self.diff_word_wrap {
-            return scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
-                let source_visible_ix = self
-                    .diff_source_visible_ix_for_visible_ix(visible_ix)
-                    .unwrap_or(visible_ix);
-                ranges
-                    .iter()
-                    .find_map(|(start, end, flag)| {
-                        (source_visible_ix >= *start && source_visible_ix < *end).then_some(*flag)
-                    })
-                    .unwrap_or(0)
-            });
-        }
-        scrollbar_markers_from_visible_ranges(self.diff_visible_len(), ranges)
-    }
-
     pub(in crate::view) fn compute_diff_scrollbar_markers(
         &self,
     ) -> Vec<components::ScrollbarMarker> {
-        if self.is_collapsed_diff_projection_active() {
-            return self.diff_scrollbar_markers_collapsed();
+        if self.effective_diff_content_mode() == DiffContentMode::Collapsed {
+            return Vec::new();
         }
 
         if !self.is_file_diff_view_active() {
@@ -297,9 +234,14 @@ impl DiffRenderer {
             }
         }
 
-        self.diff_scrollbar_markers_cache = split_visible_flags
-            .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
-            .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
+        self.diff_scrollbar_markers_cache =
+            if self.effective_diff_content_mode() == DiffContentMode::Collapsed {
+                Vec::new()
+            } else {
+                split_visible_flags
+                    .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
+                    .unwrap_or_else(|| self.compute_diff_scrollbar_markers())
+            };
 
         if recompute_search && self.diff_search_has_query() {
             self.diff_search_recompute_matches_for_current_view_preserving_current();

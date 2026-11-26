@@ -73,6 +73,7 @@ pub(super) fn scrollbar_markers_from_flags(
     scrollbar_markers_from_bucket_flags(buckets.as_slice())
 }
 
+#[cfg(test)]
 pub(super) fn scrollbar_markers_from_visible_ranges(
     len: usize,
     ranges: impl IntoIterator<Item = (usize, usize, u8)>,

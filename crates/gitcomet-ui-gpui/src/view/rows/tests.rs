@@ -80,7 +80,7 @@ fn only_added_deleted_and_renamed_wear_a_badge() {
 #[test]
 fn badge_disc_tracks_the_row_it_sits_on() {
     for theme in bundled_themes() {
-        for kind in [FileStatusKind::Modified, FileStatusKind::Deleted] {
+        for kind in [FileStatusKind::Modified, FileStatusKind::Conflicted] {
             let tint = file_kind_row_tint(kind, &theme);
             let resting = tinted_row_bg(theme.colors.surface.canvas, tint);
             let hovered = tinted_row_bg(theme.colors.interaction.hover_background, tint);
@@ -116,24 +116,61 @@ fn explorer_rows_tint_ignored_over_hidden_and_never_like_hover() {
 }
 
 #[test]
-fn only_modified_rows_go_untinted() {
+fn added_deleted_and_renamed_rows_go_untinted_and_color_icon_background() {
     for theme in bundled_themes() {
-        assert_eq!(
-            file_kind_row_tint(FileStatusKind::Modified, &theme),
-            None,
-            "modified is the untinted default",
-        );
-        for kind in [
+        for untinted in [
+            FileStatusKind::Modified,
             FileStatusKind::Untracked,
             FileStatusKind::Added,
             FileStatusKind::Deleted,
             FileStatusKind::Renamed,
-            FileStatusKind::Conflicted,
         ] {
-            assert!(
-                file_kind_row_tint(kind, &theme).is_some(),
-                "{kind:?} should be tinted",
+            assert_eq!(
+                file_kind_row_tint(untinted, &theme),
+                None,
+                "{untinted:?} row should stay untinted",
             );
+        }
+        assert!(
+            file_kind_row_tint(FileStatusKind::Conflicted, &theme).is_some(),
+            "Conflicted should be tinted",
+        );
+        for added in [FileStatusKind::Untracked, FileStatusKind::Added] {
+            let bg = file_row_icon_background(added, &theme).expect("added icon background");
+            assert_eq!(
+                (bg.red, bg.green, bg.blue),
+                (
+                    theme.colors.status.success.foreground.red,
+                    theme.colors.status.success.foreground.green,
+                    theme.colors.status.success.foreground.blue,
+                ),
+            );
+            assert!(bg.alpha > 0.0 && bg.alpha < 1.0);
+        }
+        let removed_bg = file_row_icon_background(FileStatusKind::Deleted, &theme)
+            .expect("removed icon background");
+        assert_eq!(
+            (removed_bg.red, removed_bg.green, removed_bg.blue),
+            (
+                theme.colors.status.danger.foreground.red,
+                theme.colors.status.danger.foreground.green,
+                theme.colors.status.danger.foreground.blue,
+            ),
+        );
+        assert!(removed_bg.alpha > 0.0 && removed_bg.alpha < 1.0);
+        let renamed_bg = file_row_icon_background(FileStatusKind::Renamed, &theme)
+            .expect("renamed icon background");
+        assert_eq!(
+            (renamed_bg.red, renamed_bg.green, renamed_bg.blue),
+            (
+                theme.colors.accent.foreground.red,
+                theme.colors.accent.foreground.green,
+                theme.colors.accent.foreground.blue,
+            ),
+        );
+        assert!(renamed_bg.alpha > 0.0 && renamed_bg.alpha < 1.0);
+        for none_kind in [FileStatusKind::Modified, FileStatusKind::Conflicted] {
+            assert_eq!(file_row_icon_background(none_kind, &theme), None);
         }
     }
 }
@@ -144,13 +181,7 @@ fn only_modified_rows_go_untinted() {
 #[test]
 fn every_tint_is_translucent_and_leaves_hover_visible() {
     for theme in bundled_themes() {
-        for kind in [
-            FileStatusKind::Untracked,
-            FileStatusKind::Added,
-            FileStatusKind::Deleted,
-            FileStatusKind::Renamed,
-            FileStatusKind::Conflicted,
-        ] {
+        for kind in [FileStatusKind::Conflicted] {
             let tint = file_kind_row_tint(kind, &theme).expect("tinted kind");
             assert!(tint.alpha < 1.0, "{kind:?} tint must stay translucent");
 
@@ -180,7 +211,7 @@ fn file_row_interactions_support_translucent_canvases() {
                 base_theme.colors.surface.canvas,
                 theme.colors.surface.canvas,
             );
-            for kind in [FileStatusKind::Modified, FileStatusKind::Deleted] {
+            for kind in [FileStatusKind::Modified, FileStatusKind::Conflicted] {
                 let tint = file_kind_row_tint(kind, &theme);
                 let surface = tinted_row_bg(canvas, tint);
                 for (selected, open) in [(false, false), (true, false), (false, true), (true, true)]
@@ -231,7 +262,7 @@ fn file_row_interactions_support_translucent_canvases() {
 #[test]
 fn file_row_badges_preserve_selection_and_tint_through_hover_and_press() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-        let tint = file_kind_row_tint(FileStatusKind::Deleted, &theme).expect("tinted kind");
+        let tint = file_kind_row_tint(FileStatusKind::Conflicted, &theme).expect("tinted kind");
         let selected =
             FileRowInteraction::new(theme, Some(tint), true, false).badge_disc("row".into());
         let plain = FileRowInteraction::new(theme, None, true, false).badge_disc("row".into());

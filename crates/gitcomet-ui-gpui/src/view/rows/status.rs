@@ -805,8 +805,10 @@ fn status_row(
     } else {
         crate::view::rows::file_row_icon(&entry.path, entry.kind, &theme)
     };
-    // The change kind rides the row wash and a badge on the icon's corner.
+    // The change kind rides the icon background (added/removed), optional row
+    // tint (renamed/conflicted), and a badge on the icon's corner.
     let tint = crate::view::rows::file_kind_row_tint(entry.kind, &theme);
+    let icon_bg = crate::view::rows::file_row_icon_background(entry.kind, &theme);
     let badge = crate::view::rows::file_row_kind_badge(entry.kind, &theme);
 
     let path = Arc::new(entry.path.clone());
@@ -952,6 +954,7 @@ fn status_row(
         .child(crate::view::rows::file_row_icon_slot(
             icon,
             color,
+            icon_bg,
             badge,
             badge_disc,
             14.0,
