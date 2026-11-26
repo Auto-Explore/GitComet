@@ -2237,7 +2237,8 @@ impl SidebarPaneView {
         });
     }
 
-    pub(in super::super) fn reveal_tag_commit(
+    /// Select a tag's or stash's commit in the history.
+    pub(in super::super) fn reveal_ref_commit(
         &mut self,
         repo_id: RepoId,
         target: CommitId,
@@ -2558,6 +2559,8 @@ mod long_list_tests;
 mod search;
 mod sticky;
 
+#[cfg(test)]
+mod stash_row_tests;
 #[cfg(test)]
 mod sticky_tests;
 #[cfg(test)]
