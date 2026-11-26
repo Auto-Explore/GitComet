@@ -98,12 +98,6 @@ pub(super) static FILESYSTEM_QUEUE: std::sync::LazyLock<TaskExecutor> =
 /// second panic in a `Drop`, or a non-unwindable frame on the way out, turns a
 /// recoverable bug into a process abort.
 ///
-/// Catching here does not hide the panic: the process panic hook has already
-/// run at the original panic site and recorded the location and backtrace in
-/// the crash log. Note that the hook also arms the pending startup report, so a
-/// task panic still surfaces to the user on the next launch even though the
-/// process survived it — unchanged by this recovery, which only decides whether
-/// the worker thread lives.
 fn worker_loop(rx: Arc<std::sync::Mutex<mpsc::Receiver<Task>>>) {
     // These long-lived workers run unrelated jobs across repositories. Mark
     // each worker once, before its first task, for mimalloc's locality heuristics.

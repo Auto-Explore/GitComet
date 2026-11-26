@@ -270,7 +270,7 @@ fn-lines crates/gitcomet-ui-media/src/diagram_preview/surface.rs::render_viewpor
 fn-lines crates/gitcomet-ui-media/src/image_preview/surface.rs::render_viewport 281 -
 fn-lines crates/gitcomet-ui-terminal/src/viewport.rs::build_terminal_canvas_paint_state 248 -
 fn-lines crates/gitcomet/src/bin/perf_app_launch.rs::run_first_interactive_probe 152 -
-glob-super gitcomet-app 3 -
+glob-super gitcomet-app 2 -
 glob-super gitcomet-conflict-resolver 9 -
 glob-super gitcomet-core 5 -
 glob-super gitcomet-git-gix 14 -

@@ -29,6 +29,7 @@ pub use files::*;
 pub mod sidebar;
 pub use sidebar::*;
 pub mod host;
+pub use gitcomet_core::startup_exit::{StartupExitReason, StartupExitReport};
 pub mod id;
 pub mod lifecycle;
 pub mod markdown;
@@ -47,7 +48,7 @@ pub use contributions::{
     BottomPanelDescriptor, CanvasOverlayDescriptor, CanvasOverlayObserver, CanvasOverlayVisibility,
     ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext,
     CommandDescriptor, CommandHandler, CommitBoxItemDescriptor, CrashReportAction,
-    DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
+    CrashReportDismiss, DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
     NavigationAvailability, PanelArea, PanelContentPolicy, PanelTabDescriptor, RefMenuContext,
     RefMenuHandler, RefMenuItemDescriptor, RefMenuTarget, RepositoryEntryGate,
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,

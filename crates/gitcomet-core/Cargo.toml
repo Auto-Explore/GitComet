@@ -16,6 +16,7 @@ test-support = ["gitcomet-base/test-support"]
 benchmarks = ["gitcomet-base/benchmarks", "dep:strsim"]
 
 [dependencies]
+uuid = { workspace = true }
 gitcomet-base = { workspace = true }
 chardetng = { workspace = true }
 encoding_rs = { workspace = true }

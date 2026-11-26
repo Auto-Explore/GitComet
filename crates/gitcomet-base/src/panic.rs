@@ -1,6 +1,6 @@
 //! Containing a panic in code GitComet does not own, whose panic the caller
 //! maps to a fallback, so the crash hook does not report a crash that never
-//! happened. A panic in GitComet's own code stays a crash report.
+//! happened. Other observations can supply diagnostics for a confirmed crash.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -38,7 +38,7 @@ enum Noted {
 pub enum Containment {
     /// [`contain`] will return it; no crash report.
     Contained,
-    /// Report it. `escaped` is this thread's earlier panic that never reached
+    /// Capture evidence. `escaped` is this thread's earlier panic that never reached
     /// `contain` (it could not unwind, or the contained code caught it): the
     /// cause of this one when it could not unwind.
     Report { escaped: Option<ContainedPanic> },

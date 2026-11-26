@@ -556,7 +556,27 @@ impl PopOutWindow {
 #[derive(Clone)]
 pub struct WindowHost(Rc<dyn WindowHostImpl>);
 
+/// The incident recovered by this process at startup.
+#[doc(hidden)]
+pub struct RecoveredExit(pub crate::StartupExitReport);
+impl gitcomet_ui_kit::gpui::Global for RecoveredExit {}
+
 impl WindowHost {
+    /// The local incident currently offered for review by this window.
+    pub fn startup_exit_report(&self, cx: &App) -> Option<crate::StartupExitReport> {
+        if !self.is_open(cx) {
+            return None;
+        }
+        cx.try_global::<RecoveredExit>()
+            .map(|exit| exit.0.clone())
+            .filter(|report| !report.acknowledged())
+    }
+
+    /// Refreshes the banner after its snapshot has been acknowledged.
+    pub fn refresh_startup_exit_report(&self, cx: &mut App) {
+        cx.refresh_windows();
+    }
+
     #[doc(hidden)]
     pub fn new(host: Rc<dyn WindowHostImpl>) -> Self {
         Self(host)
