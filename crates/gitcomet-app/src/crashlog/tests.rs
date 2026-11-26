@@ -24,6 +24,30 @@ fn ignores_non_fatal_egl_native_fence_validation_error() {
 }
 
 #[test]
+fn ignores_windows_cursor_position_when_mouse_is_unavailable() {
+    assert!(!should_record_runtime_error(
+        "gpui_windows::window",
+        "unable to get cursor position: Access is denied. (0x80070005)"
+    ));
+    assert!(!should_record_runtime_error(
+        "gpui_windows::window",
+        "  unable to get cursor position: Access is denied. (0x80070005)\n"
+    ));
+    assert!(!should_record_runtime_error(
+        "gpui_windows::window",
+        "unable to get cursor position: Zugriff verweigert (0x80070005)"
+    ));
+    assert!(should_record_runtime_error(
+        "gpui_windows::window",
+        "unable to get cursor position: The handle is invalid. (0x80070006)"
+    ));
+    assert!(should_record_runtime_error(
+        "gitcomet::window",
+        "unable to get cursor position: Access is denied. (0x80070005)"
+    ));
+}
+
+#[test]
 fn retains_other_runtime_errors() {
     assert!(should_record_runtime_error(
         "gpui::window",
