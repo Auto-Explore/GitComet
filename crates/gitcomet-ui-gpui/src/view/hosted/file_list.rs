@@ -42,6 +42,8 @@ pub(crate) struct FileListView {
     error: Option<SharedString>,
     on_select: FileSelected,
     scroll: UniformListScrollHandle,
+    /// Lines up the visible paths' ellipses, as the status lists do.
+    path_alignment_group: components::PathTruncationAlignmentGroup,
     _state: Option<StateSubscription>,
 }
 
@@ -207,6 +209,7 @@ impl FileListView {
             error: None,
             on_select,
             scroll,
+            path_alignment_group: Default::default(),
             _state: state,
         }
     }
@@ -285,6 +288,13 @@ impl FileListView {
             self.scroll.clone(),
             self.controller.borrow_mut().group_builds,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_alignment_for_test(
+        &self,
+    ) -> crate::kit::text_truncation::PathAlignmentSnapshot {
+        self.path_alignment_group.snapshot_for_test()
     }
 
     #[cfg(test)]
@@ -420,6 +430,7 @@ impl FileListView {
         ordinal: usize,
         depth: usize,
         is_tree: bool,
+        path_alignment_group: Option<components::PathTruncationAlignmentGroup>,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let theme = self.host.theme(cx);
@@ -446,7 +457,7 @@ impl FileListView {
                 depth,
                 selected,
                 context_menu_active: false,
-                path_alignment_group: None,
+                path_alignment_group,
                 diff_stat: true,
                 leading: published
                     .is_some_and(|published| published.glyphs)
@@ -524,6 +535,17 @@ impl FileListView {
         let row_height =
             crate::view::rows::sidebar::sidebar_list_row_height(theme, ui_scale_percent);
         let list_id = self.view_id.0;
+        let shown = {
+            let mut controller = self.controller.borrow_mut();
+            (controller.projection_key(), controller.row_count())
+        };
+        let visible_signature = crate::kit::text_truncation::path_alignment_visible_signature(&(
+            list_id,
+            shown,
+            range.start,
+            range.end,
+        ));
+        let aligned = self.path_alignment_group.visible_rows(visible_signature);
         if self.controller.borrow_mut().mode == FileListMode::Grouped {
             let grouped = self.controller.borrow_mut().grouped();
             let list = cx.weak_entity();
@@ -532,7 +554,9 @@ impl FileListView {
                     GroupedRow::Header { .. } => group_header(
                         &list, list_id, &grouped, ix, false, theme, ui_scale, row_height,
                     ),
-                    GroupedRow::File { ordinal } => self.file_row(ix, ordinal, 0, false, cx),
+                    GroupedRow::File { ordinal } => {
+                        self.file_row(ix, ordinal, 0, false, Some(aligned.clone()), cx)
+                    }
                 })
                 .collect();
         }
@@ -541,9 +565,17 @@ impl FileListView {
             .filter_map(|ix| {
                 let row = plan.row_at(RowIx(ix))?;
                 match row {
-                    FileListRow::File { ordinal, depth } => {
-                        self.file_row(ix, ordinal.0, depth, plan.is_tree(), cx)
-                    }
+                    // A tree shows leaf names, which have no shared prefix to
+                    // align, and a row that reported into the group would
+                    // anchor it on the shortest one.
+                    FileListRow::File { ordinal, depth } => self.file_row(
+                        ix,
+                        ordinal.0,
+                        depth,
+                        plan.is_tree(),
+                        (!plan.is_tree()).then(|| aligned.clone()),
+                        cx,
+                    ),
                     directory => {
                         let (element, toggle) = crate::view::rows::changed_file_directory_row(
                             ("hosted_file_list_dir", ix).into(),
@@ -804,18 +836,28 @@ impl Render for FileListView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            // Laid out as the status lists' section headers: their height,
+            // padding and gaps, so the chips and controls sit where
+            // Unstaged's and Staged's do.
             .child(
                 div()
+                    .debug_selector(move || format!("hosted_file_list_{list_id}_header"))
                     .flex()
-                    .items_start()
-                    .gap_1()
+                    .items_center()
+                    .gap_2()
+                    .min_h(components::content_header_height(
+                        ui_scale::UiScale::current(cx),
+                    ))
+                    .px_2()
                     .child(
                         div()
                             .flex()
                             .flex_1()
                             .min_w_0()
                             .flex_wrap()
-                            .gap_1()
+                            .items_center()
+                            .gap_x_2()
+                            .gap_y_1()
                             .children(self.chips.iter().enumerate().map(|(ix, chip)| {
                                 let active = chip_active(&self.controller.borrow(), chip);
                                 let chip = chip.clone();

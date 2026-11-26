@@ -352,7 +352,7 @@ impl FileListController {
         self.sort = sort;
     }
 
-    fn projection_key(&self) -> u64 {
+    pub(in crate::view) fn projection_key(&self) -> u64 {
         let mut hasher = rustc_hash::FxHasher::default();
         self.files_rev.hash(&mut hasher);
         Arc::as_ptr(&self.files).hash(&mut hasher);
