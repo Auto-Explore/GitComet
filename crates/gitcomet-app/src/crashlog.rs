@@ -108,6 +108,19 @@ fn should_record_runtime_error(target: &str, message: &str) -> bool {
         return false;
     }
 
+    // On Windows, `GetCursorPos` returns `E_ACCESSDENIED` (`0x80070005`) when
+    // the calling thread has no input desktop (for example in a locked session,
+    // service, or remote session). Match the HRESULT rather than the localized
+    // Win32 message so non-English locales are also ignored instead of being
+    // promoted into a next-launch crash report.
+    let trimmed = message.trim();
+    if target == "gpui_windows::window"
+        && trimmed.contains("unable to get cursor position")
+        && trimmed.contains("0x80070005")
+    {
+        return false;
+    }
+
     true
 }
 
