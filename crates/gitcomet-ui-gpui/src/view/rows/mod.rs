@@ -807,16 +807,15 @@ pub(in crate::view) const fn commit_file_kind_visuals(
     COMMIT_FILE_KIND_VISUALS[kind as usize]
 }
 
-/// Row wash strength. Dark surfaces need a touch more of it than light ones to
-/// read at all. These four are the only knobs the tint has -- turn them here.
-const ROW_TINT_ALPHA_DARK: f32 = 0.13;
-const ROW_TINT_ALPHA_LIGHT: f32 = 0.11;
+/// Conflict row wash strength. Dark surfaces need a touch more of it than light
+/// ones to read at all.
 const CONFLICT_ROW_TINT_ALPHA_DARK: f32 = 0.20;
 const CONFLICT_ROW_TINT_ALPHA_LIGHT: f32 = 0.16;
 
 /// Background wash marking a file row's change kind, or `None` for a kind that
-/// keeps the plain surface. Added, untracked, and deleted rows mark their
-/// change kind on the leading icon background instead of tinting the whole row.
+/// keeps the plain surface. Added, untracked, deleted, and renamed rows mark
+/// their change kind on the leading icon background instead of tinting the whole
+/// row.
 ///
 /// Always translucent, and that is load-bearing -- [`tinted_row_bg`] folds this
 /// into the hover, selection and pressed fills too, and an opaque tint would
@@ -829,11 +828,8 @@ pub(in crate::view) fn file_kind_row_tint(
         FileStatusKind::Modified
         | FileStatusKind::Untracked
         | FileStatusKind::Added
-        | FileStatusKind::Deleted => return None,
-        FileStatusKind::Renamed => (
-            theme.colors.accent.foreground,
-            row_tint_alpha(theme.is_dark),
-        ),
+        | FileStatusKind::Deleted
+        | FileStatusKind::Renamed => return None,
         // Louder than the rest: a conflict is the one kind that blocks you.
         FileStatusKind::Conflicted => (
             theme.colors.status.danger.foreground,
@@ -847,8 +843,8 @@ pub(in crate::view) fn file_kind_row_tint(
     Some(with_alpha(color, alpha))
 }
 
-/// Background color for a file row's leading icon slot when a file is added or
-/// removed, or `None` for other change kinds.
+/// Background color for a file row's leading icon slot when a file is added,
+/// removed, or renamed, or `None` for other change kinds.
 pub(in crate::view) fn file_row_icon_background(
     kind: FileStatusKind,
     theme: &AppTheme,
@@ -858,9 +854,8 @@ pub(in crate::view) fn file_row_icon_background(
             theme.colors.status.success.foreground
         }
         FileStatusKind::Deleted => theme.colors.status.danger.foreground,
-        FileStatusKind::Modified | FileStatusKind::Renamed | FileStatusKind::Conflicted => {
-            return None;
-        }
+        FileStatusKind::Renamed => theme.colors.accent.foreground,
+        FileStatusKind::Modified | FileStatusKind::Conflicted => return None,
     };
     Some(with_alpha(color, if theme.is_dark { 0.22 } else { 0.18 }))
 }
@@ -879,15 +874,6 @@ pub(in crate::view) fn explorer_row_tint(
         Some(with_alpha(theme.colors.surface.canvas, 0.45))
     } else {
         None
-    }
-}
-
-#[inline]
-fn row_tint_alpha(is_dark: bool) -> f32 {
-    if is_dark {
-        ROW_TINT_ALPHA_DARK
-    } else {
-        ROW_TINT_ALPHA_LIGHT
     }
 }
 
