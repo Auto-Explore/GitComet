@@ -479,6 +479,33 @@ pub enum DiffPaneEvent {
     TargetChanged(Option<DiffTarget>),
     Loaded,
     Error(SharedString),
+    /// The shown target's change stops, once its rows are built, and again
+    /// whenever their number or the one the cursor is on changes. Failed
+    /// diff loads and snapshot panes send no change stops.
+    ChangeStops(DiffChangeStops),
+}
+
+/// The changes Down and F3 step through in `target`, as the pane draws them,
+/// numbered from zero at the top. `count` is the total, and `current` is the
+/// index of the stop the pane's cursor is on. A binary file can have no
+/// stops. Opening a file shows its first change without putting the cursor
+/// on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DiffChangeStops {
+    pub target: DiffTarget,
+    pub count: usize,
+    pub current: Option<usize>,
+}
+
+impl DiffChangeStops {
+    pub fn new(target: DiffTarget, count: usize, current: Option<usize>) -> Self {
+        Self {
+            target,
+            count,
+            current,
+        }
+    }
 }
 
 pub type DiffPaneEventHandler = Rc<dyn Fn(DiffPaneEvent, &mut App)>;
