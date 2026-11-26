@@ -2,6 +2,7 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::history_canvas;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::caches::{HistoryListRow, HistoryWorktreeChip};
@@ -702,8 +703,10 @@ fn history_table_row(
                 ("history_worktree_chip", ix),
                 theme,
                 ui_scale,
+                repo_id,
                 chip.label,
                 chip.path,
+                chip.branch,
                 cx,
             )
             .debug_selector(move || format!("history_worktree_chip_{ix}"))
@@ -788,15 +791,25 @@ fn history_table_row(
 }
 
 /// A worktree's chip in the log, naming its branch and folder. Clicking it opens
-/// that worktree.
+/// that worktree; right-clicking opens the sidebar's menu for it.
+#[allow(clippy::too_many_arguments)]
 fn history_worktree_chip(
     id: impl Into<gpui::ElementId>,
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
+    repo_id: RepoId,
     label: SharedString,
     path: std::path::PathBuf,
+    branch: Option<String>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> gpui::Stateful<gpui::Div> {
+    let menu = PopoverKind::worktree(
+        repo_id,
+        WorktreePopoverKind::Menu {
+            path: path.clone(),
+            branch,
+        },
+    );
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let tooltip: SharedString = format!("Open this worktree\n{}", path.display()).into();
     super::sidebar::worktree_origin_chip(
@@ -826,6 +839,13 @@ fn history_worktree_chip(
                 path.clone(),
             );
             cx.notify();
+        }),
+    )
+    // Claims the press before the row's canvas, which would open the commit's menu.
+    .on_pointer_click(
+        MouseButton::Right,
+        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+            this.open_popover_at(menu.clone(), e.position, window, cx);
         }),
     )
     // Gives way to its neighbours; the label shortens instead.
@@ -983,14 +1003,17 @@ fn worktree_uncommitted_history_row(
         ("history_worktree_badge", list_ix),
         theme,
         ui_scale,
+        repo_id,
         super::sidebar::worktree_origin_label(
             summary.branch.as_deref(),
             summary.detached,
             &summary.path,
         ),
         summary.path.clone(),
+        summary.branch.clone(),
         cx,
-    );
+    )
+    .debug_selector(move || format!("history_worktree_badge_{list_ix}"));
 
     let select_path = summary.path.clone();
     // These cells share the canvas graph's column offsets. Keep every fixed

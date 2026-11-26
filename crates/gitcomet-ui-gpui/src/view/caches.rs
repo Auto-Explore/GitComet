@@ -1612,6 +1612,7 @@ pub(super) struct HistoryStashIdsCache {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct HistoryWorktreeChip {
     pub(in crate::view) path: std::path::PathBuf,
+    pub(in crate::view) branch: Option<String>,
     pub(in crate::view) label: SharedString,
 }
 
@@ -1636,6 +1637,7 @@ pub(in crate::view) fn history_worktree_chips_by_head(
             .or_default()
             .push(HistoryWorktreeChip {
                 path: worktree.path.clone(),
+                branch: worktree.branch.clone(),
                 label: super::rows::sidebar::worktree_origin_label(
                     worktree.branch.as_deref(),
                     worktree.detached,

@@ -539,6 +539,15 @@ impl RefMenuTarget {
             Self::Commit { id } => id.as_ref().to_string(),
         }
     }
+
+    /// Whether the menu was opened on a branch, local or remote, which
+    /// [`RefMenuItemDescriptor::branches_only`] entries need.
+    pub fn is_branch(&self) -> bool {
+        match self {
+            Self::LocalBranch { .. } | Self::RemoteBranch { .. } => true,
+            Self::Commit { .. } => false,
+        }
+    }
 }
 
 /// Where a branch or commit menu entry runs: the window, the repository whose
@@ -554,12 +563,16 @@ pub struct RefMenuContext {
 pub type RefMenuHandler = Rc<dyn Fn(RefMenuContext, &mut Window, &mut App)>;
 
 /// An entry in every branch menu (local and remote, in the sidebar and in
-/// History) and every commit menu, after the host's comparison entries.
+/// History) and, unless [`Self::branches_only`], every commit menu, after
+/// the host's comparison entries.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct RefMenuItemDescriptor {
     pub label: SharedString,
     pub icon: Option<SharedString>,
+    /// Offered only in menus opened on a branch, not in commit menus; see
+    /// [`Self::branches_only`].
+    pub branches_only: bool,
     pub run: RefMenuHandler,
 }
 
@@ -571,12 +584,20 @@ impl RefMenuItemDescriptor {
         Self {
             label: label.into(),
             icon: None,
+            branches_only: false,
             run: Rc::new(run),
         }
     }
 
     pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Offers the entry in branch menus only, for an action that needs a
+    /// branch, such as opening a pull request from it.
+    pub fn branches_only(mut self) -> Self {
+        self.branches_only = true;
         self
     }
 }

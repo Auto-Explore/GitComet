@@ -179,6 +179,93 @@ fn extension_ref_menu_entries_run_with_the_menus_target(cx: &mut gpui::TestAppCo
     }
 }
 
+/// Registers "Branch action" for branches only, beside "Any ref action".
+struct BranchesOnly;
+
+impl gitcomet_extension_api::Extension for BranchesOnly {
+    fn id(&self) -> gitcomet_extension_api::ExtensionId {
+        gitcomet_extension_api::ExtensionId::new("com.example.branches-only").unwrap()
+    }
+
+    fn register(&self, registrar: &mut gitcomet_extension_api::Registrar) {
+        use gitcomet_extension_api::RefMenuItemDescriptor;
+        registrar.ref_menu_item(
+            "branch-action",
+            RefMenuItemDescriptor::new("Branch action", |_, _, _| {}).branches_only(),
+        );
+        registrar.ref_menu_item(
+            "any-ref-action",
+            RefMenuItemDescriptor::new("Any ref action", |_, _, _| {}),
+        );
+    }
+}
+
+/// A branches-only entry is in local and remote branch menus and not in
+/// commit menus, where the other entries stay.
+#[gpui::test]
+fn branches_only_ref_menu_entries_stay_out_of_commit_menus(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::Registry;
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(BranchesOnly)]).unwrap(),
+            app,
+        );
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(70548);
+    let commit_id = CommitId("cafebabe00000001".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_branches_only_ref_menu",
+        std::process::id()
+    ));
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+    );
+    cx.run_until_parked();
+
+    let cases = [
+        (
+            PopoverKind::BranchMenu {
+                repo_id,
+                target: BranchMenuTarget::local("feature"),
+            },
+            true,
+        ),
+        (
+            PopoverKind::BranchMenu {
+                repo_id,
+                target: BranchMenuTarget::remote("origin", "feature"),
+            },
+            true,
+        ),
+        (
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::All,
+            },
+            false,
+        ),
+    ];
+    for (kind, offered) in cases {
+        let model = cx.update(|_window, app| context_menu_model_for(&view, app, kind.clone()));
+        let labels = model.entry_labels();
+        assert!(
+            labels.contains(&"Any ref action"),
+            "every ref menu keeps the other entries: {kind:?} {labels:?}"
+        );
+        assert_eq!(
+            labels.contains(&"Branch action"),
+            offered,
+            "branches-only entry in {kind:?}: {labels:?}"
+        );
+    }
+}
+
 #[gpui::test]
 fn snapshot_diff_selection_copies_without_repository_menu_actions(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::{DiffLayout, DiffPaneOptions, DiffSnapshot, Registry};

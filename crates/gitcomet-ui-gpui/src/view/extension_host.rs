@@ -238,10 +238,12 @@ pub(in crate::view) struct ExtensionRefMenuEntry {
     pub(in crate::view) id: SharedString,
     pub(in crate::view) label: SharedString,
     pub(in crate::view) icon: Option<SharedString>,
+    /// Offered in branch menus only.
+    pub(in crate::view) branches_only: bool,
 }
 
-/// The extension entries of branch and commit menus, in registration order;
-/// none while commands are not offered.
+/// The extension entries of branch and commit menus, in registration order,
+/// the branches-only ones among them; none while commands are not offered.
 pub(in crate::view) fn ref_menu_entries(cx: &App) -> Rc<[ExtensionRefMenuEntry]> {
     let Some(registry) = cx
         .try_global::<ExtensionHost>()
@@ -257,6 +259,7 @@ pub(in crate::view) fn ref_menu_entries(cx: &App) -> Rc<[ExtensionRefMenuEntry]>
             id: id.to_string().into(),
             label: item.label.clone(),
             icon: item.icon.clone(),
+            branches_only: item.branches_only,
         })
         .collect()
 }
