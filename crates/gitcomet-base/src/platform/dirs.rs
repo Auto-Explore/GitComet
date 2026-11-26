@@ -308,3 +308,7 @@ mod tests {
         );
     }
 }
+pub fn current_session_token() -> uuid::Uuid {
+    static TOKEN: std::sync::OnceLock<uuid::Uuid> = std::sync::OnceLock::new();
+    *TOKEN.get_or_init(uuid::Uuid::new_v4)
+}

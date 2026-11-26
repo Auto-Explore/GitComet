@@ -126,16 +126,26 @@ fn should_launch_focused_diff_gui(
     config.gui && result.exit_code == exit_code::SUCCESS
 }
 
-/// Runs a parsed mode to completion and returns its exit code.
+pub(crate) struct LaunchOptions {
+    pub on_ready: Option<crate::ReadyCallback>,
+    pub bundle: BundleRelaunch,
+    pub browser_probed: bool,
+    pub executable: bool,
+}
+
 pub(crate) fn run_mode(
     mode: AppMode,
     extensions: crate::Extensions,
     repository_options: gitcomet_core::services::RepositoryOptions,
     backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
-    on_ready: Option<crate::ReadyCallback>,
-    bundle: BundleRelaunch,
-    browser_probed: bool,
+    options: LaunchOptions,
 ) -> i32 {
+    let LaunchOptions {
+        on_ready,
+        bundle,
+        browser_probed,
+        executable,
+    } = options;
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
     #[cfg(feature = "ui-gpui-runtime")]
@@ -156,7 +166,15 @@ pub(crate) fn run_mode(
         install_configured_git_executable_preference(&mode);
     }
     #[cfg(feature = "ui-gpui-runtime")]
-    let backend = || build_backend(&repository_options, backend_override.clone());
+    let ui = |extensions| {
+        gitcomet_ui_gpui::UiLaunch::new(build_backend(
+            &repository_options,
+            backend_override.clone(),
+        ))
+        .extensions(extensions)
+        .on_fatal_panic(executable.then_some(crashlog::confirm_panic))
+        .on_shutdown(finish_ui_session)
+    };
     #[cfg(not(feature = "ui-gpui-runtime"))]
     let _ = (
         &repository_options,
@@ -164,6 +182,7 @@ pub(crate) fn run_mode(
         &on_ready,
         bundle,
         browser_probed,
+        executable,
     );
 
     #[cfg(feature = "ui-gpui-runtime")]
@@ -202,9 +221,11 @@ pub(crate) fn run_mode(
                     display_path: config.display_path.clone(),
                     input: difftool_mode::focused_input(&config, result.stdout.clone()),
                 };
-                return gitcomet_ui_gpui::UiLaunch::new(backend())
-                    .extensions(extensions)
-                    .run_focused_diff(gui_config);
+                let ui = ui(extensions);
+                begin_ui_session();
+                let code = ui.run_focused_diff(gui_config);
+                finish_ui_session();
+                return code;
             }
 
             emit(result)
@@ -212,7 +233,7 @@ pub(crate) fn run_mode(
         AppMode::Browser { path } => {
             #[cfg(feature = "ui-gpui-runtime")]
             {
-                run_browser(path, extensions, backend(), on_ready, browser_probed)
+                run_browser(path, ui(extensions), on_ready, browser_probed)
             }
 
             #[cfg(not(feature = "ui-gpui-runtime"))]
@@ -245,10 +266,11 @@ pub(crate) fn run_mode(
                         return exit_code::ERROR;
                     }
                 };
-                let backend = backend();
-                return gitcomet_ui_gpui::UiLaunch::new(backend)
-                    .extensions(extensions)
-                    .run_focused_mergetool(gui_config);
+                let ui = ui(extensions);
+                begin_ui_session();
+                let code = ui.run_focused_mergetool(gui_config);
+                finish_ui_session();
+                return code;
             }
 
             emit(mergetool_mode::run_mergetool(&config))
@@ -295,8 +317,7 @@ pub(crate) fn finish_browser_forward(on_ready: Option<crate::ReadyCallback>) -> 
 #[cfg(feature = "ui-gpui-runtime")]
 fn run_browser(
     path: Option<std::path::PathBuf>,
-    extensions: gitcomet_extension_api::Registry,
-    backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
+    ui: gitcomet_ui_gpui::UiLaunch,
     on_ready: Option<crate::ReadyCallback>,
     probed: bool,
 ) -> i32 {
@@ -350,56 +371,60 @@ fn run_browser(
         // a window for the in-app notification.
         print_startup_crash_report_hint(report);
     }
-    let crash_session_result = {
+    {
         let _stage = gitcomet_core::startup_trace::span("crashlog_begin_session");
-        crashlog::begin_session()
-    };
-    if let Err(err) = crash_session_result {
-        eprintln!("Failed to create {name} crash-recovery marker before UI launch: {err}");
+        begin_ui_session();
     }
+    let startup_exit = startup_crash_report
+        .as_ref()
+        .map(|report| report.snapshot.clone());
     let startup_report = startup_crash_report.map(|report| gitcomet_ui_gpui::StartupCrashReport {
         issue_url: report.issue_url,
         summary: report.summary,
         crash_log_path: report.crash_log_path,
     });
-    let mut ui_launch = gitcomet_ui_gpui::UiLaunch::new(backend)
-        .extensions(extensions)
+    let mut ui_launch = ui
         .initial_request(initial_browser_request)
+        .startup_exit(startup_exit)
         .startup_crash_report(startup_report)
-        .on_shutdown(move || {
-            if let Err(err) = crashlog::finish_session() {
-                eprintln!(
-                    "Failed to clear {} crash-recovery marker during graceful shutdown: {err}",
-                    identity::current().display_name()
-                );
-            }
-        })
         .browser_requests(browser_requests);
     if let Some(on_ready) = on_ready {
         ui_launch = ui_launch.on_ready(on_ready);
     }
     let run_result = ui_launch.run();
     match run_result {
-        Ok(
-            gitcomet_ui_gpui::UiRunOutcome::CleanShutdown
-            | gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit,
-        ) => {
-            if let Err(err) = crashlog::finish_session() {
-                eprintln!(
-                    "Failed to clear {name} crash-recovery marker after clean shutdown: {err}"
-                );
-            }
+        Ok(gitcomet_ui_gpui::UiRunOutcome::CleanShutdown) => {
+            finish_ui_session();
             exit_code::SUCCESS
         }
+        Ok(gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit) => {
+            eprintln!("The GPUI event loop exited unexpectedly.");
+            exit_code::ERROR
+        }
         Err(err) => {
-            if let Err(record_err) =
-                crashlog::record_session_failure("main GPUI window launch", &err.to_string())
+            if !err.is_panic()
+                && let Err(record_err) =
+                    crashlog::record_session_failure("main GPUI window launch", &err.to_string())
             {
                 eprintln!("Failed to preserve {name} UI launch failure data: {record_err}");
             }
             eprintln!("Failed to launch GPUI browser UI: {err}");
             exit_code::ERROR
         }
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn begin_ui_session() {
+    if let Err(error) = crashlog::begin_session() {
+        eprintln!("Could not record the start of the UI session: {error}");
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn finish_ui_session() {
+    if let Err(error) = crashlog::finish_session() {
+        eprintln!("Could not retire the UI session marker: {error}");
     }
 }
 
@@ -695,14 +720,13 @@ fn ensure_macos_dev_app_bundle(
 
 #[cfg(feature = "ui-gpui-runtime")]
 fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
-    eprintln!(
-        "{} detected a crash from a previous run.",
-        identity::current().display_name()
-    );
-    eprintln!(
-        "Open this URL to file a prefilled crash report:\n{}",
-        report.issue_url
-    );
+    eprintln!("{}", report.summary);
+    if !report.issue_url.is_empty() {
+        eprintln!(
+            "Open this URL to file a prefilled crash report:\n{}",
+            report.issue_url
+        );
+    }
     eprintln!("Crash log: {}", report.crash_log_path.display());
 }
 

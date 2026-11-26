@@ -60,6 +60,7 @@ type ReadyCallback = Box<dyn FnOnce() -> Result<(), String>>;
 enum LaunchEntry {
     Library,
     Cli,
+    Executable,
 }
 
 /// The compiled-in extensions, in registration order.
@@ -183,6 +184,15 @@ impl AppLaunch {
         self.run_args(std::env::args_os().collect(), LaunchEntry::Cli)
     }
 
+    pub fn run_cli_and_exit(self) -> ! {
+        let launch = || self.run_args(std::env::args_os().collect(), LaunchEntry::Executable);
+        #[cfg(feature = "ui-gpui-runtime")]
+        let code = exit_on_panic(launch);
+        #[cfg(not(feature = "ui-gpui-runtime"))]
+        let code = launch();
+        std::process::exit(code)
+    }
+
     fn run_args(self, args: Vec<OsString>, entry: LaunchEntry) -> i32 {
         gitcomet_core::startup_trace::mark("app_entry");
         let Self {
@@ -214,7 +224,7 @@ impl AppLaunch {
         let mut browser_probed = false;
         let parsed = match parsed {
             Ok(parsed) => {
-                let is_cli_browser = matches!(entry, LaunchEntry::Cli)
+                let is_cli_browser = matches!(entry, LaunchEntry::Cli | LaunchEntry::Executable)
                     && matches!(parsed.outcome, CliOutcome::Run(AppMode::Browser { .. }));
                 if parsed.startup_socket.is_some()
                     && (!is_cli_browser || !cfg!(all(unix, feature = "ui-gpui-runtime")))
@@ -293,9 +303,12 @@ impl AppLaunch {
                 extensions,
                 repository_options,
                 backend,
-                on_ready.take(),
-                bundle_relaunch,
-                browser_probed,
+                launch::LaunchOptions {
+                    on_ready: on_ready.take(),
+                    bundle: bundle_relaunch,
+                    browser_probed,
+                    executable: matches!(entry, LaunchEntry::Executable),
+                },
             )
         })
     }
@@ -341,7 +354,19 @@ impl App {
         Self(self.0.extension(extension))
     }
     pub fn run(self) -> ! {
-        std::process::exit(self.0.run_cli())
+        self.0.run_cli_and_exit()
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn exit_on_panic(launch: impl FnOnce() -> i32) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(launch)) {
+        Ok(code) => code,
+        Err(payload) => {
+            crashlog::confirm_panic("Application entry point", payload.as_ref());
+            std::mem::forget(payload);
+            101
+        }
     }
 }
 

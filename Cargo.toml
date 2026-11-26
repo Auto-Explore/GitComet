@@ -177,14 +177,14 @@ gix-quote = "0.10.2"
 gix-validate = "0.13.2"
 hmac = "0.13.0"
 glob = "0.3.4"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9", default-features = false }
 # The portable glyph rasterizer the kit's test text backend paints with.
-gpui_render = { package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b", features = ["swash"] }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "83840eaa5058cb8b7c42ad17f5c603c0f4ea0d9b" }
+gpui_render = { package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9", features = ["swash"] }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "f5ea706bf28ba180b2790533b22e1a50990843e9" }
 hashbrown = "0.17.2"
 humansize = "2.1.3"
 image = "0.25.10"

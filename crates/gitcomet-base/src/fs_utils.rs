@@ -49,6 +49,18 @@ fn private_file_parent(path: &Path) -> io::Result<&Path> {
 /// Open a private regular file for append without following a symlink, whether
 /// one is already there or is swapped in while this runs.
 pub fn open_private_append(path: &Path) -> io::Result<File> {
+    open_private_append_with_read(path, false)
+}
+
+/// Holds an exclusive process-shared lock until the returned handle is dropped.
+pub fn lock_private_file(path: &Path) -> io::Result<File> {
+    // Windows rejects file locking on an append-only handle.
+    let file = open_private_append_with_read(path, true)?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn open_private_append_with_read(path: &Path, read: bool) -> io::Result<File> {
     ensure_private_dir(private_file_parent(path)?)?;
 
     match std::fs::symlink_metadata(path) {
@@ -60,7 +72,7 @@ pub fn open_private_append(path: &Path) -> io::Result<File> {
     }
 
     let mut options = OpenOptions::new();
-    options.create(true).append(true);
+    options.create(true).append(true).read(read);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;

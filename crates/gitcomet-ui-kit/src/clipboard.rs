@@ -374,7 +374,10 @@ fn write_copy_diagnostic_inner(
         },
     );
     gitcomet_base::fs_utils::write_private_file(
-        &dir.join(format!("last-operation-{}.log", std::process::id())),
+        &dir.join(format!(
+            "last-operation-{}.log",
+            gitcomet_base::platform::dirs::current_session_token()
+        )),
         text.as_bytes(),
     )
 }

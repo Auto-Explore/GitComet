@@ -2,10 +2,10 @@
 
 use crate::contributions::{
     BottomPanelDescriptor, CanvasOverlayDescriptor, ChromeDescriptor, CloseGuard,
-    CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, DetailsTabDescriptor,
-    MenuLocation, RefMenuItemDescriptor, RepositoryEntryGate, RepositoryViewDescriptor,
-    SettingsPageDescriptor, SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor,
-    UpdateCheckAction, WindowGateDescriptor,
+    CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, CrashReportDismiss,
+    DetailsTabDescriptor, MenuLocation, RefMenuItemDescriptor, RepositoryEntryGate,
+    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
+    SidebarTabDescriptor, StatusItemDescriptor, UpdateCheckAction, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -14,6 +14,12 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::rc::Rc;
+
+#[derive(Clone)]
+struct CrashReportActions {
+    review: CrashReportAction,
+    dismiss: Option<CrashReportDismiss>,
+}
 
 /// A declaration the host refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,7 +92,7 @@ pub struct Registrar {
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
-    crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    crash_report_actions: Vec<(ContributionId, CrashReportActions)>,
     update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
     errors: Vec<String>,
 }
@@ -424,8 +430,38 @@ impl Registrar {
         local: impl Into<Cow<'static, str>>,
         action: CrashReportAction,
     ) -> &mut Self {
+        self.register_crash_report_actions(
+            local,
+            CrashReportActions {
+                review: action,
+                dismiss: None,
+            },
+        )
+    }
+
+    /// Also clears private evidence for an explicitly dismissed, identified session.
+    pub fn crash_report_action_with_dismiss(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        review: CrashReportAction,
+        dismiss: CrashReportDismiss,
+    ) -> &mut Self {
+        self.register_crash_report_actions(
+            local,
+            CrashReportActions {
+                review,
+                dismiss: Some(dismiss),
+            },
+        )
+    }
+
+    fn register_crash_report_actions(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        actions: CrashReportActions,
+    ) -> &mut Self {
         if let Some(id) = self.id(local) {
-            self.crash_report_actions.push((id, action));
+            self.crash_report_actions.push((id, actions));
         }
         self
     }
@@ -488,7 +524,7 @@ pub struct Registry {
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
-    crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
+    crash_report_actions: Vec<(ContributionId, CrashReportActions)>,
     update_check_actions: Vec<(ContributionId, UpdateCheckAction)>,
 }
 
@@ -776,7 +812,16 @@ impl Registry {
 
     /// The crash banner's native report-review action, when provided.
     pub fn crash_report_action(&self) -> Option<&CrashReportAction> {
-        self.crash_report_actions.first().map(|(_, action)| action)
+        self.crash_report_actions
+            .first()
+            .map(|(_, actions)| &actions.review)
+    }
+
+    /// Private evidence cleanup paired with the registered review provider.
+    pub fn crash_report_dismiss(&self) -> Option<&CrashReportDismiss> {
+        self.crash_report_actions
+            .first()
+            .and_then(|(_, actions)| actions.dismiss.as_ref())
     }
 
     /// The product's own update check, when provided.

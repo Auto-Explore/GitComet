@@ -62,3 +62,4 @@ pub mod benchmarks {
 mod smoke_tests;
 #[cfg(test)]
 mod test_support;
+pub use gitcomet_ui_kit::gpui::set_native_panic_observer;

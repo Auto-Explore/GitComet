@@ -47,12 +47,12 @@ fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui
     });
 
     cx.update(|_window, app| {
-        view.update(app, |this, _cx| {
-            this.ignore_startup_crash_report()
-                .expect("ignore startup crash report");
+        view.update(app, |this, cx| {
+            this.ignore_startup_crash_report(cx);
         });
     });
 
+    cx.run_until_parked();
     assert!(
         !crash_log_path.exists(),
         "ignoring the crash must delete its persisted report"
@@ -1935,6 +1935,12 @@ fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
     let report_dir = tempfile::tempdir().unwrap();
     let crash_log_path = report_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "private raw crash text").unwrap();
+    let snapshot = gitcomet_extension_api::StartupExitReport::new(
+        crash_log_path.clone(),
+        b"private raw crash text",
+        gitcomet_extension_api::StartupExitReason::X11EventLoopError,
+    );
+    cx.update(|cx| cx.set_global(gitcomet_extension_api::host::RecoveredExit(snapshot)));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let mut config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: String::new(),
@@ -1955,4 +1961,85 @@ fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
     assert_eq!(opened.get(), 1);
     assert!(crash_log_path.exists(), "review must preserve the report");
     view.read_with(cx, |view, _| assert!(view.startup_crash_report.is_some()));
+    cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let reviewed = host.startup_exit_report(app).unwrap();
+        assert_eq!(
+            reviewed.reason(),
+            gitcomet_extension_api::StartupExitReason::X11EventLoopError
+        );
+        reviewed.acknowledge().unwrap();
+        host.refresh_startup_exit_report(app);
+        assert!(host.startup_exit_report(app).is_none());
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("startup_crash_report").is_none());
+    assert!(!crash_log_path.exists());
+}
+
+#[gpui::test]
+fn explicit_crash_dismissal_retries_private_cleanup_before_acknowledging(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::{CrashReportDismiss, Extension, ExtensionId, Registrar, Registry};
+    use std::rc::Rc;
+
+    struct Reporting(CrashReportDismiss);
+    impl Extension for Reporting {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.reporting").unwrap()
+        }
+        fn register(&self, registrar: &mut Registrar) {
+            registrar.crash_report_action_with_dismiss(
+                "report",
+                Rc::new(|_, _, _| {}),
+                self.0.clone(),
+            );
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pending-startup-report.log");
+    std::fs::write(&path, b"saved exit").unwrap();
+    let private = dir.path().join("private-evidence");
+    let token = gitcomet_core::startup_exit::current_session_token();
+    let capture = gitcomet_core::startup_exit::PanicCaptureId::new_v4();
+    let snapshot = gitcomet_extension_api::StartupExitReport::new_with_session(
+        path.clone(),
+        b"saved exit",
+        gitcomet_extension_api::StartupExitReason::RustPanic,
+        Some(token),
+    )
+    .with_panic_capture_id(capture);
+    let cleanup_path = private.clone();
+    let cleanup: CrashReportDismiss = Arc::new(move |received, received_capture| {
+        assert_eq!(received, token);
+        assert_eq!(received_capture, capture);
+        std::fs::remove_file(&cleanup_path)
+    });
+    cx.update(|app| {
+        extension_host::install(
+            Registry::build(vec![Box::new(Reporting(cleanup))]).unwrap(),
+            app,
+        );
+        app.set_global(gitcomet_extension_api::host::RecoveredExit(snapshot));
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let config = GitCometViewConfig::normal(Some(StartupCrashReport {
+        issue_url: String::new(),
+        summary: "Unexpected exit".into(),
+        crash_log_path: path.clone(),
+    }));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    cx.update(|_, app| view.update(app, |this, cx| this.ignore_startup_crash_report(cx)));
+    cx.run_until_parked();
+    assert!(path.exists());
+    view.read_with(cx, |view, _| assert!(view.startup_crash_report.is_some()));
+    std::fs::write(&private, b"private capture").unwrap();
+    cx.update(|_, app| view.update(app, |this, cx| this.ignore_startup_crash_report(cx)));
+    cx.run_until_parked();
+    assert!(!path.exists());
+    assert!(!private.exists());
+    view.read_with(cx, |view, _| assert!(view.startup_crash_report.is_none()));
 }
