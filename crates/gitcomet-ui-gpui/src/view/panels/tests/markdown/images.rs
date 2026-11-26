@@ -277,24 +277,29 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
     fixture.cleanup();
 }
 
+#[derive(Default)]
+struct ImageRequests(std::sync::Mutex<Vec<String>>);
+
+impl gpui::http_client::HttpClient for ImageRequests {
+    fn get(
+        &self,
+        url: &str,
+        follow_redirects: bool,
+    ) -> futures::future::BoxFuture<'static, anyhow::Result<gpui::http_client::HttpResponse>> {
+        self.0.lock().unwrap().push(url.to_owned());
+        gpui::http_client::FakeHttpClient::with_404_response().get(url, follow_redirects)
+    }
+}
+
 #[gpui::test]
-fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
-    cx: &mut gpui::TestAppContext,
-) {
+fn markdown_previews_ask_before_fetching_remote_images_by_default(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
-    cx.update(|_window, app| {
-        let diff_renderer = view.read(app).diff_renderer.clone();
-        diff_renderer.update(app, |pane, cx| {
-            pane.set_remote_markdown_image_policy(
-                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
-                cx,
-            );
-        });
-    });
+    let requests = Arc::new(ImageRequests::default());
+    cx.update(|_, app| app.set_http_client(requests.clone()));
 
     let fixture = RenderedPreviewFixture::open(
         cx,
@@ -308,6 +313,7 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
             "width=\"80\" height=\"40\" />\n",
         ),
     );
+    assert!(requests.0.lock().unwrap().is_empty());
     let row_ix = fixture.row_ix("remote");
     let retry_selector = leaked_selector(format!("markdown_preview_block_image_load_{row_ix}"));
     let retry_icon_selector = leaked_selector(format!(
@@ -341,7 +347,14 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
     );
 
     cx.simulate_click(retry.center(), gpui::Modifiers::default());
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
     cx.run_until_parked();
+    assert_eq!(
+        requests.0.lock().unwrap().as_slice(),
+        ["https://example.invalid/tracking.png"]
+    );
     cx.update(|_window, app| {
         let diff_renderer = view.read(app).diff_renderer.clone();
         diff_renderer.update(app, |pane, cx| {

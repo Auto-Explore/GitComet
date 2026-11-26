@@ -54,22 +54,12 @@ impl MarkdownPreviewHoveredLink {
 }
 
 /// A snapshot of the per-window permission state used by one render pass.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(in crate::view) struct MarkdownRemoteImageAccess {
     pub(in crate::view) policy: RemoteMarkdownImagePolicy,
     pub(in crate::view) approved_urls: Arc<FxHashSet<SharedString>>,
     pub(in crate::view) approval_view:
         Option<crate::view::markdown_interaction::MarkdownInteraction>,
-}
-
-impl Default for MarkdownRemoteImageAccess {
-    fn default() -> Self {
-        Self {
-            policy: RemoteMarkdownImagePolicy::AlwaysLoad,
-            approved_urls: Arc::default(),
-            approval_view: None,
-        }
-    }
 }
 
 impl MarkdownRemoteImageAccess {

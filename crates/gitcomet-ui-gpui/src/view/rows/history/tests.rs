@@ -629,7 +629,14 @@ fn markdown_remote_image_access_requires_exact_url_approval_in_ask_mode() {
     assert!(!access.permits(&SharedString::from("https://example.com/other.png")));
 
     let url = SharedString::from("https://example.com/other.png");
-    assert!(MarkdownRemoteImageAccess::default().permits(&url));
+    assert!(!MarkdownRemoteImageAccess::default().permits(&url));
+    assert!(
+        MarkdownRemoteImageAccess {
+            policy: crate::view::RemoteMarkdownImagePolicy::AlwaysLoad,
+            ..Default::default()
+        }
+        .permits(&url)
+    );
     assert!(
         !MarkdownRemoteImageAccess {
             policy: crate::view::RemoteMarkdownImagePolicy::NeverLoad,

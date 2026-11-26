@@ -107,12 +107,11 @@ impl Default for DiffPreferences {
 /// sources into network requests.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum RemoteMarkdownImagePolicy {
-    /// Preserve the historical behavior: remote pictures load as soon as the
-    /// rendered preview asks for them.
-    #[default]
+    /// Load remote pictures as soon as the rendered preview asks for them.
     AlwaysLoad,
     /// Keep remote pictures inert until the user approves their URL in the
     /// current preview target.
+    #[default]
     AskBeforeLoading,
     /// Never make a request for a remote Markdown picture.
     NeverLoad,
@@ -155,7 +154,7 @@ pub(super) struct SecurityPreferences {
 impl Default for SecurityPreferences {
     fn default() -> Self {
         Self {
-            remote_markdown_images: RemoteMarkdownImagePolicy::AlwaysLoad,
+            remote_markdown_images: RemoteMarkdownImagePolicy::default(),
             remote_url_policy: RemoteUrlPolicy::default(),
             check_for_updates_on_startup: true,
         }
@@ -549,13 +548,29 @@ mod tests {
         );
         assert_eq!(
             preferences.security.remote_markdown_images,
-            RemoteMarkdownImagePolicy::AlwaysLoad
+            RemoteMarkdownImagePolicy::AskBeforeLoading
         );
         assert_eq!(
             preferences.security.remote_url_policy,
             RemoteUrlPolicy::default()
         );
         assert!(preferences.security.check_for_updates_on_startup);
+    }
+
+    #[test]
+    fn remote_image_preferences_preserve_saved_choices_and_ask_for_unknown_values() {
+        for (saved, expected) in [
+            ("always", RemoteMarkdownImagePolicy::AlwaysLoad),
+            ("never", RemoteMarkdownImagePolicy::NeverLoad),
+            ("ask", RemoteMarkdownImagePolicy::AskBeforeLoading),
+            ("unknown", RemoteMarkdownImagePolicy::AskBeforeLoading),
+        ] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                remote_markdown_image_policy: Some(saved.to_owned()),
+                ..Default::default()
+            });
+            assert_eq!(preferences.security.remote_markdown_images, expected);
+        }
     }
 
     #[test]
