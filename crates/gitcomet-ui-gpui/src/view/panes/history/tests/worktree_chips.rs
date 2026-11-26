@@ -105,6 +105,10 @@ fn mount<'a>(
             .map(|folder| WorktreeDirtySummary {
                 path: worktree_path(folder),
                 head: Some(CommitId("base".into())),
+                branch: others
+                    .iter()
+                    .find(|(other, _)| other == folder)
+                    .map(|(_, branch)| (*branch).to_owned()),
                 modified: 1,
                 ..Default::default()
             })
@@ -287,4 +291,49 @@ fn more_worktrees_on_a_commit_fold_into_a_menu(cx: &mut gpui::TestAppContext) {
         .expect("the folded worktree is in the menu");
     cx.simulate_click(second.center(), gpui::Modifiers::default());
     wait_for_open(cx, &store, "another-clean-worktree-with-a-long-name");
+}
+
+/// Right-clicking a worktree's chip opens the same menu as its sidebar row,
+/// on a clean worktree's commit chip and on a dirty one's changes row alike.
+#[gpui::test]
+fn right_clicking_a_worktree_chip_opens_its_worktree_menu(cx: &mut gpui::TestAppContext) {
+    let Mounted {
+        cx,
+        view,
+        history,
+        base_row,
+        ..
+    } = mount(cx, &[("clean", "side"), ("dirty", "fix")], &["dirty"]);
+    let dirty_row = cx.update(|_, app| {
+        history.update(app, |history, _| {
+            history.ensure_history_list_plan().list_ix_for_worktree(0)
+        })
+    });
+    let dirty_row = dirty_row.expect("the dirty worktree's changes row");
+
+    for (selector, folder, branch) in [
+        (format!("history_worktree_chip_{base_row}"), "clean", "side"),
+        (format!("history_worktree_badge_{dirty_row}"), "dirty", "fix"),
+    ] {
+        let chip = bounds_of(cx, selector.clone()).unwrap_or_else(|| panic!("{selector}"));
+        cx.simulate_mouse_down(chip.center(), gpui::MouseButton::Right, gpui::Modifiers::default());
+        cx.simulate_mouse_up(chip.center(), gpui::MouseButton::Right, gpui::Modifiers::default());
+        crate::view::test_support::redraw(cx);
+        assert_eq!(
+            cx.update(|_, app| crate::view::test_support::popover_kind(view.read(app), app)),
+            Some(PopoverKind::worktree(
+                RepoId(1),
+                WorktreePopoverKind::Menu {
+                    path: worktree_path(folder),
+                    branch: Some(branch.to_owned()),
+                },
+            )),
+            "right-clicking {selector} should open {folder}'s worktree menu"
+        );
+        cx.update(|_, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        });
+        crate::view::test_support::redraw(cx);
+    }
 }
