@@ -954,9 +954,30 @@ fn image_diff_cache_dir_rejects_a_world_writable_directory() {
     std::fs::create_dir(&dir).unwrap();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
 
-    let result = image_diff_cache_dir_in(root.path());
+    let result =
+        gitcomet_core::fs_utils::private_cache_dir_in(root.path(), IMAGE_DIFF_CACHE_DIR_NAME);
 
     assert!(result.is_err(), "{result:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn image_diff_cache_dir_rejects_a_linked_directory() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("other-cache")).unwrap();
+    let alias = root.path().join(IMAGE_DIFF_CACHE_DIR_NAME);
+    std::os::unix::fs::symlink("other-cache", &alias).unwrap();
+
+    assert!(
+        gitcomet_core::fs_utils::private_cache_dir_in(root.path(), IMAGE_DIFF_CACHE_DIR_NAME)
+            .is_err()
+    );
+    assert!(
+        std::fs::read_dir(root.path().join("other-cache"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[cfg(unix)]

@@ -436,6 +436,38 @@ fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
     .expect("blob id")
 }
 
+#[cfg(unix)]
+#[test]
+fn disk_backed_preview_uses_a_private_cache_directory() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = tempfile::tempdir().unwrap();
+    init_test_repo(tmp.path());
+    let blob_id = stage_blob(tmp.path(), "note.txt", b"cached note");
+    let repo = open_repo(tmp.path());
+
+    let path = repo
+        .cached_preview_blob_file_path(blob_id, Path::new("note.txt"))
+        .unwrap()
+        .unwrap();
+    let parent = path.parent().unwrap();
+    assert_ne!(parent, std::env::temp_dir());
+    assert_eq!(
+        std::fs::symlink_metadata(parent)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"cached note");
+    assert_eq!(
+        repo.cached_preview_blob_file_path(blob_id, Path::new("note.txt"))
+            .unwrap(),
+        Some(path)
+    );
+}
+
 #[test]
 fn preview_blob_cache_ignores_pre_planted_file_with_other_content() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -444,9 +476,8 @@ fn preview_blob_cache_ignores_pre_planted_file_with_other_content() {
     let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
     let repo = open_repo(tmp.path());
 
-    // The name is a function of (workdir, path, blob id) that anyone on the
-    // host can compute, so a file there is not evidence of who wrote it.
-    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+    // The application can detect a cached blob changed by another local tool.
+    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id).unwrap();
     std::fs::write(&cache_path, b"planted by someone else").expect("plant cache file");
 
     let served = repo
@@ -470,7 +501,7 @@ fn preview_blob_verification_memo_rechecks_matching_racy_stamp() {
     let logical_path = Path::new("image.bin");
     let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
     let repo = open_repo(tmp.path());
-    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id).unwrap();
     std::fs::write(&cache_path, b"fake blob bytes").expect("tamper");
     // Keep the stamp racy regardless of how long the test is descheduled.
     std::fs::File::options()
@@ -509,7 +540,7 @@ fn preview_blob_verification_memo_does_not_record_racy_hash_verification() {
     let logical_path = Path::new("image.bin");
     let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
     let repo = open_repo(tmp.path());
-    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id).unwrap();
     std::fs::write(&cache_path, b"real blob bytes").expect("write cache");
     std::fs::File::options()
         .write(true)
@@ -578,7 +609,7 @@ fn preview_blob_cache_replaces_symlink_at_cache_path() {
     let elsewhere = tempfile::tempdir().expect("symlink target dir");
     let target = elsewhere.path().join("target");
     std::fs::write(&target, b"real blob bytes").expect("write symlink target");
-    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+    let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id).unwrap();
     let _ = std::fs::remove_file(&cache_path);
     std::os::unix::fs::symlink(&target, &cache_path).expect("plant symlink");
 
@@ -863,6 +894,7 @@ fn unmerged_staged_side_prefers_stage_two_without_reading_stage_three() {
             Path::new("a.txt"),
             &gix::ObjectId::from_hex(id.as_bytes()).unwrap(),
         )
+        .unwrap()
     };
     assert_eq!(
         diff.new_source.map(|source| source.path),

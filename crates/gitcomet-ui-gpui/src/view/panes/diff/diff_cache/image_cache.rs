@@ -71,32 +71,8 @@ fn maybe_cleanup_image_diff_cache_on_write() {
     }
 }
 
-/// Previews live in an owner-only directory, not the shared temp root: the file
-/// name is a content hash, so anyone able to create an entry there could plant
-/// a name and have it served as a cache hit. The temp root is world-creatable,
-/// so a directory already there is used only if nobody else can write to it.
 fn image_diff_cache_dir() -> std::io::Result<std::path::PathBuf> {
-    image_diff_cache_dir_in(&std::env::temp_dir())
-}
-
-fn image_diff_cache_dir_in(base: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
-    let dir = base.join(IMAGE_DIFF_CACHE_DIR_NAME);
-    gitcomet_core::fs_utils::ensure_private_dir(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        if std::fs::metadata(&dir)?.permissions().mode() & 0o022 != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "image diff cache dir is writable by others: {}",
-                    dir.display()
-                ),
-            ));
-        }
-    }
-    Ok(dir)
+    gitcomet_core::fs_utils::private_product_cache_dir(IMAGE_DIFF_CACHE_DIR_NAME)
 }
 
 fn cleanup_image_diff_cache_now() {
