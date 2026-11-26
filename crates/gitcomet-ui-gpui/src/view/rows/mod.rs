@@ -815,9 +815,8 @@ const CONFLICT_ROW_TINT_ALPHA_DARK: f32 = 0.20;
 const CONFLICT_ROW_TINT_ALPHA_LIGHT: f32 = 0.16;
 
 /// Background wash marking a file row's change kind, or `None` for a kind that
-/// keeps the plain surface. Modified is that untinted default: in an unstaged
-/// list nearly every row is one, so tinting it would drown the add/delete
-/// signal the wash exists for.
+/// keeps the plain surface. Added, untracked, and deleted rows mark their
+/// change kind on the leading icon background instead of tinting the whole row.
 ///
 /// Always translucent, and that is load-bearing -- [`tinted_row_bg`] folds this
 /// into the hover, selection and pressed fills too, and an opaque tint would
@@ -827,15 +826,10 @@ pub(in crate::view) fn file_kind_row_tint(
     theme: &AppTheme,
 ) -> Option<gpui::Rgba> {
     let (color, alpha) = match kind {
-        FileStatusKind::Modified => return None,
-        FileStatusKind::Untracked | FileStatusKind::Added => (
-            theme.colors.status.success.foreground,
-            row_tint_alpha(theme.is_dark),
-        ),
-        FileStatusKind::Deleted => (
-            theme.colors.status.danger.foreground,
-            row_tint_alpha(theme.is_dark),
-        ),
+        FileStatusKind::Modified
+        | FileStatusKind::Untracked
+        | FileStatusKind::Added
+        | FileStatusKind::Deleted => return None,
         FileStatusKind::Renamed => (
             theme.colors.accent.foreground,
             row_tint_alpha(theme.is_dark),
@@ -851,6 +845,24 @@ pub(in crate::view) fn file_kind_row_tint(
         ),
     };
     Some(with_alpha(color, alpha))
+}
+
+/// Background color for a file row's leading icon slot when a file is added or
+/// removed, or `None` for other change kinds.
+pub(in crate::view) fn file_row_icon_background(
+    kind: FileStatusKind,
+    theme: &AppTheme,
+) -> Option<gpui::Rgba> {
+    let color = match kind {
+        FileStatusKind::Untracked | FileStatusKind::Added => {
+            theme.colors.status.success.foreground
+        }
+        FileStatusKind::Deleted => theme.colors.status.danger.foreground,
+        FileStatusKind::Modified | FileStatusKind::Renamed | FileStatusKind::Conflicted => {
+            return None;
+        }
+    };
+    Some(with_alpha(color, if theme.is_dark { 0.22 } else { 0.18 }))
 }
 
 /// Background wash for an explorer row that is normally out of sight; ignored
@@ -931,10 +943,12 @@ pub(in crate::view) fn file_row_kind_badge(
 }
 
 /// A file row's leading icon slot: the file-type glyph, with the change kind
-/// badged on its top-right corner.
+/// badged on its top-right corner and an optional background color.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::view) fn file_row_icon_slot(
     icon: &'static str,
     color: gpui::Rgba,
+    icon_bg: Option<gpui::Rgba>,
     badge: Option<(&'static str, gpui::Rgba)>,
     disc: FileRowBadgeDisc,
     icon_px: f32,
@@ -949,6 +963,15 @@ pub(in crate::view) fn file_row_icon_slot(
         // Anchors the badge; the row is `items_center`, so without it the badge
         // would hang off the row box rather than the icon.
         .relative()
+        .when_some(icon_bg, |slot, bg| {
+            slot.child(
+                div()
+                    .absolute()
+                    .inset(scaled(-2.0))
+                    .bg(bg)
+                    .rounded(scaled(4.0)),
+            )
+        })
         .flex()
         .items_center()
         .justify_center()

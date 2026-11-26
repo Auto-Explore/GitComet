@@ -68,8 +68,10 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
     } else {
         crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
     };
-    // The change kind rides the row wash and a badge on the icon's corner.
+    // The change kind rides the icon background (added/removed), optional row
+    // tint (renamed/conflicted), and a badge on the icon's corner.
     let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+    let icon_bg = crate::view::rows::file_row_icon_background(f.kind, &theme);
     let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
     let interaction =
         crate::view::rows::FileRowInteraction::new(theme, tint, selected, context_menu_active);
@@ -101,6 +103,7 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
         .child(crate::view::rows::file_row_icon_slot(
             icon,
             color,
+            icon_bg,
             badge,
             badge_disc,
             14.0,

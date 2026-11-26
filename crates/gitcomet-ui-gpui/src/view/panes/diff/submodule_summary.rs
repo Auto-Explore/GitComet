@@ -729,8 +729,10 @@ impl DiffRenderer {
         let submodule_repo_path = Arc::clone(submodule_repo_path);
         let (icon, icon_color) =
             crate::view::rows::file_row_icon(&change.path, change.kind, &theme);
-        // The change kind rides the row wash and a badge on the icon's corner.
+        // The change kind rides the icon background (added/removed), optional row
+        // tint (renamed/conflicted), and a badge on the icon's corner.
         let tint = crate::view::rows::file_kind_row_tint(change.kind, &theme);
+        let icon_bg = crate::view::rows::file_row_icon_background(change.kind, &theme);
         let badge = crate::view::rows::file_row_kind_badge(change.kind, &theme);
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let row_group: SharedString = format!("submodule_change_row_{row_ix}").into();
@@ -775,6 +777,7 @@ impl DiffRenderer {
             .child(crate::view::rows::file_row_icon_slot(
                 icon,
                 icon_color,
+                icon_bg,
                 badge,
                 badge_disc,
                 12.0,

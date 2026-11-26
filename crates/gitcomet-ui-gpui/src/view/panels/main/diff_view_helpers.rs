@@ -135,6 +135,7 @@ impl DiffRenderer {
                             crate::view::rows::file_row_icon_slot(
                                 icon,
                                 color,
+                                None,
                                 badge,
                                 crate::view::rows::FileRowBadgeDisc::still(header_bg),
                                 14.0,
