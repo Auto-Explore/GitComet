@@ -362,8 +362,9 @@ impl Registrar {
         self
     }
 
-    /// Adds an entry to every branch and commit menu; it receives the
-    /// branch or commit the menu was opened on.
+    /// Adds an entry to every branch menu and, unless it is
+    /// [`RefMenuItemDescriptor::branches_only`], every commit menu; it
+    /// receives the branch or commit the menu was opened on.
     pub fn ref_menu_item(
         &mut self,
         local: impl Into<Cow<'static, str>>,
