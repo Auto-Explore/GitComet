@@ -3,12 +3,13 @@
 use super::*;
 
 impl SidebarPaneView {
-    /// One stash entry; double-click applies it.
+    /// One stash entry; click reveals its commit, double-click applies it.
     pub(super) fn sidebar_stash_item_row(
         this: &Self,
         ctx: &SidebarRowContext,
         slot: SidebarRowSlot,
         index: usize,
+        id: CommitId,
         message: SharedString,
         tooltip: SharedString,
         cx: &mut gpui::Context<Self>,
@@ -69,7 +70,11 @@ impl SidebarPaneView {
                 false,
                 controls::ControlActivation::Composite,
                 cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                    if !e.standard_click() || e.click_count() < 2 {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    if e.click_count() == 1 {
+                        this.reveal_ref_commit(repo_id, id.clone(), cx);
                         return;
                     }
                     this.store.dispatch(Msg::ApplyStash { repo_id, index });
@@ -176,7 +181,7 @@ impl SidebarPaneView {
                     if !e.standard_click() || e.click_count() != 1 {
                         return;
                     }
-                    this.reveal_tag_commit(repo_id, target_for_click.clone(), cx);
+                    this.reveal_ref_commit(repo_id, target_for_click.clone(), cx);
                 }),
             )
             .on_pointer_click(

@@ -535,11 +535,14 @@ impl SidebarPaneView {
                     ctx.placeholder_row("stash_placeholder", slot.ix, message)
                 }
                 BranchSidebarRow::StashItem {
+                    id,
                     index,
                     message,
                     tooltip,
                     ..
-                } => Self::sidebar_stash_item_row(this, &ctx, slot, index, message, tooltip, cx),
+                } => {
+                    Self::sidebar_stash_item_row(this, &ctx, slot, index, id, message, tooltip, cx)
+                }
                 BranchSidebarRow::TagsHeader {
                     top_border: _,
                     collapsed,

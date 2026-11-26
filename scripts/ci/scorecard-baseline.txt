@@ -256,7 +256,6 @@ fn-lines crates/gitcomet-ui-gpui/src/view/state_apply.rs::apply_state_snapshot 3
 fn-lines crates/gitcomet-ui-gpui/src/view/state_apply.rs::consume_store_feedback 167 -
 fn-lines crates/gitcomet-ui-gpui/src/view/terminal_panel.rs::render_terminal_header 230 -
 fn-lines crates/gitcomet-ui-gpui/src/view/toast_host.rs::render 231 -
-fn-lines crates/gitcomet-ui-gpui/src/view/toast_host.rs::render_operation_progress_toast 158 -
 fn-lines crates/gitcomet-ui-gpui/src/view/ui_persistence.rs::schedule_ui_settings_persist 196 -
 fn-lines crates/gitcomet-ui-gpui/src/view/window_bootstrap.rs::from_session 226 -
 fn-lines crates/gitcomet-ui-kit/src/components/button.rs::render 278 -
