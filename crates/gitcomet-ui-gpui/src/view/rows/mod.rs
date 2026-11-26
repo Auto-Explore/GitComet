@@ -850,9 +850,7 @@ pub(in crate::view) fn file_row_icon_background(
     theme: &AppTheme,
 ) -> Option<gpui::Rgba> {
     let color = match kind {
-        FileStatusKind::Untracked | FileStatusKind::Added => {
-            theme.colors.status.success.foreground
-        }
+        FileStatusKind::Untracked | FileStatusKind::Added => theme.colors.status.success.foreground,
         FileStatusKind::Deleted => theme.colors.status.danger.foreground,
         FileStatusKind::Renamed => theme.colors.accent.foreground,
         FileStatusKind::Modified | FileStatusKind::Conflicted => return None,
