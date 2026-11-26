@@ -313,11 +313,23 @@ fn right_clicking_a_worktree_chip_opens_its_worktree_menu(cx: &mut gpui::TestApp
 
     for (selector, folder, branch) in [
         (format!("history_worktree_chip_{base_row}"), "clean", "side"),
-        (format!("history_worktree_badge_{dirty_row}"), "dirty", "fix"),
+        (
+            format!("history_worktree_badge_{dirty_row}"),
+            "dirty",
+            "fix",
+        ),
     ] {
         let chip = bounds_of(cx, selector.clone()).unwrap_or_else(|| panic!("{selector}"));
-        cx.simulate_mouse_down(chip.center(), gpui::MouseButton::Right, gpui::Modifiers::default());
-        cx.simulate_mouse_up(chip.center(), gpui::MouseButton::Right, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            chip.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            chip.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
         crate::view::test_support::redraw(cx);
         assert_eq!(
             cx.update(|_, app| crate::view::test_support::popover_kind(view.read(app), app)),
