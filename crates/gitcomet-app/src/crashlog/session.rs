@@ -57,6 +57,8 @@ pub(super) enum CrashCause {
     NativeFault {
         description: String,
         time_is_event: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        faulting_module: Option<native::FaultingModule>,
     },
 }
 
@@ -240,6 +242,7 @@ pub(super) fn recover(
                 cause: CrashCause::NativeFault {
                     description: fault.description,
                     time_is_event: fault.time_is_event,
+                    faulting_module: fault.faulting_module,
                 },
                 environment: read_limited(
                     &super::environment_path(dir, token),

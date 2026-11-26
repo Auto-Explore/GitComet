@@ -212,6 +212,7 @@ fn match_report(
             description: description.to_owned(),
             timestamp_unix_ms: capture,
             time_is_event: true,
+            faulting_module: None,
         },
     ))
 }

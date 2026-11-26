@@ -166,6 +166,7 @@ fn match_record(
         description: description.to_owned(),
         timestamp_unix_ms,
         time_is_event: false,
+        faulting_module: None,
     })
 }
 

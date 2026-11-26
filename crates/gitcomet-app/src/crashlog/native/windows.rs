@@ -1,4 +1,4 @@
-use super::NativeFault;
+use super::{FaultingModule, NativeFault};
 use gitcomet_win32_window_utils::application_error::{self, CrashEvent};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +88,10 @@ fn match_event(
         description: description.to_owned(),
         timestamp_unix_ms,
         time_is_event: true,
+        faulting_module: event.module_name.clone().map(|name| FaultingModule {
+            name,
+            offset: event.faulting_offset,
+        }),
     })
 }
 
@@ -108,6 +112,8 @@ mod tests {
             created_filetime: identity.created_filetime,
             logged_filetime: 134_000_000_010_000_000,
             exception_code: 0xC000_0005,
+            module_name: Some("renderer.dll".into()),
+            faulting_offset: Some(0x53a1),
         };
         let reliable = |candidate: &CrashEvent| {
             match_event(&identity, 1_755_526_400_000, 1_755_526_402_000, candidate)
@@ -115,6 +121,13 @@ mod tests {
         let fault = reliable(&event).unwrap();
         assert_eq!(fault.timestamp_unix_ms, 1_755_526_401_000);
         assert!(fault.time_is_event);
+        assert_eq!(
+            fault.faulting_module,
+            Some(FaultingModule {
+                name: "renderer.dll".into(),
+                offset: Some(0x53a1),
+            }),
+        );
         for code in [0, 1, 0xC000_013A, 0x8000_0003, 0x8000_0004, 0xE06D_7363] {
             event.exception_code = code;
             assert!(reliable(&event).is_none());

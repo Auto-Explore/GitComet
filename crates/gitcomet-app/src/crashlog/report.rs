@@ -88,7 +88,7 @@ fn issue_body(
 ) -> String {
     let product = identity::current().display_name();
     let mut body = format!(
-        "## Crash Summary\n\n<!-- Please describe what you were doing right before the crash. -->\n{description}\n\n## Environment\n\n- {product} version: `{}`\n- {time_label} (Unix ms): `{}`\n",
+        "## Crash Summary\n\n{description}\n\n## What were you doing when it crashed?\n\n\n## Environment\n\n- {product} version: `{}`\n- {time_label} (Unix ms): `{}`\n",
         record.version, crash.timestamp_unix_ms,
     );
     if let Some(environment) = &crash.environment {
@@ -109,11 +109,33 @@ fn issue_body(
                 let _ = writeln!(body, "- Thread: `{thread}`");
             }
         }
-        CrashCause::NativeFault { .. } => {
+        CrashCause::NativeFault {
+            faulting_module, ..
+        } => {
             let _ = writeln!(body, "- Failure kind: Native fault");
+            if let Some(module) = faulting_module
+                && let Some(name) = issue_module_name(&module.name)
+            {
+                let _ = writeln!(body, "- Faulting module: `{name}`");
+                if let Some(offset) = module.offset {
+                    let _ = writeln!(body, "- Faulting offset: `0x{offset:x}`");
+                }
+            }
         }
     }
     body
+}
+
+fn issue_module_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.eq_ignore_ascii_case("unknown")
+        || name.contains(['/', '\\', ':', '`'])
+        || name.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(name)
 }
 
 fn build_issue_url(url: &str, title: &str, body: &str) -> String {

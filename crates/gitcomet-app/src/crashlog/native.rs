@@ -31,4 +31,12 @@ pub(super) struct NativeFault {
     pub(super) description: String,
     pub(super) timestamp_unix_ms: u64,
     pub(super) time_is_event: bool,
+    pub(super) faulting_module: Option<FaultingModule>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FaultingModule {
+    pub(super) name: String,
+    pub(super) offset: Option<u64>,
 }

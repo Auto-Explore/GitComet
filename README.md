@@ -324,9 +324,11 @@ GitComet keeps local crash reports and recent session diagnostics in:
 GitComet offers a report on the next launch after it records a fatal Rust panic
 or finds an operating-system crash record for the exact previous session. The
 banner shows the observed crash time or the time the OS logged the event. The
-report can include the app version, environment, and confirmed failure
-details. A Rust panic observation in the local file can include the original
-location and backtrace. Review it before adding it to your report.
+prefilled GitHub issue can include the app version, environment, and confirmed
+failure details. Windows reports include the faulting module and its offset
+when the matching event provides them. A Rust panic observation in the local
+file can include the original location and backtrace. Review it before adding
+it to your report.
 
 For an unfinished session, GitComet looks for native crash evidence once.
 It checks macOS DiagnosticReports, the Windows Application event log, or a

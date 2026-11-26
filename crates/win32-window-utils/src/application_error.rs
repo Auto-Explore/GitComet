@@ -10,6 +10,9 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::w;
 
+const CRASH_EVENT_FIELD_COUNT: usize = 7;
+type CrashEventValues = [EVT_VARIANT; CRASH_EVENT_FIELD_COUNT];
+
 pub fn current_process_identity() -> Option<(u64, String)> {
     let handle = unsafe { GetCurrentProcess() };
     let [mut creation, mut exit, mut kernel, mut user] = [FILETIME::default(); 4];
@@ -33,6 +36,8 @@ pub struct CrashEvent {
     pub image: String,
     pub logged_filetime: u64,
     pub exception_code: u32,
+    pub module_name: Option<String>,
+    pub faulting_offset: Option<u64>,
 }
 
 struct EventHandle(EVT_HANDLE);
@@ -70,12 +75,14 @@ pub fn recent_crashes(image: &str, age_ms: u64) -> Vec<CrashEvent> {
     }) else {
         return Vec::new();
     };
-    let paths = [
+    let paths: [_; CRASH_EVENT_FIELD_COUNT] = [
         w!("Event/EventData/Data[@Name='ProcessId']"),
         w!("Event/EventData/Data[@Name='ProcessCreationTime']"),
         w!("Event/EventData/Data[@Name='AppPath']"),
         w!("Event/EventData/Data[@Name='ExceptionCode']"),
         w!("Event/System/TimeCreated/@SystemTime"),
+        w!("Event/EventData/Data[@Name='ModuleName']"),
+        w!("Event/EventData/Data[@Name='FaultingOffset']"),
     ];
     let Some(context) = EventHandle::new(unsafe {
         EvtCreateRenderContext(paths.len() as u32, paths.as_ptr(), EvtRenderContextValues)
@@ -106,7 +113,7 @@ pub fn recent_crashes(image: &str, age_ms: u64) -> Vec<CrashEvent> {
 }
 
 fn render_event(context: &EventHandle, event: &EventHandle) -> Option<CrashEvent> {
-    // The longest Win32 path fits in 64 KiB of UTF-16. The other four selected fields are small.
+    // The longest Win32 path fits in 64 KiB of UTF-16. The other selected fields are small.
     // EVT_VARIANT and the strings it points to occupy the same aligned output allocation.
     let mut storage = vec![0u64; 9 * 1024];
     let mut used = 0;
@@ -122,7 +129,7 @@ fn render_event(context: &EventHandle, event: &EventHandle) -> Option<CrashEvent
             &mut count,
         )
     } == 0
-        || count != 5
+        || count as usize != CRASH_EVENT_FIELD_COUNT
     {
         return None;
     }
@@ -130,11 +137,11 @@ fn render_event(context: &EventHandle, event: &EventHandle) -> Option<CrashEvent
 }
 
 fn decode_event(storage: &[u64], used: usize) -> Option<CrashEvent> {
-    if used > size_of_val(storage) || used < 5 * size_of::<EVT_VARIANT>() {
+    if used > size_of_val(storage) || used < size_of::<CrashEventValues>() {
         return None;
     }
-    // SAFETY: EvtRender succeeded and returned exactly five aligned EVT_VARIANTs in request order.
-    let values = unsafe { &*storage.as_ptr().cast::<[EVT_VARIANT; 5]>() };
+    // SAFETY: EvtRender returned the aligned EVT_VARIANTs in request order.
+    let values = unsafe { &*storage.as_ptr().cast::<CrashEventValues>() };
     let text = |value: &EVT_VARIANT| -> Option<String> {
         if value.Type != EvtVarTypeString as u32 {
             return None;
@@ -172,7 +179,15 @@ fn decode_event(storage: &[u64], used: usize) -> Option<CrashEvent> {
             }
         }
     };
-    let [pid, created, image, exception, logged] = values;
+    let [
+        pid,
+        created,
+        image,
+        exception,
+        logged,
+        module_name,
+        faulting_offset,
+    ] = values;
     if logged.Type != EvtVarTypeFileTime as u32 {
         return None;
     }
@@ -182,6 +197,8 @@ fn decode_event(storage: &[u64], used: usize) -> Option<CrashEvent> {
         image: text(image)?,
         exception_code: number(exception, true)?.try_into().ok()?,
         logged_filetime: unsafe { logged.Anonymous.FileTimeVal },
+        module_name: text(module_name),
+        faulting_offset: number(faulting_offset, true),
     })
 }
 
@@ -194,11 +211,11 @@ mod tests {
     fn rendered_event_decodes_only_complete_scalar_fields_in_the_returned_buffer() {
         let mut storage = [0u64; 96];
         let ptr = storage.as_mut_ptr().cast::<u16>();
-        let mut end = size_of::<[EVT_VARIANT; 5]>() / 2;
+        let mut end = size_of::<CrashEventValues>() / 2;
         let mut field = |s: &str| {
             let units: Vec<_> = s.encode_utf16().chain([0]).collect();
             assert!(end + units.len() <= 96 * 4);
-            // SAFETY: the five slots are followed by disjoint UTF-16 strings in this allocation.
+            // SAFETY: the variant slots are followed by disjoint UTF-16 strings in this allocation.
             let text = unsafe { ptr.add(end) };
             unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), text, units.len()) };
             end += units.len();
@@ -226,12 +243,14 @@ mod tests {
             field(r"C:\Example\gitcomet.exe"),
             field("c0000005"),
             time,
+            field("renderer.dll"),
+            field("00000000000053a1"),
         ];
-        // SAFETY: storage is aligned and starts with room for all five slots.
+        // SAFETY: storage is aligned and starts with room for all variant slots.
         unsafe {
             storage
                 .as_mut_ptr()
-                .cast::<[EVT_VARIANT; 5]>()
+                .cast::<CrashEventValues>()
                 .write(fields)
         };
         let event = decode_event(&storage, end * 2).unwrap();
@@ -240,7 +259,18 @@ mod tests {
         assert_eq!(event.exception_code, 0xc0000005);
         assert_eq!(event.image, r"C:\Example\gitcomet.exe");
         assert_eq!(event.logged_filetime, 134_000_000_010_000_000);
+        assert_eq!(event.module_name.as_deref(), Some("renderer.dll"));
+        assert_eq!(event.faulting_offset, Some(0x53a1));
         assert!(decode_event(&storage, end * 2 - 2).is_none());
         assert!(decode_event(&storage, size_of_val(&storage) + 1).is_none());
+
+        let values = storage.as_mut_ptr().cast::<CrashEventValues>();
+        // SAFETY: the render fixture above initialized every element in this aligned array.
+        let [.., module_name, faulting_offset] = unsafe { &mut *values };
+        *module_name = EVT_VARIANT::default();
+        *faulting_offset = EVT_VARIANT::default();
+        let event = decode_event(&storage, end * 2).unwrap();
+        assert_eq!(event.module_name, None);
+        assert_eq!(event.faulting_offset, None);
     }
 }
